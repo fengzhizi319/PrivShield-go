@@ -91,11 +91,15 @@ func (s *Server) Readyz(c *gin.Context) {
 	if flusherStore, ok := s.audit.(*flusher.BufferedAuditStore); ok {
 		if flusherStore.HasFlushError() {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"status":     "not_ready",
-				"backend":    "degraded",
-				"storage":    "flush_error",
-				"last_error": flusherStore.LastFlushError(),
-				"via":        moduleVia,
+				"status":        "not_ready",
+				"backend":       "degraded",
+				"storage":       "flush_error",
+				"last_error":    flusherStore.LastFlushError(),
+				"queue_depth":   flusherStore.QueueDepth(),
+				"retry_backlog": flusherStore.RetryPending(),
+				"staged":        flusherStore.StagedCount(),
+				"rejected":      flusherStore.OverflowTotal(),
+				"via":           moduleVia,
 			})
 			return
 		}
@@ -205,6 +209,14 @@ func (s *Server) CreateLog(c *gin.Context) {
 		return
 	}
 
+	// The hash chain tail is server-assigned by the audit store. Accepting a caller-supplied
+	// prev_hash would let any client fork or permanently break the tamper-evidence chain.
+	if req.PrevHash != "" {
+		middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT",
+			"prev_hash is assigned by the audit store and must be omitted", nil)
+		return
+	}
+
 	rawDS := req.DatasourceID
 	if rawDS == "" {
 		rawDS = req.APICode
@@ -290,7 +302,6 @@ func (s *Server) CreateLog(c *gin.Context) {
 		Status:         req.Status,
 		ErrorMessage:   req.ErrorMessage,
 		SecurityLevel:  req.SecurityLevel,
-		PrevHash:       req.PrevHash,
 	}
 
 	// Encrypt sensitive snapshot samples before storage (Envelope Encryption)
@@ -314,7 +325,6 @@ func (s *Server) CreateLog(c *gin.Context) {
 		Algorithm:      req.Algorithm,
 		Parameters:     req.Parameters,
 		ParametersJSON: string(paramsJSON),
-		PrevHash:       req.PrevHash,
 	}
 
 	// Single Authority: store assigns and syncs PrevHash and IntegrityHash to log and snapshot

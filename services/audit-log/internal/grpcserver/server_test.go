@@ -242,6 +242,17 @@ func TestGRPCValidationErrors(t *testing.T) {
 	if status.Code(err) != codes.InvalidArgument {
 		t.Errorf("expected InvalidArgument for empty snapshot ID, got: %v", err)
 	}
+
+	// 5. RecordAudit must reject a caller-chosen chain predecessor
+	_, err = client.RecordAudit(ctx, &pb.RecordAuditRequest{
+		Operation:  "mask",
+		Status:     "success",
+		Datasource: "ds_yibao",
+		PrevHash:   "cafe0000_client_forged",
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument for caller-supplied prev_hash, got: %v", err)
+	}
 }
 
 // ─────────────────────────────────────────────────────────────

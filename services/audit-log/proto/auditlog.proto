@@ -96,7 +96,7 @@ message RecordAuditRequest {
   string datasource_id = 16;
   string input_sample = 17;   // 输入样本（可选，用于生成快照）
   string output_sample = 18;  // 输出样本（可选，用于生成快照）
-  string prev_hash = 19;      // 指定的前序哈希（可选，留空时自动关联最新）
+  string prev_hash = 19;      // 已废弃：链尾哈希由审计存储服务裁定，非空请求将被拒绝（InvalidArgument）
 }
 
 message RecordAuditResponse {

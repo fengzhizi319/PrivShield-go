@@ -108,6 +108,12 @@ func (s *GRPCServer) RecordAudit(ctx context.Context, req *pb.RecordAuditRequest
 		return nil, status.Error(codes.InvalidArgument, "operation is required")
 	}
 
+	// The hash chain tail is server-assigned by the audit store. Accepting a caller-supplied
+	// prev_hash would let any client fork or permanently break the tamper-evidence chain.
+	if req.PrevHash != "" {
+		return nil, status.Error(codes.InvalidArgument, "prev_hash is assigned by the audit store and must be omitted")
+	}
+
 	rawDS := req.DatasourceId
 	if rawDS == "" {
 		rawDS = req.ApiCode
@@ -185,7 +191,6 @@ func (s *GRPCServer) RecordAudit(ctx context.Context, req *pb.RecordAuditRequest
 		Status:         opStatus,
 		ErrorMessage:   req.ErrorMessage,
 		SecurityLevel:  secLevel,
-		PrevHash:       req.PrevHash,
 	}
 
 	// Envelope encrypt sample fields if key is configured
@@ -210,7 +215,6 @@ func (s *GRPCServer) RecordAudit(ctx context.Context, req *pb.RecordAuditRequest
 		Algorithm:      req.Algorithm,
 		Parameters:     params,
 		ParametersJSON: req.ParametersJson,
-		PrevHash:       req.PrevHash,
 	}
 
 	// Single Authority: store assigns and syncs PrevHash and IntegrityHash to logEntry and snapshot

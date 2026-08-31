@@ -7,7 +7,7 @@
 # - 构建全套镜像：`make docker-all`
 # - 部署与打包：`make helm-lint` / `make helm-template`
 
-.PHONY: help build test test-unit test-console test-go test-services test-cov check lint format \
+.PHONY: help build test test-race test-unit test-console test-go test-services test-cov check lint format \
         helm-lint helm-template docker-agent docker-services docker-console docker-all clean docs-serve docs-build docs-clean
 
 VERSION ?= 10.0.0
@@ -23,6 +23,7 @@ help:
 	@echo "  test-console   - 运行 console/bff-go 单元测试"
 	@echo "  test-go        - 运行 Go 全量测试"
 	@echo "  test-services  - 运行三大中台微服务单元测试"
+	@echo "  test-race      - 运行写入路径竞态门禁 (-race: 存储缓冲器 + 审计服务)"
 	@echo ""
 	@echo "Quality:"
 	@echo "  lint           - go vet 静态代码检查"
@@ -78,6 +79,11 @@ test-go: test
 
 test-services:
 	CGO_ENABLED=0 go test -count=1 ./services/service-hub/... ./services/datasource-mgr/... ./services/audit-log/...
+
+# 微批写入缓冲器与审计服务是并发关键区，本地门禁与 CI 保持一致。
+# -race 依赖 cgo，因此这里不能沿用其它目标的 CGO_ENABLED=0。
+test-race:
+	CGO_ENABLED=1 go test -race -count=1 -timeout 900s ./pkg/store/... ./services/audit-log/...
 
 # ── Docker ───────────────────────────────────────────────────
 

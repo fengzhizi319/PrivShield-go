@@ -158,6 +158,81 @@ func TestCreateLogInvalidBody(t *testing.T) {
 	}
 }
 
+// TestCreateLogRejectsCallerSuppliedPrevHash asserts the chain predecessor is server-assigned:
+// honouring a client value would let any caller fork or permanently break the tamper chain.
+func TestCreateLogRejectsCallerSuppliedPrevHash(t *testing.T) {
+	s := newTestServer()
+	router := newTestRouter(s)
+
+	body, _ := json.Marshal(map[string]any{
+		"operation":  "mask",
+		"datasource": "ds_yibao",
+		"status":     "success",
+		"prev_hash":  "cafe0000_client_forged",
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/audit/logs", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for caller-supplied prev_hash, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestCreateLogChainIsServerAssigned asserts consecutive records are linked by the store, and
+// that the linked values are what the 201 responses reported to the callers.
+func TestCreateLogChainIsServerAssigned(t *testing.T) {
+	s := newTestServer()
+	router := newTestRouter(s)
+
+	post := func() map[string]any {
+		body, _ := json.Marshal(map[string]any{
+			"operation":  "mask",
+			"datasource": "ds_yibao",
+			"status":     "success",
+		})
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/api/audit/logs", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		return resp
+	}
+
+	first := post()
+	second := post()
+
+	if first["integrity_hash"] == "" {
+		t.Fatalf("first response missing integrity_hash: %+v", first)
+	}
+	if second["prev_hash"] != first["integrity_hash"] {
+		t.Fatalf("chain not server-linked: second.prev=%v first.integrity=%v", second["prev_hash"], first["integrity_hash"])
+	}
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/audit/chain/verify?limit=100", nil)
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("verify endpoint returned %d: %s", w.Code, w.Body.String())
+	}
+	var res struct {
+		Valid         bool `json:"valid"`
+		TotalVerified int  `json:"total_verified"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("unmarshal verify response: %v (%s)", err, w.Body.String())
+	}
+	if !res.Valid || res.TotalVerified != 2 {
+		t.Fatalf("expected a valid 2-record chain, got %+v", res)
+	}
+}
+
 func TestGetLogNotFound(t *testing.T) {
 	s := newTestServer()
 	router := newTestRouter(s)

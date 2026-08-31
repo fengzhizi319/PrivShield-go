@@ -361,7 +361,7 @@ type RecordAuditRequest struct {
 	DatasourceId   string `protobuf:"bytes,16,opt,name=datasource_id,json=datasourceId,proto3" json:"datasource_id,omitempty"`
 	InputSample    string `protobuf:"bytes,17,opt,name=input_sample,json=inputSample,proto3" json:"input_sample,omitempty"`    // 输入样本（可选，用于生成快照）
 	OutputSample   string `protobuf:"bytes,18,opt,name=output_sample,json=outputSample,proto3" json:"output_sample,omitempty"` // 输出样本（可选，用于生成快照）
-	PrevHash       string `protobuf:"bytes,19,opt,name=prev_hash,json=prevHash,proto3" json:"prev_hash,omitempty"`             // 指定的前序哈希（可选，留空时自动关联最新）
+	PrevHash       string `protobuf:"bytes,19,opt,name=prev_hash,json=prevHash,proto3" json:"prev_hash,omitempty"`             // 已废弃：链尾哈希由审计存储服务裁定，非空请求将被拒绝（InvalidArgument）
 }
 
 func (x *RecordAuditRequest) Reset() {
