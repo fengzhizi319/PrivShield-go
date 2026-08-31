@@ -19,6 +19,7 @@ import (
 	"github.com/fengzhizi319/PrivShield/pkg/middleware"
 	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
 	"github.com/fengzhizi319/PrivShield/pkg/store"
+	"github.com/fengzhizi319/PrivShield/pkg/store/flusher"
 	"github.com/fengzhizi319/PrivShield/pkg/validation"
 
 	"github.com/fengzhizi319/PrivShield/services/audit-log/internal/agent"
@@ -84,8 +85,22 @@ func (s *Server) Health(c *gin.Context) {
 	})
 }
 
-// Readyz is a readiness probe — checks upstream agent connectivity.
+// Readyz is a readiness probe — checks upstream agent connectivity and storage flush health.
 func (s *Server) Readyz(c *gin.Context) {
+	// Check storage flush health
+	if flusherStore, ok := s.audit.(*flusher.BufferedAuditStore); ok {
+		if flusherStore.HasFlushError() {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"status":     "not_ready",
+				"backend":    "degraded",
+				"storage":    "flush_error",
+				"last_error": flusherStore.LastFlushError(),
+				"via":        moduleVia,
+			})
+			return
+		}
+	}
+
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -109,6 +124,7 @@ func (s *Server) Readyz(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status":     "ready",
 		"backend":    "ok",
+		"storage":    "healthy",
 		"agent":      agentData,
 		"agent_url":  s.cfg.AgentBaseURL(),
 		"latency_ms": latency,
@@ -254,16 +270,6 @@ func (s *Server) CreateLog(c *gin.Context) {
 		outputHash = hex.EncodeToString(h[:])
 	}
 
-	// Resolve Hash Chain: find preceding hash if not explicitly provided
-	prevHash := req.PrevHash
-	if prevHash == "" {
-		if latest, err := s.audit.GetLatestLog(); err == nil && latest != nil {
-			prevHash = latest.IntegrityHash
-		}
-	}
-
-	integrityHash := store.ComputeAuditIntegrityHash(logID, prevHash, now, req.Algorithm, inputHash, outputHash, req.User, req.SecurityLevel, string(paramsJSON))
-
 	log := &store.AuditLog{
 		ID:             logID,
 		TaskID:         req.TaskID,
@@ -284,8 +290,7 @@ func (s *Server) CreateLog(c *gin.Context) {
 		Status:         req.Status,
 		ErrorMessage:   req.ErrorMessage,
 		SecurityLevel:  req.SecurityLevel,
-		PrevHash:       prevHash,
-		IntegrityHash:  integrityHash,
+		PrevHash:       req.PrevHash,
 	}
 
 	// Encrypt sensitive snapshot samples before storage (Envelope Encryption)
@@ -309,10 +314,10 @@ func (s *Server) CreateLog(c *gin.Context) {
 		Algorithm:      req.Algorithm,
 		Parameters:     req.Parameters,
 		ParametersJSON: string(paramsJSON),
-		IntegrityHash:  integrityHash,
-		PrevHash:       prevHash,
+		PrevHash:       req.PrevHash,
 	}
 
+	// Single Authority: store assigns and syncs PrevHash and IntegrityHash to log and snapshot
 	if err := s.audit.SaveLogWithSnapshot(log, snapshot); err != nil {
 		s.logger.Error("failed to persist audit log and snapshot", "error", err.Error())
 		middleware.AbortWithError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to persist audit log and snapshot", nil)
@@ -322,8 +327,8 @@ func (s *Server) CreateLog(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{
 		"id":             logID,
 		"snapshot_id":    snapshot.ID,
-		"integrity_hash": integrityHash,
-		"prev_hash":      prevHash,
+		"integrity_hash": log.IntegrityHash,
+		"prev_hash":      log.PrevHash,
 		"via":            moduleVia,
 	})
 }

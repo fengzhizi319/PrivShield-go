@@ -278,7 +278,9 @@ type AuditStore interface {
 	SaveLogWithSnapshot(log *AuditLog, snapshot *SnapshotRecord) error
 	SaveLogsBatch(logs []AuditLog, snapshots []SnapshotRecord) error // 高并发批量刷盘支持
 	GetLog(id string) (*AuditLog, error)
-	GetLatestLog() (*AuditLog, error) // 获取最新一条日志用于构建防篡改哈希链
+	// GetLatestLog returns the newest tail log in the chain (including staged in-memory records if buffered).
+	// 获取防篡改哈希链当前链尾的最新日志（若启用了微批缓冲，包含内存中待落盘记录），用于构建连续防篡改哈希链。
+	GetLatestLog() (*AuditLog, error)
 	ListLogs(filter AuditFilter) ([]AuditLog, int, error)
 	GetStats() (*AuditStats, error)                     // P31: SQL-level aggregation
 	GenerateReport(period string) (*AuditReport, error) // P33: SQL-level filtering + aggregation

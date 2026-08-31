@@ -23,7 +23,6 @@
 package main
 
 import (
-	"crypto/sha256"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -34,6 +33,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite" // Pure-Go SQLite driver / 纯 Go SQLite 驱动
+
+	"github.com/fengzhizi319/PrivShield/pkg/store"
 )
 
 // ─────────────────────────────────────────────────────────────
@@ -80,22 +81,17 @@ type auditRow struct {
 // 9 要素完整性哈希计算 / 9-element integrity hash computation
 // ─────────────────────────────────────────────────────────────
 
-// computeIntegrityHash computes the SHA-256 integrity hash from the 9 chain elements.
-// computeIntegrityHash 从 9 个链要素计算 SHA-256 完整性哈希。
-//
-// Element order / 要素顺序:
-//
-//	prevHash | logID | timestamp(RFC3339Nano) | algorithm |
-//	inputHash | outputHash | user | securityLevel | paramsJSON
-//
-// This matches the implementation in pkg/store/sqlite/audit.go ComputeAuditIntegrityHash.
-// 与 pkg/store/sqlite/audit.go 中的 ComputeAuditIntegrityHash 实现一致。
-func computeIntegrityHash(logID, prevHash, timestamp, algorithm, inputHash, outputHash, user, securityLevel, paramsJSON string) string {
-	data := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%v",
-		prevHash, logID, timestamp, algorithm,
-		inputHash, outputHash, user, securityLevel, paramsJSON)
-	hash := sha256.Sum256([]byte(data))
-	return fmt.Sprintf("%x", hash)
+// computeIntegrityHash computes the canonical SM3 integrity hash from the 9 chain elements.
+// computeIntegrityHash 从 9 个链要素计算权威国密 SM3 完整性哈希。
+func computeIntegrityHash(logID, prevHash, timestampStr, algorithm, inputHash, outputHash, user, securityLevel, paramsJSON string) string {
+	var ts time.Time
+	var err error
+	if ts, err = time.Parse(time.RFC3339Nano, timestampStr); err != nil {
+		if ts, err = time.Parse(time.RFC3339, timestampStr); err != nil {
+			ts = time.Now().UTC()
+		}
+	}
+	return store.ComputeAuditIntegrityHash(logID, prevHash, ts, algorithm, inputHash, outputHash, user, securityLevel, paramsJSON)
 }
 
 // ─────────────────────────────────────────────────────────────

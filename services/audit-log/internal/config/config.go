@@ -55,6 +55,9 @@ type Config struct {
 	// Rate limiting / 每客户端 IP 令牌桶限流
 	RateLimitRPS   int // 每秒允许的请求数（默认 100，0 = 不限流）
 	RateLimitBurst int // 令牌桶突发容量（默认 200）
+
+	// Strict storage enforcement / 严格存储模式（禁止降级回退）
+	StrictStorage bool // 当配置的持久化存储连接失败时直接报错退出，禁止静默回退
 }
 
 // Load reads configuration from environment variables.
@@ -113,6 +116,9 @@ func Load() *Config {
 		// Rate limiting / 每客户端 IP 令牌桶限流（默认 100 rps，突发 200）
 		RateLimitRPS:   pkgconfig.EnvInt("AUDIT_LOG_RATE_LIMIT_RPS", 100),
 		RateLimitBurst: pkgconfig.EnvInt("AUDIT_LOG_RATE_LIMIT_BURST", 200),
+
+		// Strict storage mode / 严格存储模式（禁止降级回退）
+		StrictStorage: pkgconfig.EnvBool("AUDIT_LOG_STRICT_STORAGE", pkgconfig.EnvBool("STRICT_STORAGE", false)),
 	}
 }
 

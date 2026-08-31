@@ -338,6 +338,9 @@ func initAuditStore(cfg *config.Config, logger *slog.Logger) (store.AuditStore, 
 			logger.Info("postgresql audit store initialized (Phase B)")
 			underlying = pgStore
 		} else {
+			if cfg.StrictStorage {
+				return nil, fmt.Errorf("strict storage mode: PostgreSQL connection probe failed: %w", err)
+			}
 			logger.Warn("PostgreSQL connection probe failed, falling back to SQLite / in-memory store", "error", err.Error())
 		}
 	}
@@ -355,16 +358,25 @@ func initAuditStore(cfg *config.Config, logger *slog.Logger) (store.AuditStore, 
 				underlying = as
 			} else {
 				db.Close()
+				if cfg.StrictStorage {
+					return nil, fmt.Errorf("strict storage mode: SQLite audit store initialization failed: %w", err)
+				}
 				logger.Warn("sqlite audit store initialization failed, falling back to in-memory", "error", err.Error())
 			}
 		} else {
+			if cfg.StrictStorage {
+				return nil, fmt.Errorf("strict storage mode: open SQLite failed: %w", err)
+			}
 			logger.Warn("open sqlite failed, falling back to in-memory", "error", err.Error())
 		}
 	}
 
 	// 3. Fallback to in-memory store
 	if underlying == nil {
-		logger.Info("using in-memory audit store (no persistence)")
+		if cfg.StrictStorage {
+			return nil, fmt.Errorf("strict storage mode enabled: no persistent storage configured or available")
+		}
+		logger.Warn("using in-memory audit store (volatile / non-persistent)")
 		underlying = memory.NewAuditStore()
 	}
 

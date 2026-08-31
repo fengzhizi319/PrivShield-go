@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"runtime"
 	"strings"
 	"time"
 
@@ -36,7 +35,7 @@ func NewAuditStore(ctx context.Context, cfg Config, logger *slog.Logger) (*Audit
 		return nil, fmt.Errorf("postgres parse DSN: %w", err)
 	}
 
-	numCPU := int32(runtime.NumCPU())
+	numCPU := effectiveNumCPU()
 	if cfg.MaxConn > 0 {
 		poolCfg.MaxConns = cfg.MaxConn
 	} else {
@@ -77,15 +76,18 @@ func NewAuditStore(ctx context.Context, cfg Config, logger *slog.Logger) (*Audit
 		return nil, fmt.Errorf("postgres create pool: %w", err)
 	}
 
-	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	// Probe connectivity with 3s timeout / 使用 3 秒超时探测连接
+	pingCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := pool.Ping(pingCtx); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("postgres ping: %w", err)
+		return nil, fmt.Errorf("postgres ping probe failed (3s): %w", err)
 	}
 
 	s := &AuditStore{pool: pool, logger: logger}
-	if err := s.initAuditSchema(ctx); err != nil {
+	schemaCtx, schemaCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer schemaCancel()
+	if err := s.initAuditSchema(schemaCtx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("postgres init audit schema: %w", err)
 	}
@@ -164,16 +166,22 @@ func (s *AuditStore) initAuditSchema(ctx context.Context) error {
 	return err
 }
 
-func (s *AuditStore) Close() {
+func (s *AuditStore) Close() error {
 	if s.pool != nil {
 		s.pool.Close()
 	}
+	return nil
 }
 
 func (s *AuditStore) SaveLog(log *store.AuditLog) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	if log.PrevHash == "" {
+		if latest, err := s.GetLatestLog(); err == nil && latest != nil {
+			log.PrevHash = latest.IntegrityHash
+		}
+	}
 	if log.IntegrityHash == "" {
 		log.IntegrityHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 	}
@@ -193,14 +201,21 @@ func (s *AuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *store.Sn
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	if log.PrevHash == "" {
+		if latest, err := s.GetLatestLog(); err == nil && latest != nil {
+			log.PrevHash = latest.IntegrityHash
+		}
+	}
 	if log.IntegrityHash == "" {
 		log.IntegrityHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 	}
-	if snapshot.IntegrityHash == "" {
-		snapshot.IntegrityHash = log.IntegrityHash
-	}
-	if snapshot.PrevHash == "" {
-		snapshot.PrevHash = log.PrevHash
+	if snapshot != nil {
+		if snapshot.PrevHash == "" {
+			snapshot.PrevHash = log.PrevHash
+		}
+		if snapshot.IntegrityHash == "" {
+			snapshot.IntegrityHash = log.IntegrityHash
+		}
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -561,6 +576,7 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 
 	var previousHash string
 	count := 0
+	legacyCount := 0
 
 	for rows.Next() {
 		log, err := scanPGAuditRow(rows)
@@ -568,23 +584,30 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 			return nil, err
 		}
 
-		valid, _ := store.VerifyAuditIntegrityHash(log.IntegrityHash, log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
-		if !valid && log.IntegrityHash != "" {
-			expectedHash := store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
-			return &store.ChainVerificationResult{
-				TotalVerified: count,
-				Valid:         false,
-				BrokenAtID:    log.ID,
-				ExpectedHash:  expectedHash,
-				ActualHash:    log.IntegrityHash,
-				Message:       fmt.Sprintf("integrity hash mismatch at log %s: content modified", log.ID),
-			}, nil
+		if log.IntegrityHash != "" {
+			ok, hashLabel := store.VerifyAuditIntegrityHash(log.IntegrityHash, log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
+			if !ok {
+				expectedHash := store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
+				return &store.ChainVerificationResult{
+					TotalVerified: count,
+					Valid:         false,
+					LegacyHashed:  legacyCount,
+					BrokenAtID:    log.ID,
+					ExpectedHash:  expectedHash,
+					ActualHash:    log.IntegrityHash,
+					Message:       fmt.Sprintf("integrity hash mismatch at log %s: content modified", log.ID),
+				}, nil
+			}
+			if !store.IsCanonicalHashLabel(hashLabel) {
+				legacyCount++
+			}
 		}
 
 		if count > 0 && log.PrevHash != previousHash {
 			return &store.ChainVerificationResult{
 				TotalVerified: count,
 				Valid:         false,
+				LegacyHashed:  legacyCount,
 				BrokenAtID:    log.ID,
 				ExpectedHash:  previousHash,
 				ActualHash:    log.PrevHash,
@@ -593,14 +616,22 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 		}
 
 		previousHash = log.IntegrityHash
+		if previousHash == "" {
+			previousHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
+		}
 		count++
 	}
 
-	return &store.ChainVerificationResult{
+	result := &store.ChainVerificationResult{
 		TotalVerified: count,
 		Valid:         true,
+		LegacyHashed:  legacyCount,
 		Message:       fmt.Sprintf("hash chain verified successfully (%d records checked)", count),
-	}, rows.Err()
+	}
+	if legacyCount > 0 {
+		result.Message = fmt.Sprintf("hash chain verified successfully (%d records checked, %d legacy-hashed records pending canonical SM3 re-signing)", count, legacyCount)
+	}
+	return result, rows.Err()
 }
 
 func (s *AuditStore) CleanupOld(before time.Time) (int64, error) {

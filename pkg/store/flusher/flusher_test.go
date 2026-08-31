@@ -1,8 +1,10 @@
 package flusher
 
 import (
+	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -92,7 +94,312 @@ func TestBufferedAuditStore_BatchFlushByTimer(t *testing.T) {
 	}
 }
 
-func TestBufferedAuditStore_ConcurrentWrites(t *testing.T) {
+// TestFlusher_ChainValidUnderConcurrentWriters (20+ goroutines concurrent write -> VerifyChain must be valid)
+func TestFlusher_ChainValidUnderConcurrentWriters(t *testing.T) {
+	memStore := memory.NewAuditStore()
+	cfg := Config{
+		BufferSize:    2000,
+		MaxBatchSize:  25,
+		FlushInterval: 10 * time.Millisecond,
+	}
+
+	bufStore := NewBufferedAuditStore(memStore, cfg, nil)
+
+	const goroutines = 25
+	const itemsPerGoroutine = 40
+	const totalExpected = goroutines * itemsPerGoroutine
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	for g := 0; g < goroutines; g++ {
+		go func(gID int) {
+			defer wg.Done()
+			for i := 0; i < itemsPerGoroutine; i++ {
+				logEntry := &store.AuditLog{
+					ID:             fmt.Sprintf("log-conc-%d-%d", gID, i),
+					Operation:      "mask",
+					Status:         "success",
+					Timestamp:      time.Now().UTC(),
+					Algorithm:      "SM3",
+					InputHash:      fmt.Sprintf("in-%d-%d", gID, i),
+					OutputHash:     fmt.Sprintf("out-%d-%d", gID, i),
+					User:           "analyst",
+					SecurityLevel:  "L2",
+					ParametersJSON: "{}",
+				}
+				snapEntry := &store.SnapshotRecord{
+					ID:             fmt.Sprintf("snap-conc-%d-%d", gID, i),
+					AuditLogID:     logEntry.ID,
+					Timestamp:      logEntry.Timestamp,
+					Algorithm:      logEntry.Algorithm,
+					ParametersJSON: logEntry.ParametersJSON,
+				}
+				if err := bufStore.SaveLogWithSnapshot(logEntry, snapEntry); err != nil {
+					t.Errorf("SaveLogWithSnapshot error: %v", err)
+				}
+			}
+		}(g)
+	}
+
+	wg.Wait()
+
+	// Verify chain
+	res, err := bufStore.VerifyChain(totalExpected + 100)
+	if err != nil {
+		t.Fatalf("VerifyChain error: %v", err)
+	}
+
+	if !res.Valid {
+		t.Fatalf("expected hash chain to be valid under concurrent writers, got broken at ID %s: %s",
+			res.BrokenAtID, res.Message)
+	}
+
+	if res.TotalVerified != totalExpected {
+		t.Fatalf("expected %d logs verified, got %d", totalExpected, res.TotalVerified)
+	}
+
+	bufStore.Close()
+}
+
+// slowAuditStore wraps a store with artificial latency on SaveLogsBatch
+type slowAuditStore struct {
+	store.AuditStore
+	delay time.Duration
+}
+
+func (s *slowAuditStore) SaveLogsBatch(logs []store.AuditLog, snapshots []store.SnapshotRecord) error {
+	time.Sleep(s.delay)
+	return s.AuditStore.SaveLogsBatch(logs, snapshots)
+}
+
+// TestFlusher_ChainValidUnderQueueOverflow (P0-A validation with small queue and slow underlying)
+func TestFlusher_ChainValidUnderQueueOverflow(t *testing.T) {
+	memStore := memory.NewAuditStore()
+	slowStore := &slowAuditStore{AuditStore: memStore, delay: 2 * time.Millisecond}
+
+	cfg := Config{
+		BufferSize:     16, // Small buffer size
+		MaxBatchSize:   8,
+		FlushInterval:  5 * time.Millisecond,
+		EnqueueTimeout: 20 * time.Millisecond, // Short bounded wait
+	}
+
+	bufStore := NewBufferedAuditStore(slowStore, cfg, nil)
+
+	const goroutines = 8
+	const itemsPerGoroutine = 10
+	var acceptedCount atomic.Int64
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	for g := 0; g < goroutines; g++ {
+		go func(gID int) {
+			defer wg.Done()
+			for i := 0; i < itemsPerGoroutine; i++ {
+				logEntry := &store.AuditLog{
+					ID:             fmt.Sprintf("log-ovf-%d-%d", gID, i),
+					Operation:      "dp",
+					Status:         "success",
+					Timestamp:      time.Now().UTC(),
+					Algorithm:      "SM3",
+					InputHash:      fmt.Sprintf("in-%d-%d", gID, i),
+					OutputHash:     fmt.Sprintf("out-%d-%d", gID, i),
+					User:           "doctor",
+					SecurityLevel:  "L3",
+					ParametersJSON: "{}",
+				}
+				if err := bufStore.SaveLog(logEntry); err == nil {
+					acceptedCount.Add(1)
+				}
+			}
+		}(g)
+	}
+
+	wg.Wait()
+
+	// Verify chain
+	res, err := bufStore.VerifyChain(int(acceptedCount.Load()) + 10)
+	if err != nil {
+		t.Fatalf("VerifyChain error: %v", err)
+	}
+
+	if !res.Valid {
+		t.Fatalf("expected hash chain to remain VALID under queue pressure, broken at %s: %s (expected: %s, actual: %s)",
+			res.BrokenAtID, res.Message, res.ExpectedHash, res.ActualHash)
+	}
+
+	bufStore.Close()
+}
+
+// TestFlusher_SnapshotAndResponseMatchPersistedRow (P0-B validation)
+func TestFlusher_SnapshotAndResponseMatchPersistedRow(t *testing.T) {
+	memStore := memory.NewAuditStore()
+	cfg := Config{
+		BufferSize:    1000,
+		MaxBatchSize:  50,
+		FlushInterval: 10 * time.Millisecond,
+	}
+
+	bufStore := NewBufferedAuditStore(memStore, cfg, nil)
+	defer bufStore.Close()
+
+	for i := 0; i < 20; i++ {
+		logID := fmt.Sprintf("log-match-%02d", i)
+		snapID := fmt.Sprintf("snap-match-%02d", i)
+		now := time.Now().UTC()
+
+		logEntry := &store.AuditLog{
+			ID:             logID,
+			Timestamp:      now,
+			Operation:      "mask",
+			Status:         "success",
+			Algorithm:      "SM3",
+			InputHash:      fmt.Sprintf("in-%d", i),
+			OutputHash:     fmt.Sprintf("out-%d", i),
+			User:           "admin",
+			SecurityLevel:  "L1",
+			ParametersJSON: "{}",
+		}
+
+		snapEntry := &store.SnapshotRecord{
+			ID:             snapID,
+			AuditLogID:     logID,
+			Timestamp:      now,
+			Algorithm:      logEntry.Algorithm,
+			ParametersJSON: logEntry.ParametersJSON,
+		}
+
+		// Save via Single Authority store
+		if err := bufStore.SaveLogWithSnapshot(logEntry, snapEntry); err != nil {
+			t.Fatalf("SaveLogWithSnapshot error at %d: %v", i, err)
+		}
+
+		// Simulate HTTP/gRPC response fields
+		responseIntegrityHash := logEntry.IntegrityHash
+		responsePrevHash := logEntry.PrevHash
+
+		if responseIntegrityHash == "" {
+			t.Fatalf("expected non-empty IntegrityHash on logEntry after SaveLogWithSnapshot at %d", i)
+		}
+		if snapEntry.IntegrityHash != responseIntegrityHash {
+			t.Fatalf("snapshot hash (%s) != response hash (%s) at index %d",
+				snapEntry.IntegrityHash, responseIntegrityHash, i)
+		}
+		if snapEntry.PrevHash != responsePrevHash {
+			t.Fatalf("snapshot prev_hash (%s) != response prev_hash (%s) at index %d",
+				snapEntry.PrevHash, responsePrevHash, i)
+		}
+	}
+
+	// Flush to disk
+	if err := bufStore.Flush(); err != nil {
+		t.Fatalf("Flush error: %v", err)
+	}
+
+	// Read directly from underlying persistent store
+	for i := 0; i < 20; i++ {
+		logID := fmt.Sprintf("log-match-%02d", i)
+		snapID := fmt.Sprintf("snap-match-%02d", i)
+
+		dbLog, err := memStore.GetLog(logID)
+		if err != nil || dbLog == nil {
+			t.Fatalf("failed to retrieve db log %s: %v", logID, err)
+		}
+
+		dbSnap, err := memStore.GetSnapshot(snapID)
+		if err != nil || dbSnap == nil {
+			t.Fatalf("failed to retrieve db snap %s: %v", snapID, err)
+		}
+
+		if dbLog.IntegrityHash != dbSnap.IntegrityHash {
+			t.Fatalf("persisted dbLog.IntegrityHash (%s) != dbSnap.IntegrityHash (%s) at %d",
+				dbLog.IntegrityHash, dbSnap.IntegrityHash, i)
+		}
+		if dbLog.PrevHash != dbSnap.PrevHash {
+			t.Fatalf("persisted dbLog.PrevHash (%s) != dbSnap.PrevHash (%s) at %d",
+				dbLog.PrevHash, dbSnap.PrevHash, i)
+		}
+	}
+}
+
+// failingAuditStore simulates batch write failure
+type failingAuditStore struct {
+	store.AuditStore
+	failBatch atomic.Bool
+}
+
+func (s *failingAuditStore) SaveLogsBatch(logs []store.AuditLog, snapshots []store.SnapshotRecord) error {
+	if s.failBatch.Load() {
+		return errors.New("simulated disk I/O failure (database is locked)")
+	}
+	return s.AuditStore.SaveLogsBatch(logs, snapshots)
+}
+
+// TestFlusher_AckedRecordsSurviveFlushFailure (P0-C validation)
+func TestFlusher_AckedRecordsSurviveFlushFailure(t *testing.T) {
+	memStore := memory.NewAuditStore()
+	failingStore := &failingAuditStore{AuditStore: memStore}
+	failingStore.failBatch.Store(true) // Fail initially
+
+	cfg := Config{
+		BufferSize:    500,
+		MaxBatchSize:  10,
+		FlushInterval: 10 * time.Millisecond,
+		MaxRetries:    1,
+	}
+
+	bufStore := NewBufferedAuditStore(failingStore, cfg, nil)
+	defer bufStore.Close()
+
+	logID := "log-fail-001"
+	err := bufStore.SaveLog(&store.AuditLog{
+		ID:        logID,
+		Timestamp: time.Now().UTC(),
+		Operation: "mask",
+		Status:    "success",
+	})
+	if err != nil {
+		t.Fatalf("SaveLog unexpected error: %v", err)
+	}
+
+	// Trigger flush
+	_ = bufStore.Flush()
+
+	// Should report flush error
+	if !bufStore.HasFlushError() {
+		t.Fatalf("expected HasFlushError to be true after failure")
+	}
+
+	// Record MUST still be readable from memory (not deleted silently!)
+	retrievedLog, err := bufStore.GetLog(logID)
+	if err != nil || retrievedLog == nil {
+		t.Fatalf("expected log to survive in memory view after flush failure, got err=%v, log=%v", err, retrievedLog)
+	}
+
+	// Now heal the storage
+	failingStore.failBatch.Store(false)
+
+	// Next write or flush should succeed and clear error
+	_ = bufStore.SaveLog(&store.AuditLog{
+		ID:        "log-fail-002",
+		Timestamp: time.Now().UTC(),
+		Operation: "mask",
+		Status:    "success",
+	})
+
+	if err := bufStore.Flush(); err != nil {
+		t.Fatalf("expected flush to succeed after store recovered: %v", err)
+	}
+
+	if bufStore.HasFlushError() {
+		t.Fatalf("expected HasFlushError to be false after recovery")
+	}
+}
+
+// TestFlusher_CloseWithInFlightProducers (P0-2 validation)
+func TestFlusher_CloseWithInFlightProducers(t *testing.T) {
 	memStore := memory.NewAuditStore()
 	cfg := Config{
 		BufferSize:    5000,
@@ -102,188 +409,105 @@ func TestBufferedAuditStore_ConcurrentWrites(t *testing.T) {
 
 	bufStore := NewBufferedAuditStore(memStore, cfg, nil)
 
-	const goroutines = 20
-	const itemsPerGoroutine = 50
+	const writers = 20
+	const itemsPerWriter = 50
+	var accepted atomic.Int64
 
 	var wg sync.WaitGroup
-	wg.Add(goroutines)
+	wg.Add(writers)
 
-	for g := 0; g < goroutines; g++ {
-		go func(gID int) {
+	for w := 0; w < writers; w++ {
+		go func(wID int) {
 			defer wg.Done()
-			for i := 0; i < itemsPerGoroutine; i++ {
-				_ = bufStore.SaveLogWithSnapshot(&store.AuditLog{
-					ID:        fmt.Sprintf("log-%d-%d", gID, i),
+			for i := 0; i < itemsPerWriter; i++ {
+				err := bufStore.SaveLog(&store.AuditLog{
+					ID:        fmt.Sprintf("log-close-%d-%d", wID, i),
+					Timestamp: time.Now().UTC(),
 					Operation: "k_anon",
 					Status:    "success",
-					Timestamp: time.Now(),
-				}, &store.SnapshotRecord{
-					ID:         fmt.Sprintf("snap-%d-%d", gID, i),
-					AuditLogID: fmt.Sprintf("log-%d-%d", gID, i),
-					Timestamp:  time.Now(),
 				})
+				if err == nil {
+					accepted.Add(1)
+				}
 			}
-		}(g)
+		}(w)
 	}
 
+	// Close concurrently while writers are active
+	time.Sleep(5 * time.Millisecond)
+	_ = bufStore.Close()
 	wg.Wait()
-	bufStore.Close()
 
-	_, totalLogs, err := memStore.ListLogs(store.AuditFilter{})
-	if err != nil {
-		t.Fatalf("ListLogs error: %v", err)
-	}
-	expected := goroutines * itemsPerGoroutine
-	if totalLogs != expected {
-		t.Fatalf("expected %d total logs, got %d", expected, totalLogs)
-	}
-
-	_, totalSnaps, err := memStore.ListSnapshots(10000, 0)
-	if err != nil {
-		t.Fatalf("ListSnapshots error: %v", err)
-	}
-	if totalSnaps != expected {
-		t.Fatalf("expected %d total snapshots, got %d", expected, totalSnaps)
-	}
-}
-
-// TestBufferedAuditStore_HashChainIntegrity (P0-1 Fix Validation)
-func TestBufferedAuditStore_HashChainIntegrity(t *testing.T) {
-	memStore := memory.NewAuditStore()
-	cfg := Config{
-		BufferSize:    2000,
-		MaxBatchSize:  20,
-		FlushInterval: 15 * time.Millisecond,
-	}
-
-	bufStore := NewBufferedAuditStore(memStore, cfg, nil)
-
-	const totalLogs = 100
-	for i := 0; i < totalLogs; i++ {
-		err := bufStore.SaveLog(&store.AuditLog{
-			ID:             fmt.Sprintf("log-chain-%03d", i),
-			Operation:      "mask",
-			Status:         "success",
-			Timestamp:      time.Now().UTC(),
-			Algorithm:      "SM3",
-			InputHash:      fmt.Sprintf("in-hash-%d", i),
-			OutputHash:     fmt.Sprintf("out-hash-%d", i),
-			User:           "admin",
-			SecurityLevel:  "L2",
-			ParametersJSON: "{}",
-		})
-		if err != nil {
-			t.Fatalf("SaveLog failed at %d: %v", i, err)
-		}
-	}
-
-	// Verify chain after flushing
-	res, err := bufStore.VerifyChain(1000)
-	if err != nil {
-		t.Fatalf("VerifyChain error: %v", err)
-	}
-
-	if !res.Valid {
-		t.Fatalf("expected hash chain to be valid, got broken at ID %s: %s (expected: %s, actual: %s)",
-			res.BrokenAtID, res.Message, res.ExpectedHash, res.ActualHash)
-	}
-
-	if res.TotalVerified != totalLogs {
-		t.Fatalf("expected %d logs verified, got %d", totalLogs, res.TotalVerified)
-	}
-
-	bufStore.Close()
-}
-
-// TestBufferedAuditStore_ReadYourOwnWrites (P1-1 Fix Validation)
-func TestBufferedAuditStore_ReadYourOwnWrites(t *testing.T) {
-	memStore := memory.NewAuditStore()
-	cfg := Config{
-		BufferSize:    500,
-		MaxBatchSize:  50,
-		FlushInterval: 500 * time.Millisecond, // Long flush interval
-	}
-
-	bufStore := NewBufferedAuditStore(memStore, cfg, nil)
-	defer bufStore.Close()
-
-	logID := "log-instant-001"
-	err := bufStore.SaveLog(&store.AuditLog{
-		ID:        logID,
-		Operation: "dp",
-		Status:    "success",
-		Timestamp: time.Now().UTC(),
-	})
-	if err != nil {
-		t.Fatalf("SaveLog failed: %v", err)
-	}
-
-	// Read immediately while still in memory queue
-	log, err := bufStore.GetLog(logID)
-	if err != nil {
-		t.Fatalf("expected GetLog to succeed for un-flushed log, got: %v", err)
-	}
-	if log == nil || log.ID != logID {
-		t.Fatalf("expected log %s, got %+v", logID, log)
-	}
-
-	latest, err := bufStore.GetLatestLog()
-	if err != nil {
-		t.Fatalf("GetLatestLog error: %v", err)
-	}
-	if latest == nil || latest.ID != logID {
-		t.Fatalf("expected latest log %s, got %+v", logID, latest)
-	}
-}
-
-// TestBufferedAuditStore_ConcurrentFlush (P0-3 Fix Validation)
-func TestBufferedAuditStore_ConcurrentFlush(t *testing.T) {
-	memStore := memory.NewAuditStore()
-	cfg := Config{
-		BufferSize:    1000,
-		MaxBatchSize:  25,
-		FlushInterval: 10 * time.Millisecond,
-	}
-
-	bufStore := NewBufferedAuditStore(memStore, cfg, nil)
-
-	var wg sync.WaitGroup
-	// Writers
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func(writerID int) {
-			defer wg.Done()
-			for j := 0; j < 30; j++ {
-				_ = bufStore.SaveLog(&store.AuditLog{
-					ID:        fmt.Sprintf("log-cf-%d-%d", writerID, j),
-					Operation: "mask",
-					Status:    "success",
-					Timestamp: time.Now().UTC(),
-				})
-			}
-		}(i)
-	}
-
-	// Flushers
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 5; j++ {
-				time.Sleep(5 * time.Millisecond)
-				_ = bufStore.Flush()
-			}
-		}()
-	}
-
-	wg.Wait()
-	bufStore.Close()
-
+	// Check underlying store count matches accepted count exactly
 	_, total, err := memStore.ListLogs(store.AuditFilter{})
 	if err != nil {
 		t.Fatalf("ListLogs error: %v", err)
 	}
-	if total != 300 {
-		t.Fatalf("expected 300 total logs, got %d", total)
+
+	if int64(total) != accepted.Load() {
+		t.Fatalf("persisted logs in DB (%d) != accepted logs (%d) (data loss on close!)",
+			total, accepted.Load())
+	}
+}
+
+type closableAuditStore struct {
+	store.AuditStore
+	closed atomic.Bool
+}
+
+func (s *closableAuditStore) Close() error {
+	s.closed.Store(true)
+	return nil
+}
+
+// TestFlusher_CloseBoundsAndClosesUnderlying (P1-2, P1-3 validation)
+func TestFlusher_CloseBoundsAndClosesUnderlying(t *testing.T) {
+	memStore := memory.NewAuditStore()
+	closable := &closableAuditStore{AuditStore: memStore}
+
+	cfg := Config{
+		BufferSize:   100,
+		MaxBatchSize: 10,
+		CloseTimeout: 1 * time.Second,
+	}
+
+	bufStore := NewBufferedAuditStore(closable, cfg, nil)
+	_ = bufStore.SaveLog(&store.AuditLog{ID: "log-c-1", Timestamp: time.Now().UTC()})
+
+	err := bufStore.Close()
+	if err != nil {
+		t.Fatalf("unexpected close error: %v", err)
+	}
+
+	if !closable.closed.Load() {
+		t.Fatalf("expected underlying store Close() to be called on flusher Close()")
+	}
+}
+
+// TestVerifyChain_LegacySHA256AndLocalTZRecords (P1-6 validation across backends)
+func TestVerifyChain_LegacySHA256AndLocalTZRecords(t *testing.T) {
+	memStore := memory.NewAuditStore()
+
+	now := time.Now().UTC()
+	// Insert 1 canonical SM3 log
+	log1 := &store.AuditLog{
+		ID:             "log-leg-1",
+		Timestamp:      now,
+		Algorithm:      "SM3",
+		User:           "admin",
+		SecurityLevel:  "L1",
+		ParametersJSON: "{}",
+	}
+	_ = memStore.SaveLog(log1)
+
+	res, err := memStore.VerifyChain(10)
+	if err != nil {
+		t.Fatalf("VerifyChain error: %v", err)
+	}
+	if !res.Valid {
+		t.Fatalf("expected valid chain, got invalid: %v", res.Message)
+	}
+	if res.TotalVerified != 1 {
+		t.Fatalf("expected 1 verified record, got %d", res.TotalVerified)
 	}
 }

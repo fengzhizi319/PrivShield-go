@@ -2,11 +2,15 @@
 // Package flusher 为 store.AuditStore 提供基于内存缓冲的高性能微批异步刷盘器。
 //
 // 核心设计与保障：
-// 1. 将高并发下的频繁单条写事务折叠为低频大事务（SaveLogsBatch），化解 SQLite 单写者锁竞争；
-// 2. 单 Worker 串行计算并链式咬合 PrevHash 与 IntegrityHash，彻底杜绝高并发缓冲下的防篡改哈希链断裂（P0-1）；
-// 3. 严格的生命周期管理与无竞态停机（Close）：写锁阻断新入队 + Worker 完全排空（P0-2）；
-// 4. 串行化 Flush 指令：通过向 Worker 投递刷新请求实现独占刷盘与错误透传，消除并发争用与静默吞错（P0-3）；
-// 5. 内存短环查找支持“读己之写”一致性（GetLog / GetLatestLog 查询缓冲中待落盘记录）。
+// 1. 将高并发下的频繁单条写事务折叠为低频大事务（SaveLogsBatch），化解 SQLite 单写者锁竞争与 PG 连接争用；
+// 2. 单一权威机制（Single Authority）：在 SaveLogWithSnapshot 入队时即在锁内确定 PrevHash 与 IntegrityHash，
+//    并同步写回调用方的 AuditLog 与 SnapshotRecord 指针，消除日志行、快照行与 HTTP/gRPC 响应体的哈希分叉（P0-B）；
+// 3. 严格 FIFO 顺序入队与微批提交，结合有界阻塞排队（EnqueueTimeout），杜绝越序落盘与假阳性断链（P0-A）；
+// 4. 刷盘重试与持久性保障：底层写入失败自动退避重试，失败条目保留在内存暂存区（recentLogs）中不被静默抹除，
+//    并对外暴露健康降级状态（P0-C）；
+// 5. 严格生命周期管理与无竞态优雅停机（Close）：写锁阻断新写入 + Worker 完全排空（Drain on Close），零记录丢失；
+// 6. 串行化 Flush 指令：通过向 Worker 投递刷新请求实现独占刷盘与错误透传，消除并发争用与读路径放大；
+// 7. 内存暂存支持“读己之写”（Read-Your-Own-Writes）线性一致性，并在 CleanupOld 中联动清理防止僵尸读。
 package flusher
 
 import (
@@ -28,17 +32,25 @@ var ErrStoreClosed = errors.New("audit store is closed")
 
 // Config holds configuration parameters for BufferedAuditStore.
 type Config struct {
-	BufferSize    int           // 环形缓冲队列容量（默认 10000）
-	MaxBatchSize  int           // 单批最大写入条数（默认 200）
-	FlushInterval time.Duration // 最长刷盘等待时间窗口（默认 20ms）
+	BufferSize     int           // 环形缓冲队列容量（默认 10000）
+	MaxBatchSize   int           // 单批最大写入条数（默认 200）
+	FlushInterval  time.Duration // 最长刷盘等待时间窗口（默认 20ms）
+	EnqueueTimeout time.Duration // 队列满时等待可用槽位的超时时间（默认 500ms，防拥塞越序与丢数据）
+	FlushTimeout   time.Duration // 显式 Flush 等待超时时间（默认 2s）
+	CloseTimeout   time.Duration // 优雅停机排空等待超时时间（默认 5s）
+	MaxRetries     int           // 刷盘失败重试次数（默认 3）
 }
 
 // DefaultConfig returns default high-performance batch flusher settings.
 func DefaultConfig() Config {
 	return Config{
-		BufferSize:    10000,
-		MaxBatchSize:  200,
-		FlushInterval: 20 * time.Millisecond,
+		BufferSize:     10000,
+		MaxBatchSize:   200,
+		FlushInterval:  20 * time.Millisecond,
+		EnqueueTimeout: 500 * time.Millisecond,
+		FlushTimeout:   2 * time.Second,
+		CloseTimeout:   5 * time.Second,
+		MaxRetries:     3,
 	}
 }
 
@@ -49,6 +61,14 @@ type pendingItem struct {
 
 type flushRequest struct {
 	done chan error
+}
+
+type auditStoreCloser interface {
+	Close() error
+}
+
+type auditStoreSimpleCloser interface {
+	Close()
 }
 
 // BufferedAuditStore wraps an underlying store.AuditStore with asynchronous micro-batch aggregation.
@@ -65,15 +85,18 @@ type BufferedAuditStore struct {
 	closeMu sync.RWMutex
 	closed  bool
 
-	// In-memory read-your-own-writes and chain-tail tracking
+	// In-memory read-your-own-writes and single-authority chain-tail tracking
 	stateMu    sync.RWMutex
 	lastHash   string
 	lastLog    *store.AuditLog
 	recentLogs map[string]*store.AuditLog
 
-	flushedTotal atomic.Int64
-	failedTotal  atomic.Int64
-	droppedTotal atomic.Int64
+	flushedTotal  atomic.Int64
+	failedTotal   atomic.Int64
+	overflowTotal atomic.Int64
+
+	hasFlushError atomic.Bool
+	lastFlushErr  atomic.Value // string
 }
 
 // NewBufferedAuditStore creates a new buffered batch audit store wrapper.
@@ -86,6 +109,18 @@ func NewBufferedAuditStore(underlying store.AuditStore, cfg Config, logger *slog
 	}
 	if cfg.FlushInterval <= 0 {
 		cfg.FlushInterval = 20 * time.Millisecond
+	}
+	if cfg.EnqueueTimeout <= 0 {
+		cfg.EnqueueTimeout = 500 * time.Millisecond
+	}
+	if cfg.FlushTimeout <= 0 {
+		cfg.FlushTimeout = 2 * time.Second
+	}
+	if cfg.CloseTimeout <= 0 {
+		cfg.CloseTimeout = 5 * time.Second
+	}
+	if cfg.MaxRetries < 0 {
+		cfg.MaxRetries = 3
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -110,6 +145,7 @@ func NewBufferedAuditStore(underlying store.AuditStore, cfg Config, logger *slog
 		lastLog:     initLog,
 		recentLogs:  make(map[string]*store.AuditLog, cfg.BufferSize),
 	}
+	b.lastFlushErr.Store("")
 
 	b.wg.Add(1)
 	go b.flushWorker()
@@ -118,6 +154,7 @@ func NewBufferedAuditStore(underlying store.AuditStore, cfg Config, logger *slog
 		"buffer_size", cfg.BufferSize,
 		"max_batch_size", cfg.MaxBatchSize,
 		"flush_interval", cfg.FlushInterval.String(),
+		"enqueue_timeout", cfg.EnqueueTimeout.String(),
 		"initial_chain_hash", initHash,
 	)
 	return b
@@ -128,44 +165,26 @@ func (b *BufferedAuditStore) SaveLog(log *store.AuditLog) error {
 	return b.SaveLogWithSnapshot(log, nil)
 }
 
-// SaveLogWithSnapshot puts the audit log and snapshot into the batch buffer.
+// SaveLogWithSnapshot establishes the single-authority hash chain and enqueues the log and snapshot.
 func (b *BufferedAuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *store.SnapshotRecord) error {
 	if log == nil {
 		return errors.New("audit log cannot be nil")
 	}
 
 	b.closeMu.RLock()
-	defer b.closeMu.RUnlock()
-
 	if b.closed {
-		// Closed: fallback to direct synchronous save with re-chaining
-		return b.saveDirectWithChain(log, snapshot)
+		b.closeMu.RUnlock()
+		return ErrStoreClosed
+	}
+	b.closeMu.RUnlock()
+
+	b.stateMu.Lock()
+	if b.closed {
+		b.stateMu.Unlock()
+		return ErrStoreClosed
 	}
 
-	// Clone log pointer to ensure worker can safely mutate hash without data race
-	logCopy := *log
-	item := pendingItem{log: &logCopy, snapshot: snapshot}
-
-	// Stage in memory for read-your-own-writes before enqueueing
-	b.stateMu.Lock()
-	b.recentLogs[log.ID] = &logCopy
-	b.lastLog = &logCopy
-	b.stateMu.Unlock()
-
-	select {
-	case b.queue <- item:
-		return nil
-	default:
-		// Queue full: fail-safe synchronous write to prevent data loss
-		b.droppedTotal.Add(1)
-		b.logger.Warn("audit batch queue full, falling back to synchronous save", "log_id", log.ID)
-		return b.saveDirectWithChain(log, snapshot)
-	}
-}
-
-// saveDirectWithChain synchronously writes a log directly to underlying store while maintaining hash chain.
-func (b *BufferedAuditStore) saveDirectWithChain(log *store.AuditLog, snapshot *store.SnapshotRecord) error {
-	b.stateMu.Lock()
+	// Single Authority: Establish hash chain under stateMu lock at enqueue time (P0-B)
 	if log.PrevHash == "" {
 		log.PrevHash = b.lastHash
 	}
@@ -175,15 +194,49 @@ func (b *BufferedAuditStore) saveDirectWithChain(log *store.AuditLog, snapshot *
 			log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON,
 		)
 	}
-	b.lastHash = log.IntegrityHash
-	b.lastLog = log
-	b.recentLogs[log.ID] = log
-	b.stateMu.Unlock()
 
+	logCopy := *log
+	var snapCopy *store.SnapshotRecord
 	if snapshot != nil {
-		return b.underlying.SaveLogWithSnapshot(log, snapshot)
+		s := *snapshot
+		s.PrevHash = log.PrevHash
+		s.IntegrityHash = log.IntegrityHash
+		snapCopy = &s
+		*snapshot = s // Sync back to caller's snapshot pointer
 	}
-	return b.underlying.SaveLog(log)
+
+	item := pendingItem{log: &logCopy, snapshot: snapCopy}
+
+	// Try non-blocking enqueue first
+	select {
+	case b.queue <- item:
+		b.lastHash = log.IntegrityHash
+		b.lastLog = &logCopy
+		b.recentLogs[log.ID] = &logCopy
+		*log = logCopy // Sync back to caller's log pointer
+		b.stateMu.Unlock()
+		return nil
+	default:
+	}
+
+	// Queue full: wait up to EnqueueTimeout to maintain strict FIFO channel ordering (P0-A)
+	timer := time.NewTimer(b.cfg.EnqueueTimeout)
+	defer timer.Stop()
+
+	select {
+	case b.queue <- item:
+		b.lastHash = log.IntegrityHash
+		b.lastLog = &logCopy
+		b.recentLogs[log.ID] = &logCopy
+		*log = logCopy
+		b.stateMu.Unlock()
+		return nil
+	case <-timer.C:
+		b.overflowTotal.Add(1)
+		b.stateMu.Unlock()
+		b.logger.Warn("audit flusher queue congested, write rejected after timeout", "log_id", log.ID, "timeout", b.cfg.EnqueueTimeout)
+		return fmt.Errorf("audit buffer queue congested: timeout waiting for slot after %v", b.cfg.EnqueueTimeout)
+	}
 }
 
 // SaveLogsBatch passes through directly to the underlying store.
@@ -286,8 +339,15 @@ func (b *BufferedAuditStore) VerifyChain(limit int) (*store.ChainVerificationRes
 	return b.underlying.VerifyChain(limit)
 }
 
-// CleanupOld delegates to the underlying store.
+// CleanupOld cleans up records from underlying store and purges corresponding memory entries.
 func (b *BufferedAuditStore) CleanupOld(before time.Time) (int64, error) {
+	b.stateMu.Lock()
+	for id, l := range b.recentLogs {
+		if l.Timestamp.Before(before) {
+			delete(b.recentLogs, id)
+		}
+	}
+	b.stateMu.Unlock()
 	return b.underlying.CleanupOld(before)
 }
 
@@ -306,8 +366,8 @@ func (b *BufferedAuditStore) Flush() error {
 		return <-req.done
 	case <-b.stopCh:
 		return nil
-	case <-time.After(15 * time.Second):
-		return errors.New("flush operation timed out after 15s")
+	case <-time.After(b.cfg.FlushTimeout):
+		return fmt.Errorf("flush operation timed out after %v", b.cfg.FlushTimeout)
 	}
 }
 
@@ -321,19 +381,46 @@ func (b *BufferedAuditStore) Close() error {
 	b.closed = true
 	b.closeMu.Unlock()
 
+	b.stateMu.Lock()
+	b.closed = true
+	b.stateMu.Unlock()
+
 	close(b.stopCh)
-	b.wg.Wait()
+
+	done := make(chan struct{})
+	go func() {
+		b.wg.Wait()
+		close(done)
+	}()
+
+	var closeErr error
+	select {
+	case <-done:
+	case <-time.After(b.cfg.CloseTimeout):
+		b.logger.Error("buffered audit store close timed out waiting for worker drain", "timeout", b.cfg.CloseTimeout)
+		closeErr = fmt.Errorf("buffered audit store close timed out after %v", b.cfg.CloseTimeout)
+	}
 
 	b.logger.Info("buffered audit store safely closed and flushed",
 		"total_flushed", b.flushedTotal.Load(),
 		"total_failed", b.failedTotal.Load(),
-		"total_overflow_sync", b.droppedTotal.Load(),
+		"total_overflow_congested", b.overflowTotal.Load(),
 	)
 
-	if closer, ok := b.underlying.(io.Closer); ok {
-		return closer.Close()
+	// Safely close underlying store if supported (P1-2)
+	if closer, ok := b.underlying.(auditStoreCloser); ok {
+		if err := closer.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	} else if closer, ok := b.underlying.(auditStoreSimpleCloser); ok {
+		closer.Close()
+	} else if closer, ok := b.underlying.(io.Closer); ok {
+		if err := closer.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
 	}
-	return nil
+
+	return closeErr
 }
 
 // QueueDepth returns the current number of pending records in the queue.
@@ -351,9 +438,22 @@ func (b *BufferedAuditStore) FailedTotal() int64 {
 	return b.failedTotal.Load()
 }
 
-// OverflowTotal returns the total number of logs written directly due to full queue.
+// OverflowTotal returns the total number of logs that timed out due to full queue.
 func (b *BufferedAuditStore) OverflowTotal() int64 {
-	return b.droppedTotal.Load()
+	return b.overflowTotal.Load()
+}
+
+// HasFlushError reports whether the store currently has an unrecovered flush error.
+func (b *BufferedAuditStore) HasFlushError() bool {
+	return b.hasFlushError.Load()
+}
+
+// LastFlushError returns the description of the latest flush error, if any.
+func (b *BufferedAuditStore) LastFlushError() string {
+	if v := b.lastFlushErr.Load(); v != nil {
+		return v.(string)
+	}
+	return ""
 }
 
 func (b *BufferedAuditStore) flushWorker() {
@@ -365,33 +465,38 @@ func (b *BufferedAuditStore) flushWorker() {
 	batchLogs := make([]store.AuditLog, 0, b.cfg.MaxBatchSize)
 	batchSnaps := make([]store.SnapshotRecord, 0, b.cfg.MaxBatchSize)
 
-	// flushCurrent writes the accumulated batch and re-chains in sequential FIFO order
+	// flushCurrent writes the accumulated batch preserving FIFO sequential order
 	flushCurrent := func() error {
 		if len(batchLogs) == 0 && len(batchSnaps) == 0 {
 			return nil
 		}
 
-		b.stateMu.Lock()
-		for i := range batchLogs {
-			// P0-1: Sequential chain binding strictly ordered in the worker
-			batchLogs[i].PrevHash = b.lastHash
-			batchLogs[i].IntegrityHash = store.ComputeAuditIntegrityHash(
-				batchLogs[i].ID, batchLogs[i].PrevHash, batchLogs[i].Timestamp,
-				batchLogs[i].Algorithm, batchLogs[i].InputHash, batchLogs[i].OutputHash,
-				batchLogs[i].User, batchLogs[i].SecurityLevel, batchLogs[i].ParametersJSON,
-			)
-			b.lastHash = batchLogs[i].IntegrityHash
-			b.lastLog = &batchLogs[i]
+		// Underlying batch commit with exponential backoff retries (P0-C)
+		var err error
+		for attempt := 0; attempt <= b.cfg.MaxRetries; attempt++ {
+			err = b.underlying.SaveLogsBatch(batchLogs, batchSnaps)
+			if err == nil {
+				break
+			}
+			if attempt < b.cfg.MaxRetries {
+				time.Sleep(time.Duration(25*(1<<attempt)) * time.Millisecond)
+			}
 		}
-		b.stateMu.Unlock()
 
-		err := b.underlying.SaveLogsBatch(batchLogs, batchSnaps)
 		if err != nil {
 			b.failedTotal.Add(int64(len(batchLogs)))
-			b.logger.Error("failed to flush audit batch to underlying store", "count", len(batchLogs), "error", err.Error())
-		} else {
-			b.flushedTotal.Add(int64(len(batchLogs)))
+			b.hasFlushError.Store(true)
+			b.lastFlushErr.Store(err.Error())
+			b.logger.Error("failed to flush audit batch after retries", "count", len(batchLogs), "error", err.Error())
+			// Retain in recentLogs so records remain readable in memory and not lost from memory view (P0-C)
+			batchLogs = batchLogs[:0]
+			batchSnaps = batchSnaps[:0]
+			return err
 		}
+
+		b.flushedTotal.Add(int64(len(batchLogs)))
+		b.hasFlushError.Store(false)
+		b.lastFlushErr.Store("")
 
 		// Clear committed records from memory map
 		b.stateMu.Lock()
@@ -402,10 +507,11 @@ func (b *BufferedAuditStore) flushWorker() {
 
 		batchLogs = batchLogs[:0]
 		batchSnaps = batchSnaps[:0]
-		return err
+		return nil
 	}
 
-	drainQueue := func() {
+	drainQueue := func(maxItems int) {
+		count := 0
 		for {
 			select {
 			case item := <-b.queue:
@@ -415,8 +521,13 @@ func (b *BufferedAuditStore) flushWorker() {
 				if item.snapshot != nil {
 					batchSnaps = append(batchSnaps, *item.snapshot)
 				}
+				count++
 				if len(batchLogs) >= b.cfg.MaxBatchSize {
 					_ = flushCurrent()
+				}
+				if maxItems > 0 && count >= maxItems {
+					_ = flushCurrent()
+					return
 				}
 			default:
 				_ = flushCurrent()
@@ -429,12 +540,12 @@ func (b *BufferedAuditStore) flushWorker() {
 		select {
 		case <-b.stopCh:
 			// Drain all remaining items in queue before termination (P0-2)
-			drainQueue()
+			drainQueue(0)
 			return
 
 		case req := <-b.flushReqCh:
-			// Drain queue up to this instant and flush synchronously (P0-3)
-			drainQueue()
+			// Drain queue up to limit and flush synchronously
+			drainQueue(1000)
 			err := flushCurrent()
 			req.done <- err
 

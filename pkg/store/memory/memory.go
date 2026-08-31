@@ -316,6 +316,14 @@ func NewAuditStore() *AuditStore {
 func (s *AuditStore) SaveLog(log *store.AuditLog) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if log.PrevHash == "" && len(s.logs) > 0 {
+		log.PrevHash = s.logs[len(s.logs)-1].IntegrityHash
+	}
+	if log.IntegrityHash == "" {
+		log.IntegrityHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
+	}
+
 	cp := *log
 	s.logs = append(s.logs, cp)
 	// P60 fix: drop oldest logs when capacity is exceeded to prevent unbounded memory growth.
@@ -330,10 +338,27 @@ func (s *AuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *store.Sn
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if log.PrevHash == "" && len(s.logs) > 0 {
+		log.PrevHash = s.logs[len(s.logs)-1].IntegrityHash
+	}
+	if log.IntegrityHash == "" {
+		log.IntegrityHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
+	}
+	if snapshot != nil {
+		if snapshot.PrevHash == "" {
+			snapshot.PrevHash = log.PrevHash
+		}
+		if snapshot.IntegrityHash == "" {
+			snapshot.IntegrityHash = log.IntegrityHash
+		}
+	}
+
 	logCopy := *log
-	snapshotCopy := *snapshot
 	s.logs = append(s.logs, logCopy)
-	s.snapshots = append(s.snapshots, snapshotCopy)
+	if snapshot != nil {
+		snapshotCopy := *snapshot
+		s.snapshots = append(s.snapshots, snapshotCopy)
+	}
 	if len(s.logs) > maxAuditLogs {
 		s.logs = s.logs[len(s.logs)-maxAuditLogs:]
 	}
@@ -660,27 +685,34 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 
 	var previousHash string
 	count := 0
+	legacyCount := 0
 
 	for i := 0; i < limit; i++ {
 		l := s.logs[i]
-		valid, _ := store.VerifyAuditIntegrityHash(l.IntegrityHash, l.ID, l.PrevHash, l.Timestamp, l.Algorithm, l.InputHash, l.OutputHash, l.User, l.SecurityLevel, l.ParametersJSON)
-
-		if !valid && l.IntegrityHash != "" {
-			expectedHash := store.ComputeAuditIntegrityHash(l.ID, l.PrevHash, l.Timestamp, l.Algorithm, l.InputHash, l.OutputHash, l.User, l.SecurityLevel, l.ParametersJSON)
-			return &store.ChainVerificationResult{
-				TotalVerified: count,
-				Valid:         false,
-				BrokenAtID:    l.ID,
-				ExpectedHash:  expectedHash,
-				ActualHash:    l.IntegrityHash,
-				Message:       fmt.Sprintf("integrity hash mismatch at log %s", l.ID),
-			}, nil
+		if l.IntegrityHash != "" {
+			ok, hashLabel := store.VerifyAuditIntegrityHash(l.IntegrityHash, l.ID, l.PrevHash, l.Timestamp, l.Algorithm, l.InputHash, l.OutputHash, l.User, l.SecurityLevel, l.ParametersJSON)
+			if !ok {
+				expectedHash := store.ComputeAuditIntegrityHash(l.ID, l.PrevHash, l.Timestamp, l.Algorithm, l.InputHash, l.OutputHash, l.User, l.SecurityLevel, l.ParametersJSON)
+				return &store.ChainVerificationResult{
+					TotalVerified: count,
+					Valid:         false,
+					LegacyHashed:  legacyCount,
+					BrokenAtID:    l.ID,
+					ExpectedHash:  expectedHash,
+					ActualHash:    l.IntegrityHash,
+					Message:       fmt.Sprintf("integrity hash mismatch at log %s: content modified", l.ID),
+				}, nil
+			}
+			if !store.IsCanonicalHashLabel(hashLabel) {
+				legacyCount++
+			}
 		}
 
 		if count > 0 && l.PrevHash != previousHash {
 			return &store.ChainVerificationResult{
 				TotalVerified: count,
 				Valid:         false,
+				LegacyHashed:  legacyCount,
 				BrokenAtID:    l.ID,
 				ExpectedHash:  previousHash,
 				ActualHash:    l.PrevHash,
@@ -689,14 +721,22 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 		}
 
 		previousHash = l.IntegrityHash
+		if previousHash == "" {
+			previousHash = store.ComputeAuditIntegrityHash(l.ID, l.PrevHash, l.Timestamp, l.Algorithm, l.InputHash, l.OutputHash, l.User, l.SecurityLevel, l.ParametersJSON)
+		}
 		count++
 	}
 
-	return &store.ChainVerificationResult{
+	result := &store.ChainVerificationResult{
 		TotalVerified: count,
 		Valid:         true,
+		LegacyHashed:  legacyCount,
 		Message:       fmt.Sprintf("hash chain verified successfully (%d records checked)", count),
-	}, nil
+	}
+	if legacyCount > 0 {
+		result.Message = fmt.Sprintf("hash chain verified successfully (%d records checked, %d legacy-hashed records pending canonical SM3 re-signing)", count, legacyCount)
+	}
+	return result, nil
 }
 
 // Ensure interface compliance at compile time.

@@ -28,6 +28,11 @@ func (s *AuditStore) SaveLog(log *store.AuditLog) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if log.PrevHash == "" {
+		if latest, err := s.GetLatestLog(); err == nil && latest != nil {
+			log.PrevHash = latest.IntegrityHash
+		}
+	}
 	if log.IntegrityHash == "" {
 		log.IntegrityHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 	}
@@ -47,14 +52,21 @@ func (s *AuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *store.Sn
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if log.PrevHash == "" {
+		if latest, err := s.GetLatestLog(); err == nil && latest != nil {
+			log.PrevHash = latest.IntegrityHash
+		}
+	}
 	if log.IntegrityHash == "" {
 		log.IntegrityHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 	}
-	if snapshot.IntegrityHash == "" {
-		snapshot.IntegrityHash = log.IntegrityHash
-	}
-	if snapshot.PrevHash == "" {
-		snapshot.PrevHash = log.PrevHash
+	if snapshot != nil {
+		if snapshot.PrevHash == "" {
+			snapshot.PrevHash = log.PrevHash
+		}
+		if snapshot.IntegrityHash == "" {
+			snapshot.IntegrityHash = log.IntegrityHash
+		}
 	}
 
 	tx, err := s.db.Begin()
@@ -618,4 +630,12 @@ func scanSnapshotRowScanner(scan func(dest ...any) error) (*store.SnapshotRecord
 
 func scanSnapshotRow(rows *sql.Rows) (*store.SnapshotRecord, error) {
 	return scanSnapshotRowScanner(rows.Scan)
+}
+
+// Close closes the underlying SQLite database connection.
+func (s *AuditStore) Close() error {
+	if s.db != nil {
+		return s.db.Close()
+	}
+	return nil
 }

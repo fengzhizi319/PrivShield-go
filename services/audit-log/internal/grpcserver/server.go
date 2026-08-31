@@ -165,16 +165,6 @@ func (s *GRPCServer) RecordAudit(ctx context.Context, req *pb.RecordAuditRequest
 		outputHash = hex.EncodeToString(h[:])
 	}
 
-	// Resolve Hash Chain
-	prevHash := req.PrevHash
-	if prevHash == "" {
-		if latest, err := s.audit.GetLatestLog(); err == nil && latest != nil {
-			prevHash = latest.IntegrityHash
-		}
-	}
-
-	integrityHash := store.ComputeAuditIntegrityHash(id, prevHash, now, req.Algorithm, inputHash, outputHash, user, secLevel, req.ParametersJson)
-
 	logEntry := &store.AuditLog{
 		ID:             id,
 		TaskID:         req.TaskId,
@@ -195,8 +185,7 @@ func (s *GRPCServer) RecordAudit(ctx context.Context, req *pb.RecordAuditRequest
 		Status:         opStatus,
 		ErrorMessage:   req.ErrorMessage,
 		SecurityLevel:  secLevel,
-		PrevHash:       prevHash,
-		IntegrityHash:  integrityHash,
+		PrevHash:       req.PrevHash,
 	}
 
 	// Envelope encrypt sample fields if key is configured
@@ -221,10 +210,10 @@ func (s *GRPCServer) RecordAudit(ctx context.Context, req *pb.RecordAuditRequest
 		Algorithm:      req.Algorithm,
 		Parameters:     params,
 		ParametersJSON: req.ParametersJson,
-		IntegrityHash:  integrityHash,
-		PrevHash:       prevHash,
+		PrevHash:       req.PrevHash,
 	}
 
+	// Single Authority: store assigns and syncs PrevHash and IntegrityHash to logEntry and snapshot
 	if err := s.audit.SaveLogWithSnapshot(logEntry, snapshot); err != nil {
 		return nil, status.Errorf(codes.Internal, "save audit log and snapshot: %v", err)
 	}
@@ -236,7 +225,7 @@ func (s *GRPCServer) RecordAudit(ctx context.Context, req *pb.RecordAuditRequest
 		Success:       true,
 		Via:           moduleVia,
 		SnapshotId:    snapID,
-		IntegrityHash: integrityHash,
+		IntegrityHash: logEntry.IntegrityHash,
 	}, nil
 }
 
