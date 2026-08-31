@@ -1,7 +1,6 @@
 package sqlite
 
 import (
-	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -30,7 +29,7 @@ func (s *AuditStore) SaveLog(log *store.AuditLog) error {
 	defer s.mu.Unlock()
 
 	if log.IntegrityHash == "" {
-		log.IntegrityHash = ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
+		log.IntegrityHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 	}
 	_, err := s.db.Exec(`
 		INSERT INTO audit_logs (id, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash,
@@ -49,7 +48,7 @@ func (s *AuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *store.Sn
 	defer s.mu.Unlock()
 
 	if log.IntegrityHash == "" {
-		log.IntegrityHash = ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
+		log.IntegrityHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 	}
 	if snapshot.IntegrityHash == "" {
 		snapshot.IntegrityHash = log.IntegrityHash
@@ -111,7 +110,7 @@ func (s *AuditStore) SaveLogsBatch(logs []store.AuditLog, snapshots []store.Snap
 
 	for _, log := range logs {
 		if log.IntegrityHash == "" {
-			log.IntegrityHash = ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
+			log.IntegrityHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 		}
 		if _, err := logStmt.Exec(log.ID, log.TaskID, log.APICode, log.DatasourceID, log.Timestamp.Format(time.RFC3339Nano), log.Operation, log.DataSource,
 			log.InputHash, log.OutputHash, log.Algorithm, log.ParametersJSON,
@@ -156,7 +155,7 @@ func (s *AuditStore) GetLatestLog() (*store.AuditLog, error) {
 	row := s.db.QueryRow(`
 		SELECT id, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash, algorithm,
 			parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash
-		FROM audit_logs ORDER BY timestamp DESC, rowid DESC LIMIT 1
+		FROM audit_logs ORDER BY rowid DESC LIMIT 1
 	`)
 	log, err := scanAuditLog(row)
 	if err != nil {
@@ -422,9 +421,12 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 		limit = 1000
 	}
 
+	// The chain follows persistence order, not the timestamp text: timestamps are stored as
+	// offset-bearing RFC3339Nano strings, whose lexicographic order is not chronological.
+	// 哈希链沿用具名顺序（落盘顺序）而非 timestamp 文本：带时区偏移的时间串按字典序排列不等于按时间排列。
 	query := fmt.Sprintf(`SELECT id, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash, algorithm,
 		parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash
-		FROM audit_logs ORDER BY timestamp ASC, rowid ASC LIMIT %d`, limit)
+		FROM audit_logs ORDER BY rowid ASC LIMIT %d`, limit)
 
 	rows, err := s.db.Query(query)
 	if err != nil {
@@ -433,7 +435,7 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 	defer rows.Close()
 
 	var previousHash string
-	count := 0
+	count, legacyCount := 0, 0
 
 	for rows.Next() {
 		log, err := scanAuditLogRow(rows)
@@ -441,18 +443,22 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 			return nil, err
 		}
 
-		expectedHash := ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
-
-		// Check internal hash integrity
-		if log.IntegrityHash != "" && log.IntegrityHash != expectedHash {
-			return &store.ChainVerificationResult{
-				TotalVerified: count,
-				Valid:         false,
-				BrokenAtID:    log.ID,
-				ExpectedHash:  expectedHash,
-				ActualHash:    log.IntegrityHash,
-				Message:       fmt.Sprintf("integrity hash mismatch at log %s: content modified", log.ID),
-			}, nil
+		// Check internal hash integrity (canonical SM3, legacy SHA-256 accepted)
+		if log.IntegrityHash != "" {
+			ok, hashLabel := store.VerifyAuditIntegrityHash(log.IntegrityHash, log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
+			if !ok {
+				return &store.ChainVerificationResult{
+					TotalVerified: count,
+					Valid:         false,
+					BrokenAtID:    log.ID,
+					ExpectedHash:  store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON),
+					ActualHash:    log.IntegrityHash,
+					Message:       fmt.Sprintf("integrity hash mismatch at log %s: content modified", log.ID),
+				}, nil
+			}
+			if !store.IsCanonicalHashLabel(hashLabel) {
+				legacyCount++
+			}
 		}
 
 		// Check chain continuity with previous record
@@ -460,6 +466,7 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 			return &store.ChainVerificationResult{
 				TotalVerified: count,
 				Valid:         false,
+				LegacyHashed:  legacyCount,
 				BrokenAtID:    log.ID,
 				ExpectedHash:  previousHash,
 				ActualHash:    log.PrevHash,
@@ -469,16 +476,21 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 
 		previousHash = log.IntegrityHash
 		if previousHash == "" {
-			previousHash = expectedHash
+			previousHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 		}
 		count++
 	}
 
-	return &store.ChainVerificationResult{
+	result := &store.ChainVerificationResult{
 		TotalVerified: count,
 		Valid:         true,
+		LegacyHashed:  legacyCount,
 		Message:       fmt.Sprintf("hash chain verified successfully (%d records checked)", count),
-	}, rows.Err()
+	}
+	if legacyCount > 0 {
+		result.Message = fmt.Sprintf("hash chain verified successfully (%d records checked, %d legacy-hashed records pending canonical SM3 re-signing)", count, legacyCount)
+	}
+	return result, rows.Err()
 }
 
 func buildAuditWhere(filter store.AuditFilter) (string, []any) {
@@ -606,13 +618,4 @@ func scanSnapshotRowScanner(scan func(dest ...any) error) (*store.SnapshotRecord
 
 func scanSnapshotRow(rows *sql.Rows) (*store.SnapshotRecord, error) {
 	return scanSnapshotRowScanner(rows.Scan)
-}
-
-// ComputeAuditIntegrityHash computes an enhanced SHA-256 integrity hash with prev_hash chaining.
-func ComputeAuditIntegrityHash(logID, prevHash string, timestamp time.Time, algorithm, inputHash, outputHash, user, securityLevel, paramsJSON string) string {
-	data := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%v",
-		prevHash, logID, timestamp.Format(time.RFC3339Nano), algorithm,
-		inputHash, outputHash, user, securityLevel, paramsJSON)
-	hash := sha256.Sum256([]byte(data))
-	return fmt.Sprintf("%x", hash)
 }

@@ -1,9 +1,11 @@
 # PrivShield 架构设计文档 (Architecture Design Document)
 
-> **版本**：v16.1.0（2026 生产实装版）  
+> **版本**：v16.4.0（2026 生产实装版）  
 > **适用范围**：`PrivShield` 核心算力引擎（`engine`）、企业级中台微服务群（`service-hub` / `datasource-mgr` / `audit-log`）、控制台与双 BFF 体系（`bff-go` / `app-lz` / `web`）及云原生部署基础设施。  
+> **核心数据分级基准**：**DB51/T 2989—2023《四川省健康医疗大数据应用指南》**（五级分类分级核心基准与敏感病种治理规则）  
 > **关联文档**：
 > - [liuzhou_govcloud_data_security_architecture.md](liuzhou_govcloud_data_security_architecture.md)（柳州政务云数据流通与网关脱敏安全架构审查专版）
+> - [柳州市医疗健康数据分类分级与隐私脱敏算法标准规范.md](柳州市医疗健康数据分类分级与隐私脱敏算法标准规范.md)（柳州市医疗健康数据分类脱敏算法标准规范）
 > - [unified_design_specifications.md](unified_design_specifications.md)（全栈统一设计规范）
 > - [new_api_design.md](new_api_design.md)（新增数据接口扩展 SOP）
 > - [architecture-summary.md](architecture-summary.md)（工程实践速览）
@@ -19,16 +21,16 @@
   - [1.1 业务定位与全景拓扑](#11-业务定位与全景拓扑)
   - [1.2 核心设计哲学](#12-核心设计哲学)
   - [1.3 分层 Monorepo 代码架构](#13-分层-monorepo-代码架构)
-  - [1.4 三大安全物理区域划分与部署拓扑](#14-三大安全物理区域划分与部署拓扑)
+  - [1.4 政务云三大安全区域与部署拓扑](#14-政务云三大安全区域与部署拓扑)
 - [二、算法与核心算力引擎（PrivShield Core）](#二算法与核心算力引擎privshield-core)
-  - [2.1 三层动态分类分级漏斗 (3-Layer Funnel)](#21-三层动态分类分级漏斗-3-layer-funnel)
+  - [2.1 四川省五级分级基准与三层动态分类漏斗](#21-四川省五级分级基准与三层动态分类漏斗)
   - [2.2 差分隐私与预算会计模型 (DP & Budget)](#22-差分隐私与预算会计模型-dp--budget)
   - [2.3 K-匿名与 Mondrian 多维泛化](#23-k-匿名与-mondrian-多维泛化)
   - [2.4 示范数据源（医保与康养）字段脱敏策略矩阵](#24-示范数据源医保与康养字段脱敏策略矩阵)
 - [三、企业级中台微服务群（Enterprise Services）](#三企业级中台微服务群enterprise-services)
   - [3.1 数据服务调度中枢 (Service Hub :8082 / :50052)](#31-数据服务调度中枢-service-hub-8082--50052)
   - [3.2 数据源资产管理 (Datasource Manager :8083 / :50053)](#32-数据源资产管理-datasource-manager-8083--50053)
-  - [3.3 独立审计与密码学防篡改存证 (Audit Log :8084 / :50054)](#33-独立审计与密码学防篡改存证-audit-log-8084--50054)
+  - [3.3 独立审计与国密 SM3 防篡改存证 (Audit Log :8084 / :50054)](#33-独立审计与国密-sm3-防篡改存证-audit-log-8084--50054)
 - [四、端到端数据流转机制与高可用调度](#四端到端数据流转机制与高可用调度)
   - [4.1 端到端 9 阶段全流程流转时序](#41-端到端-9-阶段全流程流转时序)
   - [4.2 各阶段安全关键控制点](#42-各阶段安全关键控制点)
@@ -54,8 +56,8 @@
 
 PrivShield 实现了**「三层四柱五御六类」数据安全与隐私治理架构**：
 - **表现与接入面**：双控制台（`console/web` 与 `console/app-lz/web`）配合高性能 Go BFF 代理网关群（`:8081` / `:8085`），面向合规工程师与业务运营人员提供全场景交互；
-- **调度与存证面**：企业级 Go 微服务群串联多源数据纳管（`datasource-mgr:8083`）、6 阶段流水线调度编排（`service-hub:8082`）与 9 要素密码学防篡改存证（`audit-log:8084`）；
-- **核心计算面**：以独立高性能 Sidecar / 微服务（`engine:8079` / `:50051`）形式提供字段级脱敏、差分隐私、K-匿名与三层动态分类分级漏斗（Rule → Small-NER → Local LLM 仲裁）；
+- **调度与存证面**：企业级 Go 微服务群串联多源数据纳管（`datasource-mgr:8083`）、6 阶段流水线调度编排（`service-hub:8082`）与 9 要素国密 SM3 防篡改存证（`audit-log:8084`）；
+- **核心计算面**：以独立高性能微服务（`engine:8079` / `:50051`）形式提供字段级脱敏、差分隐私、K-匿名与三层动态分类分级漏斗（Rule → Small-NER → Local LLM 仲裁）；
 - **存储与基础设施面**：支持 SQLite WAL 单机部署与 PostgreSQL `FOR UPDATE SKIP LOCKED` 原子租约高可用集群，并提供 Helm / K8s / Docker Compose 全栈云原生基础设施。
 
 ```mermaid
@@ -66,7 +68,7 @@ flowchart TD
         WebAppLZ[console/app-lz/web<br/>数联调度之眼大屏 :5174]
         GoBFF[Go gRPC API Gateway / BFF :8081<br/>REST 入口 + gRPC 上游]
         GoLZBFF[App-LZ BFF 网关 :8085<br/>流水线调度与 E2E 测试器]
-        GoGateway[engine-go/cmd/privshield-gateway<br/>Go L7 P2C 负载均衡网关 :8000 / :50000]
+        PyGateway[engine/gateway<br/>Python L7 负载均衡网关 :8000 / :50000]
     end
 
     subgraph CrossCutting ["2. 跨切面中间件与零信任安全层 (Middleware & Security)"]
@@ -77,26 +79,26 @@ flowchart TD
     subgraph ServiceCluster ["3. 企业级数据流通调度与存证层 (Governance Services)"]
         ServiceHub[数据服务调度中枢 :8082 / :50052<br/>6 阶段流水线编排 / PG 原子租约 Worker]
         DatasourceMgr[数据源与资产管理 :8083 / :50053<br/>多源连接池 / 样本切片 / 敏感特征探查]
-        AuditLog[合规存证与审计日志 :8084 / :50054<br/>9 要素防篡改哈希链 / SM4-GCM 快照加密]
+        AuditLog[合规存证与审计日志 :8084 / :50054<br/>9 要素国密 SM3 哈希链 / SM4-GCM 快照加密]
     end
 
     subgraph CoreEngine ["4. 核心隐私算力与动态分类引擎 (Core Engine :8079 / :50051)"]
-        REST[Gin REST API :8079]
+        REST[FastAPI REST API :8079]
         GRPC[gRPC Servicer :50051]
-        Funnel[3 层动态分类漏斗<br/>Rule → Small-NER → External LLM 仲裁]
-        Primitives[四大隐私原语<br/>Masking / DP / K-Anon & L-Diversity / QoL]
-        Budget[无锁原子隐私预算会计模型<br/>CAS 循环 + 时间窗口重置]
+        Funnel[3 层动态分类漏斗<br/>Rule → Small-NER → Local LLM 仲裁]
+        Primitives[四大隐私原语<br/>Masking / DP / K-Anon / QoL]
+        Budget[分布式隐私预算会计模型<br/>Epsilon / Delta + 时间窗口重置]
     end
 
     subgraph StorageSecurity ["5. 统一存储与密码学基座 (Storage & Crypto)"]
         SSOT[pkg/naming 单一事实源]
         StoreSQLite[SQLite WAL 单机存储]
         StorePostgres[PostgreSQL FOR UPDATE SKIP LOCKED 原子租约高可用存储]
-        CryptoBase[国密 SM3 散列 / SM4-GCM 快照信封加密 enc:v1:...]
+        CryptoBase[国密 SM4-GCM 快照信封加密 enc:v1:... 与 SM3 哈希]
     end
 
     subgraph Infrastructure ["6. 云原生与全栈可观测基础设施 (Observability & K8s)"]
-        Prometheus[Prometheus 指标采集 :9090<br/>全栈 Go 50+ 核心生产指标]
+        Prometheus[Prometheus 指标采集 :9090<br/>Python 40+ 指标 / Go 15+ 指标]
         Grafana[Grafana 联合监控看板 :3000]
         Tracing[OpenTelemetry 分布式链路追踪]
         K8sHPA[K8s HPA / CronHPA / ServiceMonitor]
@@ -106,8 +108,8 @@ flowchart TD
     WebAppLZ --> GoLZBFF
     GoBFF & GoLZBFF --> CrossCutting
     CrossCutting --> ServiceCluster & CoreEngine
-    CrossCutting --> GoGateway
-    GoGateway --> CoreEngine
+    CrossCutting --> PyGateway
+    PyGateway --> CoreEngine
 
     GoBFF -->|gRPC / HTTP| GRPC & REST
     GoLZBFF -->|HTTP| ServiceHub & DatasourceMgr & AuditLog
@@ -131,12 +133,12 @@ flowchart TD
 
 | 原则 | 含义 | 架构落地体现 |
 |---|---|---|
-| **确定性优先** | 隐私算法与安全定级具备可证明的数学与规则依据 | 规则引擎优先于 AI 模型；DP/K-Anon 采用经典数学机制与单趟融合向量计算 |
-| **优雅降级** | 复杂重依赖缺失或硬件受限时不崩溃，自动回退可用子集 | LLM/NER 缺失回退规则层与人工审核标记；三态熔断器自动半开探测恢复 |
-| **算力调度解耦** | 纯算力计算与上层业务流水线解耦为独立微服务 | `engine-go` 专攻零内存分配隐私算力，`services/` 专攻高并发调度、存证与租约管理 |
-| **双栈同源** | 一套核心业务逻辑，同时支持高性能 RPC 与易调试 REST | `PrivacyService` 同时驱动 Gin REST 路由与 gRPC Servicer |
-| **零信任访问** | 默认不信任任何内部网络，每跳通信均需身份认证与权限校验 | gRPC mTLS + CN 白名单动态热重载 + HTTP API Key 常量时间鉴权 |
-| **云原生韧性** | 具备自愈、自适应负载均衡与细粒度事件驱动弹性扩缩 | P2C-EWMA 动态分流、BufferPool 零分配反向代理、优雅停机排空 |
+| **确定性优先** | 隐私算法与安全定级具备可证明的数学与规则依据 | 规则引擎优先于 AI 模型；DP/K-Anon 采用经典数学机制 |
+| **优雅降级** | 复杂重依赖缺失或硬件受限时不崩溃，自动回退可用子集 | LLM/NER 缺失回退规则层与人工审核标记；内存 `<512MB` 跳过 LLM |
+| **算力调度解耦** | 纯算力计算与上层业务流水线解耦为独立微服务 | Python 专攻 AI 隐私算力，Go 专攻高并发调度、存证与租约管理 |
+| **双栈同源** | 一套核心业务逻辑，同时支持高性能 RPC 与易调试 REST | `PrivacyService` 同时驱动 REST 路由与 gRPC Servicer |
+| **零信任访问** | 默认不信任任何内部网络，每跳通信均需身份认证与权限校验 | gRPC mTLS + CN 白名单动态热重载 + HTTP API Key 鉴权 |
+| **云原生韧性** | 具备自愈、自适应负载均衡与细粒度事件驱动弹性扩缩 | P2C 动态分流、三态熔断器、优雅停机排空与 CronHPA 潮汐调度 |
 
 ---
 
@@ -144,98 +146,105 @@ flowchart TD
 
 ```text
 PrivShield/ (Repo Root)
-├── engine-go/                 # 核心隐私算力与动态分类分级引擎 (Go 1.25+)
-│   ├── cmd/                   # privshield-agent 与 privshield-gateway 启动入口
-│   └── internal/              # 3-Layer 漏斗、DICOM 脱敏、P2C-EWMA 网关、安全与可观测性
-├── privacy-go-sdk/            # 纯 Go 零依赖数学隐私原语库 (Masking, DP, LDP, Kano, QOL, Budget)
-├── services/                  # 企业级中台微服务群 (Go 1.25 集群)
+├── engine/                    # 核心隐私算力与动态分类分级引擎 (Python 3.10+)
+│   ├── privacy/               # 隐私原语 (Masking, DP, K-Anon, QoL, Budget)
+│   ├── dynclassification/     # 3 层动态分类漏斗 (Rule, NER, LLM 适配器与仲裁)
+│   ├── security/              # 传输与身份安全 (TLS, mTLS, API Key, RateLimit, 白名单)
+│   ├── observability/         # Prometheus 指标、OTel 链路追踪与结构化日志
+│   ├── routers/               # FastAPI REST 各子路由
+│   └── gateway/               # 智能动态负载均衡网关 (P2C / WRR / 节点熔断)
+│
+├── services/                  # 企业级中台微服务群 (Go 1.24/1.25 集群)
 │   ├── service-hub/           # 数据服务调度中枢 (:8082 / :50052)
 │   ├── datasource-mgr/        # 数据源资产管理与模拟库 (:8083 / :50053)
-│   └── audit-log/             # 脱敏审计与 9 要素防篡改存证 (:8084 / :50054)
+│   └── audit-log/             # 脱敏审计与 9 要素国密 SM3 防篡改存证 (:8084 / :50054)
+│
 ├── console/                   # 统一管理与测试控制台
 │   ├── bff-go/                # Go BFF 聚合网关 (:8081 / :50055)
 │   ├── app-lz/                # 数联调度之眼业务 BFF 与 E2E 测试器 (:8085)
 │   ├── web/                   # 通用隐私控制台前端 (React 18 + TS + Vite)
 │   └── app-lz/web/            # 业务流水线控制台前端 (React 18 + TS + Vite)
+│
 ├── pkg/                       # Go 全局共享基础库
 │   ├── naming/                # SSOT 规范命名与别名归一化
 │   ├── middleware/            # 9 层统一中间件栈与统一错误信封
-│   ├── store/                 # 存储底座抽象 (SQLite WAL / PostgreSQL 原子租约)
-│   ├── crypto/                # 国密 SM3 / SM4-GCM 快照信封加密 (enc:v1:...)
+│   ├── store/                 # 存储底座抽象 (SQLite WAL / PostgreSQL 原子租约 / Memory)
+│   ├── crypto/                # SM4-GCM 快照信封加密 (enc:v1:...) 与纯 Go SM4 分组密码
 │   ├── tlsutil/               # TLS 1.3 mTLS 与 CN 白名单动态热重载
 │   └── metrics/               # Prometheus 指标收集器
+│
 ├── deploy/                    # 云原生部署基础设施 (Helm, K8s, Docker Compose, Grafana)
 ├── config/                    # 运行时配置与 mTLS 白名单 (mtls-whitelist.yaml)
-├── rules/                     # 分类分级领域规则库与标准体系 YAML
+├── rules/                     # 分类分级领域规则库与标准体系 YAML (medical.yaml, sc_health_db51.yaml)
 └── scripts/                   # 自动化运维、启动、测试与数据迁移脚本
 ```
 
 ---
 
-### 1.4 三大安全物理区域划分与部署拓扑
+### 1.4 政务云三大安全区域与部署拓扑
 
-针对政务云、医疗医保与智慧康养等高敏感数据跨域流通场景，系统在物理与网络层面划分为三大严格隔离的安全区域：
+针对政务云、医疗医保与智慧康养等高敏感数据跨域流通场景，系统在政务云上划分为三大严格隔离的安全区域，并采用**独立虚拟机 (ECS) 与 VPC 子网及安全组逻辑强隔离**：
 
 ```mermaid
 graph TD
-    subgraph ZoneA [区域一：业务应用域 / 外部业务云]
-        AppLZ[业务系统 / 客户端 APP<br/>如: 龙城云·康养APP]
+    subgraph ZoneA [区域一：业务应用域 / 龙城云 VPC]
+        AppLZ[业务系统 / 客户端 APP<br/>如: 龙城云·康养APP :8085/:5173]
         AgentLZ[业务 Agent 编排集群<br/>Context 组装 / 安全审查]
-        ExtLLM[公有云通用大模型集群<br/>Qwen / DeepSeek / 商业大模型]
+        ExtLLM[公有云通用大模型集群<br/>Qwen / 商业大模型]
     end
 
     subgraph ZoneVPN [安全传输通道]
-        VPN[国密 VPN 专线 / TLS 1.3 mTLS 链路<br/>IPSec / SM4 硬件加密]
+        VPN[国密 IPSec VPN / SM4 加密 / TLS 1.3 mTLS]
     end
 
-    subgraph ZoneB [区域二：政务云高安全域 / 数据局专区]
-        subgraph Server1 [物理服务器主机甲 · 网关算力节点]
-            Hub[数联数据服务调度中枢 :8082<br/>Service Hub / 6阶段流水线]
-            Engine[动态分类分级与脱敏引擎 :8079<br/>Core Engine / 3层漏斗脱敏]
+    subgraph ZoneB [区域二：政务云高安全 VPC 专区]
+        subgraph Server1 [政务云虚拟机主机甲 · 网关算力节点 · ECS]
+            Hub[数联数据服务调度中枢 :8082 / :50052<br/>Service Hub / 6阶段流水线]
+            Engine[动态分类分级与脱敏引擎 :8079 / :50051<br/>Core Engine / 3层漏斗脱敏]
         end
 
-        subgraph Server2 [物理服务器主机乙 · 独立安全审计节点]
-            Audit[脱敏审计日志服务器 :8084<br/>Audit Log / 9要素哈希链]
-            AuditUI[数据管理方专属只读核验专区]
+        subgraph Server2 [政务云独立审计虚拟机主机乙 · 安全审计节点 · ECS]
+            Audit[脱敏审计日志服务器 :8084 / :50054<br/>Audit Log / 国密 SM3 哈希链]
+            AuditUI[数据局专属只读核验专区]
         end
 
-        subgraph BureauDB [核心数据资产受控专区]
-            DB[(内部原始高密数据库<br/>Datasource Mgr :8083 / 医保 & 康养原数)]
+        subgraph BureauDB [数据局核心资产受控 VPC 子网]
+            DB[(内部原始高密数据库<br/>Datasource Mgr :8083 / :50053)]
         end
     end
 
     AppLZ -->|① 发起协商请求| VPN
-    VPN -->|mTLS 进站| Hub
+    VPN -->|mTLS 进站鉴权| Hub
     Hub -->|② 申请原数| DB
     DB -->|③ 供给原数| Hub
-    Hub -->|④ 域内原数 同机IPC| Engine
+    Hub -->|④ 域内原数 同虚机内存IPC| Engine
     Engine -->|⑤ 返回脱敏数据包| Hub
-    Hub -->|⑥ 跨机同步存证| Audit
+    Hub -->|⑥ 跨虚机单向同步存证| Audit
     Hub -->|⑦ 回传脱敏安全流| VPN
     VPN -->|脱敏安全流| AgentLZ
     AgentLZ -->|⑧ 发送脱敏 Prompt| ExtLLM
     ExtLLM -->|⑨ 返回推理结果| AgentLZ
 ```
 
-| 物理节点定位 | 部署组件 | 网络与访问控制策略 | 归属与管理责任 |
+| 部署节点定位 | 部署组件 | 网络与 VPC 安全组控制策略 | 归属与管理责任 |
 |---|---|---|---|
-| **外部业务节点** | • 业务系统 (`app-lz`)<br/>• 业务 Agent 集群 | 位于业务外网/云端，经国密 VPN 连接政务云网关 | 业务运营方 |
-| **物理主机甲**<br/>(网关算力节点) | • 数据服务调度中枢 (`service-hub:8082`)<br/>• 动态分类分级与脱敏程序 (`engine:8079`) | 仅开放特定 VPN 接入端口，中枢与脱敏引擎使用 `127.0.0.1` 环回内存通信 | 技术运营方（受数据方监管） |
-| **物理主机乙**<br/>(独立审计节点) | • 脱敏审计日志服务器 (`audit-log:8084`)<br/>• 9 要素连续哈希链与加密快照 | 独立物理机，与主机甲内网单向存证通信，暴露只读验真端点 | **数据主管方安全监管组专属** |
-| **数据底座受控区** | • 内部原始数据库 (`datasource-mgr:8083`) | 物理隔离受控机房，禁止外网直连，仅响应主机甲的鉴权请求 | **数据主管方独家持有与管控** |
+| **外部业务节点** | • 业务系统 (`app-lz`)<br/>• 业务 Agent 集群 | 位于业务云 VPC，经国密 IPSec VPN 专线连接政务云网关 | 业务运营方 |
+| **云虚拟机主机甲**<br/>(网关算力节点 · ECS) | • 数据服务调度中枢 (`service-hub:8082`)<br/>• 动态分类分级与脱敏引擎 (`engine:8079`) | 仅开放受控 VPN 接入端口；中枢与脱敏引擎使用 `127.0.0.1` 环回内存 IPC 高速通信 (10~50μs) | 技术运营方（受数据局监管） |
+| **云虚拟机主机乙**<br/>(独立审计节点 · ECS) | • 脱敏审计日志服务器 (`audit-log:8084`)<br/>• 9 要素国密 SM3 连续哈希链与 SM4 快照 | 独立审计虚拟机，VPC 安全组配置单向入站只写策略，暴露只读验真端点 | **数据局安全监管组专属** |
+| **核心数据资产区** | • 内部原始数据库 (`datasource-mgr:8083`) | 专用高密受控 VPC 子网，禁止外网直连，仅响应主机甲鉴权原数切片申请 | **数据局独家持有与管控** |
 
 ---
 
 ## 二、算法与核心算力引擎（PrivShield Core）
 
-### 2.1 三层动态分类分级漏斗 (3-Layer Funnel)
+### 2.1 四川省五级分级基准与三层动态分类漏斗
 
-系统采用**三层递进漏斗机制**实现高效、精准的数据安全治理：
+系统以 **DB51/T 2989—2023《四川省健康医疗大数据应用指南》** 为核心五级分级基准（L1公开、L2内部、L3敏感、L4高敏、L5极敏），并在 `engine/dynclassification` 实现**三层递进漏斗机制**：
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#1e293b', 'primaryTextColor': '#f8fafc', 'primaryBorderColor': '#38bdf8', 'lineColor': '#38bdf8' }}}%%
 graph TB
-    Input[待分类数据记录 / 字段] --> L1[Layer 1: YAML 规则引擎<br/>正则 / 关键词 / 条件组合 / Safety Floor 10~50μs]
+    Input[待分类数据记录 / 字段] --> L1[Layer 1: YAML 规则引擎<br/>DB51 规则 / 正则词典 / 条件组合 / Safety Floor 10~50μs]
     L1 -->|高置信度命中 85%+| Out[输出定级与脱敏策略]
     L1 -->|未命中 / 低置信度| L2[Layer 2: Small-NER 引擎<br/>ONNX 轻量中文实体识别 1~5ms]
     L2 -->|抽取出明确专有实体| Out
@@ -243,9 +252,9 @@ graph TB
     L3 --> Out
 ```
 
-* **Layer-1 (规则层 + Safety Floor 保底)**：`ConfigurableRuleEngine` 解析 `rules/domains/*.yaml` 与标准体系定义，支持正则匹配、枚举词典、Luhn 校验与条件组合规则，并结合 Safety Floor 对身份证、手机号等关键字段强制保底定级（L3/L4），处理 85%+ 明确模式；
+* **Layer-1 (规则层 + Safety Floor 保底)**：`ConfigurableRuleEngine` 解析 `rules/domains/*.yaml` 与 DB51 标准体系定义，支持正则匹配、枚举词典、Luhn 校验与条件组合规则，并结合 Safety Floor 对身份证、手机号等关键字段强制保底定级（L3/L4），处理 85%+ 明确模式；
 * **Layer-2 (实体抽取层)**：采用轻量级 ONNX NER 模型抽取姓名、身份证、疾病、机构等实体，跳过纯数字及英文字段以提高吞吐；
-* **Layer-3 (大模型仲裁层)**：采用专精量化本地大模型（Qwen3.5）进行上下文语义推理与歧义仲裁，配备进程级并发信号量（`PRIVACY_LLM_MAX_CONCURRENCY`）防显存 OOM，当系统可用内存 `<512MB` 时自动跳过并标记 `needs_human_review`。
+* **Layer-3 (大模型仲裁层)**：采用专精量化本地大模型（Qwen3.5）进行上下文语义推理与歧义仲裁，配备进程级并发信号量（`PRIVACY_LLM_MAX_CONCURRENCY=1`）防显存 OOM，当系统可用内存 `<512MB` 时自动跳过并标记 `needs_human_review`。
 
 ---
 
@@ -255,8 +264,8 @@ graph TB
 * **差分隐私预算会计中枢 (`BudgetAccountant`)**：
   * 支持命名空间隔离追踪累计 $\varepsilon$（Epsilon）与 $\delta$（Delta）消耗；
   * 支持时间窗口自动重置（`PRIVACY_BUDGET_WINDOW_SECONDS`）；
-  * 支持跨多实例持久化同步（`PRIVACY_BUDGET_DB`，SQLite / PostgreSQL）；
-  * 不可篡改 HMAC 审计：`BudgetAuditLogger` 对每笔预算消耗记录进行 HMAC-SHA256 签名存证。
+  * 支持跨多实例持久化同步（`PRIVACY_BUDGET_DB`，SQLite / PostgreSQL / Memory）；
+  * 不可篡改国密哈希审计：`BudgetAuditLogger` 对每笔预算消耗记录进行 **国密 HMAC-SM3 / SM3** 签名存证。
 
 ---
 
@@ -269,12 +278,12 @@ graph TB
 
 ### 2.4 示范数据源（医保与康养）字段脱敏策略矩阵
 
-针对核心政务与医疗数据资产，系统内置了标准化的分类脱敏策略矩阵：
+针对核心政务与医疗数据资产，系统内置了对齐 DB51 标准的分类脱敏策略矩阵：
 
 #### 1. 医保结算数据接口 (`ds_yibao` / `api1_yibao`，18 字段)
-| 字段标识 | 字段业务名称 | 敏感等级 | 数据分类 | 脱敏策略与算法 | 脱敏效果示例 |
+| 字段标识 | 字段业务名称 | 敏感等级 | DB51 数据分类 | 脱敏策略与算法 | 脱敏效果示例 |
 |---|---|:---:|:---:|---|---|
-| `person_id` | 个人参保标识 | **L4** | 个人直接标识 | HMAC 散列化 + 截断 | `P9A8***F6` |
+| `person_id` | 个人参保标识 | **L4** | 个人直接标识 | 国密 HMAC-SM3 散列 + 截断 | `P9A8***F6` |
 | `birth_date` | 出生日期 | **L2** | 准标识符 | 年份保留 / 月日泛化 | `1985-**-**` |
 | `gender` | 性别 | **L1** | 统计属性 | 明文保留 / 保持原始 | `男` |
 | `hospital_code` | 医疗机构编码 | **L2** | 业务代码 | 结构保留 / 局部掩码 | `H4502***01` |
@@ -283,7 +292,7 @@ graph TB
 | `insurance_settlement_id` | 结算流水号 | **L2** | 业务流水 | 中段掩码 | `SET-2026-****-88` |
 
 #### 2. 康养体征数据接口 (`ds_kangyang` / `api2_kangyang`，27 字段)
-| 字段标识 | 字段业务名称 | 敏感等级 | 数据分类 | 脱敏策略与算法 | 脱敏效果示例 |
+| 字段标识 | 字段业务名称 | 敏感等级 | DB51 数据分类 | 脱敏策略与算法 | 脱敏效果示例 |
 |---|---|:---:|:---:|---|---|
 | `name` | 患者真实姓名 | **L4** | 个人高敏感 PII | 姓氏保留，名字掩码 | `王*` / `张**` |
 | `id_card_no` | 身份证号 | **L4** | 个人法定唯一标识 | 前6后4保留，中间掩码 | `450202********1234` |
@@ -296,7 +305,7 @@ graph TB
 
 ## 三、企业级中台微服务群（Enterprise Services）
 
-中台微服务群位于 `services/`，基于 Go 1.25 构建，具备高并发、低内存占用与强类型安全的特性。
+中台微服务群位于 `services/`，基于 Go 构建，具备高并发、低内存占用与强类型安全的特性。
 
 ### 3.1 数据服务调度中枢 (Service Hub :8082 / :50052)
 * **流水线 6 阶段调度**：`Ingest` (请求接入) ➔ `Fetch` (拉取原数) ➔ `Classify` (分类定级) ➔ `Desensitize` (按级脱敏) ➔ `Return` (脱敏回传) ➔ `Audit` (异步存证)；
@@ -310,14 +319,14 @@ graph TB
 * **模拟数据集开箱即用**：内置医保结算（`yibao.csv`）与康养体检慢病（`kangyang.csv`）数据库，支持启动自动种子注入（`SeedMockDataSources`）、元数据自动探查与样本安全切片提取（Sample Slicing）；
 * **HTTP/gRPC 双协议 mTLS**：与 service-hub 共享 `pkg/tlsutil` 工具库，支持 TLS 1.3 双向认证与 CN 白名单动态热重载。
 
-### 3.3 独立审计与密码学防篡改存证 (Audit Log :8084 / :50054)
+### 3.3 独立审计与国密 SM3 防篡改存证 (Audit Log :8084 / :50054)
 
-传统网关常将审计日志记录在本地或共享数据库中，存在“业务管理员即审计员”的安全风险。PrivShield 将审计系统独立部署在物理主机乙上：
+PrivShield 将审计系统独立部署在政务云独立审计虚拟机主机乙上，实现算力与审计的强隔离：
 
-1. **9 要素区块链式连续哈希链数学模型**：
-   每一笔数据流通操作均提取 9 个关键特征字段，并与前序区块的哈希值进行链式计算：
-   $$\text{BlockData}_n = \text{prev_hash}_{n-1} \parallel \text{id}_n \parallel \text{task_id}_n \parallel \text{api_code}_n \parallel \text{datasource_id}_n \parallel \text{timestamp}_n \parallel \text{input_hash}_n \parallel \text{output_hash}_n \parallel \text{algorithm}_n$$
-   $$\text{IntegrityHash}_n = \text{SHA256}(\text{BlockData}_n)$$
+1. **9 要素国密 SM3 连续哈希链数学模型**：
+   每一笔数据流通操作均提取 9 个关键特征字段，采用 **国密 SM3 算法（GM/T 0004-2012 / GB/T 32918）** 与前序区块的哈希值进行链式计算：
+   $$\text{BlockData}_n = \text{prev\_hash}_{n-1} \parallel \text{id}_n \parallel \text{task\_id}_n \parallel \text{api\_code}_n \parallel \text{datasource\_id}_n \parallel \text{timestamp}_n \parallel \text{input\_hash}_n \parallel \text{output\_hash}_n \parallel \text{algorithm}_n$$
+   $$\text{IntegrityHash}_n = \text{SM3}(\text{BlockData}_n)$$
 2. **快照 SM4-GCM 信封加密落盘**：
    出域脱敏样本快照在入库前经国密 SM4-GCM 动态信封加密落盘，存储格式为：
    ```text
@@ -336,7 +345,7 @@ graph TB
 ```mermaid
 sequenceDiagram
     autonumber
-    box rgba(14,165,233,0.1) 业务应用域
+    box rgba(14,165,233,0.1) 业务应用域 (龙城云 VPC)
     participant App as 业务系统 (app-lz)
     participant Agent as 业务 Agent 集群
     participant ExtLLM as 公有云通用大模型
@@ -346,16 +355,16 @@ sequenceDiagram
     participant VPN as 国密 VPN / TLS 1.3 mTLS
     end
 
-    box rgba(37,99,235,0.1) 主机甲 (网关算力节点)
+    box rgba(37,99,235,0.1) 主机甲 (网关算力节点 · ECS)
     participant Hub as 数联调度中枢 (Service Hub)
     participant Engine as 动态分类与脱敏引擎
     end
 
-    box rgba(220,38,38,0.1) 数据核心专区
+    box rgba(220,38,38,0.1) 数据核心专区 (受控 VPC)
     participant DB as 内部原始数据库 (Datasource Mgr)
     end
 
-    box rgba(217,119,6,0.1) 主机乙 (安全审计节点)
+    box rgba(217,119,6,0.1) 主机乙 (独立审计节点 · ECS)
     participant Audit as 脱敏审计日志服务器 (Audit Log)
     end
 
@@ -367,13 +376,13 @@ sequenceDiagram
     Hub->>DB: 依据授权 API 契约向原始数据库申请指定数据切片
     DB-->>Hub: 局域网内供给未脱敏原始记录流 (Raw Payload)
 
-    Note over Hub,Engine: ④~⑤ 同机环回高速闭环分类与脱敏 (微秒级)
-    Hub->>Engine: 同机 Loopback (127.0.0.1) 发送原始数据包
+    Note over Hub,Engine: ④~⑤ 同虚机环回高速闭环分类与脱敏 (微秒级)
+    Hub->>Engine: 同虚机 Loopback (127.0.0.1) 发送原始数据包
     Engine->>Engine: 3层漏斗定级 + 执行掩码/DP/K-匿名脱敏算子
     Engine-->>Hub: 返回处理完成的安全脱敏包 (Masked Payload)
 
-    Note over Hub,Audit: ⑥ 跨物理机异步同步存证 (物理隔离)
-    Hub-)Audit: 异步提交 9 要素元数据 + 加密出域快照 (9-Factor Hash Chain)
+    Note over Hub,Audit: ⑥ 跨虚机单向异步同步存证 (VPC 安全组隔离)
+    Hub-)Audit: 异步提交 9 要素元数据 + 加密出域快照 (SM3 Hash Chain)
     Audit->>Audit: 计算连续哈希 IntegrityHash 并持久化
 
     Note over Hub,Agent: ⑦ 安全脱敏流回传 (原始数据零出域)
@@ -395,9 +404,9 @@ sequenceDiagram
 | 阶段序号 | 阶段名称 | 执行实体 | 安全与技术控制点 | 架构关注重点 |
 |:---:|---|---|---|---|
 | **①** | 协商数据请求 | `app-lz` ➔ VPN ➔ `service-hub` | • 必须指明规范化的 `api_code`（如 `api1_yibao`）<br/>• 验证客户端 mTLS 证书 CN 是否在白名单中 | 严格限制调用范围，拒绝任意 SQL 或自由查询 |
-| **②~③** | 原数受控供给 | `service-hub` ➔ `datasource-mgr` | • 局域网专线连接，严格限制读取行数（Limit）<br/>• 原始库表不暴露任何外部公网端口 | 原始数据物理不出机房，仅在政务局域网受控流转 |
-| **④~⑤** | 同机闭环脱敏 | `service-hub` ➔ `engine` | • 同宿主机 `127.0.0.1` 环回通信，无跨机抓包风险<br/>• 3 层漏斗自动打标 L1~L5 并强制执行脱敏 | 内存级处理，微秒级响应，杜绝中间明文落盘 |
-| **⑥** | 跨机同步存证 | `service-hub` ➔ `audit-log` | • 跨物理机异步存证，记录 9 要素密码学特征<br/>• 样本快照自动执行 SM4-GCM 信封加密 | 计算与审计物理隔离，确保存证不可被业务侧篡改 |
+| **②~③** | 原数受控供给 | `service-hub` ➔ `datasource-mgr` | • 受控专网连接，严格限制读取行数（Limit）<br/>• 原始库表不暴露任何外部公网端口 | 原始数据物理不出专网，仅在局方受控专区流转 |
+| **④~⑤** | 同虚机闭环脱敏 | `service-hub` ➔ `engine` | • 同虚拟机 `127.0.0.1` 环回通信，无跨机抓包风险<br/>• 3 层漏斗自动打标 L1~L5 并强制执行脱敏 | 内存级处理，微秒级响应，杜绝中间明文落盘 |
+| **⑥** | 跨虚机同步存证 | `service-hub` ➔ `audit-log` | • 跨虚机异步存证，记录 9 要素国密 SM3 特征<br/>• 样本快照自动执行 SM4-GCM 信封加密 | 计算与审计强隔离，确保存证不可被业务侧篡改 |
 | **⑦** | 脱敏安全回传 | `service-hub` ➔ VPN ➔ 业务端 | • 仅允许经脱敏引擎处理后的安全结构体出域<br/>• 经过国密 VPN（IPSec/SM4）通道安全加密传输 | 确保出域数据完全符合脱敏标准，绝无原始高敏泄漏 |
 | **⑧~⑨** | 大模型安全交互 | 业务 Agent ➔ 公有云 LLM | • Prompt 仅包含已脱敏字段与泛化特征<br/>• Agent 执行响应后置校验，拦截非法内容 | 外部第三方大模型全程零接触敏感明文 |
 
@@ -427,7 +436,7 @@ WITH candidate AS (
 UPDATE tasks
 SET status = 'running', lease_owner = $1, lease_token = $2,
     lease_expires_at = NOW() + INTERVAL '60 seconds', version = version + 1
-WHERE id IN (SELECT id FROM candidate)
+  WHERE id IN (SELECT id FROM candidate)
 RETURNING *;
 ```
 * **彻底消除死锁**：多个 Hub 节点抢占任务时无锁阻塞；
@@ -482,12 +491,17 @@ TraceMiddleware → StructuredLogger → Recovery → SecurityHeaders → MaxBod
 
 | 法律法规与标准条款 | 法规核心要求 | 本架构落地防护措施 | 合规判定 |
 |---|---|---|:---:|
+| **DB51/T 2989—2023**<br/>四川省健康医疗大数据应用指南 | 建立健康医疗数据 L1~L5 五级分类基准与 6 类字段矩阵，规范敏感病种强剥离与彻底抹平/泛化策略 | **核心分级基准**：严格落地五级定级模型、四柱高敏特征强剥离机制，对 STD/HIV/重度精神病彻底抹平，恶性肿瘤/肝炎范畴化泛化 | ✅ **完全符合 (核心基准)** |
+| **《密码法》第二十七条** | 关键信息基础设施应当使用商用密码进行保护，开展密码应用安全性评估 | 全链路采用 SM2 双向认证、SM3 完整性哈希链与 HMAC、SM4-GCM 信封加密 | ✅ **完全符合** |
+| **《GB/T 39786-2021》第三级** | 信息系统物理和环境、网络和通信、设备和计算、应用和数据密码应用要求 | 网络层 SM4 VPN + 传输层 SM2/TLS 1.3 mTLS + 数据层 SM3 防篡改哈希链 + 存储层 SM4 信封加密 | ✅ **完全符合** |
+| **《GB/T 43697-2024》**<br/>数据分类分级规则 | 建立 1~5 级数据分类分级规则，明确重要数据与核心数据保护要求 | 平台 L1~L5 级别严格对齐国标 1~5 级分类分级体系，内置三层漏斗动态定级与差异化脱敏策略 | ✅ **完全符合** |
+| **《GB/T 35273-2020》§5.3/§7.4/§8.2**<br/>个人信息安全规范 | 个人信息分类分级、共享前去标识化、公开披露前匿名化 | 敏感个人信息出域前执行 HMAC-SM3 去标识化、Mondrian K-匿名化及差分隐私（DP）抗重构 | ✅ **完全符合** |
+| **《JR/T 0197-2020》**<br/>金融数据安全分级指南 | 规范金融与医保结算流水、交易凭证的数据安全分级与访问控制 | 医保与社保结算数据严格实施中段掩码、截断与动态访问鉴权管控 | ✅ **完全符合** |
 | **《数据安全法》第二十一条** | 建立数据分类分级保护制度，确定重要数据保护目录 | 内置 3 层动态分类分级漏斗（YAML 规则 + Small-NER + 本地 LLM），实现 L1~L5 细粒度标签化管控 | ✅ **完全符合** |
 | **《数据安全法》第二十七条** | 采取技术措施和其他必要措施，保障数据安全 | 全链路国密 VPN + TLS 1.3 双向 mTLS + 9 层中间件防御栈 | ✅ **完全符合** |
 | **《个人信息保护法》第二十八条** | 敏感个人信息处理应取得单独同意，采取严格保护措施 | 敏感个人信息（身份证、病历、残疾证）在出域前 100% 执行动态脱敏与泛化，外部大模型零接触原数 | ✅ **完全符合** |
 | **《个人信息保护法》第五十一条** | 采取加密、去标识化等安全技术措施 | 掩码、K-匿名（Mondrian）、差分隐私（DP）及快照 SM4-GCM 信封加密全面落地 | ✅ **完全符合** |
-| **《GB/T 35273-2020》§7.1** | 个人敏感信息应采用加密或去标识化存储 | 存证快照密文带 `enc:v1:` 存储，密钥由数据主管方专属受控 | ✅ **完全符合** |
-| **《政务信息资源共享管理办法》** | 建立健全政务信息资源共享安全管理与审计制度 | 独立物理机审计部署 + 9 要素密码学哈希链 + 在线对账秒级验真 | ✅ **完全符合** |
+| **《政务信息资源共享管理办法》** | 建立健全政务信息资源共享安全管理与审计制度 | 独立云虚拟机审计部署 + 9 要素国密 SM3 密码学哈希链 + 在线对账秒级验真 | ✅ **完全符合** |
 
 ---
 
@@ -495,11 +509,14 @@ TraceMiddleware → StructuredLogger → Recovery → SecurityHeaders → MaxBod
 
 | 分层 | 核心技术组件 | 运行版本 | 核心选型考量 |
 |---|---|---|---|
-| **算力层** | Go 1.25+ / Gin / gRPC | 1.25+ / 1.10 / 1.68 | 纯 Go 原生零分配 REST + gRPC 双协议支持与多核分块加速 |
-| **分类漏斗** | YAML Rules (AC自动机) / ONNX Runtime Go / External LLM (熔断器) | — | Aho-Corasick 规则引擎 + 轻量 NER + 独立 LLM 语义仲裁 |
-| **中台微服务** | Go / Gin / ByteDance Sonic | 1.25 / 1.12 / 1.15 | 超轻量 Goroutine 并发调度与 JIT 极速序列化 |
-| **密码学基座** | 纯 Go 国密 SM3 / SM4-GCM / SHA-256 | GB/T 32918.4 / GB/T 32907 | 国密标准对齐、快照信封加密与 9 要素防篡改哈希链 |
-| **存储与持久化** | PostgreSQL / SQLite Pure Go | 14+ / WAL mode | PostgreSQL `FOR UPDATE SKIP LOCKED` 原子租约与无 CGO 嵌入式存储 |
+| **算力层** | Python / FastAPI / Pydantic v2 | 3.10+ / 0.115 / 2.10 | 异步高性能 REST + gRPC 双协议支持 |
+| **分类漏斗** | YAML Rules / ONNX / Qwen3.5 | DB51 基准 | 规则引擎确定性过滤 + 轻量 NER + 本地大模型语义仲裁 |
+| **中台微服务** | Go / Gin / ByteDance Sonic | 1.24+ / 1.12 / 1.15 | 超轻量 Goroutine 并发调度与 JIT 极速序列化 |
+| **密码学基座** | 纯 Go SM4 / SM4-GCM / 国密 SM3 / SM2 | GM/T 0004 / GB/T 32907 / GB/T 32918 | 国密商用密码标准对齐、快照信封加密与 9 要素防篡改哈希链 |
+| **存储与持久化** | PostgreSQL / SQLite Pure Go / Memory | 14+ / WAL mode | PostgreSQL `FOR UPDATE SKIP LOCKED` 原子租约与无 CGO 嵌入式存储 |
 | **表现层** | React / TypeScript / Vite / Tailwind | 18.2 / 5.2 / 5.2 / 3.4 | 强类型契约校验与原子化 UI 体系 |
 | **云原生编排** | Helm / K8s / KEDA / CronHPA | v3 / v1.28+ | 企业级声明式编排与业务指标弹性扩缩容 |
 | **可观测性** | Prometheus / Grafana / OTel | 2.50+ / 10.x | 全链路指标采集、专属调度大屏与分布式追踪 |
+
+---
+*PrivShield 架构设计文档 v16.4.0 终*

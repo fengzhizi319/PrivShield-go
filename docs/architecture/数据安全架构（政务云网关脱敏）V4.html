@@ -105,7 +105,7 @@
 
 <div class="header">
   <h1>柳州康养项目 · 数据安全交互与隔离审计架构</h1>
-  <p>接口协商授权 ｜ 同机高速脱敏 ｜ 跨机隔离审计 ｜ 数据局合规核验 ｜ 国密 VPN 安全回传</p>
+  <p>接口协商授权 ｜ 同虚机微秒脱敏 ｜ 独立虚机审计 ｜ 数据局合规核验 ｜ 国密 VPN 安全回传</p>
 </div>
 
 <div class="svg-container">
@@ -202,8 +202,8 @@
 
     <rect x="150" y="215" width="435" height="62" rx="6" fill="rgba(14, 165, 233, 0.12)" stroke="#0284c7" stroke-dasharray="3,2"/>
     <text x="160" y="233" font-size="10" font-weight="700" fill="#38bdf8">📌 API 协商授权规范：</text>
-    <text x="170" y="250" font-size="9.5" fill="#cbd5e1">• API 1：医疗数据包（协商申请 15 个必要临床与检验字段）</text>
-    <text x="170" y="266" font-size="9.5" fill="#cbd5e1">• API 2：社保数据包（协商申请 18 个医保与待遇核销字段）</text>
+    <text x="170" y="250" font-size="9.5" fill="#cbd5e1">• API 1：医保数据包（协商申请 18 个医保与待遇核销字段）</text>
+    <text x="170" y="266" font-size="9.5" fill="#cbd5e1">• API 2：医疗数据包（协商申请 27 个必要临床与检验字段）</text>
   </g>
 
   <g class="component-group" data-id="vpn">
@@ -223,15 +223,15 @@
   <g class="component-group" data-id="phys-server-1">
     <rect x="725" y="45" width="275" height="570" rx="14" fill="rgba(37,99,235,0.03)" stroke="#3b82f6" stroke-width="1.2" stroke-dasharray="8,4"/>
     <rect x="735" y="50" width="245" height="20" rx="4" fill="#1e3a8a"/>
-    <text x="742" y="63" font-size="10" font-weight="700" fill="#93c5fd">🖥️ 物理服务器主机甲 (网关算力节点，数联开发)</text>
+    <text x="742" y="63" font-size="10" font-weight="700" fill="#93c5fd">☁️ 政务云虚拟机主机甲 (网关算力节点 · ECS)</text>
 
     <g data-id="shulian-service">
       <rect x="735" y="75" width="255" height="115" rx="10" fill="url(#g-svc)" filter="url(#shadow-sm)"/>
       <text x="748" y="98" font-size="16">🔄</text>
       <text x="772" y="98" font-size="12.5" font-weight="800" fill="white">数联数据服务 S</text>
       <text x="748" y="120" font-size="9" fill="#bfdbfe">• 接收协商请求并跨网络申请原始数据</text>
-      <text x="748" y="135" font-size="9" fill="#bfdbfe">• 同机高吞吐本地调用脱敏微服务模块</text>
-      <text x="748" y="150" font-size="9" fill="#fde047" font-weight="700">• 跨机向安全审计日志服务器 L 存证</text>
+      <text x="748" y="135" font-size="9" fill="#bfdbfe">• 同虚机微秒级本地调用脱敏微服务模块</text>
+      <text x="748" y="150" font-size="9" fill="#fde047" font-weight="700">• 跨虚机向安全审计日志服务器 L 存证</text>
     </g>
 
     <g data-id="lane-gateway">
@@ -241,10 +241,10 @@
       <text x="862" y="348" text-anchor="middle" font-size="11.5" font-weight="800" fill="white">🛡️ 分类分级与脱敏程序</text>
 
       <rect x="748" y="368" width="229" height="90" rx="6" fill="rgba(234,88,12,0.12)" stroke="#ea580c" stroke-width="0.8"/>
-      <text x="862" y="385" text-anchor="middle" font-size="10" font-weight="700" fill="#fed7aa">数据分类分级</text>
+      <text x="862" y="385" text-anchor="middle" font-size="10" font-weight="700" fill="#fed7aa">数据分类分级 (GB/T 43697)</text>
       <text x="756" y="405" font-size="8.5" fill="#cbd5e1">• 智能识别接口匹配字段集</text>
       <text x="756" y="420" font-size="8.5" fill="#cbd5e1">• L1~L5 敏感级别标记与控制</text>
-      <text x="862" y="445" text-anchor="middle" font-size="8" fill="#fcd34d">[同机IPC/Loopback 127.0.0.1高速流]</text>
+      <text x="862" y="445" text-anchor="middle" font-size="8" fill="#fcd34d">[同虚机 IPC / Loopback 127.0.0.1 内存流]</text>
 
       <rect x="748" y="468" width="229" height="122" rx="6" fill="url(#g-privacy)" filter="url(#shadow-sm)"/>
       <text x="862" y="486" text-anchor="middle" font-size="10" font-weight="700" fill="white">本地隐私脱敏内核</text>
@@ -258,7 +258,7 @@
     <g data-id="flow-desensitize-down">
       <path d="M 785 190 L 785 315" fill="none" stroke="#fb923c" stroke-width="2.2" class="flow-line" marker-end="url(#arr-orange)"/>
       <rect x="726" y="240" width="118" height="24" rx="4" fill="#1e1b4b" stroke="#fb923c" stroke-width="1" filter="url(#shadow-sm)"/>
-      <text x="785" y="255" text-anchor="middle" font-size="8.5" fill="#fdba74" font-weight="700">④ 域内原数(同机gRPC)</text>
+      <text x="785" y="255" text-anchor="middle" font-size="8.5" fill="#fdba74" font-weight="700">④ 域内原数(同虚机gRPC)</text>
     </g>
     <g data-id="flow-desensitize-up">
       <path d="M 895 315 L 895 190" fill="none" stroke="#a78bfa" stroke-width="2.2" class="flow-line up" marker-end="url(#arr-purple)"/>
@@ -270,10 +270,10 @@
   <g class="component-group" data-id="liushu-db">
     <rect x="1105" y="75" width="265" height="115" rx="10" fill="url(#g-db)" filter="url(#shadow-sm)"/>
     <text x="1120" y="102" font-size="18">🗄️</text>
-    <text x="1145" y="102" font-size="12" font-weight="800" fill="white">柳树数据局内部原始数据库 D</text>
+    <text x="1145" y="102" font-size="12" font-weight="800" fill="white">柳州数据局内部原始数据库 D</text>
     <text x="1120" y="125" font-size="9" fill="#fecaca">• 汇聚多部门政务全量核心未脱敏原始数据</text>
     <rect x="1120" y="140" width="235" height="36" rx="4" fill="rgba(0,0,0,0.4)" stroke="#f87171" stroke-width="0.8"/>
-    <text x="1237" y="154" text-anchor="middle" font-size="8.5" fill="#fee2e2" font-weight="700">🔒 高密隔离 ｜ 局方资产属地</text>
+    <text x="1237" y="154" text-anchor="middle" font-size="8.5" fill="#fee2e2" font-weight="700">🔒 高密受控 VPC 专区 ｜ 局方资产属地</text>
     <text x="1237" y="166" text-anchor="middle" font-size="8" fill="#fca5a5">生产环境原始高敏信息绝不外泄</text>
   </g>
 
@@ -288,7 +288,7 @@
   <g class="component-group" data-id="phys-server-2">
     <rect x="1095" y="270" width="285" height="345" rx="14" fill="rgba(217,119,6,0.03)" stroke="#f59e0b" stroke-width="1.2" stroke-dasharray="8,4"/>
     <rect x="1105" y="275" width="250" height="20" rx="4" fill="#78350f"/>
-    <text x="1112" y="288" font-size="10" font-weight="700" fill="#fef3c7">🖥️ 物理服务器主机乙 (独立安全审计节点，数联开发)</text>
+    <text x="1112" y="288" font-size="10" font-weight="700" fill="#fef3c7">☁️ 政务云独立审计虚拟机主机乙 (安全审计节点 · ECS)</text>
 
     <g data-id="audit-log-server">
       <rect x="1105" y="315" width="265" height="290" rx="12" fill="url(#g-log)" stroke="#f59e0b" stroke-width="1.5" filter="url(#shadow)"/>
@@ -296,23 +296,23 @@
       <text x="1145" y="344" font-size="12.5" font-weight="800" fill="white">脱敏审计日志服务器 L</text>
       
       <rect x="1118" y="370" width="240" height="90" rx="6" fill="rgba(0,0,0,0.3)"/>
-      <text x="1126" y="388" font-size="8.5" fill="#fef3c7">• 存储跨机传输的「出域脱敏后明文快照」</text>
+      <text x="1126" y="388" font-size="8.5" fill="#fef3c7">• 存储跨虚机传输的「出域脱敏快照 (SM4信封加密)」</text>
       <text x="1126" y="404" font-size="8.5" fill="#fef3c7">• 记录接口协商契约字段及对应脱敏算法</text>
-      <text x="1126" y="420" font-size="8.5" fill="#fef3c7">• 记录全局防篡改流水号、数字签名与时间戳</text>
+      <text x="1126" y="420" font-size="8.5" fill="#fef3c7">• 记录 9 要素国密 SM3 连续哈希链与防篡改签名</text>
 
       <rect x="1118" y="470" width="240" height="122" rx="6" fill="rgba(0,0,0,0.45)" stroke="#fbbf24" stroke-width="0.8"/>
       <text x="1238" y="492" text-anchor="middle" font-size="10.5" fill="#fef08a" font-weight="800">🔍 数据局审核专区</text>
-      <text x="1126" y="515" font-size="8.5" fill="#fde68a">1. 【运维隔离】业务侧负载故障不影响审计稳定性</text>
+      <text x="1126" y="515" font-size="8.5" fill="#fde68a">1. 【VPC隔离】独立安全组单向写入，杜绝业务干扰</text>
       <text x="1126" y="532" font-size="8.5" fill="#fde68a">2. 【真实性审计】核对实际出域内容是否合规脱敏</text>
       <text x="1126" y="549" font-size="8.5" fill="#fde68a">3. 【数据反洗】提供只读合规看板给局方管理员</text>
-      <text x="1126" y="566" font-size="8.5" fill="#fde68a">4. 【合规举证】事后安全责任边界追踪与存证</text>
+      <text x="1126" y="566" font-size="8.5" fill="#fde68a">4. 【合规举证】事后安全责任边界追踪与国密存证</text>
     </g>
   </g>
 
   <g class="component-group" data-id="flow-log">
     <path d="M 990 145 L 1050 145 L 1050 350 L 1105 350" fill="none" stroke="#eab308" stroke-width="2.5" class="flow-line" marker-end="url(#arr-yellow)"/>
     <rect x="980" y="250" width="140" height="26" rx="5" fill="#451a03" stroke="#eab308" stroke-width="1.2" filter="url(#shadow-sm)"/>
-    <text x="1050" y="267" text-anchor="middle" font-size="9" fill="#fef08a" font-weight="800">⑥ 跨机同步存证</text>
+    <text x="1050" y="267" text-anchor="middle" font-size="9" fill="#fef08a" font-weight="800">⑥ 跨虚机同步存证</text>
   </g>
 
   <g class="component-group" data-id="flow-resp">
@@ -372,16 +372,16 @@
 
   <g class="component-group" data-id="principles">
     <rect x="735" y="810" width="195" height="55" rx="8" fill="rgba(6,182,212,0.12)" stroke="#06b6d4" stroke-width="1" stroke-dasharray="4,2"/>
-    <text x="832" y="833" text-anchor="middle" font-size="11" fill="#67e8f9" font-weight="700">1. 同机网关高速高吞吐</text>
-    <text x="832" y="852" text-anchor="middle" font-size="9" fill="#67e8f9">S 与脱敏程序同宿主机 IPC 通信</text>
+    <text x="832" y="833" text-anchor="middle" font-size="11" fill="#67e8f9" font-weight="700">1. 同虚机微秒高速脱敏</text>
+    <text x="832" y="852" text-anchor="middle" font-size="9" fill="#67e8f9">S 与脱敏引擎同虚机 IPC 通信</text>
 
     <rect x="955" y="810" width="195" height="55" rx="8" fill="rgba(234,179,8,0.15)" stroke="#eab308" stroke-width="1" stroke-dasharray="4,2"/>
-    <text x="1052" y="833" text-anchor="middle" font-size="11" fill="#fde047" font-weight="700">2. 独立安全审计</text>
-    <text x="1052" y="852" text-anchor="middle" font-size="9" fill="#fde047">日志独立部署，强力防止篡改</text>
+    <text x="1052" y="833" text-anchor="middle" font-size="11" fill="#fde047" font-weight="700">2. 独立云虚机安全审计</text>
+    <text x="1052" y="852" text-anchor="middle" font-size="9" fill="#fde047">VPC/安全组隔离，国密SM3防篡改</text>
 
     <rect x="1175" y="810" width="200" height="55" rx="8" fill="rgba(20,184,166,0.12)" stroke="#14b8a6" stroke-width="1" stroke-dasharray="4,2"/>
-    <text x="1275" y="833" text-anchor="middle" font-size="11" fill="#5eead4" font-weight="700">3. 现有服务完全隔离</text>
-    <text x="1275" y="852" text-anchor="middle" font-size="9" fill="#5eead4">网关审计均独立，方便扩容运维</text>
+    <text x="1275" y="833" text-anchor="middle" font-size="11" fill="#5eead4" font-weight="700">3. 国家标准合规对齐</text>
+    <text x="1275" y="852" text-anchor="middle" font-size="9" fill="#5eead4">GB/T 43697 & 35273 全面达标</text>
   </g>
 </svg>
 </div>
@@ -390,22 +390,22 @@
   <div class="card">
     <div class="card-num">1</div>
     <h4>API 规范协商机制</h4>
-    <p>龙城云康养 APP 向「物理服务器主机甲」上的「数联数据服务 S」发起规范化协商请求（如指定调用 API1 或 API2 契约字段集），精准界定租户授权范畴。</p>
+    <p>龙城云康养 APP 向政务云「虚拟机主机甲」上的「数联数据服务 S」发起规范化协商请求（如指定调用 API1 或 API2 契约字段集），精准界定租户授权范畴并执行 mTLS CN 白名单校验。</p>
   </div>
   <div class="card">
     <div class="card-num">2</div>
     <h4>跨网请求原始数据</h4>
-    <p>数联数据服务 S 校验权限后，跨私有网络向高密受控制区内的「柳树数据局内部原始数据库 D」调度全量原始敏感高密数据，原始数据资产不出局方机器。</p>
+    <p>数联数据服务 S 校验权限后，跨政务云受控专网向受控 VPC 区内的「柳州数据局内部原始数据库 D」调度原始敏感高密数据切片，原始数据资产不出局方受控专区。</p>
   </div>
   <div class="card">
     <div class="card-num">3</div>
-    <h4>同机闭环分类脱敏</h4>
-    <p>数联数据服务 S 将数据下发给同台「物理服务器主机甲」内合并部署的「分类分级与脱敏程序」。二者利用本地环回网络（Loopback）无损高速通信，极低延迟地完成敏感定级与数据遮蔽/泛化计算。</p>
+    <h4>同虚机闭环分类脱敏</h4>
+    <p>数联数据服务 S 将数据下发给同台「虚拟机主机甲」内合并部署的「分类分级与脱敏程序」。二者利用本地环回网络（Loopback IPC）无损高速通信，依据 GB/T 43697-2024 完成 L1~L5 敏感定级与遮蔽/泛化计算。</p>
   </div>
   <div class="card">
     <div class="card-num">4</div>
-    <h4>跨机审计与 VPN 安全出域</h4>
-    <p>数联数据服务 S 拿到脱敏安全包后，<strong>跨机器同步向「物理服务器主机乙」全量存证审计快照</strong>。随后脱敏数据经国密 VPN 安全出域交付康养终端与 Agent，实现计算与审计的隔离，方便单独扩容运维。</p>
+    <h4>跨虚机审计与 VPN 安全出域</h4>
+    <p>数联数据服务 S 拿到脱敏安全包后，<strong>跨虚拟机同步向「独立审计虚拟机主机乙」提交 9 要素国密 SM3 存证与 SM4 加密快照</strong>。随后脱敏数据经国密 VPN 安全出域交付康养业务 Agent，实现计算与审计的强隔离与合规溯源。</p>
   </div>
 </div>
 

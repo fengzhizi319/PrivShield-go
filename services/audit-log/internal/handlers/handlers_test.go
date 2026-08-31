@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/fengzhizi319/PrivShield/pkg/metrics"
+	"github.com/fengzhizi319/PrivShield/pkg/store"
+	"github.com/fengzhizi319/PrivShield/pkg/store/flusher"
 	"github.com/fengzhizi319/PrivShield/pkg/store/memory"
 
 	"github.com/fengzhizi319/PrivShield/services/audit-log/internal/agent"
@@ -434,9 +437,9 @@ func TestListLogsWithFilter(t *testing.T) {
 
 func TestComputeIntegrityHash(t *testing.T) {
 	ts := time.Now()
-	hash1 := computeIntegrityHash("log-1", "prev-1", ts, "field_mask", "abc", "def", "admin", "L3", "{}")
-	hash2 := computeIntegrityHash("log-1", "prev-1", ts, "field_mask", "abc", "def", "admin", "L3", "{}")
-	hash3 := computeIntegrityHash("log-2", "prev-1", ts, "field_mask", "abc", "def", "admin", "L3", "{}")
+	hash1 := store.ComputeAuditIntegrityHash("log-1", "prev-1", ts, "field_mask", "abc", "def", "admin", "L3", "{}")
+	hash2 := store.ComputeAuditIntegrityHash("log-1", "prev-1", ts, "field_mask", "abc", "def", "admin", "L3", "{}")
+	hash3 := store.ComputeAuditIntegrityHash("log-2", "prev-1", ts, "field_mask", "abc", "def", "admin", "L3", "{}")
 
 	if hash1 != hash2 {
 		t.Error("same inputs should produce same hash")
@@ -444,7 +447,7 @@ func TestComputeIntegrityHash(t *testing.T) {
 	if hash1 == hash3 {
 		t.Error("different inputs should produce different hash")
 	}
-	if len(hash1) != 64 { // SHA256 hex = 64 chars
+	if len(hash1) != 64 { // SM3 hex = 64 chars
 		t.Errorf("expected 64-char hex hash, got %d chars", len(hash1))
 	}
 }
@@ -561,3 +564,73 @@ func TestEnvelopeEncryptionOfSnapshots(t *testing.T) {
 		t.Errorf("expected API to return decrypted sample, got %v", firstSnap["input_sample"])
 	}
 }
+
+// TestBufferedAuditStore_Handler_VerifyChain_E2E validates that multiple HTTP POST /api/audit/logs
+// requests passing through flusher.BufferedAuditStore produce an unbroken cryptographic hash chain.
+func TestBufferedAuditStore_Handler_VerifyChain_E2E(t *testing.T) {
+	cfg := &config.Config{
+		Host:          "127.0.0.1",
+		Port:          0,
+		AgentRESTHost: "127.0.0.1",
+		AgentRESTPort: 19999,
+	}
+	memStore := memory.NewAuditStore()
+	bufStore := flusher.NewBufferedAuditStore(memStore, flusher.Config{
+		BufferSize:    500,
+		MaxBatchSize:  10,
+		FlushInterval: 10 * time.Millisecond,
+	}, nil)
+	defer bufStore.Close()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	mc := metrics.NewCollector("audit-log-e2e-test")
+	ag := agent.New(cfg)
+	server := New(ag, cfg, bufStore, logger, mc)
+	router := newTestRouter(server)
+
+	const count = 30
+	for i := 0; i < count; i++ {
+		body := map[string]any{
+			"task_id":        fmt.Sprintf("task-e2e-%03d", i),
+			"operation":      "mask",
+			"datasource":     "ds_yibao",
+			"input_rows":     10,
+			"output_rows":    10,
+			"algorithm":      "SM3",
+			"status":         "success",
+			"security_level": "L2",
+			"user":           "operator",
+		}
+		b, _ := json.Marshal(body)
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/api/audit/logs", bytes.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("POST /api/audit/logs failed at %d: %d", i, w.Code)
+		}
+	}
+
+	// Verify chain via HTTP endpoint GET /api/audit/chain/verify
+	wVerify := httptest.NewRecorder()
+	reqVerify, _ := http.NewRequest("GET", "/api/audit/chain/verify?limit=100", nil)
+	router.ServeHTTP(wVerify, reqVerify)
+
+	if wVerify.Code != http.StatusOK {
+		t.Fatalf("GET /api/audit/chain/verify returned status %d", wVerify.Code)
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(wVerify.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal verify response failed: %v", err)
+	}
+
+	if valid, ok := resp["valid"].(bool); !ok || !valid {
+		t.Fatalf("expected chain to be valid, got response: %+v", resp)
+	}
+
+	if total, ok := resp["total_verified"].(float64); !ok || int(total) != count {
+		t.Fatalf("expected total_verified=%d, got %v", count, resp["total_verified"])
+	}
+}
+

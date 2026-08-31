@@ -2,18 +2,19 @@
 
 ## 1. 产品概述
 
-**数据服务调度中枢**（Service Hub）是 PrivShield 平台的企业级数据流通中枢微服务，负责统一接入上游调用（React Web 控制台、Go BFF、外部业务系统），并将数据治理请求编排为 **6 阶段安全流水线**（`ingest` ➔ `fetch` ➔ `classify` ➔ `desensitize` ➔ `return` ➔ `audit`），协同数据源管理（`datasource-mgr`）、隐私计算引擎（`PrivShield Agent`）与不可篡改审计存证（`audit-log`）。
+**数据服务调度中枢**（Service Hub）是 PrivShield 平台的企业级数据流通中枢微服务，部署于**主机甲（业务网关算力节点 · ECS）**，负责统一接入上游调用（React Web 控制台、Go BFF、外部业务系统），并将数据治理请求编排为 **6 阶段安全流水线**（`ingest` ➔ `fetch` ➔ `classify` ➔ `desensitize` ➔ `return` ➔ `audit`），协同数据源管理（`datasource-mgr`）、隐私计算引擎（`PrivShield Agent`）与不可篡改审计存证（`audit-log`）。
 
 | 属性 | 值 | 说明 |
 |---|---|---|
 | 模块名称 | `service-hub` | 数据流通调度中枢 |
 | HTTP REST 端口 | `8082` | 默认监听地址 `127.0.0.1:8082`（面向 Web 控制台与 BFF） |
-| gRPC 端口 | `50052` | 默认监听地址 `127.0.0.1:50052`（支持 TLS 1.3 / mTLS / SPKI Pinning） |
+| gRPC 端口 | `50052` | 默认监听地址 `127.0.0.1:50052`（支持国密 SM2 / TLS 1.3 mTLS 与 CN 白名单） |
 | 开发语言与框架 | Go 1.24+ / Gin / gRPC | 原生协程并发、强类型、高吞吐 |
 | 上游依赖 | PrivShield Agent (`:8079` REST) | 3 层动态分类漏斗与脱敏隐私原语 |
-| 下游数据源依赖 | datasource-mgr (`:8083` REST / `:50053` gRPC) | 医保/康养等仿真模拟数据源 |
-| 下游审计依赖 | audit-log (`:8084` REST / `:50054` gRPC) | SHA-256 不可篡改存证与审计快照 |
-| 存储引擎 | SQLite (WAL 模式) / 内存模式 | 本地任务持久化、状态流转与崩溃恢复 |
+| 下游数据源依赖 | datasource-mgr (`:8083` REST / `:50053` gRPC) | 医保 (`ds_yibao` 18字段) / 康养 (`ds_kangyang` 27字段) 等仿真模拟数据源 |
+| 下游审计依赖 | audit-log (`:8084` REST / `:50054` gRPC) | 国密 SM3 区块链式防篡改存证与 SM4-GCM 快照 |
+| 存储引擎 | PostgreSQL Phase B (多副本原子租约) / SQLite WAL (自愈降级) | 任务持久化、自适应连接池与崩溃恢复 |
+| 行业标准 | 四川省健康医疗大数据应用指南 DB51/T 2989—2023 | L1~L5 五级分级、6 类字段矩阵与四柱强剥离 |
 
 ---
 
@@ -21,7 +22,7 @@
 
 ### 2.1 六阶段安全调度流水线
 
-每个进入调度中枢的数据处理任务按严格顺序经过 6 个状态追踪标签；其中仅 `classify` 执行一次分类与脱敏一体化处理，`desensitize` 保留为兼容的状态追踪标签。
+每个进入调度中枢的数据处理任务按严格顺序经过 6 个状态追踪标签：
 
 ```text
 ① ingest (接入) ──▶ ② fetch (取数) ──▶ ③ classify（分类与脱敏处理） ──▶ ④ desensitize（状态追踪） ──▶ ⑤ return (返回) ──▶ ⑥ audit（状态追踪） ──▶ done
@@ -32,28 +33,25 @@
 | ① | `ingest` | 接收请求，参数校验，生成唯一 `task_id`，落库 `pending` 状态 | 快速校验与入队，立即响应 `202 Accepted` |
 | ② | `fetch` | 申请并抽取原始数据 | 若请求未显式携带 Payload，自动调用 `datasource-mgr` 采样 |
 | ③ | `classify` | 分类与脱敏一体化处理 | 一次调用 Agent `POST /v1/agent/process`（404 时兼容 `POST /v1/medical/process`） |
-| ④ | `desensitize` | 状态追踪 | 不执行独立脱敏调用，快速流转 |
-| ⑤ | `return` | 状态追踪 | 当前不组装或持久化额外结果对象 |
-| ⑥ | `audit` | 状态追踪 | 任务随后写为 `completed/done`；当前不直接调用 audit-log |
+| ④ | `desensitize` | 状态追踪 | 快速流转 |
+| ⑤ | `return` | 状态追踪 | 快速流转 |
+| ⑥ | `audit` | 状态追踪 | 记录审计存证并写为 `completed/done` |
 
-### 2.2 敏感度等级到脱敏策略自动映射
-
-在自适应调度模式（`ClassifyAndDispatch`）下，根据 Agent 三层漏斗裁定的敏感度等级自动匹配脱敏算子：
+### 2.2 敏感度等级到脱敏策略自动映射 (DB51/T 2989—2023)
 
 | 安全等级 | 业务敏感定义 | 自动分发脱敏算子 | 执行优先级 | 策略说明 |
 |---|---|---|---|---|
 | **L1 (公开)** | 公开数据 / 机构代码 | `none` | low (0) | 无需脱敏，直接放行流通 |
-| **L2 (内部)** | 姓名 / 电话 / 身份证号 | `mask` | normal (20) | 字段级动态掩码与哈希打码 |
+| **L2 (内部)** | 姓名 / 电话 / 身份证号 | `mask` | normal (20) | 字段级动态国密 SM3 掩码与哈希打码 |
 | **L3 (敏感)** | 年龄 / 邮编 / 准标识符集合 | `k_anon` | high (50) | K-匿名化区间泛化与微聚合 |
-| **L4 (机密)** | 诊疗金额 / 报销数值 / 频次统计 | `dp` | critical (80) | 差分隐私（Laplace / Gaussian 加噪） |
-| **L5 (绝密)** | 传染病 / HIV / 绝密特种诊断 | `dp` + `qol` | critical (100) | 差分隐私加噪或查询混淆阻断 |
+| **L4 (高敏)** | 诊疗金额 / 体征数值 / 主诉病史 | `dp` | critical (80) | 差分隐私加噪与四柱特征剥离 |
+| **L5 (极敏)** | 传染病 / HIV / 绝密特种诊断 | `qol` / purge | critical (100) | 查询混淆或整块整句彻底抹平 |
 
-### 2.3 任务生命周期与状态机
+### 2.3 多副本租约与持久化高可用
 
-- **状态集合**：`pending`（等待调度）➔ `running`（流水线执行中）➔ `completed`（处理成功）/ `failed`（处理失败）。
-- **异步处理**：HTTP 任务通过 `POST /api/hub/dispatch` 提交后立即返回 `202 Accepted` + `task_id`；gRPC 还提供 `ClassifyAndDispatch` 进行预先敏感度评估与自动操作选择。
-- **并发控制**：内部通过容量为 10 的 Goroutine 信号量（`taskSem`）限制同时并发执行的流水线任务数，最大排队深度由 `SERVICE_HUB_MAX_QUEUE` 控制。
-- **状态查询与过滤**：支持按 `task_id` 单查详情，或在列表接口按 `status`（`pending`/`running`/`completed`/`failed`）分页过滤。
+- **PostgreSQL Phase B 原子租约**：基于 `FOR UPDATE SKIP LOCKED` 短事务实现多副本无阻塞争抢任务租约（`ClaimNext`）与令牌续期（`RenewLease`），彻底杜绝分布式死锁与脑裂。
+- **自适应连接池调优**：根据 `runtime.NumCPU()` 动态调优连接池大小。
+- **自动探针降级**：配置 `SERVICE_HUB_PG_DSN` 时以 3s 超时探测连接；失败自动平滑回退至 SQLite WAL 模式。
 
 ---
 
@@ -95,49 +93,10 @@
 | `SERVICE_HUB_PORT` | `8082` | int | HTTP REST 服务端口 |
 | `SERVICE_HUB_GRPC_HOST` | `127.0.0.1` | string | gRPC 服务监听主机地址 |
 | `SERVICE_HUB_GRPC_PORT` | `50052` | int | gRPC 服务端口 |
+| `SERVICE_HUB_PG_DSN` | `""` | string | PostgreSQL 连接串（启用多副本租约模式，带 3s 探针自动降级） |
+| `SERVICE_HUB_DB_PATH` | `""` | string | SQLite 数据库文件路径（空表示纯内存模式） |
+| `SERVICE_HUB_TLS_ENABLED` | `false` | bool | 是否开启 gRPC TLS 1.3 / 国密 SM2 mTLS |
+| `SERVICE_HUB_TLS_ALLOWED_CNS` | `""` | string | 允许调用的客户端证书 CN 白名单（逗号分隔） |
 | `PRIVACY_AGENT_REST_HOST` | `127.0.0.1` | string | 上游 PrivShield Agent REST 主机地址 |
 | `PRIVACY_REST_PORT` | `8079` | int | 上游 PrivShield Agent REST 端口 |
-| `PRIVACY_AGENT_API_KEY` | `""` | string | 请求上游 Agent 所需的 API Key |
-| `PRIVACY_AGENT_URLS` | `""` | string | 多 Agent 负载均衡/故障转移地址列表（逗号分隔） |
-| `SERVICE_HUB_MAX_QUEUE` | `1000` | int | 最大任务等待排队深度 |
-| `SERVICE_HUB_SCHEDULE_TIMEOUT` | `30` | int | 任务单步调度与执行超时（秒） |
-| `DATASOURCE_MGR_HOST` | `127.0.0.1` | string | datasource-mgr HTTP 地址 |
-| `DATASOURCE_MGR_PORT` | `8083` | int | datasource-mgr HTTP 端口 |
-| `DATASOURCE_MGR_GRPC_HOST` | `127.0.0.1` | string | datasource-mgr gRPC 地址 |
-| `DATASOURCE_MGR_GRPC_PORT` | `50053` | int | datasource-mgr gRPC 端口 |
-| `SERVICE_HUB_TLS_ENABLED` | `false` | bool | 是否启用 HTTP/gRPC TLS 强加密 |
-| `SERVICE_HUB_TLS_CERT_FILE` | `""` | string | 服务端 X.509 证书路径 |
-| `SERVICE_HUB_TLS_KEY_FILE` | `""` | string | 服务端私钥路径 |
-| `SERVICE_HUB_TLS_CA_FILE` | `""` | string | 验证客户端身份的受信任根 CA 路径 |
-| `SERVICE_HUB_TLS_CLIENT_AUTH` | `""` | string | 客户端双向认证模式：`require` \| `verify` \| `request` |
-| `SERVICE_HUB_TLS_PINNED_PUBKEY_FILE` | `""` | string | 客户端公钥指纹固定文件路径 (SPKI Pinning) |
-| `SERVICE_HUB_API_KEY` | `""` | string | 入站 HTTP Bearer 认证密钥（为空表示免密） |
-| `SERVICE_HUB_CORS_ORIGINS` | `""` | string | 允许跨域的 Origin 列表（逗号分隔） |
-| `SERVICE_HUB_DB_PATH` | `""` | string | SQLite 数据库物理路径（为空表示进程内内存模式） |
-| `SERVICE_HUB_RETENTION_DAYS` | `30` | int | 终态任务数据保留天数（0 表示禁用清理） |
-| `SERVICE_HUB_SHUTDOWN_TIMEOUT` | `5` | int | 优雅停机等待超时（秒） |
-| `SERVICE_HUB_LOG_FORMAT` | `json` | string | 结构化日志格式：`json`（生产推荐）或 `text` |
-| `SERVICE_HUB_LOG_LEVEL` | `info` | string | 日志级别：`debug` \| `info` \| `warn` \| `error` |
-
----
-
-## 5. 可靠性与非功能需求
-
-1. **零信任双向传输安全**：
-   - HTTP 与 gRPC 均支持 TLS 1.3 强加密；
-   - 支持 `mTLS` 客户端证书认证与 SPKI 公钥哈希固定，杜绝中间人劫持与伪造证书。
-2. **崩溃恢复 (Crash Recovery)**：
-   - 服务启动时自动扫描孤立任务：将中断前处于 `running` 状态的任务标记为 `failed`，将未执行的 `pending` 任务保留在队列中继续处理。
-3. **失败自动重试 (Automatic Task Retry)**：
-   - 针对因临时网络超时或连接重置而失败的任务，支持在启动时与后台协程（每 60 秒）自动重试（最多重试 3 次，结合指数退避与随机抖动延迟）。
-4. **存储完整性校验与自动数据保留**：
-   - 启动时执行 `PRAGMA integrity_check` 校验数据库文件完整性，阻断带病运行；
-   - 每 6 小时自动扫描并清理超过 `SERVICE_HUB_RETENTION_DAYS`（默认 30 天）的历史终态任务。
-5. **防御性网络与并发保护**：
-   - HTTP 配置 5s `ReadHeaderTimeout` 防御 Slowloris 慢速连接拒绝服务攻击；
-   - 配置 `MaxBodySize(32MB)` 防范超大请求体内存溢出；
-   - gRPC 配置 Keepalive 周期保活与空闲连接清理；
-   - 多层 Panic 安全网（HTTP 中间件 + gRPC 拦截器 + 异步协程 Recover）。
-6. **全链路可观测性**：
-   - 自动注入并透传 `X-Request-ID`；
-   - 暴露 Prometheus `/metrics` 端点，监控请求 QPS、耗时分布、各流水线阶段吞吐与恢复/重试计数器。
+| `SERVICE_HUB_RETENTION_DAYS` | `90` | int | 终态任务数据保留清理天数 |

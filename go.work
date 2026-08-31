@@ -1,12 +1,12 @@
 go 1.25.0
 
 use (
-	./pkg
-	./services/service-hub
-	./services/datasource-mgr
-	./services/audit-log
-	./console/bff-go
 	./console/app-lz/bff-go
-	./privacy-go-sdk
+	./console/bff-go
 	./engine-go
+	./pkg
+	./privacy-go-sdk
+	./services/audit-log
+	./services/datasource-mgr
+	./services/service-hub
 )

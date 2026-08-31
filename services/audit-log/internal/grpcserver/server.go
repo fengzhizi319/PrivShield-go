@@ -5,7 +5,6 @@ package grpcserver
 import (
 	"context"
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
@@ -158,11 +157,11 @@ func (s *GRPCServer) RecordAudit(ctx context.Context, req *pb.RecordAuditRequest
 	inputHash := req.InputHash
 	outputHash := req.OutputHash
 	if inputHash == "" {
-		h := sha256.Sum256([]byte(fmt.Sprintf("input|%s|%d|%s|%s", normID, req.InputRows, user, req.ParametersJson)))
+		h := crypto.SumSM3([]byte(fmt.Sprintf("input|%s|%d|%s|%s", normID, req.InputRows, user, req.ParametersJson)))
 		inputHash = hex.EncodeToString(h[:])
 	}
 	if outputHash == "" {
-		h := sha256.Sum256([]byte(fmt.Sprintf("output|%s|%d|%s|%s|%s", normID, req.OutputRows, opStatus, secLevel, req.ParametersJson)))
+		h := crypto.SumSM3([]byte(fmt.Sprintf("output|%s|%d|%s|%s|%s", normID, req.OutputRows, opStatus, secLevel, req.ParametersJson)))
 		outputHash = hex.EncodeToString(h[:])
 	}
 
@@ -174,7 +173,7 @@ func (s *GRPCServer) RecordAudit(ctx context.Context, req *pb.RecordAuditRequest
 		}
 	}
 
-	integrityHash := computeGRPCIntegrityHash(id, prevHash, now, req.Algorithm, inputHash, outputHash, user, secLevel, req.ParametersJson)
+	integrityHash := store.ComputeAuditIntegrityHash(id, prevHash, now, req.Algorithm, inputHash, outputHash, user, secLevel, req.ParametersJson)
 
 	logEntry := &store.AuditLog{
 		ID:             id,
@@ -430,15 +429,24 @@ func (s *GRPCServer) VerifyIntegrity(ctx context.Context, req *pb.VerifyIntegrit
 		prevHash = log.PrevHash
 	}
 
-	computed := computeGRPCIntegrityHash(snap.AuditLogID, prevHash, snap.Timestamp, snap.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, snap.ParametersJSON)
+	valid, _ := store.VerifyAuditIntegrityHash(
+		snap.IntegrityHash, snap.AuditLogID, prevHash, snap.Timestamp, snap.Algorithm,
+		log.InputHash, log.OutputHash, log.User, log.SecurityLevel, snap.ParametersJSON,
+	)
+	computed := store.ComputeAuditIntegrityHash(
+		snap.AuditLogID, prevHash, snap.Timestamp, snap.Algorithm,
+		log.InputHash, log.OutputHash, log.User, log.SecurityLevel, snap.ParametersJSON,
+	)
 
 	expected := req.ExpectedHash
 	if expected == "" {
 		expected = snap.IntegrityHash
 	}
+	if req.ExpectedHash != "" {
+		valid = computed == req.ExpectedHash
+	}
 
-	valid := computed == expected
-	msg := "integrity verified: SHA-256 matches non-repudiation proof"
+	msg := "integrity verified: SM3 hash matches non-repudiation proof"
 	if !valid {
 		msg = "integrity violation: hash mismatch, potential data tampering detected"
 	}
@@ -559,14 +567,6 @@ func recordToProto(rec *store.AuditLog) *pb.AuditLogProto {
 		PrevHash:       rec.PrevHash,
 		IntegrityHash:  rec.IntegrityHash,
 	}
-}
-
-func computeGRPCIntegrityHash(logID, prevHash string, timestamp time.Time, algorithm, inputHash, outputHash, user, securityLevel, paramsJSON string) string {
-	data := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%v",
-		prevHash, logID, timestamp.Format(time.RFC3339Nano), algorithm,
-		inputHash, outputHash, user, securityLevel, paramsJSON)
-	hash := sha256.Sum256([]byte(data))
-	return fmt.Sprintf("%x", hash)
 }
 
 // ─────────────────────────────────────────────────────────────

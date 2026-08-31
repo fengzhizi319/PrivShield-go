@@ -30,7 +30,7 @@ bash ./scripts/dev/e2e-start-all-services.sh
 cd services/service-hub
 make build
 
-# 启动服务
+# 启动服务（主机甲 · 业务网关算力节点 · ECS）
 SERVICE_HUB_HOST=0.0.0.0 \
 SERVICE_HUB_PORT=8082 \
 SERVICE_HUB_GRPC_HOST=0.0.0.0 \
@@ -40,7 +40,7 @@ SERVICE_HUB_TLS_CERT_FILE=/etc/privshield/certs/server.crt \
 SERVICE_HUB_TLS_KEY_FILE=/etc/privshield/certs/server.key \
 SERVICE_HUB_TLS_CA_FILE=/etc/privshield/certs/ca.crt \
 SERVICE_HUB_TLS_CLIENT_AUTH=require \
-SERVICE_HUB_TLS_PINNED_PUBKEY_FILE=/etc/privshield/certs/client_pub.pem \
+SERVICE_HUB_TLS_ALLOWED_CNS=gateway-bff,app-lz,admin \
 DATASOURCE_MGR_HOST=127.0.0.1 \
 DATASOURCE_MGR_PORT=8083 \
 DATASOURCE_MGR_GRPC_HOST=127.0.0.1 \
@@ -72,18 +72,18 @@ SERVICE_HUB_RETENTION_DAYS=30 \
 | `DATASOURCE_MGR_PORT` | `8083` | int | 模拟数据源 HTTP 端口 |
 | `DATASOURCE_MGR_GRPC_HOST` | `127.0.0.1` | string | 模拟数据源 gRPC 主机 |
 | `DATASOURCE_MGR_GRPC_PORT` | `50053` | int | 模拟数据源 gRPC 端口 |
-| `SERVICE_HUB_TLS_ENABLED` | `false` | bool | 是否启用 HTTP/gRPC TLS 强加密 |
+| `SERVICE_HUB_TLS_ENABLED` | `false` | bool | 是否启用 HTTP/gRPC TLS / 国密 SM2 双向认证 |
 | `SERVICE_HUB_TLS_CERT_FILE` | `""` | string | 服务端 X.509 证书 PEM 文件路径 |
 | `SERVICE_HUB_TLS_KEY_FILE` | `""` | string | 服务端私钥 PEM 文件路径 |
 | `SERVICE_HUB_TLS_CA_FILE` | `""` | string | 客户端证书校验根 CA 证书 PEM 路径 |
 | `SERVICE_HUB_TLS_CLIENT_AUTH` | `""` | string | 客户端双向认证模式: `require` \| `verify` \| `request` |
-| `SERVICE_HUB_TLS_PINNED_PUBKEY_FILE` | `""` | string | 固定的客户端 RSA 公钥 PEM 路径 (SPKI Pinning) |
+| `SERVICE_HUB_TLS_ALLOWED_CNS` | `""` | string | 允许调用的客户端证书 CN 白名单（逗号分隔） |
 | `SERVICE_HUB_API_KEY` | `""` | string | 本模块入站 API Key（空表示免密） |
 | `SERVICE_HUB_CORS_ORIGINS` | `""` | string | 允许的 CORS 跨域源（逗号分隔） |
 | `SERVICE_HUB_DB_PATH` | `""` | string | SQLite 数据库路径（空表示纯内存模式） |
-| `SERVICE_HUB_PG_DSN` / `PG_DSN` | `""` | string | Phase B PostgreSQL 连接串（启用多副本 Hub 原子租约争抢） |
-| `SERVICE_HUB_PG_MAX_CONNS` | `10` | int | PostgreSQL 连接池最大连接数 |
-| `SERVICE_HUB_PG_MIN_CONNS` | `2` | int | PostgreSQL 连接池最小连接数 |
+| `SERVICE_HUB_PG_DSN` / `PG_DSN` | `""` | string | Phase B PostgreSQL 连接串（启用多副本原子租约争抢，带 3s 探针自动降级） |
+| `SERVICE_HUB_PG_MAX_CONNS` | `10` | int | PostgreSQL 连接池最大连接数（默认按 NumCPU*4 动态调优） |
+| `SERVICE_HUB_PG_MIN_CONNS` | `2` | int | PostgreSQL 连接池最小连接数（默认按 NumCPU 动态调优） |
 | `SERVICE_HUB_LEASE_TTL` | `60` | int | 任务租约有效时间（秒，超时自动被其他 Worker 认领） |
 | `SERVICE_HUB_RETENTION_DAYS` | `30` | int | 终态任务保留天数（0 表示禁用清理） |
 | `SERVICE_HUB_SHUTDOWN_TIMEOUT` | `5` | int | 优雅停机等待超时（秒） |

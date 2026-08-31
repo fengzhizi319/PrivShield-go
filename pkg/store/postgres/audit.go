@@ -2,11 +2,11 @@ package postgres
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"strings"
 	"time"
 
@@ -36,15 +36,36 @@ func NewAuditStore(ctx context.Context, cfg Config, logger *slog.Logger) (*Audit
 		return nil, fmt.Errorf("postgres parse DSN: %w", err)
 	}
 
+	numCPU := int32(runtime.NumCPU())
 	if cfg.MaxConn > 0 {
 		poolCfg.MaxConns = cfg.MaxConn
 	} else {
-		poolCfg.MaxConns = 10
+		// Adaptive MaxConns: clamp [10, 100]
+		adaptiveMax := numCPU * 4
+		if adaptiveMax < 10 {
+			adaptiveMax = 10
+		} else if adaptiveMax > 100 {
+			adaptiveMax = 100
+		}
+		poolCfg.MaxConns = adaptiveMax
 	}
+
 	if cfg.MinConn > 0 {
 		poolCfg.MinConns = cfg.MinConn
 	} else {
-		poolCfg.MinConns = 2
+		// Adaptive MinConns: clamp [2, 20]
+		adaptiveMin := numCPU
+		if adaptiveMin < 2 {
+			adaptiveMin = 2
+		} else if adaptiveMin > 20 {
+			adaptiveMin = 20
+		}
+		poolCfg.MinConns = adaptiveMin
+	}
+
+	// Invariant: minConns must not exceed maxConns
+	if poolCfg.MinConns > poolCfg.MaxConns {
+		poolCfg.MinConns = poolCfg.MaxConns
 	}
 
 	poolCfg.HealthCheckPeriod = 30 * time.Second
@@ -154,7 +175,7 @@ func (s *AuditStore) SaveLog(log *store.AuditLog) error {
 	defer cancel()
 
 	if log.IntegrityHash == "" {
-		log.IntegrityHash = computePGAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
+		log.IntegrityHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 	}
 
 	_, err := s.pool.Exec(ctx, `
@@ -173,7 +194,7 @@ func (s *AuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *store.Sn
 	defer cancel()
 
 	if log.IntegrityHash == "" {
-		log.IntegrityHash = computePGAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
+		log.IntegrityHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 	}
 	if snapshot.IntegrityHash == "" {
 		snapshot.IntegrityHash = log.IntegrityHash
@@ -227,7 +248,7 @@ func (s *AuditStore) SaveLogsBatch(logs []store.AuditLog, snapshots []store.Snap
 	batch := &pgx.Batch{}
 	for _, log := range logs {
 		if log.IntegrityHash == "" {
-			log.IntegrityHash = computePGAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
+			log.IntegrityHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 		}
 		batch.Queue(`
 			INSERT INTO audit_logs (id, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash,
@@ -284,63 +305,58 @@ func (s *AuditStore) GetLatestLog() (*store.AuditLog, error) {
 		FROM audit_logs ORDER BY timestamp DESC LIMIT 1
 	`)
 	log, err := scanPGAuditRow(row)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, err
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
 	}
-	return log, nil
+	return log, err
 }
 
 func (s *AuditStore) ListLogs(filter store.AuditFilter) ([]store.AuditLog, int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	where, args := buildPGAuditWhere(filter)
+	whereClause, args := buildPGAuditWhere(filter)
 
-	countQuery := "SELECT COUNT(*) FROM audit_logs" + where
+	countQuery := "SELECT COUNT(*) FROM audit_logs" + whereClause
 	var total int
 	if err := s.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
-	query := `SELECT id, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash, algorithm,
-		parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash
-		FROM audit_logs` + where + " ORDER BY timestamp DESC"
-
-	if filter.Limit > 0 {
-		limit := filter.Limit
-		if limit > 10000 {
-			limit = 10000
-		}
-		offset := filter.Offset
-		if offset < 0 {
-			offset = 0
-		}
-		args = append(args, limit, offset)
-		query += fmt.Sprintf(" LIMIT $%d OFFSET $%d", len(args)-1, len(args))
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 1000 {
+		limit = 1000
 	}
 
-	rows, err := s.pool.Query(ctx, query, args...)
+	query := fmt.Sprintf(`
+		SELECT id, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash, algorithm,
+			parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash
+		FROM audit_logs%s ORDER BY timestamp DESC LIMIT $%d OFFSET $%d
+	`, whereClause, len(args)+1, len(args)+2)
+
+	queryArgs := append(args, limit, filter.Offset)
+	rows, err := s.pool.Query(ctx, query, queryArgs...)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
 
-	logs := make([]store.AuditLog, 0)
+	logs := make([]store.AuditLog, 0, limit)
 	for rows.Next() {
-		l, err := scanPGAuditRow(rows)
+		log, err := scanPGAuditRow(rows)
 		if err != nil {
 			return nil, 0, err
 		}
-		logs = append(logs, *l)
+		logs = append(logs, *log)
 	}
 	return logs, total, rows.Err()
 }
 
 func (s *AuditStore) GetStats() (*store.AuditStats, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	stats := &store.AuditStats{
@@ -349,54 +365,51 @@ func (s *AuditStore) GetStats() (*store.AuditStats, error) {
 		BySecurityLevel: make(map[string]int),
 	}
 
-	if err := s.pool.QueryRow(ctx, "SELECT COUNT(*), COALESCE(AVG(duration_ms), 0) FROM audit_logs").Scan(&stats.TotalOperations, &stats.AvgDurationMs); err != nil {
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*), COALESCE(AVG(duration_ms), 0) FROM audit_logs`).Scan(&stats.TotalOperations, &stats.AvgDurationMs); err != nil {
 		return nil, err
 	}
 
-	rows, err := s.pool.Query(ctx, "SELECT operation, COUNT(*) FROM audit_logs GROUP BY operation")
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var op string
-		var count int
-		if err := rows.Scan(&op, &count); err == nil {
-			stats.ByOperation[op] = count
+	rows, err := s.pool.Query(ctx, `SELECT operation, COUNT(*) FROM audit_logs GROUP BY operation`)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var op string
+			var count int
+			if err := rows.Scan(&op, &count); err == nil {
+				stats.ByOperation[op] = count
+			}
 		}
 	}
-	rows.Close()
 
-	rows2, err := s.pool.Query(ctx, "SELECT status, COUNT(*) FROM audit_logs GROUP BY status")
-	if err != nil {
-		return nil, err
-	}
-	for rows2.Next() {
-		var status string
-		var count int
-		if err := rows2.Scan(&status, &count); err == nil {
-			stats.ByStatus[status] = count
+	rows2, err := s.pool.Query(ctx, `SELECT status, COUNT(*) FROM audit_logs GROUP BY status`)
+	if err == nil {
+		defer rows2.Close()
+		for rows2.Next() {
+			var st string
+			var count int
+			if err := rows2.Scan(&st, &count); err == nil {
+				stats.ByStatus[st] = count
+			}
 		}
 	}
-	rows2.Close()
 
-	rows3, err := s.pool.Query(ctx, "SELECT security_level, COUNT(*) FROM audit_logs WHERE security_level != '' GROUP BY security_level")
-	if err != nil {
-		return nil, err
-	}
-	for rows3.Next() {
-		var level string
-		var count int
-		if err := rows3.Scan(&level, &count); err == nil {
-			stats.BySecurityLevel[level] = count
+	rows3, err := s.pool.Query(ctx, `SELECT security_level, COUNT(*) FROM audit_logs WHERE security_level != '' GROUP BY security_level`)
+	if err == nil {
+		defer rows3.Close()
+		for rows3.Next() {
+			var lvl string
+			var count int
+			if err := rows3.Scan(&lvl, &count); err == nil {
+				stats.BySecurityLevel[lvl] = count
+			}
 		}
 	}
-	rows3.Close()
 
 	return stats, nil
 }
 
 func (s *AuditStore) GenerateReport(period string) (*store.AuditReport, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	var periodInterval string
@@ -413,68 +426,60 @@ func (s *AuditStore) GenerateReport(period string) (*store.AuditReport, error) {
 
 	report := &store.AuditReport{
 		BySecurityLevel: make(map[string]int),
+		TopOperations:   make([]string, 0),
+		Recommendations: make([]string, 0),
 	}
 
-	query := fmt.Sprintf(`SELECT COUNT(*), COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0)
-		FROM audit_logs WHERE timestamp > NOW() - INTERVAL '%s'`, periodInterval)
+	query := fmt.Sprintf(`SELECT COUNT(*), COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) FROM audit_logs WHERE timestamp > NOW() - INTERVAL '%s'`, periodInterval)
 	var totalCount, successCount int
 	if err := s.pool.QueryRow(ctx, query).Scan(&totalCount, &successCount); err != nil {
 		return nil, err
 	}
 	report.TotalOperations = totalCount
 	if totalCount > 0 {
-		report.SuccessRate = float64(successCount) / float64(totalCount) * 100
+		report.SuccessRate = float64(successCount) / float64(totalCount) * 100.0
 	}
 
 	query2 := fmt.Sprintf(`SELECT security_level, COUNT(*) FROM audit_logs WHERE timestamp > NOW() - INTERVAL '%s' AND security_level != '' GROUP BY security_level`, periodInterval)
-	rows, err := s.pool.Query(ctx, query2)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var level string
-		var count int
-		if err := rows.Scan(&level, &count); err == nil {
-			report.BySecurityLevel[level] = count
+	rows2, err := s.pool.Query(ctx, query2)
+	if err == nil {
+		defer rows2.Close()
+		for rows2.Next() {
+			var lvl string
+			var count int
+			if err := rows2.Scan(&lvl, &count); err == nil {
+				report.BySecurityLevel[lvl] = count
+			}
 		}
 	}
-	rows.Close()
 
 	query3 := fmt.Sprintf(`SELECT operation, COUNT(*) as cnt FROM audit_logs WHERE timestamp > NOW() - INTERVAL '%s' GROUP BY operation ORDER BY cnt DESC LIMIT 5`, periodInterval)
 	rows3, err := s.pool.Query(ctx, query3)
-	if err != nil {
-		return nil, err
-	}
-	topOps := make([]string, 0, 5)
-	for rows3.Next() {
-		var op string
-		var count int
-		if err := rows3.Scan(&op, &count); err == nil {
-			topOps = append(topOps, fmt.Sprintf("%s (%d)", op, count))
+	if err == nil {
+		defer rows3.Close()
+		for rows3.Next() {
+			var op string
+			var count int
+			if err := rows3.Scan(&op, &count); err == nil {
+				report.TopOperations = append(report.TopOperations, fmt.Sprintf("%s (%d)", op, count))
+			}
 		}
 	}
-	rows3.Close()
-	report.TopOperations = topOps
 
-	report.Recommendations = generatePGRecommendations(report.BySecurityLevel, report.SuccessRate)
+	if l4 := report.BySecurityLevel["L4"]; l4 > 100 {
+		report.Recommendations = append(report.Recommendations, "L4 级别操作频繁，建议审查差分隐私预算消耗")
+	}
+	if l5 := report.BySecurityLevel["L5"]; l5 > 50 {
+		report.Recommendations = append(report.Recommendations, "L5 绝密数据操作较多，建议加强访问控制审计")
+	}
+	if report.SuccessRate < 95.0 {
+		report.Recommendations = append(report.Recommendations, fmt.Sprintf("成功率 %.1f%% 低于 95%%，建议排查失败原因", report.SuccessRate))
+	}
+	if len(report.Recommendations) == 0 {
+		report.Recommendations = append(report.Recommendations, "审计指标正常，无需特别关注")
+	}
+
 	return report, nil
-}
-
-func generatePGRecommendations(byLevel map[string]int, successRate float64) []string {
-	recs := make([]string, 0)
-	if l4 := byLevel["L4"]; l4 > 100 {
-		recs = append(recs, "L4 级别操作频繁，建议审查差分隐私预算消耗")
-	}
-	if l5 := byLevel["L5"]; l5 > 50 {
-		recs = append(recs, "L5 绝密数据操作较多，建议加强访问控制审计")
-	}
-	if successRate < 95 {
-		recs = append(recs, fmt.Sprintf("成功率 %.1f%% 低于 95%%，建议排查失败原因", successRate))
-	}
-	if len(recs) == 0 {
-		recs = append(recs, "审计指标正常，无需特别关注")
-	}
-	return recs
 }
 
 func (s *AuditStore) SaveSnapshot(snap *store.SnapshotRecord) error {
@@ -490,32 +495,31 @@ func (s *AuditStore) SaveSnapshot(snap *store.SnapshotRecord) error {
 }
 
 func (s *AuditStore) ListSnapshots(limit, offset int) ([]store.SnapshotRecord, int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
 	var total int
-	if err := s.pool.QueryRow(ctx, "SELECT COUNT(*) FROM snapshots").Scan(&total); err != nil {
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM snapshots`).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
-	query := "SELECT id, audit_log_id, timestamp, input_sample, output_sample, algorithm, parameters_json, integrity_hash, prev_hash FROM snapshots ORDER BY timestamp DESC"
-	args := []any{}
-	if limit > 0 {
-		args = append(args, limit)
-		query += fmt.Sprintf(" LIMIT $%d", len(args))
-		if offset > 0 {
-			args = append(args, offset)
-			query += fmt.Sprintf(" OFFSET $%d", len(args))
-		}
-	}
-
-	rows, err := s.pool.Query(ctx, query, args...)
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, audit_log_id, timestamp, input_sample, output_sample, algorithm, parameters_json, integrity_hash, prev_hash
+		FROM snapshots ORDER BY timestamp DESC LIMIT $1 OFFSET $2
+	`, limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
 
-	snaps := make([]store.SnapshotRecord, 0)
+	snaps := make([]store.SnapshotRecord, 0, limit)
 	for rows.Next() {
 		snap, err := scanPGSnapshotRow(rows)
 		if err != nil {
@@ -564,9 +568,9 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 			return nil, err
 		}
 
-		expectedHash := computePGAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
-
-		if log.IntegrityHash != "" && log.IntegrityHash != expectedHash {
+		valid, _ := store.VerifyAuditIntegrityHash(log.IntegrityHash, log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
+		if !valid && log.IntegrityHash != "" {
+			expectedHash := store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 			return &store.ChainVerificationResult{
 				TotalVerified: count,
 				Valid:         false,
@@ -589,9 +593,6 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 		}
 
 		previousHash = log.IntegrityHash
-		if previousHash == "" {
-			previousHash = expectedHash
-		}
 		count++
 	}
 
@@ -718,14 +719,6 @@ func scanPGSnapshotRow(row pgRowScanner) (*store.SnapshotRecord, error) {
 		_ = json.Unmarshal([]byte(*paramsJSON), &snap.Parameters)
 	}
 	return &snap, nil
-}
-
-func computePGAuditIntegrityHash(logID, prevHash string, timestamp time.Time, algorithm, inputHash, outputHash, user, securityLevel, paramsJSON string) string {
-	data := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%v",
-		prevHash, logID, timestamp.UTC().Format(time.RFC3339Nano), algorithm,
-		inputHash, outputHash, user, securityLevel, paramsJSON)
-	hash := sha256.Sum256([]byte(data))
-	return fmt.Sprintf("%x", hash)
 }
 
 var _ store.AuditStore = (*AuditStore)(nil)

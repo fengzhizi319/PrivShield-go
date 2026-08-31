@@ -276,7 +276,7 @@ HTTP `Dispatch` 与 gRPC `Dispatch` 都遵循相同的写入模型：请求入�
 
 通过 `scripts/prod/backup-sqlite-databases.sh` 统一备份：
 - **在线备份**：使用 `sqlite3 .backup` 命令，不锁库、不影响在线服务；
-- **全量与增量**：支持 `--full` 全量备份与 `--incremental` SHA-256 哈希增量备份；
+- **全量与增量**：支持 `--full` 全量备份与 `--incremental` 国密 SM3 哈希增量备份；
 - **恢复验证**：`--verify` 解压最新备份并执行 `PRAGMA integrity_check` 校验；
 - **生命周期**：自动清理超过 `RETENTION_DAYS`（默认 7 天）的旧备份文件。
 
@@ -302,7 +302,8 @@ SIGINT/SIGTERM → 停止后台协程(retry+retention) → 异步任务广播取
 | 部署规模 | 单实例或单 Pod，任务并发受内部信号量控制 | 两个及以上 Hub 副本，需要共享同一任务队列 |
 | 任务领取 | 本地 Worker 轮询消费，无需跨实例竞争 | 使用 `ClaimNext` 与 `FOR UPDATE SKIP LOCKED` 原子领取 |
 | 写入特征 | 低到中等并发写入，WAL 模式 | 高并发状态更新、租约续期、横向扩容 |
-| 运维成本 | 维护本地 `.db` 文件与定期备份脚本 | 维护独立 PostgreSQL 服务与连接池 |
+| 连接池调优 | 固定连接池 (MaxOpen: 4, MaxIdle: 2) | **自适应连接池**：基于 `runtime.NumCPU()` 动态配置 MaxConns/MinConns |
+| 容灾降级 | 本地文件与备份 | **自动探针降级**：3s 超时探测失败平滑回退 SQLite WAL |
 
 ### SQLite 配置参数
 
@@ -316,8 +317,13 @@ SIGINT/SIGTERM → 停止后台协程(retry+retention) → 异步任务广播取
 
 ---
 
-## 11. TLS/mTLS 双向认证
+## 11. TLS/mTLS 双向认证与国密支持
 
+| 特性 | 实现 |
+|---|---|
+| 最低协议版本 | TLS 1.3 / 国密 SM2 最低基线锁定 |
+| HTTP/gRPC 双向认证 | 与 `pkg/tlsutil` 工具库打通，支持 `require`/`verify`/`request` 模式 |
+| 身份准入 | 动态 CN 白名单（`SERVICE_HUB_TLS_ALLOWED_CNS`）隔离各域访问权限 |
 service-hub 的 HTTP REST 和 gRPC 双协议均支持 TLS 1.3 及 mTLS 双向认证，配置完全对称：
 
 | 变量 | 默认值 | 说明 |

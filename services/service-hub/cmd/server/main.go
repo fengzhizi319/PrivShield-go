@@ -468,9 +468,11 @@ func initTaskStore(dbPath string, logger *slog.Logger) (store.TaskStore, error) 
 //  3. 均为空 → 内存 TaskStore（租约方法返回 ErrLeaseNotSupported）
 func initLeasedTaskStore(cfg *config.Config, logger *slog.Logger) (store.LeasedTaskStore, error) {
 	if cfg.PGDSN != "" {
-		logger.Info("initializing PostgreSQL leased task store (Phase B multi-replica Hub)")
+		logger.Info("probing PostgreSQL leased task store (Phase B multi-replica Hub)")
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
 		pgStore, err := postgres.New(
-			context.Background(),
+			ctx,
 			postgres.Config{
 				DSN:     cfg.PGDSN,
 				MaxConn: int32(cfg.PGMaxConn),
@@ -478,15 +480,15 @@ func initLeasedTaskStore(cfg *config.Config, logger *slog.Logger) (store.LeasedT
 			},
 			logger,
 		)
-		if err != nil {
-			return nil, fmt.Errorf("init postgres store: %w", err)
+		if err == nil {
+			logger.Info("postgresql leased task store initialized",
+				"max_conns", cfg.PGMaxConn,
+				"min_conns", cfg.PGMinConn,
+				"lease_ttl", cfg.LeaseTTL,
+			)
+			return pgStore, nil
 		}
-		logger.Info("postgresql leased task store initialized",
-			"max_conns", cfg.PGMaxConn,
-			"min_conns", cfg.PGMinConn,
-			"lease_ttl", cfg.LeaseTTL,
-		)
-		return pgStore, nil
+		logger.Warn("PostgreSQL connection probe failed, falling back to SQLite / in-memory store", "error", err.Error())
 	}
 
 	// Fallback to SQLite / memory (lease operations return ErrLeaseNotSupported)

@@ -266,7 +266,10 @@ type ChainVerificationResult struct {
 	BrokenAtID    string `json:"broken_at_id,omitempty"`
 	ExpectedHash  string `json:"expected_hash,omitempty"`
 	ActualHash    string `json:"actual_hash,omitempty"`
-	Message       string `json:"message"`
+	// LegacyHashed counts records that only authenticated under a pre-migration convention
+	// (SHA-256, or a local-zone timestamp) and still need re-signing under canonical SM3.
+	LegacyHashed int    `json:"legacy_hashed"`
+	Message      string `json:"message"`
 }
 
 // AuditStore defines the persistence interface for audit logs and snapshots.

@@ -3,9 +3,13 @@
 package crypto
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
+	"fmt"
 	"hash"
 	"math/bits"
+	"time"
 )
 
 // SM3 constants
@@ -40,6 +44,42 @@ func SumSM3(data []byte) [SM3Size]byte {
 	d.Reset()
 	d.Write(data)
 	return d.checkSum()
+}
+
+// SumSM3Hex returns the hex-encoded SM3 checksum of data.
+func SumSM3Hex(data []byte) string {
+	sum := SumSM3(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// ComputeIntegrityHash computes the 9-factor integrity hash for an audit record using SM3 (UTC normalized).
+func ComputeIntegrityHash(prevHash, logID string, timestamp time.Time, algorithm, inputHash, outputHash, user, securityLevel, paramsJSON string) string {
+	data := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%v",
+		prevHash, logID, timestamp.UTC().Format(time.RFC3339Nano), algorithm,
+		inputHash, outputHash, user, securityLevel, paramsJSON)
+	return SumSM3Hex([]byte(data))
+}
+
+// ComputeIntegrityHashLegacySHA256 computes legacy SHA-256 integrity hash for dual-read compatibility verification.
+func ComputeIntegrityHashLegacySHA256(prevHash, logID string, timestamp time.Time, algorithm, inputHash, outputHash, user, securityLevel, paramsJSON string) string {
+	data := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%v",
+		prevHash, logID, timestamp.UTC().Format(time.RFC3339Nano), algorithm,
+		inputHash, outputHash, user, securityLevel, paramsJSON)
+	sum := sha256.Sum256([]byte(data))
+	return hex.EncodeToString(sum[:])
+}
+
+// VerifyIntegrityHash validates that expectedHash matches either SM3 or legacy SHA-256.
+func VerifyIntegrityHash(expectedHash, prevHash, logID string, timestamp time.Time, algorithm, inputHash, outputHash, user, securityLevel, paramsJSON string) (bool, string) {
+	computedSM3 := ComputeIntegrityHash(prevHash, logID, timestamp, algorithm, inputHash, outputHash, user, securityLevel, paramsJSON)
+	if expectedHash == computedSM3 {
+		return true, computedSM3
+	}
+	computedSHA := ComputeIntegrityHashLegacySHA256(prevHash, logID, timestamp, algorithm, inputHash, outputHash, user, securityLevel, paramsJSON)
+	if expectedHash == computedSHA {
+		return true, computedSHA
+	}
+	return false, computedSM3
 }
 
 func (d *sm3Digest) Reset() {

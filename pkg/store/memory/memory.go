@@ -6,7 +6,6 @@
 package memory
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"sort"
 	"sync"
@@ -664,9 +663,10 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 
 	for i := 0; i < limit; i++ {
 		l := s.logs[i]
-		expectedHash := computeMemoryIntegrityHash(l.ID, l.PrevHash, l.Timestamp, l.Algorithm, l.InputHash, l.OutputHash, l.User, l.SecurityLevel, l.ParametersJSON)
+		valid, _ := store.VerifyAuditIntegrityHash(l.IntegrityHash, l.ID, l.PrevHash, l.Timestamp, l.Algorithm, l.InputHash, l.OutputHash, l.User, l.SecurityLevel, l.ParametersJSON)
 
-		if l.IntegrityHash != "" && l.IntegrityHash != expectedHash {
+		if !valid && l.IntegrityHash != "" {
+			expectedHash := store.ComputeAuditIntegrityHash(l.ID, l.PrevHash, l.Timestamp, l.Algorithm, l.InputHash, l.OutputHash, l.User, l.SecurityLevel, l.ParametersJSON)
 			return &store.ChainVerificationResult{
 				TotalVerified: count,
 				Valid:         false,
@@ -689,9 +689,6 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 		}
 
 		previousHash = l.IntegrityHash
-		if previousHash == "" {
-			previousHash = expectedHash
-		}
 		count++
 	}
 
@@ -700,14 +697,6 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 		Valid:         true,
 		Message:       fmt.Sprintf("hash chain verified successfully (%d records checked)", count),
 	}, nil
-}
-
-func computeMemoryIntegrityHash(logID, prevHash string, timestamp time.Time, algorithm, inputHash, outputHash, user, securityLevel, paramsJSON string) string {
-	data := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%v",
-		prevHash, logID, timestamp.Format(time.RFC3339Nano), algorithm,
-		inputHash, outputHash, user, securityLevel, paramsJSON)
-	hash := sha256.Sum256([]byte(data))
-	return fmt.Sprintf("%x", hash)
 }
 
 // Ensure interface compliance at compile time.

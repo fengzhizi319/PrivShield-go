@@ -50,7 +50,7 @@
             ▼                         ▼                          ▼
 ┌──────────────────────────┐ ┌──────────────────────────┐ ┌──────────────────────────┐
 │ datasource-mgr (:8083)   │ │ PrivShield 引擎 (:8079)  │ │  audit-log (:8084)       │
-│ 数据源资产与模拟数据抽取   │ │ 三层分类漏斗与脱敏原语     │ │ SHA-256 存证与合规报告   │
+│ 数据源资产与模拟数据抽取   │ │ 三层分类漏斗与脱敏原语     │ │ 国密 SM3 存证与合规报告  │
 └──────────────────────────┘ └──────────────────────────┘ └──────────────────────────┘
 ```
 
@@ -59,8 +59,8 @@
 1. **统一任务流编排**：对外提供原子化任务调度与端到端自动化流水线（Pipeline）。
 2. **多微服务协同**：横向联动数据源管理 (`datasource-mgr`)、隐私计算 Agent (`PrivShield`) 与审计存证 (`audit-log`)。
 3. **双协议暴露与互通**：对外提供面向 Web UI 的 HTTP RESTful API (:8082)，以及面向后端服务高吞吐、低延迟调用的 gRPC API (:50052)。
-4. **金融级零信任传输**：支持 TLS 1.3 双向认证（mTLS）、证书 SAN 校验与**公钥哈希固定 (SPKI Pinning)**，杜绝中间人攻击与伪造证书。
-5. **生产级高可用与弹性存储**：支持无状态内存存储（开发测试）与 SQLite WAL 持久化引擎（生产环境），内置 Goroutine 信号量限流防击垮。
+4. **金融级零信任传输**：支持 TLS 1.3 / 国密 SM2 双向认证（mTLS）、证书 CN 白名单鉴权，杜绝中间人攻击与伪造证书。
+5. **生产级高可用与弹性存储**：支持 PostgreSQL Phase B 多副本原子租约（带自适应连接池与 3s 探针自动降级）及 SQLite WAL 持久化引擎。
 
 ---
 
@@ -69,19 +69,19 @@
 ```mermaid
 flowchart TB
     subgraph Clients [客户端接入层]
-        Web[React 前端控制台<br/>:5173]
-        BFF[Go BFF<br/>:8081]
+        Web[React 前端控制台<br/>:8000 / :5173]
+        BFF[Go BFF<br/>:8081 / :8085]
         ExtRPC[外部高性能业务微服务<br/>gRPC Client]
     end
 
-    subgraph ServiceHub ["service-hub 调度中枢 (:8082 / :50052)"]
+    subgraph ServiceHub ["service-hub 调度中枢 (:8082 / :50052 - 主机甲 · ECS)"]
         Router[Gin Router<br/>/api/hub/*]
         GRPCSrv[gRPC Server<br/>ServiceHubServiceServer]
-        MW[中间件链: CORS / Auth / RequestID / Recover / Metrics]
+        MW[中间件链: CORS / Auth / TraceID / Recover / Metrics / RateLimit]
         
         Orchestrator[流水线编排核心<br/>Pipeline Orchestrator]
         Semaphore[并发信号量<br/>max: 10 active tasks]
-        TaskStore[(TaskStore 引擎<br/>Memory / SQLite WAL)]
+        TaskStore[(LeasedTaskStore 引擎<br/>PostgreSQL Phase B / SQLite WAL)]
         
         AgentCli[Agent HTTP Client<br/>internal/agent]
         DSCli[DataSource Client<br/>internal/datasource]
@@ -90,7 +90,7 @@ flowchart TB
     subgraph Downstream [协同下游服务]
         DSMgr[datasource-mgr :8083<br/>数据资产与真实/模拟源]
         Agent["PrivShield核心引擎:8079<br/>Rule→NER→LLM动态分类<br/>Mask/DP/K-Anon隐私原语"]
-        Audit[audit-log:8084<br/>SHA-256存证与快照校验]
+        Audit[audit-log:8084<br/>国密 SM3 存证与快照校验]
     end
 
     Web -->|HTTP JSON| Router

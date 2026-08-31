@@ -3,12 +3,12 @@ package handlers
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -70,7 +70,8 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 	r.GET("/api/audit/stats", s.GetStats)
 	r.GET("/api/audit/snapshots", s.ListSnapshots)
 	r.POST("/api/audit/snapshots/verify", s.VerifyIntegrity)
-	r.POST("/api/audit/chain/verify", s.VerifyChain) // Hash chain continuous integrity verification
+	r.GET("/api/audit/chain/verify", s.VerifyChain)  // Hash chain continuous integrity verification (GET)
+	r.POST("/api/audit/chain/verify", s.VerifyChain) // Hash chain continuous integrity verification (POST)
 	r.POST("/api/audit/report", s.GenerateReport)
 	r.GET("/metrics", s.mc.Handler())
 }
@@ -245,11 +246,11 @@ func (s *Server) CreateLog(c *gin.Context) {
 	inputHash := req.InputHash
 	outputHash := req.OutputHash
 	if inputHash == "" {
-		h := sha256.Sum256([]byte(fmt.Sprintf("input|%s|%d|%s|%s", normID, req.InputRows, req.User, string(paramsJSON))))
+		h := crypto.SumSM3([]byte(fmt.Sprintf("input|%s|%d|%s|%s", normID, req.InputRows, req.User, string(paramsJSON))))
 		inputHash = hex.EncodeToString(h[:])
 	}
 	if outputHash == "" {
-		h := sha256.Sum256([]byte(fmt.Sprintf("output|%s|%d|%s|%s|%s", normID, req.OutputRows, req.Status, req.SecurityLevel, string(paramsJSON))))
+		h := crypto.SumSM3([]byte(fmt.Sprintf("output|%s|%d|%s|%s|%s", normID, req.OutputRows, req.Status, req.SecurityLevel, string(paramsJSON))))
 		outputHash = hex.EncodeToString(h[:])
 	}
 
@@ -261,7 +262,7 @@ func (s *Server) CreateLog(c *gin.Context) {
 		}
 	}
 
-	integrityHash := computeIntegrityHash(logID, prevHash, now, req.Algorithm, inputHash, outputHash, req.User, req.SecurityLevel, string(paramsJSON))
+	integrityHash := store.ComputeAuditIntegrityHash(logID, prevHash, now, req.Algorithm, inputHash, outputHash, req.User, req.SecurityLevel, string(paramsJSON))
 
 	log := &store.AuditLog{
 		ID:             logID,
@@ -419,11 +420,14 @@ func (s *Server) VerifyIntegrity(c *gin.Context) {
 		prevHash = log.PrevHash
 	}
 
-	expectedHash := computeIntegrityHash(
+	valid, _ := store.VerifyAuditIntegrityHash(
+		snap.IntegrityHash, snap.AuditLogID, prevHash, snap.Timestamp, snap.Algorithm,
+		log.InputHash, log.OutputHash, log.User, log.SecurityLevel, snap.ParametersJSON,
+	)
+	expectedHash := store.ComputeAuditIntegrityHash(
 		snap.AuditLogID, prevHash, snap.Timestamp, snap.Algorithm,
 		log.InputHash, log.OutputHash, log.User, log.SecurityLevel, snap.ParametersJSON,
 	)
-	valid := snap.IntegrityHash == expectedHash
 
 	c.JSON(http.StatusOK, gin.H{
 		"snapshot_id": req.SnapshotID,
@@ -437,15 +441,21 @@ func (s *Server) VerifyIntegrity(c *gin.Context) {
 
 // VerifyChain verifies the cryptographic hash chain of recent records.
 func (s *Server) VerifyChain(c *gin.Context) {
-	var req struct {
-		Limit int `json:"limit"`
-	}
-	_ = c.ShouldBindJSON(&req)
-	if req.Limit <= 0 {
-		req.Limit = 1000
+	limit := 1000
+	if lStr := c.Query("limit"); lStr != "" {
+		if l, err := strconv.Atoi(lStr); err == nil && l > 0 {
+			limit = l
+		}
+	} else {
+		var req struct {
+			Limit int `json:"limit"`
+		}
+		if err := c.ShouldBindJSON(&req); err == nil && req.Limit > 0 {
+			limit = req.Limit
+		}
 	}
 
-	res, err := s.audit.VerifyChain(req.Limit)
+	res, err := s.audit.VerifyChain(limit)
 	if err != nil {
 		middleware.AbortWithError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error(), nil)
 		return
@@ -489,11 +499,3 @@ func (s *Server) GenerateReport(c *gin.Context) {
 	})
 }
 
-// computeIntegrityHash computes an enhanced SHA-256 integrity hash including prev_hash chaining.
-func computeIntegrityHash(logID, prevHash string, timestamp time.Time, algorithm, inputHash, outputHash, user, securityLevel, paramsJSON string) string {
-	data := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%v",
-		prevHash, logID, timestamp.Format(time.RFC3339Nano), algorithm,
-		inputHash, outputHash, user, securityLevel, paramsJSON)
-	hash := sha256.Sum256([]byte(data))
-	return fmt.Sprintf("%x", hash)
-}

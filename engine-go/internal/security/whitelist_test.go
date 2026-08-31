@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestWhitelistManager_StaticMode(t *testing.T) {
@@ -124,7 +125,11 @@ entries:
     enabled: true
 `
 	// 等待以确保 mtime 变化
-	os.WriteFile(yamlPath, []byte(content2), 0o644)
+	time.Sleep(50 * time.Millisecond)
+	if err := os.WriteFile(yamlPath, []byte(content2), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Chtimes(yamlPath, time.Now().Add(time.Second), time.Now().Add(time.Second))
 
 	// 触发重载检查
 	if !m.IsAllowed("svc-b") {

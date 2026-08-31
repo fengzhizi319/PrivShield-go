@@ -1,56 +1,61 @@
-# PrivShield 部署运维手册 (Operations & Deployment Guide)
+# PrivShield 部署运维手册
 
 ## 1. 环境准备
 
 | 组件 | 最低版本 | 用途 |
 |---|---|---|
-| Kubernetes | >= 1.25 | 容器编排（HPA v2、NetworkPolicy v1、Kustomize） |
+| Kubernetes | >= 1.25 | 容器编排（HPA v2、NetworkPolicy v1） |
 | Helm | >= 3.12 | Chart 安装与管理 |
 | Docker | >= 20.10 | 镜像构建（BuildKit 多阶段） |
-| Docker Compose | >= 2.0 | 本地全栈开发联调 |
-| Go 运行时 | >= 1.25 | 本地原生编译、单元测试与代码审查 |
-| Prometheus Operator | 可选 | ServiceMonitor 自动发现与遥测 |
-| Grafana | >= 9.0 | 隐私治理全链路可视化仪表盘 |
+| Docker Compose | >= 2.0 | 本地联调 |
+| Prometheus Operator | 可选 | ServiceMonitor 自动发现 |
+| Grafana | >= 9.0 | 可视化仪表盘 |
+
+**Python 运行时**（仅本地开发需要）：Python >= 3.10。
 
 ---
 
-## 2. 容器镜像构建
+## 2. 镜像构建
 
 ### 2.1 多阶段构建架构
 
-项目采用纯 **Go 1.25+ 云原生多阶段构建**，根目录 [`Dockerfile`](../../Dockerfile) 与 [`engine-go/Dockerfile.cuda`](../../engine-go/Dockerfile.cuda)：
+Dockerfile 采用三阶段构建，通过 `--target` 选择最终镜像：
 
 ```text
-Stage 1: Go 编译环境 (golang:1.25-alpine3.21 / golang:1.25-bookworm)
- ├── 编译 privshield-agent (REST :8079 + gRPC :50051)
- └── 编译 privshield-gateway (REST :8000 + gRPC :50000)
-       │
-       ▼
-Stage 2: 极简运行时镜像 (alpine:3.21 或 nvidia/cuda:12.2.2-runtime-ubuntu22.04)
- ├── 安装 ca-certificates / tzdata
- ├── 创建非 root 用户 (privacy:privacy, UID 1000)
- ├── COPY 编译产物 /app/privshield-agent 与 /app/privshield-gateway
- ├── COPY 规则库 rules/ 与配置 config/
- ├── EXPOSE 8079 50051 8000 50000
- └── HEALTHCHECK CMD wget -qO- http://127.0.0.1:8079/health || exit 1
+base (python:3.13-slim-bookworm)
+ ├── 安装 curl / ca-certificates（K8s 探针依赖）
+ ├── 安装 requirements-core.txt（核心运行时依赖）
+ │
+ ├──► core 目标
+ │     ├── COPY 全部源码
+ │     ├── EXPOSE 8079 50051
+ │     ├── ENV PRIVACY_REST_HOST=0.0.0.0 / PRIVACY_GRPC_HOST=0.0.0.0
+ │     └── CMD python -m engine.server
+ │
+ └──► ml 目标（继承 core）
+       ├── 安装 requirements-ml.txt（torch/transformers/onnxruntime 等）
+       └── CMD python -m engine.server
 ```
 
-- **极简 Go 原生镜像**（~25 MB）：单个静态二进制，常驻内存 < 30MB，冷启动 < 50ms。
-- **CUDA GPU 加速镜像**（~2 GB）：基于 CUDA 12.2，支持 ONNX Runtime GPU 推理加速。
+- **core 镜像**（~350 MB）：仅含隐私原语（DP / K-匿名 / 脱敏 / 规则分类），适合绝大多数生产场景。
+- **ml 镜像**（~4 GB）：额外包含 PyTorch / Transformers / ONNX Runtime，用于本地 NER（Layer-2）和 VLM/LLM（Layer-3）分类。
 
 ### 2.2 构建命令
 
 ```bash
 # 在仓库根目录执行
-# 1. 极简 Go 运行时镜像（生产推荐默认）
-docker build -t privshield:10.0.0 .
+# core 镜像（推荐生产默认）
+docker build --target core -t PrivShield:0.1.0 .
 
-# 2. NVIDIA GPU CUDA 镜像（ONNX NER GPU 推理）
-docker build -f engine-go/Dockerfile.cuda -t privshield:10.0.0-cuda .
+# ml 镜像（含 torch/transformers/onnxruntime，用于完整三层分类）
+docker build --target ml -t PrivShield:0.1.0-ml .
 
-# 3. 也可以使用 Makefile 快捷命令
-make docker-all
+# 也可使用 Makefile 快捷命令
+make docker-core          # 等价于 --target core
+make docker-ml            # 等价于 --target ml
 ```
+
+> 自定义版本号：`make docker-core VERSION=0.2.0`
 
 ### 2.3 依赖清单
 
@@ -2677,34 +2682,34 @@ helm template privshield ./deploy/helm/PrivShield \
 
 ---
 
-## 17. 硬件服务器选型配置与多并发参数调优速查 (Hardware Sizing & Performance Tuning Runbook)
+## 17. 硬件与云主机选型配置与多并发参数调优速查 (Hardware Sizing & Performance Tuning Runbook)
 
-> 📖 **架构设计与容量测算模型**：详见详细设计文档 [docs/deployment/design.md §14](design.md#14-双物理节点服务器拆分部署与多并发场景资源评估-resource-sizing--concurrency-capacity-planning)。
+> 📖 **架构设计与容量测算模型**：详见详细设计文档 [docs/deployment/design.md §14](design.md#14-政务云双节点虚拟机拆分部署与多并发场景资源评估-resource-sizing--concurrency-capacity-planning)。
 
-本章节面向基础设施运维工程师与交付团队，提供在**双服务器物理拆分部署架构**（服务器 A：`engine` + `services/service-hub`；服务器 B：`services/audit-log`）下，处理 `ds_yibao`（医保结算）与 `ds_kangyang`（康养体征）数据流转时的**硬件选型推荐表**与**多并发环境变量调优速查配置**。
+本章节面向基础设施运维工程师与交付团队，提供在**政务云双虚拟机 (ECS) / 独立计算与审计节点拆分部署架构**（服务器 A：`engine` + `services/service-hub`；服务器 B：`services/audit-log`，VPC 子网与安全组逻辑强隔离）下，处理 `ds_yibao`（医保结算，18 字段）与 `ds_kangyang`（康养体征，27 字段）数据流转时的**硬件选型推荐表**与**多并发环境变量调优速查配置**。
 
 ---
 
-### 17.1 硬件选型与配置推荐速查表
+### 17.1 硬件与云主机选型推荐速查表
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                 双服务器拆分部署架构硬件规格选型矩阵                                              │
+│                           政务云双节点拆分部署架构计算与存储规格选型矩阵                                         │
 ├───────────────┬───────────────────────────────┬───────────────────────────────┬────────────────────────────────┤
-│ 并发梯度 / 场景│ 服务器 A (计算与调度中枢)        │ 服务器 B (审计存证中心)        │ 网络与存储选型建议              │
+│ 并发梯度 / 场景│ 服务器 A (网关算力节点 · ECS)    │ 服务器 B (独立审计节点 · ECS)    │ 网络与存储选型建议              │
 │               │ engine + service-hub + bff-go │ audit-log (+ DB 底座)         │                                │
 ├───────────────┼───────────────────────────────┼───────────────────────────────┼────────────────────────────────┤
-│ **低并发**    │ • 4 核 vCPU                   │ • 2 核 vCPU                   │ • 网络: 100 Mbps 内网互通       │
+│ **低并发**    │ • 4 核 vCPU                   │ • 2 核 vCPU                   │ • 网络: 100 Mbps VPC 内网互通   │
 │ (10 ~ 50 QPS) │ • 8 GB 内存                   │ • 4 GB 内存                   │ • A 节点磁盘: 100 GB SSD       │
-│               │ • 虚拟机 / 轻量云主机          │ • 虚拟机 / 轻量云主机          │ • B 节点磁盘: 500 GB SSD (WAL) │
+│               │ • 计算型云主机 / 虚拟机        │ • 通用型云主机 / 虚拟机        │ • B 节点磁盘: 500 GB SSD (WAL) │
 ├───────────────┼───────────────────────────────┼───────────────────────────────┼────────────────────────────────┤
-│ **中并发**    │ • 8 ~ 16 核 vCPU              │ • 4 ~ 8 核 vCPU               │ • 网络: 1 Gbps (千兆内网)       │
+│ **中并发**    │ • 8 ~ 16 核 vCPU              │ • 4 ~ 8 核 vCPU               │ • 网络: 1 Gbps (千兆 VPC 内网) │
 │ (100~500 QPS) │ • 16 ~ 32 GB 内存             │ • 8 ~ 16 GB 内存              │ • A 节点磁盘: 200 GB NVMe SSD  │
-│               │ • 物理机 / 企业级计算型实例   │ • 物理机 / 通用型实例         │ • B 节点磁盘: 1~2 TB NVMe SSD  │
+│               │ • 企业计算型 ECS / 物理机      │ • 企业通用型 ECS / 物理机      │ • B 节点磁盘: 1~2 TB NVMe SSD  │
 ├───────────────┼───────────────────────────────┼───────────────────────────────┼────────────────────────────────┤
-│ **高并发**    │ • 32 ~ 64 核物理 CPU          │ • 16 ~ 32 核 CPU              │ • 网络: 10 Gbps (万兆网卡)      │
+│ **高并发**    │ • 32 ~ 64 核 vCPU / 物理 CPU  │ • 16 ~ 32 核 vCPU / 物理 CPU  │ • 网络: 10 Gbps (万兆 VPC 专网)│
 │ (1k ~ 3k QPS) │ • 64 ~ 128 GB 内存            │ • 32 ~ 64 GB 内存             │ • A 节点磁盘: 500 GB NVMe RAID │
-│               │ • 高性能物理服务器            │ • 高性能存储型物理机          │ • B 节点磁盘: 4~8 TB NVMe RAID │
+│               │ • 高性能计算型 ECS / 物理机    │ • 高性能存储型 ECS / 物理机    │ • B 节点磁盘: 4~8 TB NVMe RAID │
 ├───────────────┼───────────────────────────────┼───────────────────────────────┼────────────────────────────────┤
 │ **超高并发**  │ • 2~4 台多节点集群 / K8s HPA  │ • 独立高可用 PostgreSQL 集群  │ • 网络: 10 Gbps+ 双网卡绑定     │
 │ (5,000+ QPS)  │ • 单机 64核/128GB+ (共128核+) │ • 32核/64GB+ 读写分离实例     │ • B 节点挂载冷存储对象存储归档  │
@@ -2867,5 +2872,5 @@ vm.swappiness = 10
 | **服务器 A 内存使用率** | 持续 3 分钟 $> 85\%$ | 检查是否存在超大批次请求堆积，调小单批抓取步长（Batch Size） |
 | **Service Hub 排队任务数** | `service_hub_queued_tasks > 1,000` | 扩充 Worker 节点实例，加速任务租约领取与消费 |
 | **服务器 B 磁盘剩余空间** | 剩余空间 $< 20\%$ 或 $< 100 \text{ GB}$ | 触发 `/api/audit/report` 归档与历史冷存证转储（S3/MinIO），调小 `AUDIT_LOG_RETENTION_DAYS` |
-| **服务器 B 写入延迟** | P99 写入延迟 $> 50 \text{ ms}$ | 检查 PostgreSQL 是否发生锁等待或磁盘 IOPS 达到物理瓶颈，开启分区表维护 |
+| **服务器 B 国密 SM3 验真与写入延迟** | P99 写入延迟 $> 50 \text{ ms}$ | 检查 PostgreSQL 是否发生锁等待或磁盘 IOPS 达到瓶颈，排查 SM3 哈希计算与 SM4-GCM 加密吞吐，开启分区表维护 |
 

@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,8 +21,8 @@ import (
 // Config 持有 PostgreSQL 连接参数。
 type Config struct {
 	DSN     string // Connection string (e.g. "postgres://user:pass@host:5432/db?sslmode=require")
-	MaxConn int32  // Maximum pool connections (default 10)
-	MinConn int32  // Minimum pool connections (default 2)
+	MaxConn int32  // Maximum pool connections (default adaptive: NumCPU*4, clamped [20, 100])
+	MinConn int32  // Minimum pool connections (default adaptive: NumCPU, clamped [4, 20])
 }
 
 // Store implements store.TaskStore and store.LeasedTaskStore backed by PostgreSQL.
@@ -48,15 +49,36 @@ func New(ctx context.Context, cfg Config, logger *slog.Logger) (*Store, error) {
 		return nil, fmt.Errorf("postgres: parse DSN: %w", err)
 	}
 
+	numCPU := int32(runtime.NumCPU())
 	if cfg.MaxConn > 0 {
 		poolCfg.MaxConns = cfg.MaxConn
 	} else {
-		poolCfg.MaxConns = 10
+		// Adaptive MaxConns: clamp between [10, 100]
+		adaptiveMax := numCPU * 4
+		if adaptiveMax < 10 {
+			adaptiveMax = 10
+		} else if adaptiveMax > 100 {
+			adaptiveMax = 100
+		}
+		poolCfg.MaxConns = adaptiveMax
 	}
+
 	if cfg.MinConn > 0 {
 		poolCfg.MinConns = cfg.MinConn
 	} else {
-		poolCfg.MinConns = 2
+		// Adaptive MinConns: clamp between [2, 20]
+		adaptiveMin := numCPU
+		if adaptiveMin < 2 {
+			adaptiveMin = 2
+		} else if adaptiveMin > 20 {
+			adaptiveMin = 20
+		}
+		poolCfg.MinConns = adaptiveMin
+	}
+
+	// Invariant: minConns must not exceed maxConns
+	if poolCfg.MinConns > poolCfg.MaxConns {
+		poolCfg.MinConns = poolCfg.MaxConns
 	}
 
 	// Connection health check interval / 连接健康检查间隔

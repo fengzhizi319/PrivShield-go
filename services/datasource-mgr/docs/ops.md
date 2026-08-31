@@ -1,6 +1,6 @@
 # 模拟数据源服务 (Mock Datasource Manager) — 运维手册
 
-> 本文档提供 **数联天下 · 数盾 (`PrivShield`)** 模拟数据源模块（`services/datasource-mgr`）的启动、配置、mTLS 证书部署与接口联调说明。
+> 本文档提供 **数联天下 · 数盾 (`PrivShield`)** 模拟数据源模块（`services/datasource-mgr`）的启动、配置、国密 mTLS 证书部署与接口联调说明。
 
 ---
 
@@ -19,7 +19,7 @@ make dev
 - **HTTP REST**：`http://127.0.0.1:8083`
 - **gRPC (insecure)**：`127.0.0.1:50053`
 
-### 1.2 生产加固模式 (mTLS + 公钥固定)
+### 1.2 生产加固模式 (国密 SM2 / TLS 1.3 mTLS + CN 白名单)
 
 ```bash
 cd services/datasource-mgr
@@ -28,7 +28,7 @@ bash scripts/prod-run.sh
 make prod
 ```
 
-自动加载 `services/datasource-mgr/certs/` 目录中的测试证书与客户端固定公钥 `client.pub`。
+自动加载 `services/datasource-mgr/certs/` 目录中的测试证书与客户端证书白名单。
 
 ### 1.3 重新生成测试证书链
 
@@ -49,12 +49,12 @@ make gen-certs
 | `DATASOURCE_MGR_PORT` | `8083` | HTTP/HTTPS REST 服务监听端口 |
 | `DATASOURCE_MGR_GRPC_HOST` | `127.0.0.1` | gRPC 服务监听主机 |
 | `DATASOURCE_MGR_GRPC_PORT` | `50053` | gRPC 服务监听端口 |
-| `DATASOURCE_MGR_TLS_ENABLED` | `false` | 是否在 HTTP REST 与 gRPC 服务上启用 TLS 1.3 / mTLS |
+| `DATASOURCE_MGR_TLS_ENABLED` | `false` | 是否在 HTTP REST 与 gRPC 服务上启用 TLS 1.3 / 国密 SM2 mTLS |
 | `DATASOURCE_MGR_TLS_CERT_FILE` | (空) | 服务端 X.509 证书 PEM 路径 |
 | `DATASOURCE_MGR_TLS_KEY_FILE` | (空) | 服务端私钥 PEM 路径 |
 | `DATASOURCE_MGR_TLS_CA_FILE` | (空) | 客户端证书校验 CA 证书 PEM 路径 |
 | `DATASOURCE_MGR_TLS_CLIENT_AUTH` | (空) | 客户端认证模式: `require` \| `verify` \| `request` |
-| `DATASOURCE_MGR_TLS_PINNED_PUBKEY_FILE` | (空) | 固定的客户端公钥 PEM 路径 (SPKI Pinning) |
+| `DATASOURCE_MGR_TLS_ALLOWED_CNS` | (空) | 允许调用的客户端证书 CN 白名单（逗号分隔） |
 | `DATASOURCE_MGR_API_KEY` | (空) | 本模块入站 API Key（空表示免密） |
 | `DATASOURCE_MGR_CORS_ORIGINS` | (空) | 允许的 CORS 跨域源（逗号分隔） |
 | `DATASOURCE_MGR_LOG_FORMAT` | `json` | 日志格式: `json` \| `text` |
@@ -66,21 +66,22 @@ make gen-certs
 
 ### 3.1 HTTP 综合健康检查（开发模式）
 ```bash
-curl -s http://127.0.0.1:8083/api/health | jq .
+curl -s http://127.0.0.1:8083/health | jq .
+curl -s http://127.0.0.1:8083/readyz | jq .
 ```
 
 ### 3.2 HTTPS 双向认证 (mTLS) 调取示例（生产加固模式）
 ```bash
-# 携带 CA 根证书与已固定公钥的客户端证书访问 HTTPS REST API
+# 携带 CA 根证书与客户端证书访问 HTTPS REST API
 curl -s --cacert certs/ca.crt \
   --cert certs/client.crt \
   --key certs/client.key \
-  https://127.0.0.1:8083/api/v1/yibao?limit=5 | jq .
+  https://127.0.0.1:8083/api/datasources/ds_yibao/records?limit=5 | jq .
 ```
 
-### 3.3 申请 API 2 康养数据
+### 3.3 申请 API 2 康养数据 (27 字段)
 ```bash
-curl -s "http://127.0.0.1:8083/api/v1/kangyang?limit=5" | jq .
+curl -s "http://127.0.0.1:8083/api/datasources/ds_kangyang/records?limit=5" | jq .
 ```
 
 ---
@@ -91,7 +92,7 @@ curl -s "http://127.0.0.1:8083/api/v1/kangyang?limit=5" | jq .
 
 > **默认开发、Docker Compose 与 K8s 内部集群环境下：不需要使用 Nginx。**
 >
-> `datasource-mgr` 是基于 Go 语言原生高性能网络栈（`net/http` + `Gin` 与 `grpc-go`）构建的独立微服务，其自身已内建高并发事件驱动模型、精细化连接超时控制（防 Slowloris）、TLS 1.3/mTLS 双向身份认证及应用层鉴权能力。
+> `datasource-mgr` 是基于 Go 语言原生高性能网络栈（`net/http` + `Gin` 与 `grpc-go`）构建的独立微服务，其自身已内建高并发事件驱动模型、精细化连接超时控制（防 Slowloris）、TLS 1.3 / 国密 SM2 双向身份认证及应用层鉴权能力。
 
 ### 4.2 为什么默认场景无需 Nginx？
 
@@ -99,9 +100,9 @@ curl -s "http://127.0.0.1:8083/api/v1/kangyang?limit=5" | jq .
 |---|---|---|
 | **并发与连接模型** | Go 原生 Goroutine 协程调度 + HTTP/2 流多路复用 | 无需传统动态语言（如 Python WSGI / PHP-FPM）前置的进程管理与连接缓冲池，单实例即可支撑上万并发连接。 |
 | **抗 Slowloris / DoS** | 显式配置了网络超时：<br>• `ReadHeaderTimeout: 5s`<br>• `ReadTimeout: 30s`<br>• `WriteTimeout: 60s`<br>• `IdleTimeout: 120s`<br>• `MaxHeaderBytes: 1MB` | 天然免疫慢速连接攻击与连接泄漏，无需依赖 Nginx 进行请求头缓冲保护。 |
-| **传输安全与零信任** | 内建 **TLS 1.3** 强加密基线、**mTLS 双向证书校验** 与 **客户端 RSA 公钥固定 (SPKI Pinning)** | 内部微服务间（如 `service-hub` ⇋ `datasource-mgr`）可直接实现端到端加密与防篡改身份校验。 |
-| **安全响应与中间件** | Gin 引擎已内置挂载：<br>`RequestID`、`StructuredLogger`、`Recovery`、`SecurityHeaders`、`CORS`、`Auth (API Key)` | 安全响应头注入、跨域策略控制、访问日志及崩溃恢复已在进程内闭环。 |
-| **服务网络拓扑** | 定位于内部数据源/模拟服务，主要由 `service-hub`（调度中枢）或 `bff-go`（网关）在内网调用 | 在 Docker Compose 内部网络或 K8s ClusterIP 网络下，微服务通过 DNS 直接点对点通信，额外增加 Nginx 反而会增加网络跳数与延迟。 |
+| **传输安全与零信任** | 内建 **TLS 1.3 / 国密 SM2** 强加密基线、**mTLS 双向证书校验** 与 **CN 白名单鉴权** | 内部微服务间（如 `service-hub` ⇋ `datasource-mgr`）可直接实现端到端加密与防篡改身份校验。 |
+| **安全响应与中间件** | Gin 引擎已内置挂载：<br>`TraceMiddleware`、`StructuredLogger`、`Recovery`、`SecurityHeaders`、`CORS`、`Auth (API Key)` | 安全响应头注入、跨域策略控制、访问日志及崩溃恢复已在进程内闭环。 |
+| **服务网络拓扑** | 定位于内部数据源/模拟服务，主要由 `service-hub`（调度中枢）或 `bff-go`（网关）在内网 VPC 子网调用 | 在专有 VPC 子网或 K8s ClusterIP 网络下，微服务通过 DNS 直接点对点通信，额外增加 Nginx 反而会增加网络跳数与延迟。 |
 
 ---
 
@@ -109,8 +110,8 @@ curl -s "http://127.0.0.1:8083/api/v1/kangyang?limit=5" | jq .
 
 在以下特定的企业级生产或网络架构演进场景下，建议在 `datasource-mgr` 上游架设 Nginx 反向代理或 API Gateway：
 
-#### 场景 1：无容器编排环境（裸机/VM）下的“多实例负载均衡”
-- **适用情况**：在物理机或虚拟机多节点上部署了多个 `datasource-mgr` 实例，但未使用 Kubernetes Service 进行内部负载均衡。
+#### 场景 1：无容器编排环境（云虚拟机 ECS 多节点）下的“多实例负载均衡”
+- **适用情况**：在云虚拟机 (ECS) 多节点或混合云环境下部署了多个 `datasource-mgr` 实例，但未使用 Kubernetes Service 进行内部负载均衡。
 - **Nginx 作用**：通过 `upstream` 负载均衡器实现 HTTP REST 轮询/权重分发，并利用 `grpc_pass` 代理 gRPC 连接。
 
 #### 场景 2：统一公网域名收敛与外部 SSL 证书卸载 (API Gateway / Ingress)
@@ -126,29 +127,20 @@ curl -s "http://127.0.0.1:8083/api/v1/kangyang?limit=5" | jq .
   - 利用 Nginx `limit_req_zone` / `limit_conn_zone` 实施基于源 IP 的高频请求限流；
   - 挂载 ModSecurity 或 OpenResty 过滤恶意爬虫探测、SQL 注入及异常 Payload。
 
-#### 场景 4：浏览器前端直连 gRPC-Web 转换代理
-- **适用情况**：未来前端 Web UI 需要直接通过 gRPC 与 `datasource-mgr` 通信，而浏览器无法直接发送原生 HTTP/2 gRPC 帧。
-- **Nginx 作用**：Nginx（配合 `grpc-web` 模块）充当桥接网关，将前端 gRPC-Web 请求转换为后端的标准 gRPC 帧。
-
 ---
 
 ### 4.4 Nginx 生产反向代理配置示例模板
-
-若确实需要在 `datasource-mgr` 前置部署 Nginx，可参考如下经过生产验证的配置模板（同时支持 HTTP REST 与 gRPC 反向代理）：
 
 ```nginx
 # 1. HTTP REST 负载均衡上游定义
 upstream datasource_mgr_http {
     server 127.0.0.1:8083 max_fails=3 fail_timeout=10s;
-    # 若有多个实例可在此追加：
-    # server 192.168.1.102:8083 max_fails=3 fail_timeout=10s;
     keepalive 32;
 }
 
 # 2. gRPC 负载均衡上游定义
 upstream datasource_mgr_grpc {
     server 127.0.0.1:50053 max_fails=3 fail_timeout=10s;
-    # server 192.168.1.102:50053 max_fails=3 fail_timeout=10s;
     keepalive 32;
 }
 

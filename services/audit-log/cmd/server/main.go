@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"net"
@@ -26,6 +27,7 @@ import (
 	"github.com/fengzhizi319/PrivShield/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield/pkg/naming"
 	"github.com/fengzhizi319/PrivShield/pkg/store"
+	"github.com/fengzhizi319/PrivShield/pkg/store/flusher"
 	"github.com/fengzhizi319/PrivShield/pkg/store/memory"
 	"github.com/fengzhizi319/PrivShield/pkg/store/postgres"
 	"github.com/fengzhizi319/PrivShield/pkg/store/sqlite"
@@ -278,6 +280,17 @@ func main() {
 	} else {
 		logger.Info("HTTP server stopped")
 	}
+
+	// Flush and close buffered batch audit store / 优雅关闭微批缓冲刷盘器
+	if buf, ok := auditStore.(*flusher.BufferedAuditStore); ok {
+		if err := buf.Close(); err != nil {
+			logger.Error("buffered audit store close error", "error", err.Error())
+		}
+	} else if closer, ok := auditStore.(io.Closer); ok {
+		if err := closer.Close(); err != nil {
+			logger.Error("audit store close error", "error", err.Error())
+		}
+	}
 }
 
 // auditRetentionLoop periodically deletes audit logs older than retentionDays.
@@ -314,33 +327,49 @@ func auditRetentionLoop(ctx context.Context, auditStore store.AuditStore, logger
 }
 
 func initAuditStore(cfg *config.Config, logger *slog.Logger) (store.AuditStore, error) {
+	var underlying store.AuditStore
+
+	// 1. Try PostgreSQL Phase B if DSN is configured (with short probe timeout)
 	if cfg.PGDSN != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		pgStore, err := postgres.NewAuditStore(ctx, postgres.Config{DSN: cfg.PGDSN}, logger)
-		if err != nil {
-			return nil, fmt.Errorf("open postgres audit store: %w", err)
+		if err == nil {
+			logger.Info("postgresql audit store initialized (Phase B)")
+			underlying = pgStore
+		} else {
+			logger.Warn("PostgreSQL connection probe failed, falling back to SQLite / in-memory store", "error", err.Error())
 		}
-		logger.Info("postgresql audit store initialized (Phase B)")
-		return pgStore, nil
 	}
 
-	if cfg.DBPath == "" {
+	// 2. Fallback to SQLite if PG was not used/failed and DBPath is set
+	if underlying == nil && cfg.DBPath != "" {
+		if err := sqlite.ValidateIntegrity(cfg.DBPath); err != nil {
+			logger.Warn("sqlite integrity check warning, recreating database", "path", cfg.DBPath, "error", err.Error())
+		}
+		db, err := sqlite.Open(cfg.DBPath, logger)
+		if err == nil {
+			as, err := sqlite.NewAuditStore(db)
+			if err == nil {
+				logger.Info("sqlite audit store initialized", "path", cfg.DBPath)
+				underlying = as
+			} else {
+				db.Close()
+				logger.Warn("sqlite audit store initialization failed, falling back to in-memory", "error", err.Error())
+			}
+		} else {
+			logger.Warn("open sqlite failed, falling back to in-memory", "error", err.Error())
+		}
+	}
+
+	// 3. Fallback to in-memory store
+	if underlying == nil {
 		logger.Info("using in-memory audit store (no persistence)")
-		return memory.NewAuditStore(), nil
+		underlying = memory.NewAuditStore()
 	}
 
-	db, err := sqlite.Open(cfg.DBPath, logger)
-	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
-	}
-
-	as, err := sqlite.NewAuditStore(db)
-	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("create audit store: %w", err)
-	}
-
-	logger.Info("sqlite audit store initialized", "path", cfg.DBPath)
-	return as, nil
+	// 4. Wrap with micro-batch flusher for high-throughput concurrency
+	flusherCfg := flusher.DefaultConfig()
+	bufferedStore := flusher.NewBufferedAuditStore(underlying, flusherCfg, logger)
+	return bufferedStore, nil
 }

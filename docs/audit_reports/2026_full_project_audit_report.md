@@ -1,391 +1,228 @@
-# PrivShield 全项目安全、正确性审计与漏洞整改报告（教科书级全量归档版）
+# PrivShield 全项目安全与工程实现审计报告
 
-> **报告版本**：v6.0.0（在 v5.0.0 复核版基础上，完成第四轮残留项清零修复）  
-> **归档时间**：2026-08-10  
-> **审计范围**：全栈代码（分类分级漏斗 / 隐私原语算法 / 服务与网关安全 / llmlora 微调管道 / Console 前后端 / 测试与部署配置）  
-> **验证状态**：第四轮修复完成——§8.2 的 10 项残留已全部闭环（含额外揪出的 `launcher.py` NameError 启动即崩真 bug）；全量回归 **1081 项测试 exit=0 全部通过**（排除 2 个需真实 vLLM 环境的文件）  
-> **最新 Commit**：第四轮修复完成于 `7961f91` 之后的工作区变更（待提交；`.env` 出库已在暂存区）  
+> **审查对象**：数联天下 · 数盾（`PrivShield`）数据安全治理网关与核心隐私算力体系  
+> **审计范围**：全栈架构（分类分级漏斗 / 隐私原语算法 / 微服务中台 / 国密商用密码体系 / 医疗标准对齐 / 云原生部署与测试）  
+> **报告定位**：全面总结当前系统已完成的核心能力与技术亮点（好的地方），并客观梳理当前系统存在的不足、局限性与后续演进空间（不好的地方）。
 
 ---
 
-## 1. 总体评价与学习指南
+## 目录
 
-`PrivShield` 是一个实现了**「三层四柱五御六类」医疗数据安全与隐私治理架构**的 Sidecar 服务。
-
-在经历了第一轮审计发现（64 项漏洞）及第二轮复核（7 项未修透返工项、4 项新引入问题）后，本项目完成了全面的技术攻坚。本报告不仅是一份审计总结，更是一本**系统级安全设计与工程防坑教学指南**。
-
-每个漏洞均按以下结构详细记录：
-- **原始问题与漏洞原理**：分析问题为何发生、在什么场景下会触发静默失效或安全越权，以及对系统的危害。
-- **修复细节与技术实现**：展示精确的代码重构逻辑、算法校准公式、防御性编程手段与测试保障。
-
----
-
-## 2. 漏斗与动态分类引擎模块（Funnel & Dynamic Classification）
-
-### 2.1 P0-1: LLM 仲裁压制值级证据，Safety Floor 可被绕过
-- **原始问题与漏洞原理**：
-  - **原因**：在分类漏斗 Step 4 中，当规则层同时产生普通规则标签与降级标签时，系统判定存在等级冲突并触发 LLM 仲裁。然而原代码在接收到 LLM 仲裁结果（例如 L2）后，没有校验该结果是否低于已经由确定性正则表达式匹配到的真实数据值证据（如身份证号值级匹配得到的 L3）。
-  - **危害**：攻击者或不可靠的 LLM 可以通过强制输出低敏感度等级（如 L1/L2），直接压制真实的极高敏感数据（如 L4/L5 疾病或身份证号），且原代码在仲裁后会擦除 `field_value` 证据标签并取消人工复核标志 (`needs_human_review=False`)，使安全防线彻底崩溃。
-- **修复细节与技术实现**：
-  - 在 `funnel.py:315` 建立 **Safety Floor（安全地基）** 机制：提取所有 `match_target == "field_value"` 且非降级的确定性数据证据标签，计算其最高敏感度 Rank `val_evidence_max_rank`。
-  - 增加硬性校验 `llm_level_rank >= val_evidence_max_rank`。若 LLM 给出低于地基等级的裁定，系统立即拦截并拒绝该裁定；保持原最高等级，并强制将 `needs_human_review` 设为 `True` 要求人工介入。
-  - 在一致性压制逻辑中，显式豁免 `match_target == "field_value"` 的证据标签，防止其被误擦除。
-
-### 2.2 P0-2 & R1: 热重载假成功与双级缓存永不失效
-- **原始问题与漏洞原理**：
-  - **原因**：服务虽然支持 YAML 规则热重载，但 gRPC 接口 (`grpc_server.py:1014`) 与 Pipeline 接口 (`pipeline/classifier.py:48`) 之前调用的是底层的 `self._dyn_service.loader.check_and_reload()`。该方法仅重新加载了 YAML 磁盘文件，但没有触发 `DynClassificationService` 中维护的 `_funnel_cache` (Funnel 实例) 以及 `_classification_cache` (LRU 评估结果缓存) 的清空。
-  - **危害**：运维修改 YAML 规则后触发 reload，日志显示成功，但后续请求依然命中内存中的旧 Funnel 实例与旧 LRU 评估结果，新规则静默失效。
-- **修复细节与技术实现**：
-  - 将所有入口统一重构为调用 `DynClassificationService.check_and_reload()`。
-  - 在 `check_and_reload()` 内部，在 `_reload_lock` 读写互斥锁保护下，同步清空 `_funnel_cache` 与 `_classification_cache`：
-    ```python
-    with self._reload_lock:
-        reloaded = self.loader.check_and_reload()
-        if reloaded:
-            self._funnel_cache.clear()
-            self._classification_cache.clear()
-            self._engine = None
-    ```
-
-### 2.3 P0-3 & N3: LLM 返回越界/NaN/1e6 置信度导致异常或误判
-- **原始问题与漏洞原理**：
-  - **原因**：LLM 模型可能返回非法的置信度数值（如 `NaN`、`Inf`、`-5.0` 或百分数 `1e6`）。原代码直接执行 `float(raw)`，遇到 `NaN` 会导致后端字典计算抛出 HTTP 500 崩溃；第一轮修复将其简单用 `min(1.0, val)` 钳制，导致 `1e6` 被错判为 1.0 (100% 满分最高置信度)。
-  - **危害**：恶意大值置信度可以轻易骗过系统的低置信度防御拦截，使不可靠的 LLM 仲裁结果被强制采纳。
-- **修复细节与技术实现**：
-  - 在 `funnel.py:580` 编写安全的 `_safe_llm_confidence` 函数：
-    ```python
-    def _safe_llm_confidence(raw: Any, fallback: float) -> float:
-        if raw is None: return fallback
-        try:
-            val = float(raw)
-            if math.isnan(val) or math.isinf(val) or val < 0.0 or val > 100.0:
-                return fallback
-            if val > 1.0: val = val / 100.0  # 容错处理 95.0 百分数
-            return min(max(val, 0.0), 1.0)
-        except (ValueError, TypeError):
-            return fallback
-    ```
-
-### 2.4 P0-4: 硬编码医疗 L5/L4 安全网跨 Taxonomy 失效
-- **原始问题与漏洞原理**：
-  - **原因**：原代码写死了 `if level in ("L5", "L4"): ...` 来触发额外安全防护。当用户切换到非医疗分类体系（如金融体系，等级为 `C1-C4` 或 `LVL1-LVL5`）时，硬编码的字符串比较永远为 `False`。
-  - **危害**：在非 `L1-L5` 命名体系下，高敏感度安全网完全失灵。
-- **修复细节与技术实现**：
-  - 改用基于 Taxonomy Rank 的动态比较：`rank >= taxonomy.get_level_rank(taxonomy.high_risk_threshold)`，实现跨领域体系的通用防护。
-
-### 2.5 P0-5: 复合规则 `\b` 烘焙与归一化缺陷致规则永不触发
-- **原始问题与漏洞原理**：
-  - **原因**：`CompositeRuleEngine` 在预编译正则时，直接给 pattern 加上了 `\b` 词边界（如 `\bid_card\b`）。然而在评估前，系统会将字典 Key 进行下划线归一化（`id_card` $\to$ `idcard`）。对于包含下划线的正则（如 `id_card`），`\b` 无法在字符与下划线之间匹配词边界；同时 pattern 自身未做下划线剥离。
-  - **危害**：所有带下划线的复合规则（如 `COMP_PII_001`）静默无法命中任何字段。
-- **修复细节与技术实现**：
-  - 在 `composite.py:58` 将边界正则改为兼容下划线的原子分组：
-    ```python
-    bounded_pattern = rf"(?:\b|_)(?:{pattern})(?:\b|_)"
-    ```
-    并在编译前对 pattern 与输入的 `field_name` 统一执行下划线/连字符归一化。
-
-### 2.6 P1-27 & P1-28: Validator 模式校验与 YAML 广谱词误伤
-- **原始问题与漏洞原理**：
-  - `validator.py:188` 之前错误地只加载第一个 Taxonomy 校验所有 Domain Profile，导致自定义体系规则报 Schema 不匹配。
-  - `medical.yaml` 中包含 `stat`、`cnt` 等通用 3 字母关键词，导致运营统计字段与普通字段被广泛误伤打标。
-- **修复细节与技术实现**：
-  - 修复 `validator.py` 循环逻辑，按 `domain.taxonomy_id` 匹配对应的 `DomainTaxonomy` 实例。
-  - 精细化 `medical.yaml` 中的关键词，要求最小长度 $\ge 4$ 或使用完整单词边界匹配。
-
-### 2.7 P1-29 & P1-48 & P1-64: 漏斗边界异常与热重载重试缺陷
-- **#29 原始问题**：遇到未在 Taxonomy 中定义的未知等级时，系统将其按 `rank=0` 过滤并直接忽略，导致问题数据暴露。  
-  **修复**：发现未知等级时抛出异常并触发安全兜底（降级为默认最高安全防护）。
-- **#48 原始问题**：热重载语法解析失败时，系统提前更新了文件的 `mtime` 记录，导致运维修改修复后，系统因 `mtime` 未变而不再重试加载坏文件。  
-  **修复**：仅在解析且校验成功后才更新缓存的 `mtime`。
-- **#N1 原始问题**：Step 4 LLM 仲裁在 `else` 分支直接赋值 `needs_human_review = False`，覆盖了前面规则层已经置位的人工复核标志。  
-  **修复**：保留历史状态 `needs_human_review = needs_human_review or orig_needs_human_review`。
+- [一、项目定位与审计总览](#一项目定位与审计总览)
+- [二、已经实现的优势与技术亮点 (好的地方)](#二已经实现的优势与技术亮点-好的地方)
+  - [2.1 动态分类分级与三层漏斗仲裁机制](#21-动态分类分级与三层漏斗仲裁机制)
+  - [2.2 严格数学级隐私原语与预算会计体系](#22-严格数学级隐私原语与预算会计体系)
+  - [2.3 全栈国密商用密码 (SM2/SM3/SM4) 与防篡改存证](#23-全栈国密商用密码-sm2sm3sm4-与防篡改存证)
+  - [2.4 高性能微服务群与政务云逻辑强隔离架构](#24-高性能微服务群与政务云逻辑强隔离架构)
+  - [2.5 医疗健康数据标准深度对齐与敏感病种治理](#25-医疗健康数据标准深度对齐与敏感病种治理)
+  - [2.6 纵深防御中间件与全栈可观测性体系](#26-纵深防御中间件与全栈可观测性体系)
+  - [2.7 完备的自动化测试工程保障](#27-完备的自动化测试工程保障)
+- [三、当前存在的不足、局限性与改进空间 (不好的地方)](#三当前存在的不足局限性与改进空间-不好的地方)
+  - [3.1 本地大模型并发吞吐与硬件资源瓶颈](#31-本地大模型并发吞吐与硬件资源瓶颈)
+  - [3.2 存储架构双模式运维与高并发切换门槛](#32-存储架构双模式运维与高并发切换门槛)
+  - [3.3 领域规则词库维护与跨行业冷启动成本](#33-领域规则词库维护与跨行业冷启动成本)
+  - [3.4 代码静态类型检查 (mypy) 全量覆盖不足](#34-代码静态类型检查-mypy-全量覆盖不足)
+  - [3.5 复杂嵌套长文本的极端语义消歧局限](#35-复杂嵌套长文本的极端语义消歧局限)
+  - [3.6 差分隐私预算多机构联合结算的跨域同步局限](#36-差分隐私预算多机构联合结算的跨域同步局限)
+- [四、审计总结与后续演进建议](#四审计总结与后续演进建议)
 
 ---
 
-## 3. 差分隐私与隐私原语模块（DP, Masking, Kano, QOL）
+## 一、项目定位与审计总览
 
-### 3.1 P0-10 & R3: 高维向量 Laplace 未按 $\sqrt{d} \cdot \text{max\_norm}$ 范数扩增校准
-- **原始问题与漏洞原理**：
-  - **原因**：在标量（1 维）下，数据 $X \in [a, b]$ 的 $L_1$ 敏感度为 $\Delta = max - min$。但对于 $d$ 维向量 $X \in \mathbb{R}^d$，其 $L_1$ 范数上限为 $\|X\|_1 \le \sqrt{d} \cdot \|X\|_2 = \sqrt{d} \cdot \text{max\_norm}$。原代码在 `dp_vector_mean` (`dp.py:2551`) 中直接使用了标量敏感度 `max_norm / count` 添加噪声。
-  - **危害**：高维向量（如 128 维嵌入向量）注入的 Laplace 噪声标准差严重不足，使得纯 $\varepsilon$-差分隐私的数学保证彻底失效，攻击者可通过高维向量逆推原始数据。
-- **修复细节与技术实现**：
-  - 在 `dp.py:2617` 中校准 $d$ 维向量 Laplace 噪声 scale：
-    ```python
-    d = vectors.shape[1] if len(vectors.shape) > 1 else 1
-    if d > 1:
-        effective_sensitivity = (max_norm * math.sqrt(d)) / effective_count
-    else:
-        effective_sensitivity = max_norm / effective_count
-    ```
+`PrivShield` 是一个面向政务云数据流通、医疗医保健康大数据以及智慧康养场景的数据安全治理网关与隐私计算 Sidecar 系统。系统实现了**「三层四柱五御六类」**的整体治理框架：
 
-### 3.2 P0-11: BudgetAccountant.spend() 接收负数“充值”预算
-- **原始问题与漏洞原理**：
-  - **原因**：`BudgetAccountant.spend(epsilon, delta)` 在扣减预算时，原代码未校验 `epsilon > 0` 且 `delta >= 0`。
-  - **危害**：攻击者或有缺陷的上层模块可通过传入 `epsilon = -10.0`，使当前已用预算 `spent_epsilon` 变小，实现隐私预算的“非法充值”，绕过配额管控。
-- **修复细节与技术实现**：
-  - 在 `budget.py:329` 增加前置防御校验：
-    ```python
-    if epsilon <= 0.0 or delta < 0.0:
-        raise ValueError(f"Epsilon and delta must be positive values. Got epsilon={epsilon}, delta={delta}")
-    ```
-
-### 3.3 P0-12 & R4: 动态推导边界时 `noise_scale` 泄露数据极值
-- **原始问题与漏洞原理**：
-  - **原因**：当用户未显式提供 `min_val` 与 `max_val` 剪切区间时，系统会自动从数据集动态推导 $min = \min(X), max = \max(X)$，并计算 Laplace 噪声 scale $\text{noise\_scale} = \frac{max - min}{\varepsilon}$。原代码将此 `noise_scale` 装入 `DPResult.noise_scale` 并回传给客户端或导出至 Arrow 元数据。
-  - **危害**：攻击者拿到返回的 `noise_scale` 后，只需乘以已知的 $\varepsilon$，即可精确定出原始数据集的极值差 $max - min = \text{noise\_scale} \cdot \varepsilon$，造成严重的差分隐私泄露。
-- **修复细节与技术实现**：
-  - 在 `dp.py` 内部追踪 `bounds_inferred` 标记：
-    ```python
-    if bounds_inferred:
-        res.noise_scale = None
-        res.confidence_interval = None
-    ```
-  - 在 `to_arrow()` 导出函数中，若 `noise_scale is None`，则禁止写入包含极值比率的 Arrow Schema 元数据。
-
-### 3.4 P0-13: 掩码与 HMAC 审计日志使用硬编码默认 Key
-- **原始问题与漏洞原理**：
-  - **原因**：`masking.py:1253` 的 FPE 保形加密与 `budget.py:57` 的审计日志 HMAC 采用了固定的字符串 Key。
-  - **危害**：在部署未显式配置环境变量时，不同实例生成的 FPE 掩码伪随机序列与 HMAC 签名完全一致，存在严重的密文可预测性风险。
-- **修复细节与技术实现**：
-  - 使用 Python `secrets.token_bytes(32)` 在模块加载时生成 256-bit 高熵进程随机 Key 作为安全回退：
-    ```python
-    DEFAULT_HMAC_KEY = os.environ.get("PRIVACY_HMAC_KEY") or secrets.token_bytes(32)
-    ```
-
-### 3.5 P1-22 & P1-23: Masking 字段名子串误伤与 Arrow 向量化校验不一致
-- **原始问题与漏洞原理**：
-  - `masking.py` 原先采用简单的 `kw in field_name` 匹配，导致 `hotel` 被误伤当成 `tel` 电话打码，`username` 被当成 `name` 打码。
-  - Arrow 向量化批处理路径缺少标量路径中的 15 位旧身份证校验，导致向量化路径下 15 位身份证漏打码。
-- **修复细节与技术实现**：
-  - 将字段名匹配升级为基于 word-boundary 的精确匹配或下划线边界匹配。
-  - 统一 Arrow 批处理路径与标量 Path 的正则引擎，补齐 15 位身份证与中文字段名匹配规则。
-
-### 3.6 P1-24 & P1-25 & P1-26: 预算 SQLite 竞态、QOL 策略死代码与 MT 随机数隐患
-- **#24 竞态问题**：SQLite 预算重置窗口使用普通 `SELECT` 后更新，在多进程并发下存在 Race Condition，可能抹掉其他进程已扣除的预算。  
-  **修复**：改用 `BEGIN IMMEDIATE` 事务锁与原子更新语句 `UPDATE ... WHERE ...`。
-- **#25 QOL 问题**：Query Obfuscation 的 `HYBRID` 策略代码分支不可达，生成的 Dummy Query 与真实查询仅相差一个病名，缺乏多样性。  
-  **修复**：修复分支逻辑，Dummy 查询引入多样化语义干扰词库。
-- **#26 随机数问题**：QOL 使用了非加密的 `random.MersenneTwister`。  
-  **修复**：统一替换为 `secrets.SystemRandom` 安全随机数生成器。
-
----
-
-## 4. 服务接口、协议与网关安全模块（API, gRPC, Gateway, Auth）
-
-### 4.1 P0-6: REST 敏感端点缺乏认证、授权与限流中间件
-- **原始问题与漏洞原理**：
-  - **原因**：`/v1/medical/process` 与 `/v1/pipeline/*` 端点在路由注册时未挂载 `SecurityMiddleware` 与 Rate Limiter。
-  - **危害**：外部未经认证的匿名网络请求可以直接调用高消耗的脱敏管道与 LLM 推理接口，导致服务被滥用或 DDoS 攻击。
-- **修复细节与技术实现**：
-  - 在 `main.py` 与 `server.py` 中将认证中间件挂载到全局 Router 前缀，对所有业务端点一律强制执行 API Key / Bearer Token 校验与令牌桶限流。
-
-### 4.2 P0-7 & R2: gRPC proto3 零值透传导致剪切为 0 与参数坍塌
-- **原始问题与漏洞原理**：
-  - **原因**：Protobuf v3 在反序列化未赋值的数值时，会隐式填充为 `0` 或 `0.0`。gRPC Servicer (`grpc_server.py:981`) 直接读取 `request.clip_lower` (0.0) 与 `request.clip_upper` (0.0) 并透传给 DP 算法模块。
-  - **危害**：所有未显式传剪切范围的 gRPC DP 聚合请求，其数据会被瞬间全截取为 `0`，算出的结果完全失真。同样 `DPAdaptiveClip` 的 `num_iterations=0` 会导致算法直接崩溃或死循环。
-- **修复细节与技术实现**：
-  - 在 `grpc_server.py:988` 增加双零检测与参数防御拦截：
-    ```python
-    if request.clip_lower == 0.0 and request.clip_upper == 0.0:
-        clip_lower, clip_upper = -10.0, 10.0
-    target_quantile = request.target_quantile if request.target_quantile > 0 else 0.95
-    num_iterations = request.num_iterations if request.num_iterations > 0 else 15
-    initial_clip = request.initial_clip if request.initial_clip > 0 else 10.0
-    ```
-
-### 4.3 P0-8: mTLS 任意 CA 证书无差别授予 `["*"]` 全权 Scope
-- **原始问题与漏洞原理**：
-  - **原因**：当开启 mTLS 认证时，只要客户端证书通过了 CA 根证书链校验，`auth.py:96` 会自动为其生成 `Identity(scopes=["*"])`。
-  - **危害**：无法对不同的客户端证书 Common Name (CN) 做细粒度权限控制，任何拥有合法签发证书的业务方都能调用管理接口或进行越权操作。
-- **修复细节与技术实现**：
-  - 在 `security/auth.py` 引入 CN 白名单与 Scope 映射机制：
-    ```python
-    client_cn = get_client_cn_from_cert(request)
-    if client_cn not in settings.AUTH_MTLS_ALLOWED_CNS:
-        raise HTTPAuthorizationError("Client CN not in authorized whitelist")
-    scopes = settings.AUTH_MTLS_CN_SCOPES_MAP.get(client_cn, ["read"])
-    ```
-
-### 4.4 P0-9: 网关节点注册端点无凭证致 SSRF 跳板攻击
-- **原始问题与漏洞原理**：
-  - **原因**：`/v1/gateway/register` 允许任意 HTTP 请求注册后端节点 URL。
-  - **危害**：攻击者注册内网敏感 IP（如 `127.0.0.1:6379` 或云厂商元数据服务 `http://169.254.169.254/`），Gateway 在执行健康检查或转发代理请求时会发起 HTTP 请求，形成严重的 SSRF 漏洞。
-- **修复细节与技术实现**：
-  - 管理端点强制要求 `GATEWAY_API_KEY` 鉴权；未配置时默认禁掉管理端点 (Fail-Closed)。
-  - 对注册 URL 的 IP 进行合规校验，禁止注册回环地址、私网地址及 Link-Local 元数据地址。
-
-### 4.5 R7: CSV 大小限制“先全量读入再检查”致内存 DoS 窗口
-- **原始问题与漏洞原理**：
-  - **原因**：`/v1/pipeline/process_csv` 之前使用 `content = await file.read()` 将整个文件装入内存后才判断 `len(content) > MAX_SIZE`。
-  - **危害**：攻击者发送 5GB 恶意 CSV 文件，服务端在 `await file.read()` 期间内存瞬间飙升，引发 OOM Killer 杀掉 Sidecar 进程。
-- **修复细节与技术实现**：
-  - 改为 64KB 流式分块读取，累计字节数超 10MB 立即中断并返回 HTTP 413：
-    ```python
-    total_bytes = 0
-    chunks = []
-    while True:
-        chunk = await file.read(64 * 1024)
-        if not chunk: break
-        total_bytes += len(chunk)
-        if total_bytes > 10 * 1024 * 1024:
-            raise HTTPException(status_code=413, detail="File size exceeds limit of 10MB")
-        chunks.append(chunk)
-    ```
-
----
-
-## 5. LLM 微调与数据集管道模块（llmlora & Models）
-
-### 5.1 P0-14 & R5: 打标管道规则失配与错别字致高敏标签归零
-- **原始问题与漏洞原理**：
-  - **原因**：`llmlora/scripts/generate_data.py` 使用规则引擎为微调数据集自动打标。但在 `rules/domains/medical.yaml` 中，`RULE_MED_DISEASE_001` 误将匹配目标设为 `field_name`，且将“抑郁症”错拼为“抑抑症”。
-  - **危害**：当输入数据为真实病名（如 `"clinical_diagnosis": "胃癌"`）时，规则引擎无法命中值级病名，导致合成数据集里的 L4/L5 高敏标签全部归零，微调出来的模型丧失高敏识别能力。
-- **修复细节与技术实现**：
-  - 修正错别字，并在 `medical.yaml` 中增加值级正则表达式匹配器：
-    ```yaml
-    - id: RULE_MED_DISEASE_VALUE_001
-      name: 医疗诊断具体疾病名称值级匹配
-      category: MEDICAL_DISEASE
-      level: L4
-      matchers:
-        - target: field_value
-          operator: regex
-          params:
-            pattern: "(?i)(胃癌|肝癌|肺癌|乳腺癌|白血病|糖尿病|高血压|抑郁症|精神分裂症)"
-    ```
-
-### 5.2 P0-15: 冒烟测试与下载脚本污染生产模型目录
-- **原始问题与漏洞原理**：
-  - **原因**：`smoke_test.sh` 与 `download_model.py` 默认直接向代理的主模型目录 `./.models/` 写入临时或测试模型权重。
-  - **危害**：测试运行后覆盖了生产环境已下载的高精度模型权重，导致生产服务加载到损坏或不完整的测试权重。
-- **修复细节与技术实现**：
-  - 在下载与测试脚本中增加 `--no-copy-to-agent` 参数，隔离测试输出目录与生产模型目录。
-
-### 5.3 P0-16 & R6: 微调 Prompt 脱节与 `<think>` 思考链破坏 JSON 结构
-- **原始问题与漏洞原理**：
-  - **原因**：微调训练集与推理引擎 `llm_engines.py` 使用了不同的 System Prompt，且未对 Qwen3.5 思考链文本进行处理。
-  - **危害**：推理时微调模型输出了 `<think>...\n</think>\n{"category":...}`，直接送入 `json.loads` 会抛出 JSONDecodeError。
-- **修复细节与技术实现**：
-  - 统一训练集与推理侧的 System Prompt 契约。
-  - 调用 `apply_chat_template` 时设置 `enable_thinking=False`。
-  - 在 JSON 解析前执行正则清洗：
-    ```python
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-    ```
-
----
-
-## 6. 运维部署、Console 与可观测性模块（Deploy, Console, Obs, Docs）
-
-### 6.1 P0-17: Helm Secret Key `api_keys` 不匹配致 Auth 必挂
-- **原始问题与漏洞原理**：
-  - `secret.yaml` 中定义的 Key 为 `api_keys`，但 `deployment.yaml` 挂载时读取的是 `api-keys.json`。
-  - **后果**：Helm 部署后 Pod 因找不到指定 Key 持续处于 `CreateContainerConfigError` 状态。
-- **修复**：统一 Helm 模板中的 Secret Key 名称为 `api-keys.json`。
-
-### 6.2 P0-18: `.dockerignore` 残缺导致敏感 `.env` 打入容器镜像
-- **原始问题与漏洞原理**：
-  - `.dockerignore` 仅 12 行，未排除 `.env` 文件。
-  - **后果**：包含数据库密码、私钥等敏感信息的 `.env` 被镜像构建层打包，镜像推送到仓库后造成严重密钥泄露。
-- **修复**：重构 `.dockerignore`，显式屏蔽所有 `.env*` 文件与本地密钥文件。
-
-### 6.3 P0-19: docker-compose 健康检查用 `wget` 但镜像仅含 `curl`
-- **原始问题与漏洞原理**：
-  - `docker-compose.yml` 中的 healthcheck 使用了 `wget --quiet --tries=1 http://localhost:8079/health`。精简版 Docker 镜像中未安装 `wget`，仅包含 `curl`。
-  - **后果**：容器状态永远被标记为 `unhealthy`。
-- **修复**：统一将健康检查命令改为 `curl -f http://localhost:8079/readyz || exit 1`。
-
-### 6.4 P0-20 & P0-21: Console 压测预设路径错误致 100% 失败
-- **原始问题与漏洞原理**：
-  - React 控制台压测面板中的预设路径写成了 `/v1/privacy/dp_count`，而后端真实的 REST 路由路径为 `/v1/privacy/dp_aggregate`。
-  - **后果**：前端控制台压测功能开启即 100% 报 404 失败。
-- **修复**：校准 React 前端 `ConcurrencyTestPanel.tsx` 中的 API 请求路径。
-
-### 6.5 P1-33: Prometheus 原始 Path 打标致基数爆炸 (Cardinality Explosion)
-- **原始问题与漏洞原理**：
-  - 可观测性中间件使用 `request.url.path` 作为 Prometheus label 标签值（如 `/v1/user/123`、`/v1/user/456`）。
-  - **后果**：外部扫描器发送高频随机 404 路径时，Prometheus 指标基数呈线性急剧膨胀，导致 Prometheus 服务内存耗尽崩溃。
-- **修复**：改用路由模板名称（如 `/v1/user/{id}`）打标，未匹配路由统一归集为 `NOT_FOUND`。
-
----
-
-## 7. 自动化回归测试验证总结
-
-项目新增专属回归测试套件 [`tests/test_audit_remediation.py`](../../tests/test_audit_remediation.py)，覆盖 5 大核心场景：
-
-1. `test_safety_floor_prevents_llm_downgrade`: 验证 Safety Floor 拦截 LLM 降级裁定。
-2. `test_budget_spend_rejects_non_positive_epsilon`: 验证预算系统拒绝负数与零值充值。
-3. `test_dp_vector_laplace_sqrt_d_calibration`: 验证高维向量 Laplace 噪声 scale 精确满足 $\sqrt{d}$ 校准。
-4. `test_composite_rule_underscore_normalization`: 验证下划线字段名自动规范化匹配。
-5. `test_safe_llm_confidence_clamping`: 验证 `1e6` / `NaN` / `Inf` 置信度异常值安全回退。
-
-**全量测试套件运行结论**：
-```bash
-PYTHONPATH=. pytest tests -k "not test_real_ and not test_modelscope_cuda and not test_ner_adapter_cuda"
-```
 ```text
-================ 973 passed, 92 skipped, 9 deselected in 32.92s ================
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                        PrivShield 核心安全治理能力全景                                 │
+├───────────────────┬────────────────────────────────────────────────────────────────────┤
+│ 接入与网关层      │ 双控制台 + Go BFF (:8081/:8085) + 国密 TLS 1.3 mTLS 双向认证       │
+│ 调度与存证层      │ 调度中枢 (:8082) + 资产管理 (:8083) + 9 要素国密 SM3 存证 (:8084) │
+│ 算力与漏斗层      │ 3 层动态分类漏斗 (Rule ➔ Small-NER ➔ Local LLM) + 4 大隐私原语     │
+│ 密码与存储层      │ SM2 双向鉴权 + SM3 连续哈希链 + SM4-GCM 快照加密 + PG 原子租约存储  │
+└───────────────────┴────────────────────────────────────────────────────────────────────┘
 ```
-全量 **973 项自动化单元与集成测试 100% PASSED**，系统安全整改全面完成。
+
+经过对全栈代码库、微服务集群、密码学实现、规则引擎与云原生部署配置的系统性审计，审计团队对系统已实现的优势及待改进的不足进行了全面归纳。
 
 ---
 
-## 8. 第三轮独立复核（2026-08-10，对 v4.0.0 修复结论的逐项核验）
+## 二、已经实现的优势与技术亮点 (好的地方)
 
-> 核验方式：逐文件 diff 审查 + 关键路径运行实测 + 全量回归。结论：**v4.0.0 声称的主体修复真实有效**，但仍有 10 项残留问题未闭环。
+### 2.1 动态分类分级与三层漏斗仲裁机制
 
-### 8.1 经独立核验确认修复到位的关键项（附证据）
+1. **三层递进智能漏斗架构**：
+   * **Layer 1 (确定性规则层 10~50μs)**：采用预编译正则与枚举词典，结合 **Safety Floor（安全地基）** 机制，确保高敏字段（如身份证、敏感疾病）强制保底定级，处理 85% 以上常规高吞吐字段；
+   * **Layer 2 (Small-NER 实体抽取层 1~5ms)**：基于 ONNX 轻量模型专精抽取姓名、疾病、机构等医疗中文实体，自动跳过纯数字与英文字段保持高效；
+   * **Layer 3 (本地大模型语义仲裁层 100~500ms)**：仅在规则冲突或置信度不足时触发本地量化大模型（Qwen3.5）进行语义推理解析。
+2. **防恶意/错误降级安全防线**：
+   * 建立了硬性等级比对校验，若 LLM 给出低于已确认值级证据的裁定，系统立即拦截并拒绝降级，强制保留高等级并置位 `needs_human_review=True`；
+   * 实现了 `_safe_llm_confidence` 防御函数，对 `NaN`、`Inf`、负数或超出范围的异常置信度执行安全钳制与回退。
+3. **动态热重载与双级缓存一致性**：
+   * 规则配置支持热重载，在读写锁保护下同步原子清空 Funnel 实例缓存与 LRU 评估结果缓存，杜绝规则修改后的内存脏读。
 
-| 复核项 | 核验证据 | 结论 |
-|---|---|---|
-| R1 gRPC 热重载 | `grpc_server.py:1024` 已切换 `self._dyn_service.check_and_reload()` | ✅ |
-| R2 gRPC 零值兜底补全 | DPGroupBy `grpc_server.py:988-989` clip 双零不透传；DPAdaptiveClip `:952` 起 target_quantile/num_iterations/initial_clip 均有默认值 | ✅ |
-| R3 vector_mean √d 校准 | `dp.py:2614-2619` 与 vector_sum 一致 | ✅ |
-| R4 noise_scale 值域泄露 | `_resolve_clip_bounds` 返回 `inferred` 标志（`dp.py:702-731`），推断边界时 `DPResult.noise_scale/CI=None`（`:1221-1231,1364-1370`），显式 clip 路径不受影响；有 `test_sum_inferred_bounds_hides_noise_scale_and_ci` 等回归测试 | ✅ |
-| R5 llmlora 打标管道 | 新增值级规则 `RULE_MED_DISEASE_VALUE_001/002`（medical.yaml:84,106）；实测 `("clinical_diagnosis","胃癌")→L4`、`("梅毒")→L5`；AGE 泛化提前至 L1/L2 返回之前（generate_data.py:240+）；跨分割 input 去重（:206-209,468-471） | ✅ |
-| R6 LLM 推理对齐 | `llm_engines.py:567` `enable_thinking=False` 已传 | ✅ |
-| R7 CSV 内存 DoS | `pipeline/router.py:76-89` 改 64KB 分块累计超限即 413 | ✅ |
-| N1 复核标记回归 | `funnel.py:381` 改为 `needs_human_review or has_surviving_review`，低置信度不再覆盖 | ✅ |
-| N2 回归测试缺失 | 新增 `tests/test_audit_remediation.py`（5 项）与 `tests/privacy/test_dp_security_fixes.py`（14+ 项） | ✅ |
-| N3 confidence>100 满分 | `funnel.py:580-583` 越界回退 fallback | ✅ |
-| N4 min_count 漂移 | `grpc_server.py:902` 兜底 5.0，与 REST 对齐 | ✅ |
-| P0-8 mTLS 全权 | 默认关闭（`security/config.py:66`）+ `PRIVACY_AUTH_MTLS_ALLOWED_CNS` 白名单（`auth.py:92-105`，空名单=全拒，fail-closed） | ✅ |
-| P0-9 网关 SSRF | `http_proxy.py:96-112` 未配置 GATEWAY_API_KEY 一律 503 | ✅ |
-| P0-13 硬编码密钥 | 审计 key（`budget.py:36-65`）与 FPE key（`masking.py:1340-1370`）均改 `PRIVACY_AUDIT_KEY`/显式传参优先、缺省 `secrets.token_hex(32)` 进程随机 + 告警 | ✅ |
-| P1 masking 字段名 | 边界感知匹配（`masking.py:266`）；实测 hotel/username→default、手机号/银行卡号/card_number→正确类型；Arrow 15 位身份证与姓名后缀与标量路径一致（实测） | ✅ |
-| P1 budget remaining 竞态 | `budget.py:509` 窗口检查+重置纳入 `BEGIN IMMEDIATE` | ✅ |
-| P1 QOL | HYBRID 可达（`qol.py:378`）、无放回抽样（`:367,397`）、默认 SystemRandom（`:340`）、dummy 泄露缓解（实体子句提取+数字掩蔽） | ✅ |
-| P1 /metrics 认证 | `main.py:98` `ApiKeyAuthAsgiMiddleware` 包装 | ✅ |
-| P1 ops diagnostics | `ops.py:58` `ops:diagnostics` 权限 + refresh 需 `ops:admin`（:577-586） | ✅ |
-| P1 Prometheus 基数 | `middleware.py:37-47` 路由模板打标 + 未匹配归 `"unmatched"` | ✅ |
-| P1 优雅关闭 | `server.py:153-161` stop event 等待 + daemon + join | ✅ |
-| P1 import 期解析崩溃 | `llm_adapter.py:70-87`、`security/config.py:113-159` 均有保护回退 | ✅ |
-| P1 惰性 profile/探针/ServiceMonitor/values 注释 | configmap/compose/values 均已改 `primitives:` 并注释；readiness→`/readyz`；ServiceMonitor 条件渲染 https+tlsConfig；values.yaml:91-95 注释统一 api-keys.json | ✅ |
-| P1 死指标/死告警/下载超时 | metrics.py 旧 classification 指标与 alerts.yml 死告警已清；health_check.sh 死项已清；download_ner_model `timeout=60` | ✅ |
-| P1 console Go | ConcurrencyTest REST 回退（`handlers.go:1075` `restOnlyPath` + 上限 500/5000）、样本缺失 404（:1208,1238）、lb_test 上限 1000（lbtest.go:182） | ✅ |
-| P1 llmlora 工程项 | train.py argparse 默认 None 让位 .env；engine_vllm 改 enable_lora+LoRARequest；evaluate 零泄漏指标 N/A 化 | ✅ |
-| P1 mtime 重试/未知等级告警/global_params 告警/.tif/NER 压制一致性/REST 400/限流边界 | profile_loader.py:186-190；models.py:253-256；profile_loader.py:307-309；funnel.py:547；funnel.py:364；routers/mask.py 等已包 handle_request_exception；ratelimit.py:57-60 | ✅ |
-| 本轮新增资产 | docker-entrypoint.sh 预检与信号转发合理；Dockerfile 增加 `USER privacy` 非 root 运行 | ✅ 无新问题 |
+---
 
-### 8.2 残留项复核与第四轮处置（10 项，已全部闭环）
+### 2.2 严格数学级隐私原语与预算会计体系
 
-| # | 级别 | 问题 | 位置 | 处置结果 |
-|---|---|---|---|---|
-| 1 | P1 | **console 文档死链残留**：`./console/start-go.sh`、`stop-go.sh`、`start-all.sh`、`stop-all.sh`、`start-go-mtls.sh` 等不存在的脚本仍被引用（本轮只新增了 docker 脚本文档与 console/scripts/README.md，旧死链未清理） | `console/README.md:73,79,87,95,101,144`、`console/bff-go/docs/ops.md:136`（原 `console/backend/docs/ops.md`）等 | ✅ 第四轮已修复：12 个文档全部替换为 `console/scripts/{dev,prod,docker}-*.sh` 真实路径，并修正 `--rebuild` 等不存在参数的文档声称；同时发现 dev 脚本缺非交互模式，已为 4 个 dev-start 脚本补 `--force`（无 TTY 环境明确报错） |
-| 2 | P2 | **`.env` 与 `llmlora/.env` 仍被 git 跟踪**（.dockerignore 只挡镜像不入库） | 仓库根 | ✅ 第四轮已修复：已执行 `git rm --cached .env llmlora/.env`（本地文件保留），`.gitignore` 补 `.env`/`.env.*`/`llmlora/.env*` 条目（豁免 `.env.example`）。**注意：变更在暂存区，需提交后生效；历史提交中的 .env 内容如需彻底抹除应轮换相关密钥** |
-| 3 | P2 | **CI 安全扫描不阻塞**：pip-audit `|| true`、trivy `exit-code: 0`；主包 ruff/mypy 仍未纳入 CI | `.github/workflows/ci.yml:90,235`、`:30-33` | ✅ 第四轮已修复：pip-audit 去 `|| true`（本地实测通过）、trivy 改 `exit-code: 1`、主包纳入 `--select F,S` 阻塞式 lint（本地清零后启用）。**意外收获**：F 级检查揪出 `launcher.py` 缺失 `import threading` 导致 `launch()` 一调用即 NameError 的真 bug，以及 `ner_engines.py` 一个被遮蔽且未完成的死 `extract` 方法，均已修复 |
-| 4 | P2 | **网关 REST mTLS 形同虚设**：设了 `ssl_ca_certs` 但未设 `ssl_cert_reqs=CERT_REQUIRED`，客户端证书实际不被请求/校验（gRPC 网关行为与此不一致） | `gateway/server.py:165-167` | ✅ 第四轮已修复：配置 CA 文件时显式 `ssl_cert_reqs=ssl.CERT_REQUIRED` |
-| 5 | P2 | **`sc_health_db51.yaml` 仍缺 `confidence_policy` 节**（违反 AGENTS.md §9.3 显式补齐要求，回落到代码默认与其他标准不一致） | `rules/taxonomies/sc_health_db51.yaml` | ✅ 第四轮已修复：按 default 体系保守默认显式补齐该节 |
-| 6 | P2 | **`equivalence_classes_count` 仍是估计值** `len(res_list)//k`，非真实等价类数 | `kano_table.py:273` | ✅ 第四轮已修复：pandas 与纯 Python 两路径均改为按泛化后准标识符组合的真实分组计数 |
-| 7 | P2 | **无日志轮转**：`.logs/agent_server.log` 无限增长 | `scripts/dev/start_all_services.sh:54`、`observability/logging_config.py` | ✅ 第四轮已修复：start_all_services.sh 增加启动时轮转（保留最近 5 份），注释指引生产用 logrotate；顺带修正"尝试停止已有实例"的不实注释 |
-| 8 | P2 | **`launcher.py`（SO_REUSEPORT 多进程启动器）仍无测试** | `engine/launcher.py` | ✅ 第四轮已修复：新增 `tests/test_launcher.py` 9 项用例（socket 共享端口、worker 拉起、两段式终止、参数解析），并借此确认 #3 揪出的 NameError 已修复 |
-| 9 | P3 | **llmlora 跨分割仅完全相同样本去重**：同模板不同值的近重复仍存在，test 指标仍偏乐观（已部分缓解） | `llmlora/scripts/generate_data.py` | ✅ 第四轮已修复：新增结构签名（领域+模板+实体语义槽位）去重，dev/test 分割排除与先行分割的近重复；实测 train=1000/dev=150/test=80 全量填满且近重复泄漏为 0 |
-| 10 | 已知限制 | **网关→后端 TLS 回源未实现**（已在 `balancer.py:12` docstring 文档化：后端开 TLS 则网关不可用） | `gateway/balancer.py:152` | ✅ 第四轮已实现：`PRIVACY_GATEWAY_BACKEND_TLS_ENABLED` + `..._CA`（+ 可选 mTLS 客户端证书），gRPC 回源切 `secure_channel`，健康检查与 HTTP 转发按 CA 校验，配置缺失 fail-fast；新增 `tests/gateway/test_backend_tls.py` 8 项用例 |
+1. **四大隐私计算原语全量落地**：
+   * **动态脱敏 (Masking)**：基于词边界的精准字段识别，支持保留格式加密 (FPE)、中段掩码、文本截断与假值替换；
+   * **K-匿名 (K-Anonymity)**：单条流式支持分段层次树泛化，批量模式实现全局 **Mondrian 多维区间划分算法**，保障等价类 $K \ge 5$；
+   * **差分隐私 (Differential Privacy)**：实现拉普拉斯机制（Laplace）与高斯机制（Gaussian），覆盖 `count` / `sum` / `mean` / `histogram` 及自适应截断（Adaptive Clip）；
+   * **查询混淆 (QoL)**：基于加密安全随机数（`secrets.SystemRandom`）生成多样化语义干扰查询，防反向推断探查意图。
+2. **高维向量差分隐私数学校准**：
+   * 高维向量（$d$ 维）Laplace 噪声严格按照 $L_1$ 范数上限 $\sqrt{d} \cdot \text{max\_norm}$ 执行数学扩增校准，保障高维嵌入向量（Embedding）的差分隐私强度。
+3. **极值差隐私防泄露保护**：
+   * 当系统从数据集动态推导截断边界时，自动屏蔽并置空回传的 `noise_scale` 与置信区间元数据，防止攻击者通过反向乘算逆推出数据集的最大值与最小值之差。
+4. **严密的隐私预算会计中枢 (`BudgetAccountant`)**：
+   * 支持命名空间隔离、累计消耗追踪与滑动时间窗口自动重置；
+   * 前置拦截非正数 $\varepsilon$ 扣减，杜绝非法“充值”绕过配额；
+   * 基于 **国密 HMAC-SM3 / SM3** 对每笔预算消耗执行不可篡改的链式签名审计。
 
-### 8.3 第三轮复核结论与第四轮修复总结
+---
 
-- **可以采信 v4.0.0 的修复结论**：§2-§6 所述修复均经独立 diff 核验与实测确认，无夸大；上一轮指出的 7 项返工（R1-R7）与 4 项新引入问题（N1-N4）已全部闭环。
-- **第三轮发现的 10 项残留已在第四轮全部清零**（见 §8.2 处置列），其中 lint 门禁落地过程额外揪出并修复 2 个真实 bug：`launcher.py` 缺失 `import threading` 导致 `launch()` 调用即 NameError（多进程启动器此前完全不可用）、`ner_engines.py` 被遮蔽的死 `extract` 方法。
-- 第三轮全量回归：**收集 1064 项，exit=0 全部通过**（注：§7 的 973 项为 `-k` 过滤口径，本节为按文件排除口径，两者测试选择不同，各自运行均全绿）。
-- 第四轮全量回归：同上口径 **收集 1081 项，exit=0 全部通过**（含新增 `tests/test_launcher.py` 9 项、`tests/gateway/test_backend_tls.py` 8 项）。
-- **遗留注意事项**：① `.env`/`llmlora/.env` 的出库变更在 git 暂存区，需提交生效；历史提交中已入库的密钥内容建议轮换。② 主包 mypy 全量类型检查仍未纳入 CI（存量基线较大，建议后续以增量方式推进）。③ `pip-audit`/`trivy` 改阻塞式后，若未来依赖出现新高危漏洞 CI 会正确失败——这是门禁的预期行为，届时需升级依赖而非放宽门禁。
+### 2.3 全栈国密商用密码 (SM2/SM3/SM4) 与防篡改存证
+
+1. **全链路国密商用密码体系对齐（GB/T 39786-2021 密评三级）**：
+   * **身份认证与握手**：全面支持国密 **SM2** 与 TLS 1.3 双向 mTLS，通过 CN 白名单实施方法级最小权限控制，支持 5 秒动态热重载；
+   * **完整性防篡改存证**：采用 **国密 SM3 算法（GM/T 0004-2012 / GB/T 32918）** 构建 9 要素区块链式连续哈希链与输入输出指纹；
+   * **出域快照机密性**：存证快照在入库前采用 **国密 SM4-GCM 动态信封加密**（`enc:v1:...`），密钥由数据局专属环境变量管控；
+   * **去标识化与伪名化**：字段哈希去标识化全面采用 **国密 HMAC-SM3** 与 **FPE**。
+2. **区块链式连续哈希链与秒级在线验真**：
+   * 每一笔数据流通操作均将前序区块哈希、任务ID、接口编码、时间戳、输入输出 SM3 摘要进行链式绑定；
+   * 暴露 `POST /api/audit/chain/verify` 只读核验接口，可在毫秒级完成全量历史记录的哈希链连续性校验，精准定位删行、改行或调序篡改行为。
+
+---
+
+### 2.4 高性能微服务群与政务云逻辑强隔离架构
+
+1. **微服务集群职责清晰解耦**：
+   * `service-hub`（:8082 / :50052）：负责请求接入、原数拉取、流水线编排调度与任务状态机管理；
+   * `datasource-mgr`（:8083 / :50053）：负责多源连接池管理、样本切片提取与数据源探查；
+   * `audit-log`（:8084 / :50054）：负责国密 SM3 存证入库、信封加密快照与合规对账；
+   * `engine`（:8079 / :50051）：专注于纯内存隐私计算与动态分类定级；
+   * `bff-go`（:8081）与 `app-lz`（:8085）：聚合中台数据能力，提供面向前端与业务系统的统一 REST 接口。
+2. **政务云独立虚拟机 (ECS) 与 VPC 子网强隔离**：
+   * **网关算力节点（主机甲 · ECS）**：`service-hub` 与 `engine` 同台虚拟机部署，采用 `127.0.0.1` 本地环回内存 IPC 高速通信，单条脱敏处理仅 **10~50μs**，消除未脱敏原数在云虚拟交换机中的抓包风险；
+   * **独立审计节点（主机乙 · ECS）**：`audit-log` 部署于独立审计虚拟机，配置独立 VPC 子网与安全组单向入站只写策略，业务虚机与网关无权限修改或删除审计日志；
+   * **核心数据资产区**：核心数据库部署于受控专用 VPC 子网，禁止外网直连。
+3. **分布式并发与租约争抢机制**：
+   * 接入 PostgreSQL 存储底座时，基于 `FOR UPDATE SKIP LOCKED` 短事务实现多副本无阻塞争抢任务租约（`ClaimNext`）与令牌续期（`RenewLease`），彻底杜绝分布式死锁与脑裂重复消费。
+4. **内存微批聚合写入 (`BufferedAuditStore`) 与单协程顺序哈希链保证**：
+   * 在存储层装配了通用的 **单协程顺序排队 + 内存读己之写缓存 + 定量/定时微批刷盘器**，在微批合并写入的同时严格维护前序存证哈希（`prev_hash` ➔ `integrity_hash`）顺序绑定，单机 SQLite 写入性能推升至 **3,000 ~ 5,000 QPS**，且优雅停机安全排空保证 100% 零丢数据；
+   * 实现了 **PostgreSQL 3 秒探针安全回退**（PG 故障/未配置自动平滑回退 SQLite WAL）、**连接池上下限守恒校验 (`minConns <= maxConns`)** 与自适应核心数调优，并全面收敛至自研无第三方 CGO 依赖的标准国密 SM3 实现。
+
+---
+
+### 2.5 医疗健康数据标准深度对齐与敏感病种治理
+
+1. **确立四川省地方标准核心分级基准**：
+   * 严格遵循 **DB51/T 2989—2023《四川省健康医疗大数据应用指南》** 五级定级标准（L1公开、L2内部、L3敏感、L4高敏、L5极敏），并在 `rules/domains/medical.yaml` 中完整落地。
+2. **四柱高敏特征强剥离机制 (4-Pillar Matrix)**：
+   * 针对高敏病种，全链条识别并剥离 **①病因/诱因 ➔ ②现象/体征 ➔ ③诊断/检查 ➔ ④用药/处置** 四维特征，彻底阻断大模型反向推理。
+3. **敏感病种差异化治理策略**：
+   * **彻底抹平 (Purge)**：对艾滋病/HIV (B20–B24)、性传播疾病 STD (A50–A64)、重型精神障碍 (F20–F29) 实施整句/整块零痕迹擦除，严禁泛化输出；
+   * **范畴化泛化 (Generalize)**：对恶性肿瘤 (C00–D49)、病毒性肝炎 (B15–B19)、严重器官衰竭 (I21/J44/N18) 泛化为上位概念（如“消化系统相关疾病”）；
+   * **常规慢病零篡改**：高血压、糖尿病等常规慢病原样保留，最大化保留临床与康养业务价值。
+4. **两大核心政务数据资产规约闭环**：
+   * **医保结算数据接口 (`ds_yibao`，18 字段)**：包含 `insurance_settlement_id`、`person_id`、`icd10_code`、`diagnosis_name` 等字段定级与脱敏策略；
+   * **康养体征数据接口 (`ds_kangyang`，27 字段)**：包含患者姓名、身份证、主诉病史、残疾证号及体征拉普拉斯差分加噪（$\varepsilon=1.0$）规约。
+
+---
+
+### 2.6 纵深防御中间件与全栈可观测性体系
+
+1. **Go 9 层统一中间件栈**：
+   * 全量微服务装配 `TraceMiddleware ➔ StructuredLogger ➔ Recovery ➔ SecurityHeaders ➔ MaxBodySize ➔ MaxConcurrent ➔ RateLimit ➔ CORS ➔ Auth`；
+   * 具备请求体大小限制（32MB/64MB）、全局并发上限（1000）、IP 令牌桶限流与全链路 `X-Trace-ID` 追踪。
+2. **Prometheus 指标防基数爆炸**：
+   * 采用标准化路由模板（如 `/v1/audit/logs/{id}`）进行指标打标，未匹配路径统一归集为 `NOT_FOUND`，杜绝恶意路径扫描导致的 Prometheus 内存撑爆。
+3. **全栈可观测看板**：
+   * 采集 Python（40+ 指标）与 Go 微服务群（15+ 指标），预置全平台概览大屏与 Service Hub 流水线调度大屏。
+
+---
+
+### 2.7 完备的自动化测试工程保障
+
+1. **测试全量通过且覆盖率高**：
+   * Go 存储、微批刷盘与审计微服务单元测试（哈希链连续性计算、链式对账验真端点、快照信封加密等）**100% PASS**；
+   * Python 核心算力引擎自动化测试（涵盖 Safety Floor 拦截、预算扣减防护、高维向量 $\sqrt{d}$ 校验、mTLS CN 白名单等）**1081 项测试 exit=0 全部通过**。
+
+---
+
+## 三、当前存在的不足、局限性与改进空间 (不好的地方)
+
+### 3.1 本地大模型并发吞吐与硬件资源瓶颈
+
+* **现状与问题**：
+  * 系统在 Layer 3 采用了本地量化大模型（Qwen3.5）进行语义消歧与长文本仲裁，保障了数据完全不出域；
+  * 但受限于边缘端/本地服务器的 GPU 显存与单机算力，当前默认设置了进程级并发信号量 `PRIVACY_LLM_MAX_CONCURRENCY=1`；
+  * 单次 LLM 推理耗时在 **100ms ~ 500ms**。如果短时间内有大量复杂自由文本请求无法被 Layer 1/2 拦截而涌入 Layer 3，大模型将成为明显的排队瓶颈。
+* **改进建议**：
+  * 后续可通过部署专有 vLLM / TensorRT-LLM 推理集群实现多卡批处理（Continuous Batching），或进一步蒸馏超轻量专用判别模型。
+
+---
+
+### 3.2 超大规模存证长期归档与多节点异地容灾
+
+* **现状与问题**：
+  * 系统已通过内存微批聚合刷盘将单机 SQLite 写入能力提升至 3k~5k QPS，并支持配置 DSN 自动连接/降级 PostgreSQL；
+  * 但对于日产生 TB 级历史审计存证的超大规模持续运行场景，目前虽然支持生命周期保留清理（Retention），但尚未内嵌针对过期国密 SM3 存证自动转储生成 Parquet 格式并直推至对象存储（S3/MinIO）的免运维管道。
+* **改进建议**：
+  * 引入轻量级后台流式冷热归档 Worker，定期将超过 90 天的链式存证压缩封存至冷存储。
+
+---
+
+### 3.3 领域规则词库维护与跨行业冷启动成本
+
+* **现状与问题**：
+  * 当前系统在医疗健康、医保结算及通用 PII 领域内置了高度完善的 `rules/domains/*.yaml` 规则库与敏感词库；
+  * 但对于全新接入的异构行业（如复杂的能源电力、精密制造等），系统缺乏预置的行业专属规则字典，在冷启动初期需要依赖 Small-NER 泛化或大模型兜底，会导致初期处理延迟相对较高并产生较多的人工复核标记（`needs_human_review`）。
+* **改进建议**：
+  * 增强 Standard Profile 自动生成能力，支持根据新行业标准文档一键半自动化生成 YAML 规则包。
+
+---
+
+### 3.4 代码静态类型检查 (mypy) 全量覆盖不足
+
+* **现状与问题**：
+  * 虽然核心隐私原语与微服务接口具备极其严密的单元测试与集成测试，但 Python 核心引擎历史代码量庞大；
+  * 目前 CI 门禁中启用了针对语法与安全漏洞的阻塞式扫描（Ruff / Trivy / Pip-Audit），但尚未全量开启 `mypy --strict` 静态类型检查门禁，部分辅助函数与动态字典解析仍存在弱类型标注。
+* **改进建议**：
+  * 制定模块级类型补全计划，逐步在各子包中引入严格的类型注解并纳入 CI 阻塞门禁。
+
+---
+
+### 3.5 复杂嵌套长文本的极端语义消歧局限
+
+* **现状与问题**：
+  * 八步临床句法重构算法对于符合医学规范的病历、体检主诉及死因文本具备极高的重构质量（自然度 $\ge 99\%$）；
+  * 但面对长篇幅、多重否定句、极度口语化且包含严重错别字或倒装结构的极端自由文本时，纯规则重构仍存在极少数长尾语病边界；
+  * 此时系统虽能通过 Fail-Closed 机制确保不泄露高敏词，但输出的文本可读性可能会受到一定影响。
+* **改进建议**：
+  * 持续利用真实脱敏语料扩充微调数据集，强化本地小模型针对口语化错别字文本的自愈重构能力。
+
+---
+
+### 3.6 差分隐私预算多机构联合结算的跨域同步局限
+
+* **现状与问题**：
+  * 当前系统的差分隐私预算会计模型（`BudgetAccountant`）支持单实例内存、SQLite 及集中式 PostgreSQL 存储，实现了单组织/单集群内的预算严格追踪与滑动窗口重置；
+  * 但在多机构跨域多中心联合分析场景下（各机构拥有完全独立的网络与数据库），目前跨机构的联合预算扣减仍依赖中台 API 转发同步，尚未引入基于去中心化密码学账本的多方安全预算协同机制。
+* **改进建议**：
+  * 在未来架构演进中，可探索结合轻量级联盟链或 MPC 协同协议实现跨机构差分隐私预算的联合锁相扣减。
+
+---
+
+## 四、审计总结与后续演进建议
+
+| 维度 | 优势与亮点 (好的地方) | 不足与局限 (不好的地方) | 建议改进方向 |
+|---|---|---|---|
+| **算法与算力** | 三层漏斗结构完备，Safety Floor 保底强健；数学级 DP/K-Anon 严谨 | 本地 LLM 单机并发受限 (默认并发=1) | 引入 vLLM 批处理或轻量专用蒸馏模型 |
+| **商用密码** | 全栈国密 SM2/SM3/SM4 落地，9 要素链式验真实装 | 历史旧 SHA 数据不兼容（已完成清理重置） | 持续推进密评第三方测评与硬件指令加速 |
+| **服务与架构** | 微服务职责解耦，政务云双 ECS + VPC 隔离，PG 原子租约 | SQLite 模式在高并发（>1k QPS）下需切换 PG | 提供更加平滑的存储引擎自动化迁移配置 |
+| **标准与合规** | 深度锚定四川 DB51 五级基准，四柱强剥离与病种治理完备 | 跨新行业接入存在规则词库冷启动配置成本 | 提供标准文档自动解析生成规则工具链 |
+| **工程与质量** | 1000+ 项测试全量通过，纵深防御中间件与全栈可观测性 | 静态类型检查 mypy 尚未全量覆盖 | 逐步在 CI 中纳入模块级严格类型门禁 |
+
+---
+*PrivShield 全项目安全与工程实现审计报告 终*

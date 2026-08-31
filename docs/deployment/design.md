@@ -64,11 +64,11 @@
 
 | 场景 | 部署形态 | 说明 |
 |---|---|---|
-| 本地开发 / 联调 | 本地直跑 | `go run ./engine-go/cmd/privshield-agent`，或一键脚本 `bash ./scripts/dev/dev-bff-agent.sh` |
-| 内部演示 / 单机小规模 | Docker 单容器 | `docker build -t privshield:10.0.0 .` + `docker run`，环境变量注入 |
-| 本地全栈（agent + console + 微服务 + 监控） | Docker Compose | `deploy/docker-compose/docker-compose.go-engine.yml` 一键拉起 |
+| 本地开发 / 联调 | 本地直跑 | `python -m engine.server`，`.env` + `config/env/<profile>.env` 级联加载 |
+| 内部演示 / 单机小规模 | Docker 单容器 | `docker build --target core|ml` + `docker run`，环境变量注入 |
+| 本地全栈（agent + console + vLLM + 监控） | Docker Compose | `deploy/docker-compose/docker-compose.yml` 一键拉起，`env_file: ../../.env` 注入配置 |
 
-**决策建议**：单机、演示、开发 → Compose / 直跑；对外提供脱敏服务、需要多副本高可用 + 弹性伸缩 + 安全合规（TLS/网络隔离/审计）→ K8s，使用 `helm install -f values-production-go.yaml`（配合自管 TLS/API Key Secret）。
+**决策建议**：单机、演示、开发 → Compose / 直跑；对外提供脱敏服务、需要多副本高可用 + 弹性伸缩 + 安全合规（TLS/网络隔离/审计）→ K8s，使用 `helm install -f values-production.yaml`（配合自管 TLS/API Key Secret）。
 
 > **注意**：K8s 部署时镜像内无 `.env`（`.dockerignore` 排除），配置完全由 values 控制（见 §4.4），LLM 等无 values 字段的配置须经 `extraEnv` 注入——这是生产配置受控的强制要求。
 
@@ -935,46 +935,46 @@ FileNotFoundError: [Errno 2] No such file or directory: '/app/docs/standard/四�
 
 ---
 
-## 14. 双物理节点/服务器拆分部署与多并发场景资源评估 (Resource Sizing & Concurrency Capacity Planning)
+## 14. 政务云双节点虚拟机拆分部署与多并发场景资源评估 (Resource Sizing & Concurrency Capacity Planning)
 
 ### 14.1 部署架构拓扑与核心工作负载模型
 
-针对政务云与医疗健康大数据典型流通场景，系统采用**计算调度与合规审计物理隔离的双节点部署架构**：
+针对政务云与医疗健康大数据典型流通场景，系统采用**计算调度与合规审计逻辑隔离的政务云双虚拟机 (ECS) 部署架构**，通过 VPC 子网与安全组实现租户与业务强隔离：
 
 ```mermaid
 flowchart LR
-    subgraph NodeA ["服务器 A：计算与调度中枢节点 (Compute & Orchestration Node)"]
+    subgraph NodeA ["政务云虚拟机主机甲：计算与调度中枢节点 (Compute & Orchestration Node · ECS)"]
         direction TB
         Hub["services/service-hub<br/>(流水线编排 / 任务租约 / 限流控制 :8082/:50052)"]
         Engine["engine (PrivShield Core Agent)<br/>(3-Layer 分类漏斗 / 医疗流水线 / PII 掩码脱敏 :8079/:50051)"]
         DSMgr["services/datasource-mgr<br/>(数据源管理与抽样 :8083/:50053)"]
         BFF["console/bff-go<br/>(API 网关与大屏聚合 :8081)"]
         
-        Hub <-->|Unix Domain Socket / 本地网络 gRPC| Engine
+        Hub <-->|同虚机 Loopback 127.0.0.1 内存 IPC (微秒级)| Engine
         Hub <-->|本地 HTTP/gRPC| DSMgr
     end
 
-    subgraph NodeB ["服务器 B：审计存证与合规账本节点 (Audit & Evidence Node)"]
+    subgraph NodeB ["政务云独立审计虚拟机主机乙：审计存证与合规账本节点 (Audit & Evidence Node · ECS)"]
         direction TB
-        AuditLog["services/audit-log<br/>(9要素区块链式哈希链 / SM4-GCM 信封加密 / 快照验真 :8084/:50054)"]
+        AuditLog["services/audit-log<br/>(9要素国密 SM3 区块链式哈希链 / SM4-GCM 信封加密 / 快照验真 :8084/:50054)"]
         AuditDB[(不可篡改存储底座<br/>SQLite WAL / PostgreSQL Phase B)]
         
         AuditLog --> AuditDB
     end
 
-    Client[客户端/医院/医保局应用] -->|HTTP / gRPC| NodeA
-    NodeA -->|"跨机 gRPC mTLS (专用内网)"| NodeB
+    Client[客户端/龙城云康养 APP/Agent] -->|国密 VPN 专线 / TLS 1.3 mTLS| NodeA
+    NodeA -->|"跨虚机 gRPC mTLS (专用 VPC 子网 / 单向入站只写)"| NodeB
 ```
 
 #### 典型业务负载特征
-1. **数据源 1: `ds_yibao` (城镇职工基本医疗保险结算数据)**
-   - 单条记录字段数：18 字段（`record_id`、`patient_name`、`id_card`、`phone`、`diagnosis_name`、`icd10_code`、`total_fee`、`yibao_pay` 等）
+1. **数据源 1: `ds_yibao` (城镇职工基本医疗保险结算数据，18 字段)**
+   - 单条记录字段数：18 字段（`insurance_settlement_id`、`person_id`、`gender`、`birth_date`、`hospital_code`、`icd10_code`、`diagnosis_name` 等）
    - 单条原始 JSON 体积：$\approx 450 \sim 650 \text{ 字节}$
-   - 处理链路：PII 敏感字段掩码（姓名、身份证、电话）+ 临床诊断与 ICD-10 敏感病种脱敏治理 + 分类分级评级 + 9 要素哈希链与加密快照。
-2. **数据源 2: `ds_kangyang` (智慧养老健康监护与体征数据)**
-   - 单条记录字段数：27 字段（`elder_id`、`name`、`age`、`heart_rate`、`blood_pressure`、`blood_glucose`、`chief_complaint`、`present_illness`、`past_history` 等）
+   - 处理链路：PII 敏感字段国密 HMAC-SM3 散列（`person_id`）+ 中段掩码 + 临床诊断与 ICD-10 敏感病种类目泛化 + DB51 分类分级定级 + 9 要素国密 SM3 哈希链与 SM4-GCM 加密快照。
+2. **数据源 2: `ds_kangyang` (智慧康养健康监护与体征数据，27 字段)**
+   - 单条记录字段数：27 字段（`record_id`、`name`、`id_card_no`、`gender`、`age`、`phone_number`、`residential_address`、`chief_complaint`、`past_history`、`height`、`weight`、`disability_cert_no` 等）
    - 单条原始 JSON 体积：$\approx 700 \sim 1,100 \text{ 字节}$
-   - 处理链路：老人身份识别码脱敏 + 血压/心率/血糖体征泛化 + 既往史病历文本敏感信息剥离 + 9 要素哈希链存证。
+   - 处理链路：患者姓名与身份证掩码 + 身高/体重/血压拉普拉斯差分加噪 ($\varepsilon=1.0$) + 四柱高敏特征强剥离 + 敏感病种差异化抹平/泛化 + 9 要素国密 SM3 哈希链存证。
 
 ---
 
@@ -986,7 +986,7 @@ flowchart LR
 |---|---|---|---|---|
 | **接入与调度 (`service-hub`)** | 请求参数解析、鉴权、生成 TaskID、任务持久化 | $0.2 \sim 0.5 \text{ ms}$ | $\approx 4 \text{ KB}$ | 内存/SQLite 1 次写入（$\approx 1 \text{ KB}$） |
 | **规则与脱敏 (`engine`)** | Layer-1 正则/字典匹配 + Layer-2 Small-NER + PII 掩码 + ICD-10 敏感诊断脱敏 | $2.5 \sim 6.0 \text{ ms}$（CPU 纯规则）<br/>$15 \sim 35 \text{ ms}$（启用 Small-NER ONNX） | $\approx 32 \text{ KB}$ (临时缓存) | 零磁盘 I/O（全内存流式处理） |
-| **审计存证 (`audit-log`)** | 追溯前序哈希 + 计算 9 要素 SHA-256 + SM4-GCM 样本信封加密 + 批量落盘 | $0.8 \sim 1.5 \text{ ms}$ (硬件加速 国密/SHA-NI) | $\approx 8 \text{ KB}$ | 磁盘写入 $\approx 1.2 \text{ KB}$ (含快照与哈希链索引) |
+| **审计存证 (`audit-log`)** | 追溯前序哈希 + 计算 9 要素国密 SM3 + SM4-GCM 样本信封加密 + 批量落盘 | $0.8 \sim 1.5 \text{ ms}$ (硬件加速 国密 SM3/SM4 指令集) | $\approx 8 \text{ KB}$ | 磁盘写入 $\approx 1.2 \text{ KB}$ (含快照与哈希链索引) |
 
 #### 容量测算关键公式：
 1. **内网带宽开销**：
@@ -1025,22 +1025,22 @@ flowchart LR
 
 | 节点 | 推荐规格 | CPU / 内存 | 存储选型与配置 | 网络需求 | 软件参数调优 |
 |---|---|---|---|---|---|
-| **服务器 A**<br/>(engine + service-hub) | 物理机 / 企业级云主机 | **8 ~ 16 核 vCPU / 16 ~ 32 GB 内存** | 200 GB NVMe SSD | 1 Gbps (千兆网) | • Uvicorn workers: 4~8<br/>• gRPC MaxWorkers: 64<br/>• Hub 并发信号量: 30<br/>• 开启规则引擎 LRU 缓存 (4096) |
-| **服务器 B**<br/>(audit-log) | 物理机 / 企业级云主机 | **4 ~ 8 核 vCPU / 8 ~ 16 GB 内存** | 1 TB ~ 2 TB NVMe SSD<br/>(写入吞吐 $\ge 20 \text{MB/s}$, IOPS $\ge 3,000$) | 1 Gbps | • 存储引擎: SQLite WAL 或 PostgreSQL Phase B<br/>• 开启 SM4-GCM 硬件指令集加速<br/>• 本地保留: 60 天 + 定期归档 |
+| **服务器 A**<br/>(engine + service-hub) | 计算型 ECS / 物理机 | **8 ~ 16 核 vCPU / 16 ~ 32 GB 内存** | 200 GB NVMe SSD | 1 Gbps (千兆网) | • Uvicorn workers: 4~8<br/>• gRPC MaxWorkers: 64<br/>• Hub 并发信号量: 30<br/>• 开启规则引擎 LRU 缓存 (4096) |
+| **服务器 B**<br/>(audit-log) | 通用型 ECS / 物理机 | **4 ~ 8 核 vCPU / 8 ~ 16 GB 内存** | 1 TB ~ 2 TB NVMe SSD<br/>(写入吞吐 $\ge 20 \text{MB/s}$, IOPS $\ge 3,000$) | 1 Gbps | • 存储引擎: SQLite WAL 或 PostgreSQL Phase B<br/>• 开启 SM4-GCM 与国密 SM3 硬件指令加速<br/>• 本地保留: 60 天 + 定期归档 |
 
 #### 梯度 3：高并发场景 (1,000 ~ 3,000 QPS，日请求量 5,000万 ~ 1.5亿次)
 
 | 节点 | 推荐规格 | CPU / 内存 | 存储选型与配置 | 网络需求 | 软件参数调优 |
 |---|---|---|---|---|---|
-| **服务器 A**<br/>(engine + service-hub) | 高性能物理服务器 / 计算型云主机 | **32 ~ 64 核物理 CPU / 64 ~ 128 GB 内存** | 500 GB NVMe 阵列 (RAID 10) | 10 Gbps (万兆网卡) | • gRPC 进程/线程池: 128<br/>• Uvicorn: 多进程集群 / Gunicorn 16 workers<br/>• Hub 信号量: 100 并发<br/>• 启用 Linux TCP `SO_REUSEPORT` 与 `epoll` |
-| **服务器 B**<br/>(audit-log) | 高性能存储型物理服务器 | **16 ~ 32 核 CPU / 32 ~ 64 GB 内存** | 4 TB ~ 8 TB 企业级 NVMe SSD<br/>(写入吞吐 $\ge 100 \text{MB/s}$, IOPS $\ge 20,000$) | 10 Gbps | • **存储引擎强制切换为 PostgreSQL Phase B**<br/>• `pgxpool` 连接池: `MaxConns=50, MinConns=10`<br/>• 批量流水线入库: 采用 `SaveLogsBatch` (每批 100~500 条)<br/>• 开启数据库时间范围分区表 (Partition by Month) |
+| **服务器 A**<br/>(engine + service-hub) | 高性能计算型 ECS / 物理机 | **32 ~ 64 核 vCPU / 64 ~ 128 GB 内存** | 500 GB NVMe 阵列 (RAID 10) | 10 Gbps (万兆 VPC 专网) | • gRPC 进程/线程池: 128<br/>• Uvicorn: 多进程集群 / Gunicorn 16 workers<br/>• Hub 信号量: 100 并发<br/>• 启用 Linux TCP `SO_REUSEPORT` 与 `epoll` |
+| **服务器 B**<br/>(audit-log) | 高性能存储型 ECS / 物理机 | **16 ~ 32 核 vCPU / 32 ~ 64 GB 内存** | 4 TB ~ 8 TB 企业级 NVMe SSD<br/>(写入吞吐 $\ge 100 \text{MB/s}$, IOPS $\ge 20,000$) | 10 Gbps | • **存储引擎强制切换为 PostgreSQL Phase B**<br/>• `pgxpool` 连接池: `MaxConns=50, MinConns=10`<br/>• 批量流水线入库: 采用 `SaveLogsBatch` (每批 100~500 条)<br/>• 开启数据库时间范围分区表 (Partition by Month) |
 
 #### 梯度 4：超高并发 / 峰值压测场景 (5,000+ QPS，峰值数据吞吐 50,000+ records/s)
 
 | 节点 | 推荐架构形态 | 资源配置要求 | 存储与 I/O 架构 | 关键高可用保障机制 |
 |---|---|---|---|---|
-| **服务器 A**<br/>(计算与调度集群) | **多节点横向扩展 / K8s HPA 集群**<br/>(2~4 台计算物理机或 K8s 动态伸缩 Pods) | 每台物理机 **64核 CPU / 128GB+ 内存**，集群总计 128~256 核 | 高速内存虚拟盘 (tmpfs) 缓存高频字典与规则编译树 | • 网关层负载均衡 (`engine/gateway` / Nginx)<br/>• Service Hub 基于 PostgreSQL `FOR UPDATE SKIP LOCKED` 分布式原子租约争抢<br/>• 背压控制：当队列超过上限时自动触发快速拒绝 (HTTP 429 / 503) |
-| **服务器 B**<br/>(审计存证集群) | **PostgreSQL 主从复制集群 / 独立高性能存证库** | 独立物理机 **32核 CPU / 64GB 内存** + 专有 NVMe 存储阵列 | 8 TB+ NVMe RAID 10 (IOPS $\ge 50,000$) + 挂载冷存储对象存储 (S3/MinIO) 自动归档 | • 写入端：采用异步环形缓冲池 + 批量 Copy / Batch Insert<br/>• 验真端：分库分表 / 读写分离，历史哈希链对账在从库执行<br/>• 自动定期将历史快照压缩转储至冷存储，降低热库空间膨胀 |
+| **服务器 A**<br/>(计算与调度集群) | **多节点横向扩展 / K8s HPA 集群**<br/>(2~4 台计算节点或 K8s 动态伸缩 Pods) | 每台主机 **64核 vCPU / 128GB+ 内存**，集群总计 128~256 核 | 高速内存虚拟盘 (tmpfs) 缓存高频字典与规则编译树 | • 网关层负载均衡 (`engine/gateway` / Nginx)<br/>• Service Hub 基于 PostgreSQL `FOR UPDATE SKIP LOCKED` 分布式原子租约争抢<br/>• 背压控制：当队列超过上限时自动触发快速拒绝 (HTTP 429 / 503) |
+| **服务器 B**<br/>(审计存证集群) | **PostgreSQL 主从复制集群 / 独立高性能存证库** | 独立虚机/物理机 **32核 vCPU / 64GB 内存** + 专有 NVMe 存储阵列 | 8 TB+ NVMe RAID 10 (IOPS $\ge 50,000$) + 挂载冷存储对象存储 (S3/MinIO) 自动归档 | • 写入端：采用异步环形缓冲池 + 批量 Copy / Batch Insert<br/>• 验真端：分库分表 / 读写分离，历史哈希链对账在从库执行<br/>• 自动定期将历史快照压缩转储至冷存储，降低热库空间膨胀 |
 
 ---
 
@@ -1048,7 +1048,7 @@ flowchart LR
 
 1. **CPU 算力瓶颈与优化**：
    - **动态脱敏规则匹配**：`engine` 内部正则编译已通过 `ConfigurableRuleEngine` 实现全局 LRU 预编译缓存（`PRIVACY_ENGINE_CACHE_MAX_SIZE=4096`），避免单次请求重复编译正则；
-   - **密码学哈希与加密**：SHA-256 哈希链与 SM4-GCM 运算尽量确保宿主机 CPU 支持并启用了 `Intel SHA-NI` 与国密 SM4 硬件扩展指令集，可降低 70% 的 CPU 存证开销。
+   - **国密密码学哈希与加密**：SM3 哈希链与 SM4-GCM 运算尽量确保宿主机 CPU 支持并启用了国密商用密码硬件扩展指令集加速，可显著降低存证与信封加密 CPU 开销。
 2. **内存消耗与 OOM 防御**：
    - `services/service-hub` 与 `services/audit-log` 配置了 HTTP `MaxBodySize(32MB)` 保护，杜绝超大 Payload 请求撑爆内存；
    - 在高并发数据导入时，优先采用批次分片（Batch Chunking，单批 100~500 行），避免一次加载上万条完整记录到单请求上下文中。
