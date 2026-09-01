@@ -33,6 +33,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -345,20 +346,40 @@ func rankToCanonical(rank int) (dynclassification.SecurityLevel, bool) {
 // 诊断与热更新辅助
 // ──────────────────────────────────────────────
 
-// llmDiagnostics 返回 LLM 仲裁链路的生效配置快照（P2-2 可审计性）。
+// llmDiagnostics 返回 Layer-3 外送的真实交付口径（P0-5 / P1-3）：
+// 是否启用、端点是否加密、载荷是否去标识化、累计外送数。
+// 诊断上报禁止再写死 available:true —— 那会把「未启用的外部大模型」宣称为可用能力。
 func (s *PrivacyService) llmDiagnostics() map[string]interface{} {
-	s.mu.RLock()
-	endpoint := s.llmEndpoint
-	enabled := s.enableLLM
-	maxConcurrency := s.llmMaxConcurrency
-	s.mu.RUnlock()
-
-	return map[string]interface{}{
-		"enabled":         enabled,
-		"endpoint":        endpoint,
-		"max_concurrency": maxConcurrency,
-		"configured":      endpoint != "",
+	out := map[string]interface{}{
+		"enabled":              false,
+		"configured":           false,
+		"available":            false,
+		"payload_deidentified": true,
+		"transport_secure":     false,
+		"escalations":          int64(0),
+		"determined_by":        "funnel.LLMEnabled/LLMEscalationStats",
+		"note":                 "Layer-3 外部大模型仲裁默认关闭（config/privacy.yaml classification.enable_llm=false）；未启用时不存在任何外送路径",
 	}
+	s.mu.RLock()
+	funnel := s.funnel
+	s.mu.RUnlock()
+	if funnel == nil {
+		return out
+	}
+	stats := funnel.LLMEscalationStats()
+	configured, available := funnel.LLMStatus(context.Background())
+	out["enabled"] = funnel.LLMEnabled()
+	out["configured"] = configured
+	out["available"] = available
+	out["endpoint_host"] = stats.EndpointHost
+	out["transport_secure"] = stats.TransportSecure
+	out["payload_deidentified"] = stats.PayloadDeidentified
+	out["escalations"] = stats.Escalations
+	out["deidentified_payloads"] = stats.DeidentifiedPayloads
+	if stats.TransportError != "" {
+		out["transport_error"] = stats.TransportError
+	}
+	return out
 }
 
 // safetyFloorDiagnostics 返回安全底线与默认拒绝策略的生效快照（P0-2 / P2-2 可审计性）。

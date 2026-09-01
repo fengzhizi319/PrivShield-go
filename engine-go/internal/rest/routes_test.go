@@ -352,6 +352,15 @@ func TestDiagnostics_NerCapability(t *testing.T) {
 				t.Error("engines.ner.available must not claim true while the regex stand-in is wired")
 			}
 		}
+		if llm, ok := engines["llm"].(map[string]any); ok {
+			// Layer-3 默认关闭；即便启用，available 也必须来自真实探测而非写死常量。
+			if llm["determined_by"] == nil || llm["determined_by"] == "" {
+				t.Error("engines.llm.determined_by must name the real source of truth")
+			}
+			if llm["payload_deidentified"] != true {
+				t.Error("engines.llm.payload_deidentified must be true: Layer-3 only ships de-identified fingerprints (P0-5)")
+			}
+		}
 	}
 }
 
