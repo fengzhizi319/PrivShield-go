@@ -378,16 +378,21 @@ func GroupBy(rows []map[string]string, groupCol, targetCol, agg string, epsilon,
 	}
 
 	// 2. 对每个分组独立计算并加噪
-	result := make(map[string]float64, len(groups))
+	// 按 DP 基本组合定理将 (ε,δ) 均匀分配至各分组：
+	// k 个分组各消耗 ε/k，总隐私成本 = k × (ε/k) = ε。
+	numGroups := float64(len(groups))
+	epsPerGroup := epsilon / numGroups
+	deltaPerGroup := delta / numGroups
 	sensitivity := clipUpper - clipLower
 	if sensitivity <= 0 {
 		sensitivity = 1.0
 	}
 
+	result := make(map[string]float64, len(groups))
 	for gVal, vals := range groups {
 		switch strings.ToLower(agg) {
 		case "count":
-			result[gVal] = NoisyCount(len(vals), epsilon)
+			result[gVal] = NoisyCount(len(vals), epsPerGroup)
 		case "sum":
 			var clippedVals []float64
 			for _, v := range vals {
@@ -397,19 +402,26 @@ func GroupBy(rows []map[string]string, groupCol, targetCol, agg string, epsilon,
 			for _, v := range clippedVals {
 				sum += v
 			}
-			if strings.ToLower(mechanism) == "gaussian" && delta > 0 {
-				result[gVal] = AddGaussianNoise(sum, epsilon, delta, sensitivity)
+			if strings.ToLower(mechanism) == "gaussian" && deltaPerGroup > 0 {
+				result[gVal] = AddGaussianNoise(sum, epsPerGroup, deltaPerGroup, sensitivity)
 			} else {
-				result[gVal] = AddLaplaceNoise(sum, epsilon, sensitivity)
+				result[gVal] = AddLaplaceNoise(sum, epsPerGroup, sensitivity)
 			}
 		case "mean":
+			// 先截断至 [clipLower, clipUpper] 确保敏感度有界
 			var clippedVals []float64
 			for _, v := range vals {
-				clippedVals = append(clippedVals, ClipValue(v, clipUpper))
+				clippedVals = append(clippedVals, ClipValueRange(v, clipLower, clipUpper))
 			}
-			result[gVal] = NoisyMean(clippedVals, epsilon, delta, clipUpper)
+			// NoisyMean 内部以 ClipValue(v, bound) 对称截断，
+			// bound 取 clipLower/clipUpper 绝对值的较大者以覆盖完整值域
+			bound := math.Max(math.Abs(clipLower), math.Abs(clipUpper))
+			if bound <= 0 {
+				bound = 1.0
+			}
+			result[gVal] = NoisyMean(clippedVals, epsPerGroup, deltaPerGroup, bound)
 		default:
-			result[gVal] = NoisyCount(len(vals), epsilon)
+			result[gVal] = NoisyCount(len(vals), epsPerGroup)
 		}
 	}
 

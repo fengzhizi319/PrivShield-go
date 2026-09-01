@@ -78,15 +78,15 @@ func mondrian(data []Record, qiFields []string, k int, depth int) [][]Record {
 	}
 
 	// 找到区分度最大的字段
-	bestField, bestMedian := findBestSplit(data, qiFields)
+	bestField := findBestSplit(data, qiFields)
 	if bestField == "" {
 		// 无法继续切分
 		return [][]Record{data}
 	}
 
-	// 按中位数切分
-	left, right := partitionByMedian(data, bestField, bestMedian)
-	if len(left) == 0 || len(right) == 0 {
+	// 按中位数索引切分（确保两侧均 >= k）
+	left, right := partitionByMedian(data, bestField)
+	if len(left) < k || len(right) < k {
 		return [][]Record{data}
 	}
 
@@ -97,11 +97,10 @@ func mondrian(data []Record, qiFields []string, k int, depth int) [][]Record {
 	return groups
 }
 
-// findBestSplit 找到区分度（range）最大的字段及其中位数。
-func findBestSplit(data []Record, qiFields []string) (string, string) {
+// findBestSplit 找到区分度（range）最大的字段。
+func findBestSplit(data []Record, qiFields []string) string {
 	bestField := ""
 	bestRange := -1
-	var bestMedian string
 
 	for _, field := range qiFields {
 		values := make([]string, 0, len(data))
@@ -120,7 +119,6 @@ func findBestSplit(data []Record, qiFields []string) (string, string) {
 			if rangeVal > bestRange {
 				bestRange = rangeVal
 				bestField = field
-				bestMedian = formatFloat(nums[len(nums)/2])
 			}
 		} else {
 			// 字符串按字典序
@@ -132,27 +130,24 @@ func findBestSplit(data []Record, qiFields []string) (string, string) {
 			if rangeVal > bestRange {
 				bestRange = rangeVal
 				bestField = field
-				bestMedian = unique[len(unique)/2]
 			}
 		}
 	}
 
-	return bestField, bestMedian
+	return bestField
 }
 
-// partitionByMedian 按字段中位数将数据分为两半。
-func partitionByMedian(data []Record, field, median string) ([]Record, []Record) {
-	half := len(data) / 2
-	left := make([]Record, 0, half+1)
-	right := make([]Record, 0, half+1)
-	for _, r := range data {
-		if compareValues(r[field], median) <= 0 {
-			left = append(left, r)
-		} else {
-			right = append(right, r)
-		}
-	}
-	return left, right
+// partitionByMedian 按字段中位数索引将数据分为两半。
+// 使用索引切分而非值比较，确保两侧分区均 >= k，
+// 避免因大量重复值聚集在中位数导致一侧 < k 而违反 K-匿名保证。
+func partitionByMedian(data []Record, field string) ([]Record, []Record) {
+	sorted := make([]Record, len(data))
+	copy(sorted, data)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return compareValues(sorted[i][field], sorted[j][field]) < 0
+	})
+	mid := len(sorted) / 2
+	return sorted[:mid], sorted[mid:]
 }
 
 // generalizeGroup 对等价类中的准标识符字段执行泛化。
@@ -270,33 +265,6 @@ func parseNumeric(values []string) []float64 {
 		result[i] = f
 	}
 	return result
-}
-
-func formatFloat(f float64) string {
-	if f == math.Trunc(f) && !math.IsInf(f, 0) && !math.IsNaN(f) {
-		return strconv.FormatInt(int64(f), 10)
-	}
-	return strconv.FormatFloat(f, 'f', -1, 64)
-}
-
-func formatInt64(n int64) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := false
-	if n < 0 {
-		neg = true
-		n = -n
-	}
-	var digits []byte
-	for n > 0 {
-		digits = append([]byte{byte(n%10 + '0')}, digits...)
-		n /= 10
-	}
-	if neg {
-		digits = append([]byte{'-'}, digits...)
-	}
-	return string(digits)
 }
 
 func uniqueValues(values []string) []string {
