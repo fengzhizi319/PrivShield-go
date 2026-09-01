@@ -122,7 +122,9 @@ func (s *Server) DPSum(ctx context.Context, req *pb.DPRequest) (*pb.DPResponse, 
 	if sensitivity <= 0 {
 		sensitivity = 1.0
 	}
-	noisy, err := s.svc.NoisySum(ctx, req.Values, req.Epsilon, sensitivity)
+	// 截断值至 [clipLower, clipUpper] 确保实际敏感度与声明一致
+	clipped := clipToRange(req.Values, req.ClipLower, req.ClipUpper)
+	noisy, err := s.svc.NoisySum(ctx, clipped, req.Epsilon, sensitivity)
 	if err != nil {
 		return nil, status.Errorf(codes.ResourceExhausted, "dp sum: %v", err)
 	}
@@ -219,4 +221,27 @@ func containsAny(s string, substrs ...string) bool {
 		}
 	}
 	return false
+}
+
+// clipToRange 将数值切片截断至 [lower, upper] 区间。
+// 与 rest/routes.go 的 clipValues 等价，确保 gRPC 路径的 DP 敏感度有界。
+func clipToRange(vals []float64, lower, upper float64) []float64 {
+	if lower == 0 && upper == 0 {
+		return vals
+	}
+	if upper <= lower {
+		return vals
+	}
+	clipped := make([]float64, len(vals))
+	for i, v := range vals {
+		switch {
+		case v > upper:
+			clipped[i] = upper
+		case v < lower:
+			clipped[i] = lower
+		default:
+			clipped[i] = v
+		}
+	}
+	return clipped
 }

@@ -128,7 +128,9 @@ func (s *TypedServer) DPSum(ctx context.Context, req *pb.DPRequest) (*pb.DPRespo
 	if req.GetClipUpper() > 0 {
 		sensitivity = req.GetClipUpper() - req.GetClipLower()
 	}
-	result, err := s.svc.NoisySum(ctx, req.GetValues(), req.GetEpsilon(), sensitivity)
+	// 截断值至 [clipLower, clipUpper] 确保实际敏感度与声明一致
+	clipped := clipToRange(req.GetValues(), req.GetClipLower(), req.GetClipUpper())
+	result, err := s.svc.NoisySum(ctx, clipped, req.GetEpsilon(), sensitivity)
 	if err != nil {
 		return nil, status.Error(codes.ResourceExhausted, err.Error())
 	}
@@ -302,7 +304,9 @@ func (s *TypedServer) DPChunkedSum(ctx context.Context, req *pb.DPChunkedSumRequ
 	if sensitivity <= 0 {
 		sensitivity = 1.0
 	}
-	result, err := s.svc.NoisySum(ctx, allValues, req.GetEpsilon(), sensitivity)
+	// 截断值至 [clipLower, clipUpper] 确保实际敏感度与声明一致
+	clipped := clipToRange(allValues, req.GetClipLower(), req.GetClipUpper())
+	result, err := s.svc.NoisySum(ctx, clipped, req.GetEpsilon(), sensitivity)
 	if err != nil {
 		return nil, status.Error(codes.ResourceExhausted, err.Error())
 	}
