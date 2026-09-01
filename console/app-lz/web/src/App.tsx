@@ -257,7 +257,7 @@ export const App: React.FC = () => {
       {/* 右侧主内容区（根据 currentTab 条件渲染对应面板） */}
       <main className="flex-1 p-8 max-w-7xl mx-auto overflow-y-auto">
         {/* 服务拓扑大屏 */}
-        {currentTab === 'topology' && (
+        <div style={{ display: currentTab === 'topology' ? 'block' : 'none' }}>
           <TopologyPanel
             topology={topology}
             activeProtocol={activeProtocol}
@@ -265,34 +265,34 @@ export const App: React.FC = () => {
             onRefresh={fetchTopology}
             loading={loadingTopo}
           />
-        )}
+        </div>
 
         {/* 性能与吞吐量压测大屏 */}
-        {currentTab === 'benchmark' && (
+        <div style={{ display: currentTab === 'benchmark' ? 'block' : 'none' }}>
           <BenchmarkPanel
             apis={dataApiDefs}
           />
-        )}
+        </div>
 
         {/* 任务生命周期大屏 */}
-        {currentTab === 'tasks' && (
+        <div style={{ display: currentTab === 'tasks' ? 'block' : 'none' }}>
           <TaskLifecyclePanel
             tasks={tasks}
             leases={leases}
             onRefresh={fetchTasksAndLeases}
             loading={loadingTasks}
           />
-        )}
+        </div>
 
         {/* E2E 测试运行器大屏 */}
-        {currentTab === 'runner' && (
+        <div style={{ display: currentTab === 'runner' ? 'block' : 'none' }}>
           <TestRunnerPanel
             suites={suites}
             onRunSuites={async (req) => {
               setLoadingRunner(true);
               try {
                 const res = await api.runSuites(req);
-                fetchTasksAndLeases();  // 测试执行后刷新任务列表
+                fetchTasksAndLeases();
                 return res;
               } finally {
                 setLoadingRunner(false);
@@ -300,36 +300,36 @@ export const App: React.FC = () => {
             }}
             loading={loadingRunner}
           />
-        )}
+        </div>
 
         {/* 审计验证大屏 */}
-        {currentTab === 'audit' && (
+        <div style={{ display: currentTab === 'audit' ? 'block' : 'none' }}>
           <AuditVerifierPanel
             logs={auditLogs}
             onVerify={() => api.verifyAudit()}
             onRefreshLogs={fetchAuditLogs}
             loading={loadingAudit}
           />
-        )}
+        </div>
 
         {/* 性能指标大屏 */}
-        {currentTab === 'metrics' && (
+        <div style={{ display: currentTab === 'metrics' ? 'block' : 'none' }}>
           <MetricsPanel
             metricsRaw={metricsRaw}
             parsedMetrics={parsedMetrics}
             onRefreshMetrics={fetchMetrics}
             loading={loadingMetrics}
           />
-        )}
+        </div>
 
         {/* 预设数据 API 大屏 */}
-        {currentTab === 'dataApi' && (
+        <div style={{ display: currentTab === 'dataApi' ? 'block' : 'none' }}>
           <DataApiPanel
             apis={dataApiDefs}
             onInvoke={invokeDataApi}
             loading={loadingDataApi}
           />
-        )}
+        </div>
       </main>
     </div>
   );
