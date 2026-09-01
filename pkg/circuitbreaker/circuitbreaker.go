@@ -36,15 +36,20 @@ func (s State) String() string {
 }
 
 // Breaker 是一个并发安全的三态熔断器实例。
+// 状态转移规则：
+//   - Closed → Open：连续失败达到 threshold 时触发；
+//   - Open → HalfOpen：冷却期（cooldown）过后自动转入；
+//   - HalfOpen → Closed：探测成功次数达到 halfOpenMax 后恢复；
+//   - HalfOpen → Open：任何一次探测失败立即回退。
 type Breaker struct {
-	state       State
-	failures    int
-	successes   int
-	threshold   int
-	halfOpenMax int
-	openedAt    time.Time
-	cooldown    time.Duration
-	mu          sync.Mutex
+	state       State         // 当前熔断状态（Closed / Open / HalfOpen）
+	failures    int           // 连续失败计数（Closed 状态下累计，达到 threshold 触发熔断）
+	successes   int           // 探测成功计数（HalfOpen 状态下累计，达到 halfOpenMax 恢复 Closed）
+	threshold   int           // 触发熔断的连续失败次数阈值
+	halfOpenMax int           // HalfOpen 状态下允许放行的最大探测请求数
+	openedAt    time.Time     // 熔断开启时间戳（用于计算冷却期是否已过）
+	cooldown    time.Duration // Open 状态最短持续时间（冷却期）
+	mu          sync.Mutex    // 保护所有状态字段的互斥锁
 }
 
 // NewBreaker 创建指定失败阈值与冷却时间的熔断器。

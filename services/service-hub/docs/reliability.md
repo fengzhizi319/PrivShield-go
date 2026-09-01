@@ -14,7 +14,7 @@
 | 失败任务自动重试 | ✅ | 启动时 + 周期性后台重试，结构化 RetryCount 字段，指数退避延迟 |
 | SQLite/内存待处理任务消费引擎 | ✅ | 本地 Worker 协程每 500ms 轮询消费 pending 任务（校验 RetryAfter 退避），解决单机模式崩溃恢复与重试任务积压 |
 | PostgreSQL 分布式原子租约 | ✅ | 多副本 Hub 基于 `FOR UPDATE SKIP LOCKED` 原子领取（ClaimNext）、租约续期与到期自动回收 |
-| Agent 客户端熔断器 | ✅ | 三态熔断（Closed→Open→HalfOpen），连续 5 次失败触发，30s 冷却后半开探测 |
+| Agent 客户端熔断器 | ✅ | 按节点维度独立三态熔断（Closed→Open→HalfOpen），单节点故障仅熔断该节点，连续 5 次失败触发，30s 冷却后半开探测 |
 | Agent 客户端指数退避重试 | ✅ | 最多 3 次重试，500ms 基础延迟 + 随机抖动，5xx/网络错误可重试、4xx 不重试 |
 | Agent 幂等凭据透传 | ✅ | 自动在请求上下文注入 `X-Idempotency-Key`（`hub-<task_id>-<stage>-<retry_count>`），防御重试导致 DP 预算重复扣减 |
 | Datasource 客户端熔断与重试 | ✅ | 三态熔断器 + 3 次指数退避重试 + HTTP/gRPC 双协议 `X-Request-ID` 链路追踪透传 |
@@ -194,11 +194,11 @@ $$\text{IdempotencyKey} = \text{"hub-"} + \text{TaskID} + \text{"-"} + \text{Sta
 - **HTTP/gRPC 透传**：`agent.Client` 在执行请求时自动提取并设置 HTTP 请求头 `X-Idempotency-Key`；
 - **防护效果**：保证同一次重试尝试在 Agent 端被精准识别，避免预算被重复消耗。
 
-### 5.2 三态熔断器（Circuit Breaker）
+### 5.2 按节点维度独立三态熔断器（Per-Node Circuit Breaker）
 
-Agent 客户端与 Datasource 客户端均实现了标准的三态熔断器：
-- **Closed（关闭）**：正常状态，记录连续失败次数；连续失败达到阈值（5 次）立即转为 Open；
-- **Open（开启）**：快速失败，所有后续请求直接返回 `ErrCircuitOpen`，不产生网络 I/O；
+Agent 客户端为每个上游节点独立维护一套三态熔断器状态机，单节点故障仅熔断该节点流量，其余健康节点继续承接请求：
+- **Closed（关闭）**：正常状态，记录该节点连续失败次数；连续失败达到阈值（5 次）立即转为 Open；
+- **Open（开启）**：快速失败，发往该节点的后续请求直接返回 `ErrCircuitOpen`，不产生网络 I/O；
 - **Half-Open（半开）**：冷却时间（30 秒）结束后转入半开状态，放行单次探测请求。若探测成功则恢复 Closed；若失败则重新开启 30 秒。
 
 ### 5.3 指数退避重试与抖动（Exponential Backoff & Jitter）
@@ -210,6 +210,7 @@ Agent 客户端与 Datasource 客户端均实现了标准的三态熔断器：
 ### 5.4 响应体安全防护
 
 - **64 MiB 保护上限**：`io.LimitReader(resp.Body, 64<<20)` 截断超大响应体，防止下游恶意或异常超大 JSON 导致 service-hub 发生 OOM 崩溃。
+- **重试循环及时释放**：重试循环内读取完毕后立即显式 `resp.Body.Close()`（而非 `defer`），避免多轮重试累积占用响应体与底层 TCP 连接。
 
 ---
 

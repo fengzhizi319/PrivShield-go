@@ -83,12 +83,12 @@ var (
 )
 
 // GenerateID produces a collision-resistant unique ID with the given prefix.
-// Format: <prefix>-<unix_seconds>-<8_random_hex_chars>
+// Format: <prefix>-<unix_seconds>-<16_random_hex_chars>
 // P18 fix: replaces time-based-only ID generation that could collide under concurrency.
 // GenerateID 生成抗碰撞的唯一 ID。
-// 格式：<prefix>-<unix秒>-<8位随机十六进制字符>
+// 格式：<prefix>-<unix秒>-<16位随机十六进制字符>（8 字节随机分量，生日悖论安全阈值 >> 10^9）
 func GenerateID(prefix string) string {
-	var buf [4]byte
+	var buf [8]byte
 	_, _ = rand.Read(buf[:])
 	return fmt.Sprintf("%s-%d-%s", prefix, time.Now().Unix(), hex.EncodeToString(buf[:]))
 }

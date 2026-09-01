@@ -327,7 +327,7 @@ classDiagram
 ```
 
 ### 6.1 `LeasedTaskStore` 原子租约接口 (`pkg/store/store.go`)
-- **`ClaimNext(owner, leaseTTL)`**：基于 PostgreSQL `FOR UPDATE SKIP LOCKED` 原子抢占一条待处理任务并分配租约令牌；
+- **`ClaimNext(owner, leaseTTL)`**：基于 PostgreSQL `FOR UPDATE SKIP LOCKED` 原子抢占一条待处理任务并分配租约令牌；无可用任务时返回 `(nil, nil)`，使用 `errors.Is(err, pgx.ErrNoRows)` 判定而非字符串比对；
 - **`RenewLease(id, owner, token, leaseTTL)`**：持有者在任务处理中延长租约有效期；
 - **`CompleteLease(id, owner, token, result)`**：带所有权校验的状态完成落盘；
 - **`FailLease(id, owner, token, failure)`**：带重试计数与退避时间的故障处理；

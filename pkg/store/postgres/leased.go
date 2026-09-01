@@ -23,8 +23,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/fengzhizi319/PrivShield-go/pkg/store"
 )
@@ -74,7 +77,7 @@ func (s *Store) ClaimNext(owner string, leaseTTL time.Duration) (*store.TaskLeas
 	task, err := scanTask(row)
 	if err != nil {
 		// 无行返回表示当前没有可调度的 pending 任务
-		if err.Error() == "no rows in result set" {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("postgres: claim next: %w", err)

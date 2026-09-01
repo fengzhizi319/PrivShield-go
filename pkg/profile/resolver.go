@@ -14,21 +14,24 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// PrimitiveParams 隐私原语默认参数。
+// PrimitiveParams 隐私原语默认参数集合，以 key-value 形式存储各原语的可调参数。
+// 例如 DP 原语可能包含 "epsilon": 1.0, "delta": 0.0, "mechanism": "laplace"。
 type PrimitiveParams map[string]interface{}
 
-// PrivacyProfile 隐私参数配置。
+// PrivacyProfile 隐私参数配置，对应一个完整的 YAML 配置文件。
+// 支持全局默认参数与各命名空间（租户）级个性化参数两层覆盖。
 type PrivacyProfile struct {
-	Name       string                     `yaml:"name"`
-	Version    string                     `yaml:"version"`
-	Defaults   map[string]PrimitiveParams `yaml:"defaults"`
-	Namespaces map[string]PrimitiveParams `yaml:"namespaces"`
+	Name       string                     `yaml:"name"`       // Profile 名称（如 "standard", "medical"）
+	Version    string                     `yaml:"version"`    // 配置版本号
+	Defaults   map[string]PrimitiveParams `yaml:"defaults"`   // 全局默认参数：primitive → params
+	Namespaces map[string]PrimitiveParams `yaml:"namespaces"` // 命名空间级个性化参数：namespace → primitive → params
 }
 
-// Resolver 隐私参数解析器。
+// Resolver 隐私参数解析器，线程安全地管理当前生效的 PrivacyProfile。
+// 支持运行时通过 LoadFromYAML 热重载配置，读路径使用 RLock 保证高并发。
 type Resolver struct {
-	mu      sync.RWMutex
-	profile *PrivacyProfile
+	mu      sync.RWMutex     // 读写锁：保护 profile 指针的并发安全
+	profile *PrivacyProfile  // 当前生效的隐私参数配置
 }
 
 // NewResolver 创建参数解析器。
@@ -38,7 +41,12 @@ func NewResolver() *Resolver {
 	}
 }
 
-// LoadFromYAML 从 YAML 文件加载配置。
+// LoadFromYAML 从 YAML 文件加载并原子替换隐私参数配置。
+//
+// 执行逻辑：
+// 1. 读取指定路径的 YAML 文件内容；
+// 2. 反序列化为 PrivacyProfile 结构体；
+// 3. 获取写锁后原子替换 r.profile 指针，保证读路径无阻塞。
 func (r *Resolver) LoadFromYAML(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -93,7 +101,8 @@ func (r *Resolver) Resolve(primitive string, namespace string, overrides map[str
 	return result
 }
 
-// Recommend 返回推荐的隐私参数配置。
+// Recommend 返回当前 Profile 下的静态隐私参数推荐值。
+// 返回结果包含推荐 Profile 名称、DP 参数（epsilon/delta/mechanism）与 K-Anonymity k 值。
 func (r *Resolver) Recommend() map[string]interface{} {
 	return map[string]interface{}{
 		"recommended_profile": r.profileName(),
@@ -106,6 +115,12 @@ func (r *Resolver) Recommend() map[string]interface{} {
 }
 
 // RecommendDataParams 根据输入样本数据特征自动计算并推荐 DP 与 K-Anonymity 最佳隐私参数。
+//
+// 执行逻辑：
+// 1. 【DP 参数推荐】：对数值型样本计算 5%~95% 分位数作为自适应截断区间 [clip_lower, clip_upper]，
+//    并根据样本量 n 动态调整 delta = min(1e-5, 1/(10n²))；
+// 2. 【K-Anonymity 参数推荐】：按行数 n/10 估算 k 值，限制在 [2, 10] 安全区间内；
+// 3. 将推荐结果保存至命名空间级个性化参数，后续 Resolve 调用自动生效。
 func (r *Resolver) RecommendDataParams(namespace string, values []float64, rows []map[string]interface{}, qiCols []string) map[string]interface{} {
 	recommendations := make(map[string]interface{})
 
@@ -173,7 +188,12 @@ func (r *Resolver) RecommendDataParams(namespace string, values []float64, rows 
 	return recommendations
 }
 
-// SavePersonalizedParams 保存命名空间级个性化参数
+// SavePersonalizedParams 将指定原语的个性化参数保存至命名空间级配置。
+//
+// 执行逻辑：
+// 1. 校验 namespace 与 primitive 非空；
+// 2. 获取写锁，惰性初始化 profile 与 Namespaces 映射；
+// 3. 将 params 合并写入对应命名空间的原语参数中（增量覆盖，不删除已有键）。
 func (r *Resolver) SavePersonalizedParams(namespace, primitive string, params map[string]interface{}) {
 	if namespace == "" || primitive == "" {
 		return
@@ -201,6 +221,7 @@ func (r *Resolver) SavePersonalizedParams(namespace, primitive string, params ma
 	r.profile.Namespaces[namespace][primitive] = m
 }
 
+// profileName 返回当前 Profile 名称，未配置时回退为 "standard"。
 func (r *Resolver) profileName() string {
 	if r.profile != nil && r.profile.Name != "" {
 		return r.profile.Name
@@ -208,7 +229,13 @@ func (r *Resolver) profileName() string {
 	return "standard"
 }
 
-// Validate 校验参数合法性。
+// Validate 校验隐私原语参数的合法性与安全性。
+//
+// 校验规则：
+//   - dp：epsilon 必须为正数（> 0），delta 必须非负（>= 0）；
+//   - k_anonymity：k 必须 >= 2（k=1 等价于无保护）。
+//
+// 支持 int 与 float64 两种 k 值类型（YAML 反序列化可能产生任一类型）。
 func Validate(primitive string, params map[string]interface{}) error {
 	switch primitive {
 	case "dp":
@@ -233,6 +260,8 @@ func Validate(primitive string, params map[string]interface{}) error {
 // 内置默认参数
 // ──────────────────────────────────────────────
 
+// defaultProfile 构造内置默认隐私参数配置（"standard" Profile v1.0）。
+// 当 YAML 配置文件不存在或解析失败时作为兜底默认值。
 func defaultProfile() *PrivacyProfile {
 	return &PrivacyProfile{
 		Name:    "standard",
@@ -251,6 +280,8 @@ func defaultProfile() *PrivacyProfile {
 	}
 }
 
+// builtinDefaults 返回指定原语的内置默认参数副本（深拷贝，调用方修改不影响全局）。
+// 未找到对应原语时返回空 map。
 func builtinDefaults(primitive string) map[string]interface{} {
 	defaults := map[string]map[string]interface{}{
 		"dp":             {"epsilon": 1.0, "delta": 0.0, "mechanism": "laplace"},

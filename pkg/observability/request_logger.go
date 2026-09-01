@@ -1,3 +1,4 @@
+// Package observability provides shared observability primitives for all PrivShield Go modules.
 package observability
 
 import (
@@ -7,11 +8,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// RequestLogger returns a Gin middleware that records structured HTTP access logs.
+// RequestLogger 返回记录结构化 HTTP 访问日志的 Gin 中间件（无模块标签）。
 //
 // 字段与行为对齐 engine-go/internal/observability/logger.go 中的历史实现：
-// - msg: "HTTP request"
-// - 字段: method, path, query, status, duration, client_ip, request_id
+// - msg: "request completed"
+// - 字段: request_id, method, path, status, latency_ms, client_ip
 // - request_id 优先从 gin.Context（TraceMiddleware / RequestID）读取，其次从请求头回退。
 func RequestLogger() gin.HandlerFunc {
 	return RequestLoggerWithModule("")

@@ -117,8 +117,9 @@ func AuthMiddleware(settings *Settings) gin.HandlerFunc {
 		}
 
 		// 接口级权限校验 (PermissionForRESTPath)
+		// 未映射路径返回空字符串，表示无需特定权限（对所有已认证身份开放）。
 		requiredPerm := PermissionForRESTPath(path)
-		if requiredPerm != "*" && !identity.HasPermission(requiredPerm) {
+		if requiredPerm != "" && !identity.HasPermission(requiredPerm) {
 			abortWithError(c, http.StatusForbidden, "FORBIDDEN", "Forbidden: insufficient scope", nil)
 			return
 		}

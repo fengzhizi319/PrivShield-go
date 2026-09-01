@@ -325,10 +325,26 @@ func contentLevel(value string) int {
 	if value == "" || !ContainsHighRiskText(value) {
 		return 0
 	}
-	if strings.Contains(RedactMedicalText(value), "[L5-") {
+	if containsL5Term(value) {
 		return 5
 	}
 	return 4
+}
+
+// containsL5Term 快速检测文本是否包含 L5 极高敏词汇。
+func containsL5Term(value string) bool {
+	if value == "" {
+		return false
+	}
+	norm := NormalizeFullwidthAlphanumeric(value)
+	for _, terms := range L5TermsMap {
+		for _, term := range terms {
+			if strings.Contains(norm, term) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ──────────────────────────────────────────────

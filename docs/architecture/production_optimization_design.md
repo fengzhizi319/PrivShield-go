@@ -91,6 +91,7 @@ flowchart TD
   - 维护健康的节点列表，自动轮询分发；
   - 当某个节点连续失败达到阈值（如 5 次）时自动熔断并隔离，在后台异步进行心跳探活；
   - 探活恢复后通过半开（Half-Open）状态自动重新纳入可用节点池。
+- **响应体及时释放**：重试循环内显式 `resp.Body.Close()`（读取完毕后立即关闭），避免 `defer` 导致所有响应体累积到函数返回才释放，防止极端场景下 256 MiB 内存占用与连接池耗尽。
 
 #### 2. Go 网关 P2C-EWMA 动态负载调度与 BufferPool (`engine-go/internal/gateway/`)
 - **Power of Two Choices + EWMA 算法 (`balancer.go`)**：

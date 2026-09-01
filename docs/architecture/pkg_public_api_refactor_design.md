@@ -257,6 +257,7 @@ func (m *REDMetrics) UnaryServerInterceptor() grpc.UnaryServerInterceptor
 #### 5.3.4 迁移 Tracing 与 TraceID 提取到 `pkg/observability`
 
 - `pkg/observability/tracing.go` 保留 `Tracer` 接口、`NoOpTracer`、`OTelTracer`、`InitTracing`、`GetTracer`、`StartSpan`、`TracingEnabled`。
+- **并发安全**：全局 `tracer` 变量使用 `atomic.Pointer[Tracer]` 存储，`GetTracer()` 无锁读取，消除 `sync.Once` 写入与裸读之间的数据竞争。
 - 新增 `pkg/observability/trace.go`，从 `pkg/middleware` 下沉：
   - `TraceIDContextKey`、`TraceHeader`、`TraceIDHeader` 常量；
   - `GenerateRequestID()` 请求 ID 生成器；
@@ -335,6 +336,8 @@ func IsHealthPathOrMethod(pathOrMethod string) bool
 func PermissionForRESTPath(path string) string
 func PermissionForGRPCMethod(method string) string
 ```
+
+**权限映射 Fail-Closed 语义**：`PermissionForRESTPath` 与 `PermissionForGRPCMethod` 对未映射的路径/方法返回空字符串 `""`（而非 `"*"`），中间件判定 `requiredPerm != ""` 时才执行权限校验。未映射路径对所有已认证身份开放，但新增敏感端点必须在映射表中显式注册，否则默认无需特定权限。
 
 #### 6.3.2 新建 `pkg/auth/settings.go`
 

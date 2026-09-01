@@ -56,29 +56,30 @@ func NewREDMetrics() *REDMetrics {
 	return m
 }
 
-// RecordRequest increments the request counter and observes latency.
+// RecordRequest 记录一次请求的计数与延迟观测。
+// protocol: "http" | "grpc"；endpoint: REST 路径或 gRPC 全限定方法名。
 func (m *REDMetrics) RecordRequest(protocol, endpoint string, statusCode int, durationSec float64) {
 	statusStr := strconv.Itoa(statusCode)
 	m.RequestsTotal.WithLabelValues(protocol, endpoint, statusStr).Inc()
 	m.RequestDuration.WithLabelValues(protocol, endpoint).Observe(durationSec)
 }
 
-// Registry returns the underlying Prometheus registry for advanced registration.
+// Registry 返回底层 Prometheus 注册表，供高级场景追加注册自定义指标。
 func (m *REDMetrics) Registry() *prometheus.Registry {
 	return m.registry
 }
 
-// MustRegister registers additional collectors into the same registry.
+// MustRegister 向同一注册表追加注册自定义指标收集器。
 func (m *REDMetrics) MustRegister(cs ...prometheus.Collector) {
 	m.registry.MustRegister(cs...)
 }
 
-// Handler returns an http.Handler that exposes the metrics on /metrics.
+// Handler 返回暴露 Prometheus /metrics 文本端点的标准 http.Handler。
 func (m *REDMetrics) Handler() http.Handler {
 	return promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})
 }
 
-// GinHandler returns a Gin handler that exposes the metrics on /metrics.
+// GinHandler 返回暴露 Prometheus /metrics 端点的 Gin 处理函数。
 func (m *REDMetrics) GinHandler() gin.HandlerFunc {
 	h := m.Handler()
 	return func(c *gin.Context) {
@@ -86,8 +87,8 @@ func (m *REDMetrics) GinHandler() gin.HandlerFunc {
 	}
 }
 
-// PrometheusMiddleware returns a Gin middleware that records RED metrics for HTTP requests.
-// It skips the /metrics endpoint to avoid self-reference.
+// PrometheusMiddleware 返回自动记录 HTTP 请求 RED 指标的 Gin 中间件。
+// 自动豁免 /metrics 端点自身，避免自抓取导致指标无限自增。
 func (m *REDMetrics) PrometheusMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
@@ -107,7 +108,7 @@ func (m *REDMetrics) PrometheusMiddleware() gin.HandlerFunc {
 	}
 }
 
-// UnaryServerInterceptor returns a gRPC unary interceptor that records RED metrics.
+// UnaryServerInterceptor 返回自动记录 gRPC 一元调用 RED 指标的拦截器。
 func (m *REDMetrics) UnaryServerInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		start := time.Now()

@@ -84,7 +84,7 @@ func PermissionForRESTPath(path string) string {
 	case strings.HasPrefix(path, "/debug/pprof"):
 		return "ops:admin"
 	}
-	return "*"
+	return ""
 }
 
 // PermissionForGRPCMethod 将 gRPC 方法名映射为权限字符串。
@@ -122,5 +122,5 @@ func PermissionForGRPCMethod(method string) string {
 	if p, ok := mapping[short]; ok {
 		return p
 	}
-	return "*"
+	return ""
 }

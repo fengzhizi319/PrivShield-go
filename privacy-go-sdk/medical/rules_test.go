@@ -38,13 +38,13 @@ func TestClassifyAndRedactICD10Code(t *testing.T) {
 		t.Errorf("RedactICD10Code(B20.900) = %q, want empty string", got)
 	}
 
-	// L4: Neoplasm (C34.900)
+	// L4: Neoplasm (C34.900) — 无痕脱敏：L4 编码也整值抹平
 	level, cat, ok = ClassifyICD10Code("C34.900")
 	if !ok || level != "L4" || cat != "MEDICAL_ICD10_CANCER" {
 		t.Errorf("C34.900 classify = (%q, %q, %v), want (L4, MEDICAL_ICD10_CANCER, true)", level, cat, ok)
 	}
-	if got := RedactICD10Code("C34.900"); got != "[L4-MEDICAL_ICD10_CANCER]" {
-		t.Errorf("RedactICD10Code(C34.900) = %q, want [L4-MEDICAL_ICD10_CANCER]", got)
+	if got := RedactICD10Code("C34.900"); got != "" {
+		t.Errorf("RedactICD10Code(C34.900) = %q, want empty string (traceless)", got)
 	}
 
 	// L4: STD (A53.900)
@@ -93,24 +93,53 @@ func TestNormalizeFullwidthAlphanumeric(t *testing.T) {
 }
 
 func TestRedactMedicalText(t *testing.T) {
-	// L5: HIV & Psychiatric
+	// L5: HIV & Psychiatric — 无痕脱敏：敏感词直接擦除，不产生任何标签
 	text1 := "患者自述既往有艾滋病病史，长期口服奥氮平片治疗精神分裂症。"
 	got1 := RedactMedicalText(text1)
 	if strings.Contains(got1, "艾滋病") || strings.Contains(got1, "奥氮平") || strings.Contains(got1, "精神分裂症") {
 		t.Errorf("RedactMedicalText did not redact L5 terms: %q", got1)
 	}
-	if !strings.Contains(got1, "[L5-IMMUNODEFICIENCY]") || !strings.Contains(got1, "[L5-PSYCHIATRIC_DISORDER]") {
-		t.Errorf("RedactMedicalText missing L5 tags: %q", got1)
+	// 无痕断言：输出不得包含任何 [L4-...] 或 [L5-...] 提示性标签
+	if strings.Contains(got1, "[L5-") || strings.Contains(got1, "[L4-") {
+		t.Errorf("RedactMedicalText output contains hinting tags: %q", got1)
 	}
 
-	// L4: Malignant neoplasm & STD
+	// L4: Malignant neoplasm & STD — 无痕脱敏
 	text2 := "初步诊断为肺腺癌晚期，合并梅毒感染。"
 	got2 := RedactMedicalText(text2)
 	if strings.Contains(got2, "肺腺癌") || strings.Contains(got2, "梅毒") {
 		t.Errorf("RedactMedicalText did not redact L4 terms: %q", got2)
 	}
-	if !strings.Contains(got2, "[L4-MALIGNANT_NEOPLASM]") || !strings.Contains(got2, "[L4-INFECTIOUS_DISEASE]") {
-		t.Errorf("RedactMedicalText missing L4 tags: %q", got2)
+	// 无痕断言：输出不得包含任何提示性标签
+	if strings.Contains(got2, "[L4-") || strings.Contains(got2, "[L5-") {
+		t.Errorf("RedactMedicalText output contains hinting tags: %q", got2)
+	}
+
+	// 范畴化泛化验证：「恶性肿瘤家族史」→「相关系统疾病家族史」
+	text3 := "有消化道恶性肿瘤家族史。"
+	got3 := RedactMedicalText(text3)
+	if strings.Contains(got3, "恶性肿瘤") {
+		t.Errorf("RedactMedicalText did not generalize: %q", got3)
+	}
+	if !strings.Contains(got3, "消化道疾病") {
+		t.Errorf("RedactMedicalText generalization missing: %q", got3)
+	}
+
+	// 句法语境脱敏验证：「因HIV去世」→「因病去世」
+	text4 := "因艾滋病导致的并发症去世。"
+	got4 := RedactMedicalText(text4)
+	if strings.Contains(got4, "艾滋") || strings.Contains(got4, "HIV") {
+		t.Errorf("RedactMedicalText did not redact death cause: %q", got4)
+	}
+	if !strings.Contains(got4, "因病去世") {
+		t.Errorf("RedactMedicalText death restructuring missing: %q", got4)
+	}
+
+	// 干净文本原样放行验证
+	text5 := "高脂血症病史5年，口服阿托伐他汀20mg qn。"
+	got5 := RedactMedicalText(text5)
+	if got5 != text5 {
+		t.Errorf("RedactMedicalText modified clean text: %q, want %q", got5, text5)
 	}
 }
 

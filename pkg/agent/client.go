@@ -622,14 +622,15 @@ func (c *Client) do(req *http.Request, endpoint string) (map[string]any, error) 
 			}
 			continue // Retry on network errors / 网络错误可重试
 		}
-		defer resp.Body.Close()
-
+		// 显式关闭响应体（不可用 defer，因为 defer 在函数返回时才执行，
+		// 重试循环中会导致所有响应体及其底层 TCP 连接持续占用直到 do() 返回）。
 		// P23 fix: limit response body to 64 MiB to prevent OOM from misbehaving upstream
 		// 限制响应体最大 64 MiB，防止上游异常返回超大响应导致 OOM
 		const maxBodySize = 64 << 20
-		body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize+1))
-		if err != nil {
-			terr := newTransportError(err)
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBodySize+1))
+		resp.Body.Close()
+		if readErr != nil {
+			terr := newTransportError(readErr)
 			c.recordFailure(endpoint)
 			lastErr = fmt.Errorf("read agent response: %w", terr)
 			if !isRetryableError(lastErr) {

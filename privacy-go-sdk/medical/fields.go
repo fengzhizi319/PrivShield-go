@@ -404,15 +404,16 @@ var enumGeneralizationMap = map[string]map[string]string{
 		"死亡":    "其他",
 		"医疗转让":  "其他",
 	},
-	// 残疾类别：精神/智力/多重类残疾为 L4/L5 强剥离，感官类合并为大类。
+	// 残疾类别：无痕泛化 —— 所有残疾类型统一合并为「其他残疾类别」，
+	// 防止通过具体残疾类型反推敏感病史（如精神残疾→精神障碍、视力残疾→特定疾病等）。
 	"disability_category": {
-		"精神残疾": "[L4-PSYCHIATRIC_DISORDER]",
-		"智力残疾": "[L4-DISABILITY_REDACTED]",
-		"多重残疾": "[L4-DISABILITY_REDACTED]",
-		"肢体残疾": "肢体或感官残疾",
-		"视力残疾": "肢体或感官残疾",
-		"听力残疾": "肢体或感官残疾",
-		"言语残疾": "肢体或感官残疾",
+		"精神残疾": "其他残疾类别",
+		"智力残疾": "其他残疾类别",
+		"多重残疾": "其他残疾类别",
+		"肢体残疾": "其他残疾类别",
+		"视力残疾": "其他残疾类别",
+		"听力残疾": "其他残疾类别",
+		"言语残疾": "其他残疾类别",
 		"无残疾":  "无残疾",
 	},
 	// 残疾等级：一/二级（重度）与三/四级（中轻度）二分泛化。
@@ -458,13 +459,14 @@ func redactClinicalText(value string) string {
 	return RedactMedicalText(StripTextEntities(value))
 }
 
-// generalizeDisease 短诊断文本处置：范畴抹平/泛化后，若未命中任何敏感病种词表，
-// 施加确定性遮蔽（不再误用中文姓名掩码，见设计文档 §5.4 差异项）。
+// generalizeDisease 短诊断文本处置：无痕范畴抹平/泛化后，若文本已被修改（敏感词已擦除或泛化），
+// 直接返回无痕结果；若未命中任何敏感词表（原文未变），施加确定性遮蔽以防直传。
 func generalizeDisease(value string) string {
 	scrubbed := redactClinicalText(value)
-	if scrubbed != value && strings.Contains(scrubbed, "[") {
-		return scrubbed
+	if scrubbed != value {
+		return scrubbed // 无痕脱敏已生效（敏感词已擦除或泛化）
 	}
+	// 原文未变 → 未命中敏感词表，施加确定性遮蔽
 	return maskRunes(scrubbed, 1, 1)
 }
 

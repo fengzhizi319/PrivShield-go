@@ -43,7 +43,7 @@ func TestPermissionForRESTPath(t *testing.T) {
 		{"/v1/ops/diagnostics", "ops:diagnostics"},
 		{"/debug/pprof", "ops:admin"},
 		{"/debug/pprof/heap", "ops:admin"},
-		{"/unknown", "*"},
+		{"/unknown", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
@@ -62,7 +62,7 @@ func TestPermissionForGRPCMethod(t *testing.T) {
 		{"privacy.local.PrivacyService/Mask", "privacy:mask"},
 		{"privacy.local.PrivacyService/DPCount", "privacy:dp"},
 		{"privacy.local.PrivacyService/Health", "health:read"},
-		{"privacy.local.PrivacyService/Unknown", "*"},
+		{"privacy.local.PrivacyService/Unknown", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.method, func(t *testing.T) {
