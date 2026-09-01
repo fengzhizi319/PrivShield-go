@@ -63,6 +63,20 @@ export interface BenchmarkRunResult {
     return: number;
     audit: number;
   };
+  stageComputeAvgMs: {
+    ingest: number;
+    fetch: number;
+    classify_desensitize: number;
+    return: number;
+    audit: number;
+  };
+  stageNetworkAvgMs: {
+    ingest: number;
+    fetch: number;
+    classify_desensitize: number;
+    return: number;
+    audit: number;
+  };
   samples: BenchmarkSample[];
   createdAt: string;
 }
@@ -141,6 +155,8 @@ export const BenchmarkPanel: React.FC<BenchmarkPanelProps> = ({ apis }) => {
     const latencies: number[] = [];
     const samples: BenchmarkSample[] = [];
     const stageSums = { ingest: 0, fetch: 0, classify_desensitize: 0, return: 0, audit: 0 };
+    const computeSums = { ingest: 0, fetch: 0, classify_desensitize: 0, return: 0, audit: 0 };
+    const networkSums = { ingest: 0, fetch: 0, classify_desensitize: 0, return: 0, audit: 0 };
     let successCount = 0;
     let rateLimitedCount = 0;
     let failCount = 0;
@@ -166,8 +182,11 @@ export const BenchmarkPanel: React.FC<BenchmarkPanelProps> = ({ apis }) => {
           const stageTimes: Record<string, number> = {};
           (resp.stages || []).forEach(s => {
             stageTimes[s.name] = s.duration_ms || 1;
-            if (stageSums[s.name as keyof typeof stageSums] !== undefined) {
-              stageSums[s.name as keyof typeof stageSums] += s.duration_ms || 1;
+            const key = s.name as keyof typeof stageSums;
+            if (stageSums[key] !== undefined) {
+              stageSums[key] += s.duration_ms || 1;
+              computeSums[key] += s.compute_ms || 0;
+              networkSums[key] += s.network_ms || 0;
             }
           });
 
@@ -273,6 +292,20 @@ export const BenchmarkPanel: React.FC<BenchmarkPanelProps> = ({ apis }) => {
         classify_desensitize: successCount > 0 ? Math.round((stageSums.classify_desensitize / successCount) * 10) / 10 : 35,
         return: successCount > 0 ? Math.round((stageSums.return / successCount) * 10) / 10 : 1,
         audit: successCount > 0 ? Math.round((stageSums.audit / successCount) * 10) / 10 : 5,
+      },
+      stageComputeAvgMs: {
+        ingest: successCount > 0 ? Math.round((computeSums.ingest / successCount) * 10) / 10 : 1,
+        fetch: successCount > 0 ? Math.round((computeSums.fetch / successCount) * 10) / 10 : 0,
+        classify_desensitize: successCount > 0 ? Math.round((computeSums.classify_desensitize / successCount) * 10) / 10 : 0,
+        return: successCount > 0 ? Math.round((computeSums.return / successCount) * 10) / 10 : 1,
+        audit: successCount > 0 ? Math.round((computeSums.audit / successCount) * 10) / 10 : 1,
+      },
+      stageNetworkAvgMs: {
+        ingest: 0,
+        fetch: successCount > 0 ? Math.round((networkSums.fetch / successCount) * 10) / 10 : 2,
+        classify_desensitize: successCount > 0 ? Math.round((networkSums.classify_desensitize / successCount) * 10) / 10 : 35,
+        return: 0,
+        audit: successCount > 0 ? Math.round((networkSums.audit / successCount) * 10) / 10 : 4,
       },
       samples,
       createdAt: new Date().toLocaleTimeString(),
@@ -637,38 +670,58 @@ export const BenchmarkPanel: React.FC<BenchmarkPanelProps> = ({ apis }) => {
               </span>
             </div>
 
-            {/* 各阶段条形图 (含传输开销) */}
+            {/* 各阶段条形图 (计算 + 通信 堆叠) */}
             <div className="space-y-3 pt-1">
               {(() => {
                 const s = currentRun.stageAvgMs;
+                const c = currentRun.stageComputeAvgMs;
+                const n = currentRun.stageNetworkAvgMs;
                 const stageTotal = s.ingest + s.fetch + s.classify_desensitize + s.return + s.audit;
                 const overheadMs = Math.max(0, Math.round((currentRun.meanMs - stageTotal) * 10) / 10);
                 const base = currentRun.meanMs > 0 ? currentRun.meanMs : stageTotal;
                 const stages = [
-                  { name: t('bench.stageIngest'), ms: s.ingest, color: 'bg-sky-500' },
-                  { name: t('bench.stageFetch'), ms: s.fetch, color: 'bg-indigo-500' },
-                  { name: t('bench.stageClassify'), ms: s.classify_desensitize, color: 'bg-amber-500' },
-                  { name: t('bench.stageReturn'), ms: s.return, color: 'bg-emerald-500' },
-                  { name: t('bench.stageAudit'), ms: s.audit, color: 'bg-purple-500' },
-                  { name: t('bench.stageOverhead'), ms: overheadMs, color: 'bg-rose-500/70' },
+                  { name: t('bench.stageIngest'), total: s.ingest, compute: c.ingest, network: n.ingest, color: 'bg-sky-500', netColor: 'bg-sky-400/50' },
+                  { name: t('bench.stageFetch'), total: s.fetch, compute: c.fetch, network: n.fetch, color: 'bg-indigo-500', netColor: 'bg-indigo-400/50' },
+                  { name: t('bench.stageClassify'), total: s.classify_desensitize, compute: c.classify_desensitize, network: n.classify_desensitize, color: 'bg-amber-500', netColor: 'bg-amber-400/50' },
+                  { name: t('bench.stageReturn'), total: s.return, compute: c.return, network: n.return, color: 'bg-emerald-500', netColor: 'bg-emerald-400/50' },
+                  { name: t('bench.stageAudit'), total: s.audit, compute: c.audit, network: n.audit, color: 'bg-purple-500', netColor: 'bg-purple-400/50' },
+                  { name: t('bench.stageOverhead'), total: overheadMs, compute: overheadMs, network: 0, color: 'bg-rose-500/70', netColor: '' },
                 ];
                 return stages.map((stage, idx) => {
-                  const pct = base > 0 ? Math.round((stage.ms / base) * 100) : 0;
+                  const pct = base > 0 ? Math.round((stage.total / base) * 100) : 0;
+                  const computePct = stage.total > 0 ? Math.round((stage.compute / stage.total) * 100) : 0;
+                  const isOverhead = idx === 5;
                   return (
                     <div key={idx} className="space-y-1">
                       <div className="flex items-center justify-between text-xs">
-                        <span className={`font-medium ${idx === 5 ? 'text-rose-400' : 'text-slate-300'}`}>{stage.name}</span>
+                        <span className={`font-medium ${isOverhead ? 'text-rose-400' : 'text-slate-300'}`}>{stage.name}</span>
                         <span className="font-mono text-slate-200">
-                          {stage.ms} ms <span className="text-slate-500">({pct}%)</span>
+                          {stage.total} ms <span className="text-slate-500">({pct}%)</span>
+                          {!isOverhead && stage.network > 0 && (
+                            <span className="text-slate-600 ml-1">计算 {stage.compute} / 通信 {stage.network}</span>
+                          )}
                         </span>
                       </div>
-                      <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
-                        <div className={`${stage.color} h-full rounded-full`} style={{ width: `${Math.max(stage.ms > 0 ? 3 : 0, pct)}%` }} />
+                      <div className="w-full bg-slate-950 rounded-full h-2.5 overflow-hidden border border-slate-800 flex">
+                        {stage.network > 0 ? (
+                          <>
+                            <div className={`${stage.color} h-full`} style={{ width: `${Math.max(computePct, stage.compute > 0 ? 5 : 0)}%` }} />
+                            <div className={`${stage.netColor} h-full`} style={{ width: `${Math.max(100 - computePct, stage.network > 0 ? 5 : 0)}%` }} />
+                          </>
+                        ) : (
+                          <div className={`${stage.color} h-full rounded-full`} style={{ width: `${Math.max(stage.total > 0 ? 3 : 0, pct)}%` }} />
+                        )}
                       </div>
                     </div>
                   );
                 });
               })()}
+              {/* 图例 */}
+              <div className="flex items-center gap-4 pt-1 text-xs text-slate-500">
+                <span className="flex items-center gap-1.5"><span className="w-3 h-2 rounded-sm bg-indigo-500 inline-block" /> 计算耗时</span>
+                <span className="flex items-center gap-1.5"><span className="w-3 h-2 rounded-sm bg-indigo-400/50 inline-block" /> 通信耗时 (HTTP + JSON)</span>
+                <span className="flex items-center gap-1.5"><span className="w-3 h-2 rounded-sm bg-rose-500/70 inline-block" /> 传输开销</span>
+              </div>
             </div>
           </div>
 

@@ -397,6 +397,8 @@ type DataApiSessionStage struct {
 	Status     string `json:"status"`           // "success" | "error" | "skipped"
 	Source     string `json:"source,omitempty"` // "engine" | "local-fallback" | "audit-log" ...
 	DurationMs int64  `json:"duration_ms"`
+	ComputeMs  int64  `json:"compute_ms,omitempty"`  // 本地计算耗时（含 JSON 编解码）
+	NetworkMs  int64  `json:"network_ms,omitempty"`  // 上游 HTTP 通信耗时（网络往返 + 序列化）
 	Detail     string `json:"detail,omitempty"`
 }
 

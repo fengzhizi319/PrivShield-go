@@ -454,6 +454,10 @@ export interface DataApiSessionStage {
   status: 'success' | 'error' | 'skipped';
   /** 阶段执行耗时（毫秒） */
   duration_ms: number;
+  /** 本地计算耗时（毫秒，含 JSON 编解码） */
+  compute_ms?: number;
+  /** 上游 HTTP 通信耗时（毫秒，含网络往返 + 序列化） */
+  network_ms?: number;
   /** 阶段详情（如分类结果摘要、掩码字段数等） */
   detail?: string;
 }
