@@ -177,27 +177,16 @@ export const BenchmarkPanel: React.FC<BenchmarkPanelProps> = ({ apis }) => {
       setLiveQps(elapsedSec > 0 ? Math.round((completedCount / elapsedSec) * 10) / 10 : 0);
       setProgress({ completed: completedCount, total: totalRequests });
     };
-    const uiTimer = setInterval(uiFlush, 200);
+    const uiTimer = setInterval(uiFlush, 500);
 
     const executeWorker = async () => {
       while (currentIndex < totalRequests && !abortControllerRef.current) {
         const reqIndex = ++currentIndex;
-        const reqUrl = `${'/api/lz'}/data-api/invoke`;
-        const perfMarkName = `bench-req-${reqIndex}-${Date.now()}`;
-        performance.mark(perfMarkName);
+        const reqStart = performance.now();
 
         try {
           const resp: DataApiSessionResponse = await api.invokeDataApi(targetApiId, batchLimit, true);
-
-          // 使用 Resource Timing API 获取实际网络耗时（排除浏览器连接池排队时间）
-          let networkMs = performance.now() - performance.measure(perfMarkName, perfMarkName).startTime;
-          const entries = performance.getEntriesByName(reqUrl, 'resource');
-          if (entries.length > 0) {
-            const lastEntry = entries[entries.length - 1] as PerformanceResourceTiming;
-            networkMs = lastEntry.responseEnd - lastEntry.requestStart;
-            performance.clearResourceTimings();
-          }
-          const reqDuration = networkMs;
+          const reqDuration = performance.now() - reqStart;
 
           completedCount++;
           latencies.push(reqDuration);
@@ -234,15 +223,7 @@ export const BenchmarkPanel: React.FC<BenchmarkPanelProps> = ({ apis }) => {
           uiDirty = true;
 
         } catch (err: any) {
-          // 使用 Resource Timing API 获取实际网络耗时
-          let networkMs = performance.now() - performance.measure(perfMarkName, perfMarkName).startTime;
-          const entries = performance.getEntriesByName(reqUrl, 'resource');
-          if (entries.length > 0) {
-            const lastEntry = entries[entries.length - 1] as PerformanceResourceTiming;
-            networkMs = lastEntry.responseEnd - lastEntry.requestStart;
-            performance.clearResourceTimings();
-          }
-          const reqDuration = networkMs;
+          const reqDuration = performance.now() - reqStart;
           completedCount++;
           latencies.push(reqDuration);
 

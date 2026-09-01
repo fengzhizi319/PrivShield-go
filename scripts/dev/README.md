@@ -40,6 +40,7 @@
   - [`run_console_e2e_tests.sh` (Console 前后端端到端 E2E 测试)](#run_console_e2e_testssh)
   - [`go-engine-bench.sh` (Go 引擎基准性能压测)](#go-engine-benchsh)
   - [`benchmark_performance.sh` (HTTP 原语基准性能压测)](#benchmark_performancesh)
+  - [`benchmark-data-api.sh` (预设数据 API 全链路性能基准压测)](#benchmark-data-apish)
   - [`health_check.sh` (全组件健康状态诊断与探针)](#health_checksh)
   - [`check_metrics_endpoints.sh` (Prometheus 指标端点探针)](#check_metrics_endpointssh)
   - [`lint-source-naming.sh` (源代码命名规约检查)](#lint-source-namingsh)
@@ -417,6 +418,39 @@ bash ./scripts/dev/go-engine-bench.sh
 执行 HTTP 性能压测：
 ```bash
 bash ./scripts/dev/benchmark_performance.sh
+```
+
+---
+
+### `benchmark-data-api.sh`
+- **作用说明**: 【App-LZ 全链路压测】通过 curl 并发请求直接测量 App-LZ BFF → 微服务群（`datasource-mgr` → `engine` → `audit-log`）全链路延迟与吞吐量，规避浏览器 JS 主线程阻塞对测量精度的影响。输出延迟分位数 (P50/P90/P95/P99)、QPS、服务端 5 阶段耗时拆解（计算 vs 通信）、SLA 判定与延迟分布直方图。
+- **参数选项**:
+  - `-u, --url <URL>`: BFF 地址 (默认: `http://127.0.0.1:8085`)。
+  - `-a, --api-id <ID>`: 数据 API ID，`1`=医保结算 / `2`=康养慢病 (默认: `1`)。
+  - `-l, --limit <N>`: 每次请求返回记录数 (默认: `5`)。
+  - `-c, --concurrency <N>`: 并发数 (默认: `10`)。
+  - `-n, --requests <N>`: 总请求数 (默认: `100`)。
+  - `--lean`: 启用 lean 模式（不返回 `raw_records`/`sanitized_data`，载荷缩减 82%）。
+  - `--warmup <N>`: 预热请求数 (默认: `5`)。
+
+标准压测（10 并发 × 100 请求）：
+```bash
+bash ./scripts/dev/benchmark-data-api.sh
+```
+
+高并发突发脉冲（50 并发 × 300 请求）：
+```bash
+bash ./scripts/dev/benchmark-data-api.sh -c 50 -n 300
+```
+
+康养场景 + lean 模式：
+```bash
+bash ./scripts/dev/benchmark-data-api.sh -a 2 --lean
+```
+
+自定义 BFF 地址：
+```bash
+bash ./scripts/dev/benchmark-data-api.sh -u http://192.168.1.100:8085
 ```
 
 ---
