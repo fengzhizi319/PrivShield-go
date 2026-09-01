@@ -691,24 +691,26 @@ func dpVectorMeanHandler(svc *service.PrivacyService) gin.HandlerFunc {
 func dpAggregateHandler(svc *service.PrivacyService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Rows    []map[string]string `json:"rows" binding:"required"`
-			Epsilon float64             `json:"epsilon" binding:"required"`
+			Rows      []map[string]string `json:"rows" binding:"required"`
+			Specs     map[string]string   `json:"specs" binding:"required"` // map[字段名]聚合算子 (count/sum/mean)
+			Epsilon   float64             `json:"epsilon" binding:"required"`
+			Delta     float64             `json:"delta"`
+			ClipLower float64             `json:"clip_lower"`
+			ClipUpper float64             `json:"clip_upper"`
+			Mechanism string              `json:"mechanism"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", err.Error())
 			return
 		}
-		ctx := c.Request.Context()
-		noisyCount, err := svc.NoisyCount(ctx, len(req.Rows), req.Epsilon)
+		// 委托给 service 层的 DPAggregate，该路径调用 SDK 的 dp.Aggregate，
+		// 内置值截断（ClipValue → clipUpper）保障敏感度有界，确保 DP 保证成立。
+		result, err := svc.DPAggregate(req.Rows, req.Specs, req.Epsilon, req.Delta, req.ClipLower, req.ClipUpper, req.Mechanism)
 		if err != nil {
 			middleware.AbortWithError(c, http.StatusTooManyRequests, "BUDGET_EXHAUSTED", "隐私预算已耗尽", err.Error())
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{
-			"row_count":   len(req.Rows),
-			"noisy_count": noisyCount,
-			"epsilon":     req.Epsilon,
-		})
+		c.JSON(http.StatusOK, gin.H{"result": result})
 	}
 }
 

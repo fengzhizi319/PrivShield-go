@@ -320,6 +320,8 @@ func (m *Mapper) handleDPAggregate(ctx context.Context, client pb.PrivacyService
 		Delta:         getFloat64(v, "delta", 0.0),          // δ 参数
 		Mechanism:     getString(v, "mechanism", "laplace"), // 噪声机制
 		ReturnDetails: true,                                 // 始终返回详细信息
+		ClipLower:     getFloat64(v, "clip_lower", 0.0),     // 值截断下界
+		ClipUpper:     getFloat64(v, "clip_upper", 100.0),   // 值截断上界（确保敏感度有界）
 	})
 	if err != nil {
 		return nil, err

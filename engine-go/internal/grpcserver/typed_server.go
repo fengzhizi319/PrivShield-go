@@ -401,7 +401,7 @@ func (s *TypedServer) DPAggregate(_ context.Context, req *pb.DPAggregateRequest)
 		_ = json.Unmarshal([]byte(req.GetSpecsJson()), &specs)
 	}
 
-	result, err := s.svc.DPAggregate(rowsMap, specs, req.GetEpsilon(), req.GetDelta(), req.GetMechanism())
+	result, err := s.svc.DPAggregate(rowsMap, specs, req.GetEpsilon(), req.GetDelta(), req.GetClipLower(), req.GetClipUpper(), req.GetMechanism())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}

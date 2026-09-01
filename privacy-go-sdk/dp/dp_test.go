@@ -219,7 +219,7 @@ func TestAggregate(t *testing.T) {
 		"salary": "sum",
 	}
 
-	res, err := Aggregate(rows, specs, 1.0, 1e-5, "laplace")
+	res, err := Aggregate(rows, specs, 1.0, 1e-5, 0, 100.0, "laplace")
 	if err != nil {
 		t.Fatalf("Aggregate failed: %v", err)
 	}

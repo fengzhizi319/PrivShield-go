@@ -62,6 +62,8 @@ message DPAggregateRequest {
   double delta = 4;
   string mechanism = 5;
   bool return_details = 6;
+  double clip_lower = 7;
+  double clip_upper = 8;
 }
 
 message DPAggregateResponse {

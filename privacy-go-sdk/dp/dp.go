@@ -405,7 +405,9 @@ func GroupBy(rows []map[string]string, groupCol, targetCol, agg string, epsilon,
 
 // Aggregate 对记录集按指定字段和算子列表执行多指标差分隐私聚合计算。
 // specs 为 map[字段名]聚合算子 (count/sum/mean)。
-func Aggregate(rows []map[string]string, specs map[string]string, epsilon, delta float64, mechanism string) (map[string]float64, error) {
+// clipLower/clipUpper 为 sum/mean 聚合的值截断区间，确保敏感度有界；
+// mechanism 支持 "laplace"（默认）或 "gaussian"。
+func Aggregate(rows []map[string]string, specs map[string]string, epsilon, delta, clipLower, clipUpper float64, mechanism string) (map[string]float64, error) {
 	if len(rows) == 0 || len(specs) == 0 {
 		return map[string]float64{}, nil
 	}
@@ -413,6 +415,15 @@ func Aggregate(rows []map[string]string, specs map[string]string, epsilon, delta
 	numSpecs := float64(len(specs))
 	epsPerSpec := epsilon / numSpecs
 	deltaPerSpec := delta / numSpecs
+
+	// 值截断区间兜底：clipUpper <= clipLower 时退化为对称截断 [0, 1]
+	if clipUpper <= clipLower {
+		clipUpper = clipLower + 1.0
+	}
+	sensitivity := clipUpper - clipLower
+	if sensitivity <= 0 {
+		sensitivity = 1.0
+	}
 
 	result := make(map[string]float64, len(specs))
 	for col, agg := range specs {
@@ -432,9 +443,19 @@ func Aggregate(rows []map[string]string, specs map[string]string, epsilon, delta
 		case "count":
 			result[key] = NoisyCount(len(vals), epsPerSpec)
 		case "sum":
-			result[key] = NoisySum(vals, epsPerSpec, 1.0)
+			// 先截断再求和，确保敏感度 = clipUpper - clipLower 有界
+			var clippedSum float64
+			for _, v := range vals {
+				clippedSum += ClipValue(v, clipUpper)
+			}
+			if strings.ToLower(mechanism) == "gaussian" && deltaPerSpec > 0 {
+				result[key] = AddGaussianNoise(clippedSum, epsPerSpec, deltaPerSpec, sensitivity)
+			} else {
+				result[key] = AddLaplaceNoise(clippedSum, epsPerSpec, sensitivity)
+			}
 		case "mean":
-			result[key] = NoisyMean(vals, epsPerSpec, deltaPerSpec, 1.0)
+			// NoisyMean 内部执行 ClipValue(v, clipBound) 并以 clipBound/n 为敏感度
+			result[key] = NoisyMean(vals, epsPerSpec, deltaPerSpec, clipUpper)
 		default:
 			result[key] = NoisyCount(len(vals), epsPerSpec)
 		}

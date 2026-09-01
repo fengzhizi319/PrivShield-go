@@ -1667,9 +1667,9 @@ func (s *PrivacyService) DPGroupBy(rows []map[string]string, groupCol, targetCol
 }
 
 // DPAggregate 执行多指标差分隐私聚合计算。
-func (s *PrivacyService) DPAggregate(rows []map[string]string, specs map[string]string, epsilon, delta float64, mechanism string) (map[string]float64, error) {
+func (s *PrivacyService) DPAggregate(rows []map[string]string, specs map[string]string, epsilon, delta, clipLower, clipUpper float64, mechanism string) (map[string]float64, error) {
 	if !s.budget.Consume(epsilon, delta) {
 		return nil, fmt.Errorf("privacy budget exhausted")
 	}
-	return dp.Aggregate(rows, specs, epsilon, delta, mechanism)
+	return dp.Aggregate(rows, specs, epsilon, delta, clipLower, clipUpper, mechanism)
 }

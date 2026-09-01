@@ -270,7 +270,10 @@ func TestTyped_DPAggregate(t *testing.T) {
 			{Fields: map[string]string{"a": "1"}},
 			{Fields: map[string]string{"a": "2"}},
 		},
-		Epsilon: 1.0,
+		SpecsJson: `{"a":"sum"}`,
+		Epsilon:   1.0,
+		ClipLower: 0,
+		ClipUpper: 100.0,
 	})
 	if err != nil {
 		t.Fatalf("DPAggregate: %v", err)
