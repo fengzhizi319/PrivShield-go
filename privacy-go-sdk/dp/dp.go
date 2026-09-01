@@ -75,6 +75,19 @@ func ClipValue(value, bound float64) float64 {
 	return value
 }
 
+// ClipValueRange 将数值截断至 [lower, upper] 区间。
+// 用于差分隐私聚合的有界敏感度截断：值域 [lower, upper] 确保
+// sum 敏感度 = upper - lower 有界，满足 ε-DP 保证。
+func ClipValueRange(value, lower, upper float64) float64 {
+	if value > upper {
+		return upper
+	}
+	if value < lower {
+		return lower
+	}
+	return value
+}
+
 // ClipL2Norm 将向量截断至 L2 范数不超过 maxNorm。
 // 返回截断后的新切片（不修改原切片）。
 func ClipL2Norm(vec []float64, maxNorm float64) []float64 {
@@ -378,7 +391,7 @@ func GroupBy(rows []map[string]string, groupCol, targetCol, agg string, epsilon,
 		case "sum":
 			var clippedVals []float64
 			for _, v := range vals {
-				clippedVals = append(clippedVals, ClipValue(v, clipUpper))
+				clippedVals = append(clippedVals, ClipValueRange(v, clipLower, clipUpper))
 			}
 			var sum float64
 			for _, v := range clippedVals {
@@ -443,10 +456,10 @@ func Aggregate(rows []map[string]string, specs map[string]string, epsilon, delta
 		case "count":
 			result[key] = NoisyCount(len(vals), epsPerSpec)
 		case "sum":
-			// 先截断再求和，确保敏感度 = clipUpper - clipLower 有界
+			// 先截断至 [clipLower, clipUpper] 再求和，确保敏感度 = clipUpper - clipLower 有界
 			var clippedSum float64
 			for _, v := range vals {
-				clippedSum += ClipValue(v, clipUpper)
+				clippedSum += ClipValueRange(v, clipLower, clipUpper)
 			}
 			if strings.ToLower(mechanism) == "gaussian" && deltaPerSpec > 0 {
 				result[key] = AddGaussianNoise(clippedSum, epsPerSpec, deltaPerSpec, sensitivity)

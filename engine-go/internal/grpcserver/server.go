@@ -118,7 +118,11 @@ func (s *Server) DPCount(ctx context.Context, req *pb.DPRequest) (*pb.DPResponse
 }
 
 func (s *Server) DPSum(ctx context.Context, req *pb.DPRequest) (*pb.DPResponse, error) {
-	noisy, err := s.svc.NoisySum(ctx, req.Values, req.Epsilon, 1.0)
+	sensitivity := req.ClipUpper - req.ClipLower
+	if sensitivity <= 0 {
+		sensitivity = 1.0
+	}
+	noisy, err := s.svc.NoisySum(ctx, req.Values, req.Epsilon, sensitivity)
 	if err != nil {
 		return nil, status.Errorf(codes.ResourceExhausted, "dp sum: %v", err)
 	}

@@ -388,7 +388,9 @@ func dpSumHandler(svc *service.PrivacyService) gin.HandlerFunc {
 		if sensitivity <= 0 {
 			sensitivity = 1.0
 		}
-		result, err := svc.NoisySum(c.Request.Context(), req.Values, req.Epsilon, sensitivity)
+		// 截断值至 [clipLower, clipUpper] 确保实际敏感度与声明一致
+		clipped := clipValues(req.Values, req.ClipLower, req.ClipUpper)
+		result, err := svc.NoisySum(c.Request.Context(), clipped, req.Epsilon, sensitivity)
 		if err != nil {
 			middleware.AbortWithError(c, http.StatusTooManyRequests, "BUDGET_EXHAUSTED", "隐私预算已耗尽", err.Error())
 			return
@@ -576,7 +578,9 @@ func dpChunkedSumHandler(svc *service.PrivacyService) gin.HandlerFunc {
 		if sensitivity <= 0 {
 			sensitivity = 1.0
 		}
-		result, err := svc.NoisySum(c.Request.Context(), allValues, req.Epsilon, sensitivity)
+		// 截断值至 [clipLower, clipUpper] 确保实际敏感度与声明一致
+		clipped := clipValues(allValues, req.ClipLower, req.ClipUpper)
+		result, err := svc.NoisySum(c.Request.Context(), clipped, req.Epsilon, sensitivity)
 		if err != nil {
 			middleware.AbortWithError(c, http.StatusTooManyRequests, "BUDGET_EXHAUSTED", "隐私预算已耗尽", err.Error())
 			return
@@ -1347,6 +1351,29 @@ func profileRecommendHandler(svc *service.PrivacyService) gin.HandlerFunc {
 // ──────────────────────────────────────────────
 // 辅助函数
 // ──────────────────────────────────────────────
+
+// clipValues 将数值切片截断至 [lower, upper] 区间。
+// clipLower == clipUpper 时不做截断（未指定裁剪参数）。
+func clipValues(vals []float64, clipLower, clipUpper float64) []float64 {
+	if clipLower == 0 && clipUpper == 0 {
+		return vals // 未指定裁剪参数
+	}
+	if clipUpper <= clipLower {
+		return vals
+	}
+	clipped := make([]float64, len(vals))
+	for i, v := range vals {
+		switch {
+		case v > clipUpper:
+			clipped[i] = clipUpper
+		case v < clipLower:
+			clipped[i] = clipLower
+		default:
+			clipped[i] = v
+		}
+	}
+	return clipped
+}
 
 func maxBodyBytesMiddleware(maxBytes int64) gin.HandlerFunc {
 	return func(c *gin.Context) {

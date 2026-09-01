@@ -15,6 +15,7 @@ import (
 
 	pb "github.com/fengzhizi319/PrivShield-go/engine-go/internal/grpcserver/proto"
 	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/service"
+	"github.com/fengzhizi319/PrivShield-go/privacy-go-sdk/kano"
 )
 
 // TypedServer 类型安全的 gRPC 隐私服务端
@@ -460,27 +461,25 @@ func (s *TypedServer) DPGroupBy(_ context.Context, req *pb.DPGroupByRequest) (*p
 // KAnonymizeTable K-匿名表级处理
 func (s *TypedServer) KAnonymizeTable(_ context.Context, req *pb.KAnonymizeTableRequest) (*pb.KAnonymizeTableResponse, error) {
 	rows := req.GetRows()
-	records := make([]map[string]string, len(rows))
+	records := make([]kano.Record, len(rows))
 	for i, r := range rows {
-		records[i] = r.GetFields()
+		records[i] = kano.Record(r.GetFields())
 	}
-	res, err := s.svc.ProcessFile(nil, "", "k_anonymize", map[string]interface{}{
-		"qi_cols": req.GetQiCols(),
-		"k":       int(req.GetK()),
-	})
+
+	anonRes, err := s.svc.KAnonymizeTable(records, req.GetQiCols(), int(req.GetK()))
 	if err != nil {
 		// 回退到逐条脱敏
 		results := make([]*pb.RecordEntry, len(records))
 		for i, rec := range records {
-			masked := s.svc.MaskRecord(rec)
+			masked := s.svc.MaskRecord(map[string]string(rec))
 			results[i] = &pb.RecordEntry{Fields: masked}
 		}
 		return &pb.KAnonymizeTableResponse{Rows: results}, nil
 	}
-	outList, _ := res["result"].([]map[string]string)
-	results := make([]*pb.RecordEntry, len(outList))
-	for i, rec := range outList {
-		results[i] = &pb.RecordEntry{Fields: rec}
+
+	results := make([]*pb.RecordEntry, len(anonRes.Records))
+	for i, rec := range anonRes.Records {
+		results[i] = &pb.RecordEntry{Fields: map[string]string(rec)}
 	}
 	return &pb.KAnonymizeTableResponse{Rows: results}, nil
 }
