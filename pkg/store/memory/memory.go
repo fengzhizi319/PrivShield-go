@@ -389,11 +389,16 @@ func (s *AuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *store.Sn
 		log.IntegrityHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 	}
 	if snapshot != nil {
+		// P0 fix: snapshot prev_hash binds to the parent log's integrity hash
+		// and its integrity hash covers the snapshot's own sample fields.
 		if snapshot.PrevHash == "" {
-			snapshot.PrevHash = log.PrevHash
+			snapshot.PrevHash = log.IntegrityHash
 		}
 		if snapshot.IntegrityHash == "" {
-			snapshot.IntegrityHash = log.IntegrityHash
+			snapshot.IntegrityHash = store.ComputeSnapshotIntegrityHash(
+				snapshot.ID, snapshot.AuditLogID, snapshot.PrevHash, snapshot.Timestamp, snapshot.Algorithm,
+				snapshot.InputSample, snapshot.OutputSample, snapshot.ParametersJSON,
+			)
 		}
 	}
 
