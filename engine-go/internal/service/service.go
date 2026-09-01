@@ -16,7 +16,6 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,6 +23,7 @@ import (
 
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/dynclassification"
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/profile"
+	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
 	"github.com/fengzhizi319/PrivShield/pkg/crypto"
 	"github.com/fengzhizi319/PrivShield/pkg/naming"
 	"github.com/fengzhizi319/PrivShield/privacy-go-sdk/budget"
@@ -100,8 +100,8 @@ func DefaultConfig() Config {
 		llmEndpoint = "http://localhost:8000/v1/chat/completions"
 	}
 
-	rulesDir := getEnv("PRIVACY_RULES_DIR", "rules/domains")
-	privacyYAML := getEnv("PRIVACY_CONFIG_FILE", "config/privacy.yaml")
+	rulesDir := pkgconfig.EnvString("PRIVACY_RULES_DIR", "rules/domains")
+	privacyYAML := pkgconfig.EnvString("PRIVACY_CONFIG_FILE", "config/privacy.yaml")
 
 	return Config{
 		TotalEpsilon:    10.0,
@@ -144,7 +144,7 @@ func NewPrivacyService(cfg Config) (*PrivacyService, error) {
 
 	ns := cfg.Namespace
 	if ns == "" {
-		ns = getEnv("PRIVACY_NAMESPACE", "default")
+		ns = pkgconfig.EnvString("PRIVACY_NAMESPACE", "default")
 	}
 
 	// ── 3. 安全底线（含 P0-2 默认拒绝下限）──
@@ -162,7 +162,7 @@ func NewPrivacyService(cfg Config) (*PrivacyService, error) {
 			llmEndpoint = fromFile
 		}
 	}
-	llmMaxConcurrency := getEnvInt("PRIVACY_LLM_MAX_CONCURRENCY", 4)
+	llmMaxConcurrency := pkgconfig.EnvInt("PRIVACY_LLM_MAX_CONCURRENCY", 4)
 	if policy != nil && policy.Classification.LLMMaxConcurrency != nil &&
 		*policy.Classification.LLMMaxConcurrency > 0 &&
 		*policy.Classification.LLMMaxConcurrency < llmMaxConcurrency {
@@ -174,7 +174,7 @@ func NewPrivacyService(cfg Config) (*PrivacyService, error) {
 	if cfg.EnableLLM || llmEndpoint != "" {
 		llmClient = dynclassification.NewLLMClient(dynclassification.LLMClientConfig{
 			Endpoint:       llmEndpoint,
-			ModelName:      getEnv("PRIVACY_LLM_MODEL", "qwen3.5"),
+			ModelName:      pkgconfig.EnvString("PRIVACY_LLM_MODEL", "qwen3.5"),
 			MaxConcurrency: llmMaxConcurrency,
 			Timeout:        30 * time.Second,
 			MaxRetries:     2,
@@ -1281,13 +1281,13 @@ func (s *PrivacyService) Diagnostics(refresh bool) map[string]interface{} {
 		// P0-2 / P2-2：安全底线与字段级默认拒绝策略的生效快照（可审计）。
 		"safety_floor": s.safetyFloorDiagnostics(),
 		"service": map[string]interface{}{
-			"name":       getEnv("PRIVACY_SERVICE_NAME", "PrivShield"),
+			"name":       pkgconfig.EnvString("PRIVACY_SERVICE_NAME", "PrivShield"),
 			"engine":     "go",
-			"namespace":  getEnv("PRIVACY_NAMESPACE", "default"),
+			"namespace":  pkgconfig.EnvString("PRIVACY_NAMESPACE", "default"),
 			"version":    "1.0.0",
 			"go_version": runtime.Version(),
-			"rest_port":  getEnvInt("PRIVACY_REST_PORT", 8079),
-			"grpc_port":  getEnvInt("PRIVACY_GRPC_PORT", 50051),
+			"rest_port":  pkgconfig.EnvInt("PRIVACY_REST_PORT", 8079),
+			"grpc_port":  pkgconfig.EnvInt("PRIVACY_GRPC_PORT", 50051),
 		},
 		"engines": map[string]interface{}{
 			"ner": map[string]interface{}{
@@ -1552,24 +1552,6 @@ func fileExists(path string) bool {
 		return false
 	}
 	return !info.IsDir()
-}
-
-func getEnv(key, defaultVal string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return defaultVal
-}
-
-func getEnvInt(key string, defaultVal int) int {
-	if v := os.Getenv(key); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			return defaultVal
-		}
-		return n
-	}
-	return defaultVal
 }
 
 // ──────────────────────────────────────────────

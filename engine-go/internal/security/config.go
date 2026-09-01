@@ -2,11 +2,11 @@ package security
 
 import (
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 
 	pkgauth "github.com/fengzhizi319/PrivShield/pkg/auth"
+	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
 )
 
 // KeyConfig 表示单个 API Key 配置。
@@ -75,57 +75,23 @@ func loadSettings() *Settings {
 
 	s := &Settings{
 		Settings: pkgauth.Settings{
-			AuthEnabled:  envBool("PRIVACY_AUTH_ENABLED", false),
-			TLSEnabled:   envBool("PRIVACY_TLS_ENABLED", false),
-			HealthNoAuth: envBool("PRIVACY_HEALTH_NO_AUTH", true),
+			AuthEnabled:  pkgconfig.EnvBool("PRIVACY_AUTH_ENABLED", false),
+			TLSEnabled:   pkgconfig.EnvBool("PRIVACY_TLS_ENABLED", false),
+			HealthNoAuth: pkgconfig.EnvBool("PRIVACY_HEALTH_NO_AUTH", true),
 			InternalKeys: internalKeys,
 			ExternalKeys: externalKeys,
 		},
-		RateLimitEnabled:      envBool("PRIVACY_RATE_LIMIT_ENABLED", false),
-		HealthNoRateLimit:     envBool("PRIVACY_HEALTH_NO_RATE_LIMIT", true),
-		MTLSEnabled:           envBool("PRIVACY_AUTH_INTERNAL_MTLS_ENABLED", false),
+		RateLimitEnabled:      pkgconfig.EnvBool("PRIVACY_RATE_LIMIT_ENABLED", false),
+		HealthNoRateLimit:     pkgconfig.EnvBool("PRIVACY_HEALTH_NO_RATE_LIMIT", true),
+		MTLSEnabled:           pkgconfig.EnvBool("PRIVACY_AUTH_INTERNAL_MTLS_ENABLED", false),
 		MTLSWhitelistFile:     os.Getenv("PRIVACY_AUTH_MTLS_WHITELIST_FILE"),
-		RateLimitDefaultRPS:   envFloat("PRIVACY_RATE_LIMIT_DEFAULT_RPS", 100),
-		RateLimitDefaultBurst: envInt("PRIVACY_RATE_LIMIT_DEFAULT_BURST", 200),
+		RateLimitDefaultRPS:   pkgconfig.EnvFloat("PRIVACY_RATE_LIMIT_DEFAULT_RPS", 100),
+		RateLimitDefaultBurst: pkgconfig.EnvInt("PRIVACY_RATE_LIMIT_DEFAULT_BURST", 200),
 		RateLimitRedisURL:     os.Getenv("PRIVACY_RATE_LIMIT_REDIS_URL"),
 		MTLSAllowedCNs:        parseStringList(os.Getenv("PRIVACY_AUTH_MTLS_ALLOWED_CNS")),
 	}
 	return s
 }
-
-func envBool(key string, def bool) bool {
-	v := os.Getenv(key)
-	if v == "" {
-		return def
-	}
-	return strings.EqualFold(v, "true") || v == "1"
-}
-
-func envFloat(key string, def float64) float64 {
-	v := os.Getenv(key)
-	if v == "" {
-		return def
-	}
-	f, err := strconv.ParseFloat(v, 64)
-	if err != nil {
-		return def
-	}
-	return f
-}
-
-func envInt(key string, def int) int {
-	v := os.Getenv(key)
-	if v == "" {
-		return def
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		return def
-	}
-	return n
-}
-
-// parseFloat/parseInt 已替换为标准库 strconv，消除手写解析器的整数溢出风险
 
 // parseAPIKeys 解析 "key1:name1:scope1,scope2;key2:name2:scope3" 格式。
 func parseAPIKeys(envKey string) map[string]*KeyConfig {

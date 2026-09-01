@@ -21,6 +21,29 @@ func EnvString(name, def string) string {
 	return def
 }
 
+// EnvStringFirstSet returns the first non-empty value among the given environment variables.
+// Returns empty string if all of them are unset or empty.
+// EnvStringFirstSet 依次读取给定的环境变量，返回第一个非空值；全为空时返回空字符串。
+func EnvStringFirstSet(names ...string) string {
+	for _, name := range names {
+		if v := os.Getenv(name); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// EnvStringOptional reads an environment variable, distinguishing "unset" from "explicitly set to empty".
+// It only falls back to def when the variable is completely unset; an empty string is treated as a valid value.
+// EnvStringOptional 读取环境变量，区分"未设置"与"显式设为空字符串"；
+// 仅在变量完全未设置时才使用默认值，空字符串被视为合法值。
+func EnvStringOptional(name, def string) string {
+	if v, ok := os.LookupEnv(name); ok {
+		return v
+	}
+	return def
+}
+
 // EnvInt reads an environment variable as int, returning def on missing or invalid.
 // EnvInt 以整数形式读取环境变量，缺失或无效时返回默认值。
 func EnvInt(name string, def int) int {
@@ -33,6 +56,20 @@ func EnvInt(name string, def int) int {
 		return def
 	}
 	return i
+}
+
+// EnvFloat reads an environment variable as float64, returning def on missing or invalid.
+// EnvFloat 以浮点数形式读取环境变量，缺失或无效时返回默认值。
+func EnvFloat(name string, def float64) float64 {
+	v := os.Getenv(name)
+	if v == "" {
+		return def
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return def
+	}
+	return f
 }
 
 // EnvBool reads an environment variable as bool.

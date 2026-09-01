@@ -16,7 +16,6 @@ import (
 	"io"
 	"net/http"
 	httppprof "net/http/pprof"
-	"os"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -26,6 +25,7 @@ import (
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/dynclassification"
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/security"
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/service"
+	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
 	"github.com/fengzhizi319/PrivShield/pkg/middleware"
 	"github.com/fengzhizi319/PrivShield/pkg/naming"
 	"github.com/fengzhizi319/PrivShield/privacy-go-sdk/kano"
@@ -51,7 +51,7 @@ func RegisterRoutes(r *gin.Engine, svc *service.PrivacyService) {
 	r.Use(security.RateLimitMiddleware())
 
 	// 性能分析端点（环境变量控制，生产环境默认关闭）
-	if getEnvDefault("PRIVACY_PPROF_ENABLED", "false") == "true" {
+	if pkgconfig.EnvString("PRIVACY_PPROF_ENABLED", "false") == "true" {
 		registerPprof(r)
 	}
 
@@ -1370,13 +1370,6 @@ func profileRecommendHandler(svc *service.PrivacyService) gin.HandlerFunc {
 // ──────────────────────────────────────────────
 // 辅助函数
 // ──────────────────────────────────────────────
-
-func getEnvDefault(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
 
 func maxBodyBytesMiddleware(maxBytes int64) gin.HandlerFunc {
 	return func(c *gin.Context) {

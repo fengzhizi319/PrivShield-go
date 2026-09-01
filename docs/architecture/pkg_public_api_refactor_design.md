@@ -82,11 +82,47 @@
 
 ### 4.3 实际变更
 
+**扩展 `pkg/config/env.go`**
+
+- 新增 `EnvFloat(name string, def float64) float64`，支持浮点环境变量读取。
+- 新增 `EnvStringFirstSet(names ...string) string`，支持依次读取多个环境变量并返回第一个非空值。
+- 新增 `EnvStringOptional(name, def string) string`，区分"未设置"与"显式设为空字符串"（空字符串是合法值）。
+
 **文件：`engine-go/internal/config/config.go`**
 
 - 删除私有函数 `envString/envInt/envBool`。
 - `LoadAgent` / `LoadGateway` 全面使用 `pkgconfig.EnvString/EnvInt/EnvBool`。
 - 新增复用 `pkgconfig.ValidateFailClosed` 进行 fail-closed 启动门禁校验。
+
+**文件：`engine-go/cmd/privshield-agent/main.go`**
+
+- 删除私有 `getEnv/getEnvInt`，统一使用 `pkgconfig.EnvString/EnvInt`。
+
+**文件：`engine-go/cmd/privshield-gateway/main.go`**
+
+- 删除私有 `getEnv`，统一使用 `pkgconfig.EnvString`。
+
+**文件：`engine-go/internal/rest/routes.go`**
+
+- 删除私有 `getEnvDefault`，统一使用 `pkgconfig.EnvString`。
+
+**文件：`engine-go/internal/security/config.go`**
+
+- 删除私有 `envBool/envInt/envFloat`，统一使用 `pkgconfig.EnvBool/EnvInt/EnvFloat`。
+
+**文件：`engine-go/internal/service/service.go`**
+
+- 删除私有 `getEnv/getEnvInt`，统一使用 `pkgconfig.EnvString/EnvInt`。
+
+**文件：`console/bff-go/internal/config/config.go`**
+
+- 删除私有 `getEnvWithFallback/getEnvOptional`。
+- `getEnvWithFallback` 替换为 `pkgconfig.EnvStringFirstSet`。
+- `getEnvOptional` 替换为 `pkgconfig.EnvStringOptional`。
+
+**文件：`services/service-hub/internal/handlers/real_e2e_test.go`**
+
+- 删除测试私有 `getEnvDefault`，统一使用 `pkgconfig.EnvString`。
 
 **示例**：
 
@@ -100,12 +136,15 @@ RESTHost: pkgconfig.EnvString("PRIVACY_REST_HOST", "127.0.0.1"),
 
 ### 4.4 兼容性
 
-- `pkg/config.EnvString/EnvInt/EnvBool` 与内部函数语义完全一致。
+- `pkg/config.EnvString/EnvInt/EnvBool/EnvFloat` 与内部函数语义完全一致。
+- `pkg/config.EnvStringFirstSet` 与 `console/bff-go` 的 `getEnvWithFallback` 语义一致。
+- `pkg/config.EnvStringOptional` 与 `console/bff-go` 的 `getEnvOptional` 语义一致。
 - 无行为变化。
 
 ### 4.5 验收
 
 - `go test ./engine-go/internal/config/...` 通过。
+- `go test ./console/bff-go/internal/config/...` 通过。
 
 ---
 
@@ -584,10 +623,11 @@ func Validate(primitive string, params map[string]interface{}) error { return pp
 
 | 模块 | 文件 | 变更 |
 |---|---|---|
-| `console/bff-go` | `internal/config/config.go` | 删除私有 `getEnv/getEnvInt/getEnvBool`，改用 `pkgconfig.EnvString/EnvInt/EnvBool` |
-| `console/app-lz/bff-go` | `internal/config/config.go` | 同上 |
+| `console/bff-go` | `internal/config/config.go` | 删除私有 `getEnv/getEnvInt/getEnvBool/getEnvWithFallback/getEnvOptional`，改用 `pkgconfig.EnvString/EnvInt/EnvBool/EnvStringFirstSet/EnvStringOptional` |
+| `console/app-lz/bff-go` | `internal/config/config.go` | 删除私有 `getEnv/getEnvInt/getEnvBool`，改用 `pkgconfig.EnvString/EnvInt/EnvBool` |
 | `services/audit-log` | `internal/config/config.go` | 同上 |
 | `services/datasource-mgr` | `internal/config/config.go` | 同上 |
+| `services/service-hub` | `internal/handlers/real_e2e_test.go` | 删除测试私有 `getEnvDefault`，改用 `pkgconfig.EnvString` |
 
 示例（`console/app-lz/bff-go/internal/config/config.go`）：
 
@@ -759,6 +799,9 @@ make check
 | 主题 | 重构前路径 | 当前路径 |
 |---|---|---|
 | env helper | `engine-go/internal/config/config.go:205`（私有函数） | `pkg/config/env.go:17` |
+| env float helper | `engine-go/internal/security/config.go:104`（私有函数） | `pkg/config/env.go:38` |
+| env first-set helper | `console/bff-go/internal/config/config.go:372`（私有函数） | `pkg/config/env.go:54` |
+| env optional helper | `console/bff-go/internal/config/config.go:395`（私有函数） | `pkg/config/env.go:72` |
 | Logger 初始化 | `engine-go/internal/observability/logger.go:14` | `pkg/observability/logger.go:17` |
 | RequestLogger | `engine-go/internal/observability/logger.go:22` | `pkg/observability/request_logger.go:22` |
 | RequestLoggerWithModule | `pkg/middleware/middleware.go:107` | `pkg/observability/request_logger.go:30` |

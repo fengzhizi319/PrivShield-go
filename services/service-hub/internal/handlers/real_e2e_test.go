@@ -40,25 +40,18 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
 )
 
 // Real service URLs (override via env vars)
 // 各微服务运行基地址（支持通过环境变量动态覆盖）
 var (
-	agentURL      = getEnvDefault("PRIVSHIELD_AGENT_URL", "http://127.0.0.1:8079")
-	serviceHubURL = getEnvDefault("SERVICE_HUB_URL", "http://127.0.0.1:8082")
-	datasourceURL = getEnvDefault("DATASOURCE_MGR_URL", "http://127.0.0.1:8083")
-	auditLogURL   = getEnvDefault("AUDIT_LOG_URL", "http://127.0.0.1:8084")
+	agentURL      = pkgconfig.EnvString("PRIVSHIELD_AGENT_URL", "http://127.0.0.1:8079")
+	serviceHubURL = pkgconfig.EnvString("SERVICE_HUB_URL", "http://127.0.0.1:8082")
+	datasourceURL = pkgconfig.EnvString("DATASOURCE_MGR_URL", "http://127.0.0.1:8083")
+	auditLogURL   = pkgconfig.EnvString("AUDIT_LOG_URL", "http://127.0.0.1:8084")
 )
-
-// getEnvDefault reads environment variable or returns default fallback.
-// getEnvDefault 获取环境变量，若未设置则返回默认值。
-func getEnvDefault(name, def string) string {
-	if v := os.Getenv(name); v != "" {
-		return v
-	}
-	return def
-}
 
 // skipIfNoE2E skips the test if PRIVSHIELD_E2E is not set.
 // skipIfNoE2E 当未配置 PRIVSHIELD_E2E=1 时跳过真实服务测试，避免 CI/普通单测因未启动依赖服务而失败。

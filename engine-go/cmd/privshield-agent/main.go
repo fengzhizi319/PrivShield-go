@@ -28,7 +28,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -43,6 +42,7 @@ import (
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/rest"
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/security"
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/service"
+	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
 	"github.com/fengzhizi319/PrivShield/pkg/middleware"
 	"github.com/fengzhizi319/PrivShield/pkg/naming"
 	"github.com/fengzhizi319/PrivShield/pkg/tlsutil"
@@ -73,9 +73,9 @@ type Config struct {
 func loadConfig() Config {
 	return Config{
 		Runtime:        engineconfig.LoadAgent(),
-		LogLevel:       getEnv("PRIVACY_LOG_LEVEL", "INFO"),
-		RateLimitRPS:   getEnvInt("PRIVACY_RATE_LIMIT_RPS", 1000),
-		RateLimitBurst: getEnvInt("PRIVACY_RATE_LIMIT_BURST", 2000),
+		LogLevel:       pkgconfig.EnvString("PRIVACY_LOG_LEVEL", "INFO"),
+		RateLimitRPS:   pkgconfig.EnvInt("PRIVACY_RATE_LIMIT_RPS", 1000),
+		RateLimitBurst: pkgconfig.EnvInt("PRIVACY_RATE_LIMIT_BURST", 2000),
 	}
 }
 
@@ -270,7 +270,7 @@ func main() {
 	rest.SetReady(false)
 
 	// 2. 流量排空等待窗口
-	drainSec := getEnvInt("PRIVACY_SHUTDOWN_DRAIN_SECONDS", 5)
+	drainSec := pkgconfig.EnvInt("PRIVACY_SHUTDOWN_DRAIN_SECONDS", 5)
 	if drainSec > 0 {
 		slog.Info("Draining in-flight traffic", "seconds", drainSec)
 		time.Sleep(time.Duration(drainSec) * time.Second)
@@ -290,7 +290,7 @@ func main() {
 		grpcSrv.GracefulStop()
 		close(grpcDone)
 	}()
-	grpcGraceSec := getEnvInt("PRIVACY_GRPC_GRACEFUL_STOP_SECONDS", 15)
+	grpcGraceSec := pkgconfig.EnvInt("PRIVACY_GRPC_GRACEFUL_STOP_SECONDS", 15)
 	select {
 	case <-grpcDone:
 		slog.Info("gRPC server stopped gracefully")
@@ -323,22 +323,4 @@ func (o namingObserver) RecordAPIAlias(alias, canonical, target string) {
 func (o namingObserver) RecordNormalizeError(reason string) {
 	slog.Warn("naming normalize failed", "reason", reason)
 	o.metrics.RecordNamingError(reason)
-}
-
-func getEnv(key, defaultVal string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return defaultVal
-}
-
-func getEnvInt(key string, defaultVal int) int {
-	if v := os.Getenv(key); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			return defaultVal
-		}
-		return n
-	}
-	return defaultVal
 }

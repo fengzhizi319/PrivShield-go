@@ -33,6 +33,7 @@ import (
 	engineconfig "github.com/fengzhizi319/PrivShield/engine-go/internal/config"
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/gateway"
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/observability"
+	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
 )
 
 var (
@@ -47,7 +48,7 @@ func main() {
 		log.Fatalf("invalid configuration: %v", err)
 	}
 
-	observability.InitLogger(getEnv("PRIVACY_LOG_LEVEL", "INFO"))
+	observability.InitLogger(pkgconfig.EnvString("PRIVACY_LOG_LEVEL", "INFO"))
 
 	slog.Info("Starting PrivShield L7 Adaptive Gateway",
 		"version", Version,
@@ -55,11 +56,11 @@ func main() {
 	)
 
 	// 解析后端地址
-	backends := getEnv("GATEWAY_BACKENDS", "127.0.0.1:8079")
+	backends := pkgconfig.EnvString("GATEWAY_BACKENDS", "127.0.0.1:8079")
 	addresses := strings.Split(backends, ",")
 
 	// 调度策略
-	strategy := getEnv("GATEWAY_STRATEGY", "p2c")
+	strategy := pkgconfig.EnvString("GATEWAY_STRATEGY", "p2c")
 
 	// 创建负载均衡器
 	lb := gateway.NewLoadBalancer(addresses, strategy)
@@ -162,11 +163,4 @@ func main() {
 	// 反向代理实例已内聚到 BackendNode（随节点创建/回收），无后台协程需要停止
 
 	slog.Info("Gateway stopped gracefully")
-}
-
-func getEnv(key, defaultVal string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return defaultVal
 }

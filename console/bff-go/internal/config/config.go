@@ -234,18 +234,18 @@ func Load() *Config {
 		ConsoleHost: pkgconfig.EnvString("PRIVACY_CONSOLE_HOST", "127.0.0.1"),
 		// 本代理 HTTP 监听端口，默认 8081
 		ConsolePort: pkgconfig.EnvInt("PRIVACY_CONSOLE_PORT", 8081),
-		// 前端静态文件目录，使用 getEnvOptional 以支持"设为空即禁用"语义
-		StaticDistDir: getEnvOptional("PRIVACY_CONSOLE_STATIC_DIR", "../web/dist"),
+		// 前端静态文件目录，使用 EnvStringOptional 以支持"设为空即禁用"语义
+		StaticDistDir: pkgconfig.EnvStringOptional("PRIVACY_CONSOLE_STATIC_DIR", "../web/dist"),
 		// 是否启用上游 gRPC 连接的 TLS/mTLS，默认关闭（非安全传输）
 		AgentTLSEnabled: pkgconfig.EnvBool("PRIVACY_AGENT_TLS_ENABLED", false) || pkgconfig.EnvBool("PRIVACY_AGENT_MTLS_ENABLED", false),
 		// 客户端证书文件（mTLS 双向认证），默认空
-		AgentTLSCertFile: getEnvWithFallback("PRIVACY_AGENT_TLS_CERT_FILE", "PRIVACY_AGENT_CLIENT_CERT"),
+		AgentTLSCertFile: pkgconfig.EnvStringFirstSet("PRIVACY_AGENT_TLS_CERT_FILE", "PRIVACY_AGENT_CLIENT_CERT"),
 		// 客户端私钥文件（mTLS 双向认证），默认空
-		AgentTLSKeyFile: getEnvWithFallback("PRIVACY_AGENT_TLS_KEY_FILE", "PRIVACY_AGENT_CLIENT_KEY"),
+		AgentTLSKeyFile: pkgconfig.EnvStringFirstSet("PRIVACY_AGENT_TLS_KEY_FILE", "PRIVACY_AGENT_CLIENT_KEY"),
 		// 校验服务端证书的 CA 文件，TLS 启用时必填
-		AgentTLSCAFile: getEnvWithFallback("PRIVACY_AGENT_TLS_CA_FILE", "PRIVACY_AGENT_CA_CERT"),
+		AgentTLSCAFile: pkgconfig.EnvStringFirstSet("PRIVACY_AGENT_TLS_CA_FILE", "PRIVACY_AGENT_CA_CERT"),
 		// 服务端证书主机名覆盖值，默认空（使用连接目标地址）
-		AgentTLSServerName: getEnvWithFallback("PRIVACY_AGENT_TLS_SERVER_NAME", "PRIVACY_AGENT_SERVER_NAME"),
+		AgentTLSServerName: pkgconfig.EnvStringFirstSet("PRIVACY_AGENT_TLS_SERVER_NAME", "PRIVACY_AGENT_SERVER_NAME"),
 		// 是否跳过服务端证书校验（仅测试用），默认关闭
 		AgentTLSInsecureSkipVerify: pkgconfig.EnvBool("PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY", false),
 		// 可选控制台 API Key，默认空（不鉴权）
@@ -366,38 +366,6 @@ func (c *Config) Validate() error {
 		GRPCEnabled:       c.ConsoleGRPCEnabled,
 		MTLSWhitelistFile: c.ConsoleMTLSWhitelistFile,
 	})
-}
-
-// getEnvWithFallback 尝试依次读取给定的环境变量列表，返回第一个非空值；全为空时返回空字符串。
-func getEnvWithFallback(names ...string) string {
-	for _, name := range names {
-		if v := os.Getenv(name); v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-// getEnvOptional reads an env var, distinguishing "unset" from "explicitly set to empty".
-// getEnvOptional 读取环境变量，区分"未设置"与"显式设为空字符串"。
-//
-// Key difference from pkgconfig.EnvString / 与 pkgconfig.EnvString 的核心区别：
-//   - EnvString: empty string equals unset, falls back to default
-//     EnvString：空字符串等同于未设置，回退到默认值
-//   - getEnvOptional: empty string is a valid value; only uses default when completely unset
-//     getEnvOptional：空字符串是合法值，仅在变量完全未设置时才使用默认值
-//
-// This enables "set empty to disable" semantics, e.g.:
-// 这样支持"设为空即禁用"的语义，例如：
-//
-//	PRIVACY_CONSOLE_STATIC_DIR=  → disable static file hosting / 禁用静态文件托管
-//	var not set                  → use default "../web/dist"   / 使用默认值 "../web/dist"
-func getEnvOptional(name, defaultValue string) string {
-	// os.LookupEnv 返回 (value, exists)，可区分"未设置"与"设为空"
-	if v, ok := os.LookupEnv(name); ok {
-		return v // 环境变量存在（即使是空字符串也返回）
-	}
-	return defaultValue // 环境变量完全未设置，使用默认值
 }
 
 // AgentAddress returns the full gRPC target address for the upstream agent.
