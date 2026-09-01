@@ -182,11 +182,22 @@ export const BenchmarkPanel: React.FC<BenchmarkPanelProps> = ({ apis }) => {
     const executeWorker = async () => {
       while (currentIndex < totalRequests && !abortControllerRef.current) {
         const reqIndex = ++currentIndex;
-        const reqStart = performance.now();
+        const reqUrl = `${'/api/lz'}/data-api/invoke`;
+        const perfMarkName = `bench-req-${reqIndex}-${Date.now()}`;
+        performance.mark(perfMarkName);
 
         try {
           const resp: DataApiSessionResponse = await api.invokeDataApi(targetApiId, batchLimit, true);
-          const reqDuration = performance.now() - reqStart;
+
+          // 使用 Resource Timing API 获取实际网络耗时（排除浏览器连接池排队时间）
+          let networkMs = performance.now() - performance.measure(perfMarkName, perfMarkName).startTime;
+          const entries = performance.getEntriesByName(reqUrl, 'resource');
+          if (entries.length > 0) {
+            const lastEntry = entries[entries.length - 1] as PerformanceResourceTiming;
+            networkMs = lastEntry.responseEnd - lastEntry.requestStart;
+            performance.clearResourceTimings();
+          }
+          const reqDuration = networkMs;
 
           completedCount++;
           latencies.push(reqDuration);
@@ -223,7 +234,15 @@ export const BenchmarkPanel: React.FC<BenchmarkPanelProps> = ({ apis }) => {
           uiDirty = true;
 
         } catch (err: any) {
-          const reqDuration = performance.now() - reqStart;
+          // 使用 Resource Timing API 获取实际网络耗时
+          let networkMs = performance.now() - performance.measure(perfMarkName, perfMarkName).startTime;
+          const entries = performance.getEntriesByName(reqUrl, 'resource');
+          if (entries.length > 0) {
+            const lastEntry = entries[entries.length - 1] as PerformanceResourceTiming;
+            networkMs = lastEntry.responseEnd - lastEntry.requestStart;
+            performance.clearResourceTimings();
+          }
+          const reqDuration = networkMs;
           completedCount++;
           latencies.push(reqDuration);
 
