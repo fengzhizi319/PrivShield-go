@@ -1,3 +1,22 @@
+// Package store 测试套件
+//
+// ==============================================================================
+// 【测试套件设计目标与覆盖范围】
+// 本测试文件验证审计哈希链的完整性计算与核验（SM3 / HMAC-SM3 / SHA-256 兼容）：
+//  1. 【无密钥纯 SM3 模式】：验证未设置存证密钥时使用纯 SM3 计算完整性摘要，
+//     与手动计算的 SM3 摘要完全一致，且核验返回 AuditHashSM3 标签；
+//  2. 【HMAC-SM3 密钥模式】：验证设置存证密钥后使用 HMAC-SM3 计算带版本前缀的摘要，
+//     与手动 HMACSM3Hex 计算结果完全一致，核验返回 AuditHashSM3HMAC 规范标签；
+//  3. 【密钥升级兼容】：验证无密钥写入的摘要在设置密钥后仍可核验（legacy 候选），
+//     但无密钥重算结果不再被视为规范态（IsCanonicalHashLabel 返回 false）；
+//  4. 【错误密钥拒绝】：验证使用错误密钥的伪造摘要与正确密钥摘要不同，且核验被拒绝；
+//  5. 【字段篡改检测】：验证修改 output_hash 后核验失败；
+//  6. 【历史 SHA-256 兼容】：验证迁移前本机时区 + SHA-256 写入的摘要仍可核验，
+//     但历史标签永不被视为规范态；
+//  7. 【空摘要拒绝】：验证空 stored hash 不通过核验；
+//  8. 【空白密钥裁剪】：验证纯空白密钥被裁剪为空，回退到无密钥 SM3 模式。
+// ==============================================================================
+
 package store
 
 import (
@@ -41,6 +60,9 @@ func withChainKey(t *testing.T, key string) {
 	SetAuditChainKey(key)
 }
 
+// TestAuditChainKeyTrimsWhitespace 验证纯空白密钥被裁剪为空，回退到无密钥 SM3 模式。
+// 执行逻辑：设置纯空白密钥（"  \t  "），断言 AuditChainKey() 返回空串，
+// 且算法回退到 AuditHashSM3。
 func TestAuditChainKeyTrimsWhitespace(t *testing.T) {
 	withChainKey(t, "")
 	SetAuditChainKey("  \t  ")
@@ -52,6 +74,10 @@ func TestAuditChainKeyTrimsWhitespace(t *testing.T) {
 	}
 }
 
+// TestUnkeyedChainUsesPlainSM3 验证无密钥模式下使用纯 SM3 计算完整性摘要。
+// 执行逻辑：清除密钥后手动拼接 payload 并计算 SM3 摘要，
+// 与 ComputeAuditIntegrityHash 结果比较，断言完全一致；
+// 核验返回 AuditHashSM3 标签，且 IsCanonicalHashLabel 返回 true。
 func TestUnkeyedChainUsesPlainSM3(t *testing.T) {
 	withChainKey(t, "")
 	payload := integrityPayload(testLogID, testPrevHash, testTimestamp, testAlgorithm, testInputHash, testOutputHash, testUser, testSecLevel, testParamsJSON, true)
@@ -71,6 +97,10 @@ func TestUnkeyedChainUsesPlainSM3(t *testing.T) {
 	}
 }
 
+// TestKeyedChainIsHMACSM3WithVersionPrefix 验证密钥模式下使用 HMAC-SM3 计算带版本前缀的摘要。
+// 执行逻辑：设置存证密钥后手动拼接 "sm3_hmac|<payload>" 并计算 HMAC-SM3，
+// 与 ComputeAuditIntegrityHash 结果比较，断言完全一致；
+// 核验返回 AuditHashSM3HMAC 规范标签。
 func TestKeyedChainIsHMACSM3WithVersionPrefix(t *testing.T) {
 	withChainKey(t, testHMACKey)
 	payload := integrityPayload(testLogID, testPrevHash, testTimestamp, testAlgorithm, testInputHash, testOutputHash, testUser, testSecLevel, testParamsJSON, true)
@@ -87,6 +117,9 @@ func TestKeyedChainIsHMACSM3WithVersionPrefix(t *testing.T) {
 	}
 }
 
+// TestKeyedChainRejectsUnkeyedRecomputation 验证密钥升级后的兼容性。
+// 执行逻辑：先在无密钥态计算摘要，然后设置密钥，断言无密钥摘要仍可核验（legacy 候选），
+// 但无密钥 SM3 标签不再被视为规范态（IsCanonicalHashLabel 返回 false）。
 func TestKeyedChainRejectsUnkeyedRecomputation(t *testing.T) {
 	withChainKey(t, "")
 	unkeyed := computeTest()
@@ -101,6 +134,9 @@ func TestKeyedChainRejectsUnkeyedRecomputation(t *testing.T) {
 	}
 }
 
+// TestKeyedChainRejectsWrongKeyForgery 验证使用错误密钥的伪造摘要被拒绝。
+// 执行逻辑：在密钥模式下计算正确摘要，然后用错误密钥伪造摘要，
+// 断言伪造摘要与正确摘要不同，且核验被拒绝。
 func TestKeyedChainRejectsWrongKeyForgery(t *testing.T) {
 	withChainKey(t, testHMACKey)
 	stored := computeTest()
@@ -114,6 +150,9 @@ func TestKeyedChainRejectsWrongKeyForgery(t *testing.T) {
 	}
 }
 
+// TestKeyedChainDetectsFieldTampering 验证修改字段后核验失败。
+// 执行逻辑：在密钥模式下计算正确摘要并验证通过，
+// 然后将 output_hash 篡改为 "attacker-controlled-output"，断言核验失败。
 func TestKeyedChainDetectsFieldTampering(t *testing.T) {
 	withChainKey(t, testHMACKey)
 	stored := computeTest()
@@ -125,6 +164,10 @@ func TestKeyedChainDetectsFieldTampering(t *testing.T) {
 	}
 }
 
+// TestLegacyLocalTimezoneSHA256StillVerifies 验证迁移前本机时区 + SHA-256 写入的摘要仍可核验。
+// 执行逻辑：使用 CST 时区 + SHA-256 手动计算历史格式摘要，
+// 调用 VerifyAuditIntegrityHash 断言核验成功且标签为 "sha256:legacy"，
+// 但历史标签永不被视为规范态（IsCanonicalHashLabel 返回 false）。
 func TestLegacyLocalTimezoneSHA256StillVerifies(t *testing.T) {
 	withChainKey(t, "")
 	// 迁移前写入方使用本机时区 + SHA-256，核验端必须在无密钥态下兼容。
@@ -142,6 +185,8 @@ func TestLegacyLocalTimezoneSHA256StillVerifies(t *testing.T) {
 	}
 }
 
+// TestVerifyRejectsEmptyStoredHash 验证空 stored hash 不通过核验。
+// 执行逻辑：在密钥模式下调用 verifyTest("")，断言 ok=false 且 label 为空。
 func TestVerifyRejectsEmptyStoredHash(t *testing.T) {
 	withChainKey(t, testHMACKey)
 	if ok, label := verifyTest(""); ok || label != "" {

@@ -37,10 +37,10 @@ services:
       - no-new-privileges:true
     environment:
       # Go 引擎基础配置
-      # 注：不设置 PRIVACY_GRPC_HOST —— Go Agent 的 gRPC 监听地址在代码内固定为 0.0.0.0
-      # （engine-go/cmd/privshield-agent/main.go），该变量无读取点（P2-1 幽灵变量）。
+      # PRIVACY_GRPC_HOST：config.go 读取点（默认 127.0.0.1），容器编排必须显式置 0.0.0.0 否则外部不可达。
       PRIVACY_REST_HOST: "0.0.0.0"
       PRIVACY_REST_PORT: "8079"
+      PRIVACY_GRPC_HOST: "0.0.0.0"
       PRIVACY_GRPC_PORT: "50051"
       PRIVACY_LOG_LEVEL: "${PRIVACY_LOG_LEVEL:-INFO}"
       PRIVACY_SERVICE_NAME: "PrivShield-Go"

@@ -89,6 +89,8 @@ spec:
               value: "0.0.0.0"
             - name: PRIVACY_REST_PORT
               value: "{{ .Values.service.restPort }}"
+            # PRIVACY_GRPC_HOST：Go 引擎 config.go 与 Python 引擎均读取，默认 127.0.0.1；
+            # 容器编排必须显式置 0.0.0.0，否则 gRPC 仅环回可达、外部容器无法调用。
             - name: PRIVACY_GRPC_HOST
               value: "0.0.0.0"
             - name: PRIVACY_GRPC_PORT

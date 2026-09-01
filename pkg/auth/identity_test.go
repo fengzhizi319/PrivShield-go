@@ -1,7 +1,26 @@
+// Package auth 测试套件
+//
+// ==============================================================================
+// 【测试套件设计目标与覆盖范围】
+// 本测试文件验证 Package auth（身份认证与权限映射）的核心功能：
+//  1. 【Identity.HasPermission 权限判定】：验证通配符 "*"、精确匹配、多 Scope 列表、空 Scope 等场景下的权限校验逻辑；
+//  2. 【PermissionForRESTPath 路径→权限映射】：验证所有 REST 端点（健康探活、隐私原语、Agent 处理、运维诊断、pprof）
+//     到权限字符串的映射覆盖完整性，未知路径返回空串（fail-closed）；
+//  3. 【PermissionForGRPCMethod 方法→权限映射】：验证 gRPC 全限定方法名到权限字符串的映射，未知方法返回空串；
+//  4. 【IsHealthPathOrMethod 探活识别】：验证 REST 探活路径（/health、/livez、/readyz）与 gRPC Health 方法的统一识别。
+// ==============================================================================
+
 package auth
 
 import "testing"
 
+// ──────────────────────────────────────────────
+// 1. Identity 权限判定测试
+// ──────────────────────────────────────────────
+
+// TestIdentity_HasPermission 验证 Identity 结构体的 Scope 权限判定逻辑。
+// 执行逻辑：构造不同 Scope 组合的 Identity（通配符、精确匹配、无匹配、空 Scope、多 Scope），
+// 断言 HasPermission 对目标权限的判定结果与预期一致。
 func TestIdentity_HasPermission(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -24,6 +43,14 @@ func TestIdentity_HasPermission(t *testing.T) {
 	}
 }
 
+// ──────────────────────────────────────────────
+// 2. REST 路径→权限映射测试
+// ──────────────────────────────────────────────
+
+// TestPermissionForRESTPath 验证 REST 路径到权限字符串的映射覆盖所有端点类型。
+// 执行逻辑：遍历健康探活（/health、/livez、/readyz）、隐私原语（mask/dp/kano/qol/budget）、
+// Agent 处理、运维诊断、pprof 管理端及未知路径，断言每条路径映射到正确的权限字符串，
+// 未知路径返回空串（fail-closed 安全语义）。
 func TestPermissionForRESTPath(t *testing.T) {
 	tests := []struct {
 		path string
@@ -54,6 +81,13 @@ func TestPermissionForRESTPath(t *testing.T) {
 	}
 }
 
+// ──────────────────────────────────────────────
+// 3. gRPC 方法→权限映射测试
+// ──────────────────────────────────────────────
+
+// TestPermissionForGRPCMethod 验证 gRPC 全限定方法名到权限字符串的映射。
+// 执行逻辑：覆盖 Mask、DPCount、Health 等已知方法及 Unknown 未知方法，
+// 断言已知方法映射到正确权限，未知方法返回空串。
 func TestPermissionForGRPCMethod(t *testing.T) {
 	tests := []struct {
 		method string
@@ -73,6 +107,13 @@ func TestPermissionForGRPCMethod(t *testing.T) {
 	}
 }
 
+// ──────────────────────────────────────────────
+// 4. 健康探活路径/方法识别测试
+// ──────────────────────────────────────────────
+
+// TestIsHealthPathOrMethod 验证健康探活路径与 gRPC Health 方法的统一识别。
+// 执行逻辑：覆盖 /health、/livez、/readyz、/readyz/llm 等 REST 探活路径，
+// 以及 gRPC Health 方法名，断言返回 true；业务路径（/v1/privacy/mask）返回 false。
 func TestIsHealthPathOrMethod(t *testing.T) {
 	tests := []struct {
 		path string

@@ -1,3 +1,18 @@
+// Package config 测试套件
+//
+// ==============================================================================
+// 【测试套件设计目标与覆盖范围】
+// 本测试文件验证安全启动前置校验（fail-closed 策略）的核心功能：
+//  1. 【ValidateFailClosed 安全校验】：验证多种危险配置组合被正确拒绝：
+//     - 远程绑定（0.0.0.0）无 API Key 被拒绝（ErrAPIKeyRequired）；
+//     - RequireTLS=true 但未配置 TLS 被拒绝（ErrTLSRequired）；
+//     - gRPC 启用 TLS 但无 mTLS CN 白名单被拒绝（ErrMTLSWhitelistRequired）；
+//     - 远程绑定缺少加密密钥被拒绝（ErrEncryptionKeyRequired）；
+//     - 本地环回绑定无 API Key 允许通过（开发友好）。
+//  2. 【IsLoopbackHost 环回识别】：验证空串、localhost、127.x.x.x、::1 等环回地址识别为 true，
+//     0.0.0.0、::、10.x.x.x 等非环回地址识别为 false。
+// ==============================================================================
+
 package config
 
 import (

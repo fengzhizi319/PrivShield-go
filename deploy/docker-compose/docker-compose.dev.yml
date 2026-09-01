@@ -87,7 +87,6 @@ services:
       PRIVACY_LLM_API_KEY: "EMPTY"
     volumes:
       - ./privacy-profile.yaml:/etc/PrivShield/privacy-profile.yaml:ro
-      - ../../engine:/app/engine:ro              # 挂载 Python 源码目录供快速热调试
       - ../../rules:/app/rules:ro                # 挂载 YAML 分类规则
       - budget-db-dev:/data/budget
       - audit-logs-dev:/var/log/privacy

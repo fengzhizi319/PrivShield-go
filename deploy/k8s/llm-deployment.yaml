@@ -85,10 +85,10 @@ spec:
               readOnly: true
       volumes:
         - name: model-weights
-          # 单机测试：hostPath 指向宿主机 .models 目录（请根据实际路径修改）；
+          # 单机测试：hostPath 指向宿主机模型目录（请根据实际节点路径修改为绝对路径）；
           # 生产环境请改用 PVC（将模型 COPY 进 PVC 后挂载）
           hostPath:
-            path: ./.models
+            path: /opt/models/PrivShield
             type: Directory
       # GPU 节点调度：如集群使用节点标签，取消下面注释
       # nodeSelector:

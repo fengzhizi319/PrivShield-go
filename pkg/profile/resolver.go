@@ -30,8 +30,8 @@ type PrivacyProfile struct {
 // Resolver 隐私参数解析器，线程安全地管理当前生效的 PrivacyProfile。
 // 支持运行时通过 LoadFromYAML 热重载配置，读路径使用 RLock 保证高并发。
 type Resolver struct {
-	mu      sync.RWMutex     // 读写锁：保护 profile 指针的并发安全
-	profile *PrivacyProfile  // 当前生效的隐私参数配置
+	mu      sync.RWMutex    // 读写锁：保护 profile 指针的并发安全
+	profile *PrivacyProfile // 当前生效的隐私参数配置
 }
 
 // NewResolver 创建参数解析器。
@@ -117,10 +117,10 @@ func (r *Resolver) Recommend() map[string]interface{} {
 // RecommendDataParams 根据输入样本数据特征自动计算并推荐 DP 与 K-Anonymity 最佳隐私参数。
 //
 // 执行逻辑：
-// 1. 【DP 参数推荐】：对数值型样本计算 5%~95% 分位数作为自适应截断区间 [clip_lower, clip_upper]，
-//    并根据样本量 n 动态调整 delta = min(1e-5, 1/(10n²))；
-// 2. 【K-Anonymity 参数推荐】：按行数 n/10 估算 k 值，限制在 [2, 10] 安全区间内；
-// 3. 将推荐结果保存至命名空间级个性化参数，后续 Resolve 调用自动生效。
+//  1. 【DP 参数推荐】：对数值型样本计算 5%~95% 分位数作为自适应截断区间 [clip_lower, clip_upper]，
+//     并根据样本量 n 动态调整 delta = min(1e-5, 1/(10n²))；
+//  2. 【K-Anonymity 参数推荐】：按行数 n/10 估算 k 值，限制在 [2, 10] 安全区间内；
+//  3. 将推荐结果保存至命名空间级个性化参数，后续 Resolve 调用自动生效。
 func (r *Resolver) RecommendDataParams(namespace string, values []float64, rows []map[string]interface{}, qiCols []string) map[string]interface{} {
 	recommendations := make(map[string]interface{})
 

@@ -11,7 +11,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"hash"
-	"math/rand"
 	"regexp"
 	"strconv"
 	"strings"
@@ -243,9 +242,15 @@ func MaskEmail(email string) string {
 
 // MaskDefault 默认脱敏策略：保留前 prefix 位与后 suffix 位，中间用 * 填充。
 // 与 Python mask_default 对齐。
+// 当值长度不足以覆盖 prefix+suffix 时，至少保留首字符并用 * 填充其余位，
+// 防止短敏感值（如 "Bob"、"12"）原样泄露。
 func MaskDefault(value string, prefix, suffix int) string {
-	if len(value) <= prefix+suffix {
+	if len(value) == 0 {
 		return value
+	}
+	if len(value) <= prefix+suffix {
+		// 短值保护：保留首字符，其余全部掩码
+		return string(value[0]) + strings.Repeat("*", len(value)-1)
 	}
 	stars := strings.Repeat("*", len(value)-prefix-suffix)
 	return value[:prefix] + stars + value[len(value)-suffix:]
@@ -453,24 +458,24 @@ func GuessFieldType(fieldName string) FieldType {
 }
 
 // boundedContains 边界感知关键字匹配。
-// 仅当关键字两侧为非字母边界时返回 true。
+// 仅当关键字两侧为非字母边界时返回 true（大小写字母均视为词内字符）。
 func boundedContains(s, keyword string) bool {
 	idx := strings.Index(s, keyword)
 	if idx < 0 {
 		return false
 	}
-	// 检查左边界
+	// 检查左边界：任何字母（无论大小写）均视为词内字符
 	if idx > 0 {
 		prev := rune(s[idx-1])
-		if unicode.IsLetter(prev) && unicode.IsLower(prev) {
+		if unicode.IsLetter(prev) {
 			return false
 		}
 	}
-	// 检查右边界
+	// 检查右边界：任何字母（无论大小写）均视为词内字符
 	end := idx + len(keyword)
 	if end < len(s) {
 		next := rune(s[end])
-		if unicode.IsLetter(next) && unicode.IsLower(next) {
+		if unicode.IsLetter(next) {
 			return false
 		}
 	}
@@ -535,6 +540,3 @@ func MaskRecord(record map[string]string) map[string]string {
 // 随机工具
 // ──────────────────────────────────────────────
 
-func init() {
-	rand.Seed(time.Now().UnixNano())
-}

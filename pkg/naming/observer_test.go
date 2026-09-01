@@ -1,3 +1,20 @@
+// Package naming 测试套件
+//
+// ==============================================================================
+// 【测试套件设计目标与覆盖范围】
+// 本测试文件验证 naming 可观测入口（Observer 模式）的事件上报与防重复计数：
+//  1. 【别名使用记录】：验证 Normalize 对别名输入（yibao、中文别名、api2_kangyang）
+//     通过 Observer 上报 alias 事件，包含正确的别名、规范名和目标类型；
+//  2. 【规范名输入无事件】：验证直接输入规范名（DSYibao）不产生 alias 事件；
+//  3. 【失败原因上报】：验证空输入、未知输入、保留字输入分别上报 ReasonEmpty、
+//     ReasonUnknown、ReasonReserved 错误事件；
+//  4. 【CheckWritable 规范化检查】：验证 CheckWritable 对别名/未注册/保留字的拒绝，
+//     以及上报 ReasonFormatInvalid 等不同的错误原因；
+//  5. 【防重复计数】：验证 ResolveInbound 对保留字输入仅上报一次错误事件，
+//     防止 Normalize 和 checkWritableEntry 双重计数；
+//  6. 【Observer 可选性】：验证未注册 Observer 时所有功能正常工作、不 panic。
+// ==============================================================================
+
 package naming
 
 import (

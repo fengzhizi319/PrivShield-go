@@ -172,9 +172,17 @@ func TestAlignPython_MaskRecordIntegration(t *testing.T) {
 
 func TestAlignPython_TruncateConsistency(t *testing.T) {
 	// Python: truncate("abcdef", 3) == "abc***"
-	// Python: truncate("ab", 3) == "ab"
-	if got := masking.MaskDefault("ab", 3, 3); got != "ab" {
-		t.Errorf("MaskDefault(ab, 3, 3) = %q, want %q (short passthrough)", got, "ab")
+	// MaskDefault 短值保护：len("ab")=2 <= prefix+suffix=6，保留首字符+掩码
+	if got := masking.MaskDefault("ab", 3, 3); got != "a*" {
+		t.Errorf("MaskDefault(ab, 3, 3) = %q, want %q (short value protection)", got, "a*")
+	}
+	// 空值原样返回
+	if got := masking.MaskDefault("", 3, 3); got != "" {
+		t.Errorf("MaskDefault(empty, 3, 3) = %q, want empty", got)
+	}
+	// 单字符：保留首字符
+	if got := masking.MaskDefault("x", 3, 3); got != "x" {
+		t.Errorf("MaskDefault(x, 3, 3) = %q, want %q", got, "x")
 	}
 }
 

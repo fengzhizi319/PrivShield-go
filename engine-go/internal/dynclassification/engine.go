@@ -164,7 +164,9 @@ func (ac *ACAutomaton) Search(text string) []string {
 		if node.children[ch] != nil {
 			node = node.children[ch]
 		}
-		if node.isEnd {
+		// 检查 output 而非 isEnd：Build() 阶段已将 fail 链上游的输出合并到
+		// node.output，仅检查 isEnd 会遗漏通过 fail 指针继承的模式匹配。
+		if len(node.output) > 0 {
 			matches = append(matches, node.output...)
 		}
 	}
