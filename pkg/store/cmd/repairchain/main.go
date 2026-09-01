@@ -50,7 +50,7 @@ import (
 
 	_ "modernc.org/sqlite" // Pure-Go SQLite driver / 纯 Go SQLite 驱动
 
-	"github.com/fengzhizi319/PrivShield/pkg/store"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store"
 )
 
 // 存证链扫描支持的模式。

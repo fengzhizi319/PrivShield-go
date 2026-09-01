@@ -4,7 +4,7 @@ package observability
 import (
 	"context"
 
-	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 )
 
 // Tracer 抽象追踪器接口（已下沉至 pkg/observability）。

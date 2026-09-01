@@ -6,7 +6,7 @@ Thank you for your interest in contributing! This guide will help you get starte
 
 ```bash
 # Clone and enter the repo
-git clone https://github.com/fengzhizi319/PrivShield.git
+git clone https://github.com/fengzhizi319/PrivShield-go.git
 cd PrivShield
 
 # Create virtual environment

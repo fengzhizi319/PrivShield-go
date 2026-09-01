@@ -7,7 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	pkgmiddleware "github.com/fengzhizi319/PrivShield/pkg/middleware"
+	pkgmiddleware "github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 )
 
 func init() {

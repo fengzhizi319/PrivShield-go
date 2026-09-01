@@ -11,7 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/fengzhizi319/PrivShield/privacy-go-sdk/medical"
+	"github.com/fengzhizi319/PrivShield-go/privacy-go-sdk/medical"
 )
 
 func main() {

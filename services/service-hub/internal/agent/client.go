@@ -15,10 +15,10 @@ import (
 	"encoding/json"
 	"strings"
 
-	pkgagent "github.com/fengzhizi319/PrivShield/pkg/agent"
-	"github.com/fengzhizi319/PrivShield/pkg/metrics"
-	"github.com/fengzhizi319/PrivShield/pkg/naming"
-	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/config"
+	pkgagent "github.com/fengzhizi319/PrivShield-go/pkg/agent"
+	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
+	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
+	"github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/config"
 )
 
 // Client wraps the shared agent client with service-hub-specific endpoints.

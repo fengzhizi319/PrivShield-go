@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/pkg/store"
-	"github.com/fengzhizi319/PrivShield/pkg/store/sqlite"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store/sqlite"
 )
 
 const testKey = "managed-evidence-chain-key-0123456789"

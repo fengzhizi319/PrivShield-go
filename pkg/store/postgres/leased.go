@@ -26,7 +26,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/pkg/store"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store"
 )
 
 // ClaimNext atomically claims the next pending task for the given owner.

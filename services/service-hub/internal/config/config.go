@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 )
 
 // ErrAuditEndpointRequired 表示中枢未配置任何 audit-log 存证端点，出域动作将无法留痕（P0-6）。

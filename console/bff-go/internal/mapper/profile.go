@@ -10,7 +10,7 @@ import (
 
 	// pb：由 proto 生成的 gRPC 客户端与消息类型
 	// pb: generated gRPC client and message types from proto
-	pb "github.com/fengzhizi319/PrivShield/console/bff-go/proto"
+	pb "github.com/fengzhizi319/PrivShield-go/console/bff-go/proto"
 )
 
 // ---------------------------------------------------------------------------

@@ -15,8 +15,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/fengzhizi319/PrivShield/engine-go/internal/security"
-	"github.com/fengzhizi319/PrivShield/engine-go/internal/service"
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/security"
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/service"
 )
 
 func init() {

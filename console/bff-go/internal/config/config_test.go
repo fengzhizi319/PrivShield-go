@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 )
 
 // TestEnvBool 验证 pkgconfig.EnvBool 布尔环境变量解析逻辑：

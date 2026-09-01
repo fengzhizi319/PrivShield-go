@@ -49,7 +49,7 @@ import (
 
 	// pb：由 proto/privacy.proto 生成的 gRPC 代码，
 	// 包含所有 RPC 方法定义（PrivacyServiceClient）和消息类型（各种 Request/Response）
-	pb "github.com/fengzhizi319/PrivShield/console/bff-go/proto"
+	pb "github.com/fengzhizi319/PrivShield-go/console/bff-go/proto"
 )
 
 // Handler defines the function signature for a single REST path to gRPC call mapping.

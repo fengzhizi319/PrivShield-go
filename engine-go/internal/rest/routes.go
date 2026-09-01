@@ -22,13 +22,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/fengzhizi319/PrivShield/engine-go/internal/dynclassification"
-	"github.com/fengzhizi319/PrivShield/engine-go/internal/security"
-	"github.com/fengzhizi319/PrivShield/engine-go/internal/service"
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
-	"github.com/fengzhizi319/PrivShield/pkg/middleware"
-	"github.com/fengzhizi319/PrivShield/pkg/naming"
-	"github.com/fengzhizi319/PrivShield/privacy-go-sdk/kano"
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/dynclassification"
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/security"
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/service"
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
+	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
+	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
+	"github.com/fengzhizi319/PrivShield-go/privacy-go-sdk/kano"
 )
 
 var isServerReady atomic.Bool

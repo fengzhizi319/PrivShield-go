@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/engine-go/internal/observability"
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/observability"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"

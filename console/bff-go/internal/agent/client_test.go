@@ -15,7 +15,7 @@ import (
 
 	"google.golang.org/grpc/metadata"
 
-	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/console/bff-go/internal/config"
 )
 
 // testCerts 保存测试用证书/密钥的临时文件路径。

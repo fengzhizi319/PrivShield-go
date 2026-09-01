@@ -15,10 +15,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/clients"
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/config"
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/models"
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/runner"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/clients"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/models"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/runner"
 )
 
 // setupTestRouter 创建测试用的 Handler 实例。

@@ -32,15 +32,15 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/catalog"
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/clients"
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/config"
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/models"
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/runner"
-	"github.com/fengzhizi319/PrivShield/pkg/metrics"
-	"github.com/fengzhizi319/PrivShield/pkg/middleware"
-	"github.com/fengzhizi319/PrivShield/pkg/naming"
-	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/catalog"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/clients"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/models"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/runner"
+	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
+	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
+	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 )
 
 // Handler 持有所有 HTTP 处理器的依赖。

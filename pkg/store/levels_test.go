@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fengzhizi319/PrivShield/pkg/naming"
+	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
 )
 
 // TestBuildAuditRecommendationsUsesTaxonomyLabels 断言报表建议文案里的等级中文名

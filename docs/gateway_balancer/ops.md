@@ -785,7 +785,7 @@ groups:
         annotations:
           summary: "网关可用后端节点降为 0"
           description: "PrivShield 网关可用健康节点数为 0 已超过 1 分钟，所有外部请求将失败！"
-          runbook_url: "https://github.com/fengzhizi319/PrivShield/docs/gateway_balancer/ops.md#故障-1503-no-healthy-backend-nodes-available--grpc-unavailable"
+          runbook_url: "https://github.com/fengzhizi319/PrivShield-go/docs/gateway_balancer/ops.md#故障-1503-no-healthy-backend-nodes-available--grpc-unavailable"
 
       # 2. 网关可用节点容量降级 (警告)
       - alert: GatewayDegradedCapacity

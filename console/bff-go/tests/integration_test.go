@@ -30,12 +30,12 @@ import (
 	"google.golang.org/grpc"                      // gRPC 客户端连接 / gRPC client connection
 	"google.golang.org/grpc/credentials/insecure" // 无 TLS 传输凭证（仅测试）/ no-TLS transport creds (test only)
 
-	"github.com/fengzhizi319/PrivShield/pkg/metrics" // Prometheus 指标收集器 / Prometheus metrics collector
+	"github.com/fengzhizi319/PrivShield-go/pkg/metrics" // Prometheus 指标收集器 / Prometheus metrics collector
 
-	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/agent"    // gRPC 客户端封装 / gRPC client wrapper
-	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/config"   // 配置结构体 / config struct
-	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/handlers" // HTTP 路由处理器 / HTTP route handlers
-	pb "github.com/fengzhizi319/PrivShield/console/bff-go/proto"          // Protobuf 生成代码 / generated protobuf code
+	"github.com/fengzhizi319/PrivShield-go/console/bff-go/internal/agent"    // gRPC 客户端封装 / gRPC client wrapper
+	"github.com/fengzhizi319/PrivShield-go/console/bff-go/internal/config"   // 配置结构体 / config struct
+	"github.com/fengzhizi319/PrivShield-go/console/bff-go/internal/handlers" // HTTP 路由处理器 / HTTP route handlers
+	pb "github.com/fengzhizi319/PrivShield-go/console/bff-go/proto"          // Protobuf 生成代码 / generated protobuf code
 )
 
 // realAgentAddr 集成测试目标 agent 的 gRPC 地址（与默认配置一致）。

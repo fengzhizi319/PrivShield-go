@@ -1,6 +1,6 @@
 package security
 
-import pkgauth "github.com/fengzhizi319/PrivShield/pkg/auth"
+import pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 
 // Identity 表示已认证的调用者身份。
 type Identity = pkgauth.Identity

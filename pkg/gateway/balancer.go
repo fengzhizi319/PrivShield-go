@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/pkg/circuitbreaker"
+	"github.com/fengzhizi319/PrivShield-go/pkg/circuitbreaker"
 )
 
 // ──────────────────────────────────────────────
@@ -26,11 +26,11 @@ import (
 type BackendNode struct {
 	Address       string
 	Weight        int
-	currentWeight atomic.Int32           // Nginx SWRR 当前权重（原子操作）
-	InFlight      atomic.Int64           // 当前在途请求数（原子操作，与 EWMA 锁分离）
-	EWMA          float64                // 指数移动加权平均延迟
+	currentWeight atomic.Int32            // Nginx SWRR 当前权重（原子操作）
+	InFlight      atomic.Int64            // 当前在途请求数（原子操作，与 EWMA 锁分离）
+	EWMA          float64                 // 指数移动加权平均延迟
 	CB            *circuitbreaker.Breaker // 熔断器
-	eWMAMu        sync.Mutex             // 仅保护 EWMA 字段
+	eWMAMu        sync.Mutex              // 仅保护 EWMA 字段
 
 	// 反向代理实例与节点生命周期绑定：随节点惰性创建、随节点回收即释放。
 	// 取代早期「全局 sync.Map 缓存 + 后台 TTL 清理 goroutine」方案——

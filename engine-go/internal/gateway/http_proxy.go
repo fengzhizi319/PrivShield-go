@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/engine-go/internal/observability"
-	"github.com/fengzhizi319/PrivShield/pkg/middleware"
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/observability"
+	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 	"github.com/gin-gonic/gin"
 )
 

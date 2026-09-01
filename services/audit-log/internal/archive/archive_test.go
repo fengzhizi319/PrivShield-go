@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/pkg/crypto"
-	"github.com/fengzhizi319/PrivShield/pkg/store"
-	"github.com/fengzhizi319/PrivShield/pkg/store/memory"
+	"github.com/fengzhizi319/PrivShield-go/pkg/crypto"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store/memory"
 )
 
 const testKey = "unit-test-archive-key"

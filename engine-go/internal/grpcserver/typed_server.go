@@ -13,8 +13,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	pb "github.com/fengzhizi319/PrivShield/engine-go/internal/grpcserver/proto"
-	"github.com/fengzhizi319/PrivShield/engine-go/internal/service"
+	pb "github.com/fengzhizi319/PrivShield-go/engine-go/internal/grpcserver/proto"
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/service"
 )
 
 // TypedServer 类型安全的 gRPC 隐私服务端

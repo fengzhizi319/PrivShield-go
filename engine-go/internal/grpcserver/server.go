@@ -16,10 +16,10 @@ import (
 	_ "google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/status"
 
-	pb "github.com/fengzhizi319/PrivShield/engine-go/internal/grpcserver/proto"
-	"github.com/fengzhizi319/PrivShield/engine-go/internal/observability"
-	"github.com/fengzhizi319/PrivShield/engine-go/internal/service"
-	pkggrpcserver "github.com/fengzhizi319/PrivShield/pkg/grpcserver"
+	pb "github.com/fengzhizi319/PrivShield-go/engine-go/internal/grpcserver/proto"
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/observability"
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/service"
+	pkggrpcserver "github.com/fengzhizi319/PrivShield-go/pkg/grpcserver"
 )
 
 // Server gRPC 隐私服务服务端

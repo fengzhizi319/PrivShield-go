@@ -6,7 +6,7 @@
 
 ## 1. Go SDK Package API
 
-包路径：`github.com/fengzhizi319/PrivShield/privacy-go-sdk/medical`
+包路径：`github.com/fengzhizi319/PrivShield-go/privacy-go-sdk/medical`
 
 ### 1.1 核心数据结构
 
@@ -50,7 +50,7 @@ type MedicalPipelineSummary struct {
 
 ## 2. DICOM 医学影像清洗 API
 
-包路径：`github.com/fengzhizi319/PrivShield/engine-go/internal/imageredact`
+包路径：`github.com/fengzhizi319/PrivShield-go/engine-go/internal/imageredact`
 
 ```go
 // 清洗 DICOM 文件元数据并输出至目标路径

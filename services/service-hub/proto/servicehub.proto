@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package servicehub;
 
-option go_package = "github.com/fengzhizi319/PrivShield/services/service-hub/proto";
+option go_package = "github.com/fengzhizi319/PrivShield-go/services/service-hub/proto";
 
 // ServiceHubService 数据服务调度中枢 gRPC 服务
 // ServiceHubService is the gRPC service interface for the data scheduling hub.

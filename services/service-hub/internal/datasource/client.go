@@ -38,11 +38,11 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
-	"github.com/fengzhizi319/PrivShield/pkg/circuitbreaker"
-	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
-	dspb "github.com/fengzhizi319/PrivShield/services/datasource-mgr/proto"
-	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/pkg/circuitbreaker"
+	naming "github.com/fengzhizi319/PrivShield-go/pkg/naming"
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
+	dspb "github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/proto"
+	"github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/config"
 )
 
 // Client handles HTTP/REST and gRPC communication with datasource-mgr.

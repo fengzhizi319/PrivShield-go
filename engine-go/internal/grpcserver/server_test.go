@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	pb "github.com/fengzhizi319/PrivShield/engine-go/internal/grpcserver/proto"
-	"github.com/fengzhizi319/PrivShield/engine-go/internal/service"
+	pb "github.com/fengzhizi319/PrivShield-go/engine-go/internal/grpcserver/proto"
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/service"
 )
 
 // newTestServer 创建测试用 gRPC 服务端

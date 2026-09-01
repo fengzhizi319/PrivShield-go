@@ -11,7 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/fengzhizi319/PrivShield/pkg/store"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store"
 )
 
 // TestPipelineAuditStageRecordsEvidence proves Gate G-05 acceptance: after one egress

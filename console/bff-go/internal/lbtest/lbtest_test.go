@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/models"
+	"github.com/fengzhizi319/PrivShield-go/console/bff-go/internal/models"
 )
 
 // startFakeBackend 启动一个返回指定状态码的假后端，并统计命中数。

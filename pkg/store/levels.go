@@ -14,7 +14,7 @@ package store
 import (
 	"fmt"
 
-	"github.com/fengzhizi319/PrivShield/pkg/naming"
+	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
 )
 
 // 审计报告建议的触发阈值：低于以下门槛不提相应建议。

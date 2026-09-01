@@ -47,15 +47,15 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 
-	pkggrpcserver "github.com/fengzhizi319/PrivShield/pkg/grpcserver"
-	"github.com/fengzhizi319/PrivShield/pkg/metrics"
-	"github.com/fengzhizi319/PrivShield/pkg/naming"
-	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
-	"github.com/fengzhizi319/PrivShield/pkg/tlsutil"
-	"github.com/fengzhizi319/PrivShield/services/datasource-mgr/internal/config"
-	"github.com/fengzhizi319/PrivShield/services/datasource-mgr/internal/grpcserver"
-	"github.com/fengzhizi319/PrivShield/services/datasource-mgr/internal/handlers"
-	pb "github.com/fengzhizi319/PrivShield/services/datasource-mgr/proto"
+	pkggrpcserver "github.com/fengzhizi319/PrivShield-go/pkg/grpcserver"
+	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
+	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
+	"github.com/fengzhizi319/PrivShield-go/pkg/tlsutil"
+	"github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/internal/grpcserver"
+	"github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/internal/handlers"
+	pb "github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/proto"
 )
 
 func main() {

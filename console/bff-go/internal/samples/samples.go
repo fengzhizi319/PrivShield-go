@@ -16,7 +16,7 @@ import (
 
 	// models：与前端共享的 EndpointSample 结构定义
 	// models: shared EndpointSample struct definition with frontend
-	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/models"
+	"github.com/fengzhizi319/PrivShield-go/console/bff-go/internal/models"
 )
 
 // raw is a small helper that converts a string literal to json.RawMessage.

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/config"
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/models"
-	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
-	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/models"
+	naming "github.com/fengzhizi319/PrivShield-go/pkg/naming"
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 )
 
 // TestD01_GetDatasourcesPathAndFallback 验证 D-01 修复：

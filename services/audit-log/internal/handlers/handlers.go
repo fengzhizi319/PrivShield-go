@@ -13,17 +13,17 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/fengzhizi319/PrivShield/pkg/crypto"
-	"github.com/fengzhizi319/PrivShield/pkg/metrics"
-	"github.com/fengzhizi319/PrivShield/pkg/middleware"
-	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
-	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
-	"github.com/fengzhizi319/PrivShield/pkg/store"
-	"github.com/fengzhizi319/PrivShield/pkg/store/flusher"
-	"github.com/fengzhizi319/PrivShield/pkg/validation"
+	"github.com/fengzhizi319/PrivShield-go/pkg/crypto"
+	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
+	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
+	naming "github.com/fengzhizi319/PrivShield-go/pkg/naming"
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store/flusher"
+	"github.com/fengzhizi319/PrivShield-go/pkg/validation"
 
-	"github.com/fengzhizi319/PrivShield/services/audit-log/internal/agent"
-	"github.com/fengzhizi319/PrivShield/services/audit-log/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/services/audit-log/internal/agent"
+	"github.com/fengzhizi319/PrivShield-go/services/audit-log/internal/config"
 )
 
 const moduleVia = "audit-log"

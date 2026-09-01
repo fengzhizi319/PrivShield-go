@@ -38,7 +38,7 @@ keywords:
   - differential-privacy
 
 # home: 项目主页 URL
-home: https://github.com/fengzhizi319/PrivShield
+home: https://github.com/fengzhizi319/PrivShield-go
 
 # maintainers: Chart 维护者列表（helm search 展示联系方式）
 maintainers:

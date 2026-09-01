@@ -20,8 +20,8 @@ import (
 	"strings"
 	"sync/atomic"
 
-	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
-	"github.com/fengzhizi319/PrivShield/services/datasource-mgr/internal/models"
+	naming "github.com/fengzhizi319/PrivShield-go/pkg/naming"
+	"github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/internal/models"
 )
 
 // Pre-defined mock data sources

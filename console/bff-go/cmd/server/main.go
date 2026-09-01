@@ -30,15 +30,15 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
-	"github.com/fengzhizi319/PrivShield/pkg/metrics"
-	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
-	"github.com/fengzhizi319/PrivShield/pkg/tlsutil"
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
+	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
+	"github.com/fengzhizi319/PrivShield-go/pkg/tlsutil"
 
-	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/agent"
-	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/config"
-	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/grpcserver"
-	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/handlers"
+	"github.com/fengzhizi319/PrivShield-go/console/bff-go/internal/agent"
+	"github.com/fengzhizi319/PrivShield-go/console/bff-go/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/console/bff-go/internal/grpcserver"
+	"github.com/fengzhizi319/PrivShield-go/console/bff-go/internal/handlers"
 )
 
 // main 是程序入口函数，按以下步骤顺序执行：

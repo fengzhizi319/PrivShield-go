@@ -18,7 +18,7 @@ import (
 	"strconv"
 	"strings"
 
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 )
 
 // Runtime 是引擎入口的「监听面 + 安全开关」快照。

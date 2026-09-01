@@ -24,7 +24,7 @@
 `pkg/crypto` 提供符合国密标准（GM/T 0004-2012 / GM/T 0002-2012）的密码学原语与动态信封加密实现。
 
 ```go
-import "github.com/fengzhizi319/PrivShield/pkg/crypto"
+import "github.com/fengzhizi319/PrivShield-go/pkg/crypto"
 ```
 
 ### 1.1 函数列表
@@ -173,7 +173,7 @@ type LeasedTaskStore interface {
 ### 2.3 高并发微批缓冲刷盘器 (`pkg/store/flusher`)
 
 ```go
-import "github.com/fengzhizi319/PrivShield/pkg/store/flusher"
+import "github.com/fengzhizi319/PrivShield-go/pkg/store/flusher"
 
 // 创建缓冲微批包装器
 cfg := flusher.Config{
@@ -226,7 +226,7 @@ res, err := bufferedStore.VerifyChain(1000)
 ### 3.2 中间件挂载与辅助函数
 
 ```go
-import "github.com/fengzhizi319/PrivShield/pkg/middleware"
+import "github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 
 router := gin.New()
 
@@ -255,7 +255,7 @@ middleware.RespondWithSuccess(c, http.StatusOK, resultData)
 `pkg/agent.Client` 用于向 Python 隐私计算核心引擎下发任务，内置熔断保护、超时与链路追踪透传。
 
 ```go
-import "github.com/fengzhizi319/PrivShield/pkg/agent"
+import "github.com/fengzhizi319/PrivShield-go/pkg/agent"
 
 client := agent.New(&config.Config{
     AgentRESTHost: "127.0.0.1",
@@ -278,7 +278,7 @@ err := client.Post(ctx, "/v1/privacy/mask", reqPayload, &resp)
 ### 5.1 Prometheus 指标收集器使用
 
 ```go
-import "github.com/fengzhizi319/PrivShield/pkg/metrics"
+import "github.com/fengzhizi319/PrivShield-go/pkg/metrics"
 
 // 初始化模块指标收集器
 mc := metrics.NewCollector("audit-log")
@@ -299,7 +299,7 @@ mc.RecordAgentRequest("/v1/privacy/mask", "success", 15*time.Millisecond)
 ### 6.1 服务端与客户端 mTLS 证书构造
 
 ```go
-import "github.com/fengzhizi319/PrivShield/pkg/tlsutil"
+import "github.com/fengzhizi319/PrivShield-go/pkg/tlsutil"
 
 // 构造服务端 TLS 1.3 双向认证配置
 tlsCfg, err := tlsutil.LoadServerTLSConfig(
@@ -336,7 +336,7 @@ scopes := wm.GetScopes("service-hub-client")
 ## 七、环境配置与结构化日志 (`pkg/config`)
 
 ```go
-import "github.com/fengzhizi319/PrivShield/pkg/config"
+import "github.com/fengzhizi319/PrivShield-go/pkg/config"
 
 // 类型安全的环境变量读取
 port := config.GetEnvInt("PORT", 8084)
@@ -355,8 +355,8 @@ logger.Info("service starting", "port", port, "db_path", dbPath)
 
 ```go
 import (
-    "github.com/fengzhizi319/PrivShield/pkg/naming"
-    "github.com/fengzhizi319/PrivShield/pkg/validation"
+    "github.com/fengzhizi319/PrivShield-go/pkg/naming"
+    "github.com/fengzhizi319/PrivShield-go/pkg/validation"
 )
 
 // 1. 字段名称安全清洗与规范化

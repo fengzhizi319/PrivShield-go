@@ -1,9 +1,9 @@
-module github.com/fengzhizi319/PrivShield/console/app-lz/bff-go
+module github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go
 
 go 1.25.0
 
 require (
-	github.com/fengzhizi319/PrivShield/pkg v0.0.0
+	github.com/fengzhizi319/PrivShield-go/pkg v0.0.0
 	github.com/gin-gonic/gin v1.12.0
 )
 
@@ -48,4 +48,4 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-replace github.com/fengzhizi319/PrivShield/pkg => ../../../pkg
+replace github.com/fengzhizi319/PrivShield-go/pkg => ../../../pkg

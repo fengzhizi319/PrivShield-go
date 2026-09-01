@@ -41,7 +41,7 @@ import (
 	"testing"
 	"time"
 
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 )
 
 // Real service URLs (override via env vars)

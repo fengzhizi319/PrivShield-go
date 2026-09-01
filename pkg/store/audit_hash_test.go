@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/pkg/crypto"
+	"github.com/fengzhizi319/PrivShield-go/pkg/crypto"
 )
 
 // 测试用固定要素，避免各用例重复拼参数。

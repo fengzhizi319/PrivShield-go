@@ -19,9 +19,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/clients"
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/models"
-	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/clients"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/models"
+	naming "github.com/fengzhizi319/PrivShield-go/pkg/naming"
 )
 
 // TestRunner 执行 E2E 测试套件。

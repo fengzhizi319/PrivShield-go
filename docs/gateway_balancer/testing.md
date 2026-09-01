@@ -73,7 +73,7 @@ CGO_ENABLED=0 go test -v ./engine-go/internal/gateway/...
 === RUN   TestBuildBackendTLSConfig
 --- PASS: TestBuildBackendTLSConfig (0.00s)
 PASS
-ok  	github.com/fengzhizi319/PrivShield/engine-go/internal/gateway	0.045s
+ok  	github.com/fengzhizi319/PrivShield-go/engine-go/internal/gateway	0.045s
 ```
 
 ---
@@ -88,13 +88,13 @@ CGO_ENABLED=0 go test -bench=. -benchmem ./engine-go/internal/gateway/...
 ```text
 goos: darwin
 goarch: arm64
-pkg: github.com/fengzhizi319/PrivShield/engine-go/internal/gateway
+pkg: github.com/fengzhizi319/PrivShield-go/engine-go/internal/gateway
 BenchmarkSelectP2C-12             28,450,112       42.1 ns/op        0 B/op       0 allocs/op
 BenchmarkSelectSWRR-12            19,231,048       62.4 ns/op        0 B/op       0 allocs/op
 BenchmarkSelectLeastConn-12       31,102,845       38.6 ns/op        0 B/op       0 allocs/op
 BenchmarkBufferPool-12            84,120,400       14.2 ns/op        0 B/op       0 allocs/op
 PASS
-ok  	github.com/fengzhizi319/PrivShield/engine-go/internal/gateway	4.821s
+ok  	github.com/fengzhizi319/PrivShield-go/engine-go/internal/gateway	4.821s
 ```
 
 **性能指标解读**：

@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/pkg/store"
-	"github.com/fengzhizi319/PrivShield/pkg/store/sqlite"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store/sqlite"
 )
 
 // verifyTestChainKey 是模拟「局方托管存证 HMAC 密钥」的测试密钥。

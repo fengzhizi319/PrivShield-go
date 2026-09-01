@@ -41,9 +41,9 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
-	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
-	"github.com/fengzhizi319/PrivShield/services/datasource-mgr/internal/config"
-	pb "github.com/fengzhizi319/PrivShield/services/datasource-mgr/proto"
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
+	"github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/internal/config"
+	pb "github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/proto"
 )
 
 // setupTestGRPCServer starts an in-process ephemeral gRPC server for testing.

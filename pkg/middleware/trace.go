@@ -20,7 +20,7 @@ package middleware
 import (
 	"github.com/gin-gonic/gin"
 
-	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 )
 
 // 常量别名：保持历史调用方兼容，实际取值来自 pkg/observability。

@@ -35,7 +35,7 @@ import (
 	"google.golang.org/grpc"
 	// credentials：基于 TLS 配置的传输凭证，用于加密与双向认证
 
-	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 	"google.golang.org/grpc/credentials"
 	// insecure：非安全传输凭证，用于本地开发环境（无 TLS）
 	"google.golang.org/grpc/credentials/insecure"
@@ -45,9 +45,9 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	// config：加载代理后端配置（agent 地址、API Key、TLS 等）
-	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/console/bff-go/internal/config"
 	// pb：由 proto/privacy.proto 生成的 gRPC 客户端代码，包含所有 RPC 方法定义
-	pb "github.com/fengzhizi319/PrivShield/console/bff-go/proto"
+	pb "github.com/fengzhizi319/PrivShield-go/console/bff-go/proto"
 )
 
 // Client wraps the gRPC connection and the generated PrivacyService client.
@@ -57,7 +57,7 @@ import (
 type Client struct {
 	// conn：底层 gRPC 连接，程序退出时需调用 Close() 释放
 	conn *grpc.ClientConn
-	// client：由 proto 生成的类型安全客户端，提供 Mask/DPCount/ClassifyTable 等所有 RPC 方法
+	// client：由 proto 生成的类型安全客户端，提供 Mask/DPCount/DynClassify 等所有 RPC 方法
 	client pb.PrivacyServiceClient
 	// cfg：代理后端配置，主要用于获取 API Key 以附加认证元数据
 	cfg *config.Config
@@ -258,7 +258,7 @@ func (c *Client) Close() error {
 // handler 通过该方法获取 client 后，可直接调用：
 //   - client.Mask(ctx, &pb.MaskRequest{...})
 //   - client.DPCount(ctx, &pb.DPRequest{...})
-//   - client.ClassifyTable(ctx, &pb.ClassifyTableRequest{...})
+//   - client.DynClassify(ctx, &pb.DynClassificationRequest{...})
 //   - etc. all RPC methods defined in proto
 func (c *Client) Raw() pb.PrivacyServiceClient {
 	return c.client

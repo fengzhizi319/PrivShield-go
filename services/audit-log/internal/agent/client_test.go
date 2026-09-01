@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/fengzhizi319/PrivShield/services/audit-log/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/services/audit-log/internal/config"
 )
 
 func TestClientHealth(t *testing.T) {

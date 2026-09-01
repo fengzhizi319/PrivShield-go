@@ -38,9 +38,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/fengzhizi319/PrivShield/engine-go/internal/dynclassification"
-	"github.com/fengzhizi319/PrivShield/pkg/naming"
-	"github.com/fengzhizi319/PrivShield/privacy-go-sdk/medical"
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/dynclassification"
+	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
+	"github.com/fengzhizi319/PrivShield-go/privacy-go-sdk/medical"
 	"gopkg.in/yaml.v3"
 )
 

@@ -28,9 +28,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/pkg/store"
-	"github.com/fengzhizi319/PrivShield/pkg/store/flusher"
-	"github.com/fengzhizi319/PrivShield/pkg/store/memory"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store/flusher"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store/memory"
 )
 
 // silentLogger 返回测试专用的静默 Logger，避免在正常测试输出中打印噪音日志。

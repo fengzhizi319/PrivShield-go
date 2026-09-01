@@ -4,7 +4,7 @@ package privacy.local;
 
 option java_multiple_files = true;
 option java_package = "com.github.fengzhizi319.privshield.grpc";
-option go_package = "github.com/fengzhizi319/PrivShield/proto";
+option go_package = "github.com/fengzhizi319/PrivShield-go/proto";
 
 service PrivacyService {
   rpc Mask (MaskRequest) returns (MaskResponse);

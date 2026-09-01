@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/config"
 )
 
 // TestAgentClient tests the agent Client methods against a mock HTTP server.

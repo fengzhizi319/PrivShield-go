@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package auditlog;
 
-option go_package = "github.com/fengzhizi319/PrivShield/services/audit-log/proto";
+option go_package = "github.com/fengzhizi319/PrivShield-go/services/audit-log/proto";
 
 // AuditLogService 审计日志与不可篡改存证 gRPC 服务
 // AuditLogService is the gRPC service interface for audit logging and tamper-proof evidence verification.

@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/catalog"
-	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/catalog"
+	naming "github.com/fengzhizi319/PrivShield-go/pkg/naming"
 )
 
 // §6.3 统一错误码。

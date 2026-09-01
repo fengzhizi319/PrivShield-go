@@ -24,7 +24,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	pkgauth "github.com/fengzhizi319/PrivShield/pkg/auth"
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 )
 
 // Auth returns an optional API Key authentication middleware.
@@ -184,4 +184,3 @@ func isReadOnlyEndpoint(method, path string, readOnly []ReadOnlyEndpoint) bool {
 	}
 	return false
 }
-

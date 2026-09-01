@@ -15,10 +15,10 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 
-	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/agent"
-	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/config"
-	pb "github.com/fengzhizi319/PrivShield/console/bff-go/proto"
-	"github.com/fengzhizi319/PrivShield/pkg/tlsutil"
+	"github.com/fengzhizi319/PrivShield-go/console/bff-go/internal/agent"
+	"github.com/fengzhizi319/PrivShield-go/console/bff-go/internal/config"
+	pb "github.com/fengzhizi319/PrivShield-go/console/bff-go/proto"
+	"github.com/fengzhizi319/PrivShield-go/pkg/tlsutil"
 )
 
 // Server implements pb.PrivacyServiceServer as a high-performance gRPC gateway proxy.
@@ -213,27 +213,6 @@ func (s *Server) ObfuscateQueryBatch(ctx context.Context, req *pb.ObfuscateQuery
 		return nil, status.Error(codes.Unavailable, "agent client not initialized")
 	}
 	return s.client.Raw().ObfuscateQueryBatch(s.outgoingCtx(ctx), req)
-}
-
-func (s *Server) ClassifyField(ctx context.Context, req *pb.ClassifyFieldRequest) (*pb.ClassifyFieldResponse, error) {
-	if s.client == nil {
-		return nil, status.Error(codes.Unavailable, "agent client not initialized")
-	}
-	return s.client.Raw().ClassifyField(s.outgoingCtx(ctx), req)
-}
-
-func (s *Server) ClassifyRecord(ctx context.Context, req *pb.ClassifyRecordRequest) (*pb.ClassifyRecordResponse, error) {
-	if s.client == nil {
-		return nil, status.Error(codes.Unavailable, "agent client not initialized")
-	}
-	return s.client.Raw().ClassifyRecord(s.outgoingCtx(ctx), req)
-}
-
-func (s *Server) ClassifyTable(ctx context.Context, req *pb.ClassifyTableRequest) (*pb.ClassifyTableResponse, error) {
-	if s.client == nil {
-		return nil, status.Error(codes.Unavailable, "agent client not initialized")
-	}
-	return s.client.Raw().ClassifyTable(s.outgoingCtx(ctx), req)
 }
 
 func (s *Server) Health(ctx context.Context, req *pb.HealthRequest) (*pb.HealthResponse, error) {

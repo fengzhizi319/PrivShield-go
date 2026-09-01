@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 )
 
 // TestConfigDefaults verifies that Load() correctly falls back to default settings when no env vars are set.

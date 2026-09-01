@@ -29,7 +29,7 @@ import (
 	"os"
 	"syscall"
 
-	pkgagent "github.com/fengzhizi319/PrivShield/pkg/agent"
+	pkgagent "github.com/fengzhizi319/PrivShield-go/pkg/agent"
 )
 
 // Bounded class vocabulary / 有界失败分类枚举。取值同时用于指标聚合与排障检索，

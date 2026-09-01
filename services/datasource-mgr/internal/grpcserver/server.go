@@ -32,12 +32,12 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 
-	"github.com/fengzhizi319/PrivShield/services/datasource-mgr/internal/config"
-	"github.com/fengzhizi319/PrivShield/services/datasource-mgr/internal/handlers"
-	pb "github.com/fengzhizi319/PrivShield/services/datasource-mgr/proto"
-	"github.com/fengzhizi319/PrivShield/pkg/tlsutil"
+	"github.com/fengzhizi319/PrivShield-go/pkg/tlsutil"
+	"github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/internal/handlers"
+	pb "github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/proto"
 
-	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
+	naming "github.com/fengzhizi319/PrivShield-go/pkg/naming"
 )
 
 // moduleVia 是在所有 gRPC 响应体中携带的服务节点标识，用于全链路追踪与调试来源识别。
@@ -309,6 +309,7 @@ func toDataQueryResponse(id, name string, total, limit, offset int, rows []map[s
 //  2. 客户端证书验证 (ClientAuth)：支持 RequireAndVerifyClientCert 模式，强制调用方提供合法的客户端证书；
 //  3. 公钥指纹固定 (Public Key Pinning)：通过 VerifyPeerCertificate 回调，精确比对客户端公钥 (RSA Modulus + Exponent)，
 //     即便第三方 CA 发生密钥泄露或签发了伪造证书，只要公钥不匹配即被拒绝连接（零信任防御）。
+//
 // BuildServerTLSConfig constructs a *tls.Config supporting mTLS and public key pinning for both HTTP/HTTPS and gRPC.
 // BuildServerTLSConfig 根据运行配置构造支持 mTLS 双向身份验证和公钥指纹绑定的标准 tls.Config，可同时服务于 HTTPS REST 和 gRPC。
 func BuildServerTLSConfig(cfg *config.Config) (*tls.Config, error) {

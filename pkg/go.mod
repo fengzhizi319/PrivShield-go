@@ -1,4 +1,4 @@
-module github.com/fengzhizi319/PrivShield/pkg
+module github.com/fengzhizi319/PrivShield-go/pkg
 
 go 1.25.0
 

@@ -54,7 +54,7 @@ PrivShield/ (Repo Root)
 #### 痛点二：Monorepo 多语言与依赖管理边界模糊
 - Python 核心包位于根目录 `PrivShield/`，而 Go 模块（共 5 个：`pkg`, `backend-go`, `service-hub`, `datasource-mgr`, `audit-log`）以及 Node.js 前端全部深埋在 `console/` 目录下。
 - `go.work` 仅在 `console/` 目录下生效，当开发者在仓库根目录使用 Go 工具链或 IDE 打开项目时，无法直接解析 Go 工作区。
-- Go 模块内部的 `replace github.com/fengzhizi319/PrivShield/console/pkg => ../pkg` 相对路径脆弱，无法进行规范的根级包分发。
+- Go 模块内部的 `replace github.com/fengzhizi319/PrivShield-go/console/pkg => ../pkg` 相对路径脆弱，无法进行规范的根级包分发。
 
 #### 痛点三：控制台（Console）职责失焦
 - 控制台在现代云原生架构中应定位为**表现层（UI）与 BFF（Backend For Frontend）接入层**。
@@ -196,7 +196,7 @@ PrivShield/                                   # 项目根目录
 │   ├── store/                                # SQLite / 内存通用持久化与数据模型
 │   ├── validation/                           # 请求安全校验与唯一 ID 生成器
 │   ├── metrics/                              # Prometheus 监控指标注册器
-│   ├── go.mod                                # `github.com/fengzhizi319/PrivShield/pkg`
+│   ├── go.mod                                # `github.com/fengzhizi319/PrivShield-go/pkg`
 │   └── go.sum
 │
 ├── proto/                                    # 统一 gRPC / Protobuf 接口契约定义
@@ -288,16 +288,16 @@ use (
 
 #### 2. `go.mod` 模块命名与依赖更新
 将所有模块内的 Module 统一升级为规范前缀：
-- `pkg/go.mod`：`module github.com/fengzhizi319/PrivShield/pkg`
-- `services/service-hub/go.mod`：`module github.com/fengzhizi319/PrivShield/services/service-hub`
-- `services/datasource-mgr/go.mod`：`module github.com/fengzhizi319/PrivShield/services/datasource-mgr`
-- `services/audit-log/go.mod`：`module github.com/fengzhizi319/PrivShield/services/audit-log`
-- `console/bff-go/go.mod`：`module github.com/fengzhizi319/PrivShield/console/bff-go`
+- `pkg/go.mod`：`module github.com/fengzhizi319/PrivShield-go/pkg`
+- `services/service-hub/go.mod`：`module github.com/fengzhizi319/PrivShield-go/services/service-hub`
+- `services/datasource-mgr/go.mod`：`module github.com/fengzhizi319/PrivShield-go/services/datasource-mgr`
+- `services/audit-log/go.mod`：`module github.com/fengzhizi319/PrivShield-go/services/audit-log`
+- `console/bff-go/go.mod`：`module github.com/fengzhizi319/PrivShield-go/console/bff-go`
 
 在开发过渡期，模块内 `replace` 指令更新为：
 ```go
 // in services/service-hub/go.mod
-replace github.com/fengzhizi319/PrivShield/pkg => ../../pkg
+replace github.com/fengzhizi319/PrivShield-go/pkg => ../../pkg
 ```
 
 ### 5.2 Python 核心引擎改造 (`engine/`)

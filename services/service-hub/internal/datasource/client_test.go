@@ -14,9 +14,9 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/fengzhizi319/PrivShield/pkg/circuitbreaker"
-	dspb "github.com/fengzhizi319/PrivShield/services/datasource-mgr/proto"
-	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/pkg/circuitbreaker"
+	dspb "github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/proto"
+	"github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/config"
 )
 
 // mockDSPBServer implements the generated DataSourceManagerServiceServer interface for gRPC testing.

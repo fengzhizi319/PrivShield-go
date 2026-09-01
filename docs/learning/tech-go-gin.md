@@ -28,7 +28,7 @@ Gin is the most popular HTTP web framework in the Go ecosystem, known for high p
 项目根目录/
 ├── go.work                     # Go 工作区定义 (包含 pkg, console/bff-go, services/*)
 │
-├── pkg/                        # 共享基础公共库 (github.com/fengzhizi319/PrivShield/pkg)
+├── pkg/                        # 共享基础公共库 (github.com/fengzhizi319/PrivShield-go/pkg)
 │   ├── store/                  # 存储接口 (TaskStore, DataSourceStore, AuditStore)
 │   │   ├── memory/             # 内存安全存储实现 (RWMutex, 切片边界保护)
 │   │   └── sqlite/             # SQLite 纯 Go WAL 持久化驱动 (modernc.org/sqlite)

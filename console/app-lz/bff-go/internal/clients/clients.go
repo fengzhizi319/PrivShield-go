@@ -28,11 +28,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/catalog"
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/config"
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/models"
-	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
-	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/catalog"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/models"
+	naming "github.com/fengzhizi319/PrivShield-go/pkg/naming"
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 )
 
 // 数据来源标记（api_rename_design.md §9.3 不变式 4）：降级/兜底数据必须携带显式来源。

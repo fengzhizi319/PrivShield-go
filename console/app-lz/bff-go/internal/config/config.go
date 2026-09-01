@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"os"
 
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 )
 
 // Config 保存 App-LZ BFF 的全部运行时配置项。

@@ -26,8 +26,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	pkgauth "github.com/fengzhizi319/PrivShield/pkg/auth"
-	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 )
 
 func init() {

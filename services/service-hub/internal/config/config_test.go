@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 )
 
 // TestLoadDefaults tests that Load() populates expected default values when no environment variables are set.

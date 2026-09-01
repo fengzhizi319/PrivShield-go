@@ -20,7 +20,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 )
 
 // CORS returns a CORS middleware that allows requests from the specified origins.

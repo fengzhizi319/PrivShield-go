@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/pkg/tlsutil"
+	"github.com/fengzhizi319/PrivShield-go/pkg/tlsutil"
 )
 
 // testCerts holds paths to test certificate files.

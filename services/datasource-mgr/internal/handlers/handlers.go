@@ -16,12 +16,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/fengzhizi319/PrivShield/pkg/metrics"
-	"github.com/fengzhizi319/PrivShield/pkg/middleware"
-	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
-	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
-	"github.com/fengzhizi319/PrivShield/services/datasource-mgr/internal/config"
-	"github.com/fengzhizi319/PrivShield/services/datasource-mgr/internal/models"
+	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
+	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
+	naming "github.com/fengzhizi319/PrivShield-go/pkg/naming"
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
+	"github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/internal/models"
 )
 
 // moduleVia 是响应体中的服务标识常量，用于全链路追踪定位请求处理节点。

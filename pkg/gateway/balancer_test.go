@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/pkg/circuitbreaker"
+	"github.com/fengzhizi319/PrivShield-go/pkg/circuitbreaker"
 )
 
 // ──────────────────────────────────────────────

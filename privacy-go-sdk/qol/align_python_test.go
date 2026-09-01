@@ -7,7 +7,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/fengzhizi319/PrivShield/privacy-go-sdk/qol"
+	"github.com/fengzhizi319/PrivShield-go/privacy-go-sdk/qol"
 )
 
 // ──────────────────────────────────────────────

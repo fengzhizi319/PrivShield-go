@@ -2,7 +2,7 @@
 
 > **数联天下 · 数盾 (PrivShield)** —— 企业级数据隐私计算、多原语脱敏与三层动态分类分级治理中台 (Data Privacy & Security Governance Sidecar & Platform)，全面落地 **「三层四柱五御六类」数据安全与隐私治理架构**，提供 REST + gRPC 双协议高可用服务与政务级全链路流通调度中台。
 >
-> 🌐 **GitHub Repository**: [https://github.com/fengzhizi319/PrivShield](https://github.com/fengzhizi319/PrivShield)
+> 🌐 **GitHub Repository**: [https://github.com/fengzhizi319/PrivShield-go](https://github.com/fengzhizi319/PrivShield-go)
 
 ---
 

@@ -34,7 +34,7 @@ import (
 	"strings"
 	"time"
 
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 )
 
 // Config holds all runtime configuration for the Go gRPC proxy server.

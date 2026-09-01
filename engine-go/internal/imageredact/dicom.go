@@ -18,7 +18,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/fengzhizi319/PrivShield/privacy-go-sdk/medical"
+	"github.com/fengzhizi319/PrivShield-go/privacy-go-sdk/medical"
 )
 
 // DICOM 魔数与偏移

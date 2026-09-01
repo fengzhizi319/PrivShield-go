@@ -9,7 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 )
 
 // IdentityContextKey 用于在 gin.Context 中存储认证身份。

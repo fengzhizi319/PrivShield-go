@@ -22,8 +22,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/pkg/store"
-	"github.com/fengzhizi319/PrivShield/pkg/store/sqlite"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store/sqlite"
 )
 
 // openTestDB 在临时目录创建临时 SQLite 数据库文件供单测使用。

@@ -204,7 +204,7 @@ import (
     "time"
 
     "github.com/gin-gonic/gin"
-    pkgmiddleware "github.com/fengzhizi319/PrivShield/pkg/middleware"
+    pkgmiddleware "github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 )
 
 func RequestLogger() gin.HandlerFunc {
@@ -466,7 +466,7 @@ func (n *BackendNode) DecrementInFlight()
 ```go
 package gateway
 
-import pgateway "github.com/fengzhizi319/PrivShield/pkg/gateway"
+import pgateway "github.com/fengzhizi319/PrivShield-go/pkg/gateway"
 
 type LoadBalancer = pgateway.LoadBalancer
 type BackendNode = pgateway.BackendNode
@@ -593,7 +593,7 @@ func Validate(primitive string, params map[string]interface{}) error
 ```go
 package profile
 
-import pprofile "github.com/fengzhizi319/PrivShield/pkg/profile"
+import pprofile "github.com/fengzhizi319/PrivShield-go/pkg/profile"
 
 type PrimitiveParams = pprofile.PrimitiveParams
 type PrivacyProfile = pprofile.PrivacyProfile
@@ -677,7 +677,7 @@ logger := slog.Default()
 `services/audit-log` 与 `services/datasource-mgr` 的 `cmd/server/main.go` 中 gRPC server 构建统一改为：
 
 ```go
-import pkggrpcserver "github.com/fengzhizi319/PrivShield/pkg/grpcserver"
+import pkggrpcserver "github.com/fengzhizi319/PrivShield-go/pkg/grpcserver"
 
 grpcServer := pkggrpcserver.New(cfg.GRPCAddress(), grpcServerOpts...)
 grpcServer.RegisterService(&pb.AuditLogService_ServiceDesc, serviceImpl)

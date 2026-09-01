@@ -30,9 +30,9 @@ import (
 	"testing"
 	"time"
 
-	pkcrypto "github.com/fengzhizi319/PrivShield/pkg/crypto"
-	"github.com/fengzhizi319/PrivShield/pkg/store/postgres"
-	"github.com/fengzhizi319/PrivShield/pkg/store/sqlite"
+	pkcrypto "github.com/fengzhizi319/PrivShield-go/pkg/crypto"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store/postgres"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store/sqlite"
 )
 
 func getTestDSN(t *testing.T) string {

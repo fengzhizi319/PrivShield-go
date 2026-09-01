@@ -27,7 +27,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/pkg/naming"
+	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
 
 	_ "modernc.org/sqlite" // SQLite 纯 Go 驱动注册
 )

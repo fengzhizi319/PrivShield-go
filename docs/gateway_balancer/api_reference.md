@@ -6,7 +6,7 @@
 
 ## 1. Go Package API
 
-包路径：`github.com/fengzhizi319/PrivShield/engine-go/internal/gateway`
+包路径：`github.com/fengzhizi319/PrivShield-go/engine-go/internal/gateway`
 
 ### 1.1 `LoadBalancer` 负载均衡器
 

@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/fengzhizi319/PrivShield/pkg/naming"
+	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
 )
 
 // ──────────────────────────────────────────────

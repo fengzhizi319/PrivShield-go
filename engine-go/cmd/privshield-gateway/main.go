@@ -30,10 +30,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	engineconfig "github.com/fengzhizi319/PrivShield/engine-go/internal/config"
-	"github.com/fengzhizi319/PrivShield/engine-go/internal/gateway"
-	"github.com/fengzhizi319/PrivShield/engine-go/internal/observability"
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
+	engineconfig "github.com/fengzhizi319/PrivShield-go/engine-go/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/gateway"
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/observability"
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 )
 
 var (

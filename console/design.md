@@ -364,8 +364,8 @@ go.work（仓库根目录）
 各业务模块通过 `go.mod` 中的 `replace` 指令引用本地 `../../pkg`：
 
 ```go
-require github.com/fengzhizi319/PrivShield/pkg v0.0.0
-replace github.com/fengzhizi319/PrivShield/pkg => ../../pkg
+require github.com/fengzhizi319/PrivShield-go/pkg v0.0.0
+replace github.com/fengzhizi319/PrivShield-go/pkg => ../../pkg
 ```
 
 ### 核心组件详解

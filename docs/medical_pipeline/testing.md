@@ -53,7 +53,7 @@ CGO_ENABLED=0 go test -v ./engine-go/internal/imageredact/...
 === RUN   TestRedactICD10
 --- PASS: TestRedactICD10 (0.00s)
 PASS
-ok  	github.com/fengzhizi319/PrivShield/privacy-go-sdk/medical	0.024s
+ok  	github.com/fengzhizi319/PrivShield-go/privacy-go-sdk/medical	0.024s
 ```
 
 ### 3.2 运行性能基准测试

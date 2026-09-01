@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/clients"
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/config"
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/models"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/clients"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/models"
 )
 
 func TestGetAvailableSuites(t *testing.T) {

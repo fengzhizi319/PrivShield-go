@@ -1,7 +1,7 @@
 package profile
 
 import (
-	pprofile "github.com/fengzhizi319/PrivShield/pkg/profile"
+	pprofile "github.com/fengzhizi319/PrivShield-go/pkg/profile"
 )
 
 // PrimitiveParams 隐私原语默认参数。

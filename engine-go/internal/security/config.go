@@ -5,8 +5,8 @@ import (
 	"strings"
 	"sync"
 
-	pkgauth "github.com/fengzhizi319/PrivShield/pkg/auth"
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 )
 
 // KeyConfig 表示单个 API Key 配置。

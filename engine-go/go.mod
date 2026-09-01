@@ -1,10 +1,10 @@
-module github.com/fengzhizi319/PrivShield/engine-go
+module github.com/fengzhizi319/PrivShield-go/engine-go
 
 go 1.25.0
 
 require (
-	github.com/fengzhizi319/PrivShield/pkg v0.0.0
-	github.com/fengzhizi319/PrivShield/privacy-go-sdk v0.0.0
+	github.com/fengzhizi319/PrivShield-go/pkg v0.0.0
+	github.com/fengzhizi319/PrivShield-go/privacy-go-sdk v0.0.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/prometheus/client_golang v1.22.0
 	google.golang.org/grpc v1.83.1
@@ -50,6 +50,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 )
 
-replace github.com/fengzhizi319/PrivShield/privacy-go-sdk => ../privacy-go-sdk
+replace github.com/fengzhizi319/PrivShield-go/privacy-go-sdk => ../privacy-go-sdk
 
-replace github.com/fengzhizi319/PrivShield/pkg => ../pkg
+replace github.com/fengzhizi319/PrivShield-go/pkg => ../pkg

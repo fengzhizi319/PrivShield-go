@@ -53,7 +53,7 @@ import (
 
 	// models：与前端共享的 JSON 数据结构（LbTestRequest/LbTestResponse）
 	// models: shared JSON data structures with frontend (LbTestRequest/LbTestResponse)
-	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/models"
+	"github.com/fengzhizi319/PrivShield-go/console/bff-go/internal/models"
 )
 
 // Supported dispatch strategy constants.

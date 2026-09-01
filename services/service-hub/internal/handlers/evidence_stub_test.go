@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/fengzhizi319/PrivShield/pkg/validation"
+	"github.com/fengzhizi319/PrivShield-go/pkg/validation"
 )
 
 // ─────────────────────────────────────────────────────────────

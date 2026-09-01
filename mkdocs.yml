@@ -1,6 +1,6 @@
 site_name: PrivShield
 site_description: Privacy primitives and data classification sidecar
-repo_url: https://github.com/fengzhizi319/PrivShield
+repo_url: https://github.com/fengzhizi319/PrivShield-go
 edit_uri: edit/main/docs/
 
 theme:

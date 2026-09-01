@@ -6,8 +6,8 @@
 package agent
 
 import (
-	pkgagent "github.com/fengzhizi319/PrivShield/pkg/agent"
-	"github.com/fengzhizi319/PrivShield/services/audit-log/internal/config"
+	pkgagent "github.com/fengzhizi319/PrivShield-go/pkg/agent"
+	"github.com/fengzhizi319/PrivShield-go/services/audit-log/internal/config"
 )
 
 // Client wraps the shared agent client with audit-log-specific endpoints.

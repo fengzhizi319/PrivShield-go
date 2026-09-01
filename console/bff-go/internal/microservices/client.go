@@ -20,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/config"
-	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
+	"github.com/fengzhizi319/PrivShield-go/console/bff-go/internal/config"
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 )
 
 // ClientPool forwards HTTP requests to the Go microservices with unified

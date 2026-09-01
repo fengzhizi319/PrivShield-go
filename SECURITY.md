@@ -23,7 +23,7 @@
 ### 2.1 报告渠道
 
 1. **GitHub 私密安全通告 (推荐)**：
-   - 访问仓库漏洞报告入口：**[Security → Advisories → Report a vulnerability](https://github.com/fengzhizi319/PrivShield/security/advisories/new)**；
+   - 访问仓库漏洞报告入口：**[Security → Advisories → Report a vulnerability](https://github.com/fengzhizi319/PrivShield-go/security/advisories/new)**；
    - 按照模板填写私密漏洞报告表单。
 2. **邮件与私密通告**：
    - 将漏洞详细复现步骤与影响分析通过 GitHub Security Advisories 私密渠道发送给仓库维护团队。

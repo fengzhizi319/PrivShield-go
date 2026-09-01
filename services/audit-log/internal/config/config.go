@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 )
 
 // minEvidenceRetentionDays 是存证物理删除允许的最短留存天数（三年），

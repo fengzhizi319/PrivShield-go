@@ -41,8 +41,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "modernc.org/sqlite"
 
-	pkcrypto "github.com/fengzhizi319/PrivShield/pkg/crypto"
-	"github.com/fengzhizi319/PrivShield/pkg/store/postgres"
+	pkcrypto "github.com/fengzhizi319/PrivShield-go/pkg/crypto"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store/postgres"
 )
 
 var (

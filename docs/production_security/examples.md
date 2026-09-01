@@ -169,7 +169,7 @@ import (
     "fmt"
     "time"
 
-    "github.com/fengzhizi319/PrivShield/pkg/agent"
+    "github.com/fengzhizi319/PrivShield-go/pkg/agent"
 )
 
 func main() {

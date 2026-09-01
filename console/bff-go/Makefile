@@ -17,7 +17,7 @@
 
 # Go 模块路径（与 go.mod 中的 module 一致）
 # Go module path (consistent with module in go.mod)
-MODULE := github.com/fengzhizi319/PrivShield/console/bff-go
+MODULE := github.com/fengzhizi319/PrivShield-go/console/bff-go
 
 # protoc 编译器路径（使用 /tmp 下的预装版本，避免污染系统环境）
 # protoc compiler path (uses pre-installed version in /tmp to avoid polluting system env)

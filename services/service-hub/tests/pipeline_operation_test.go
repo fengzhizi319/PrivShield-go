@@ -20,16 +20,16 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/fengzhizi319/PrivShield/pkg/metrics"
-	"github.com/fengzhizi319/PrivShield/pkg/store"
-	"github.com/fengzhizi319/PrivShield/pkg/store/memory"
+	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store/memory"
 
-	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/agent"
-	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/config"
-	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/datasource"
-	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/grpcserver"
-	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/handlers"
-	pb "github.com/fengzhizi319/PrivShield/services/service-hub/proto"
+	"github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/agent"
+	"github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/datasource"
+	"github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/grpcserver"
+	"github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/handlers"
+	pb "github.com/fengzhizi319/PrivShield-go/services/service-hub/proto"
 )
 
 func init() {

@@ -21,7 +21,7 @@ groups:
         annotations:
           summary: "Gateway has no healthy backend nodes"
           description: "The PrivShield gateway has 0 healthy backend nodes for more than 1 minute. All requests will fail."
-          runbook_url: "https://github.com/fengzhizi319/PrivShield/docs/gateway_balancer/ops.md"
+          runbook_url: "https://github.com/fengzhizi319/PrivShield-go/docs/gateway_balancer/ops.md"
 
       # 网关健康节点数低于预期 / Gateway healthy nodes below expected
       - alert: GatewayDegradedCapacity

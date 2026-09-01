@@ -17,7 +17,7 @@ package sqlite
 import (
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/pkg/store"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store"
 )
 
 // ClaimNext is not supported on SQLite; returns ErrLeaseNotSupported.

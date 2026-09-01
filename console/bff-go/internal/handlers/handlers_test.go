@@ -24,11 +24,11 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
-	"github.com/fengzhizi319/PrivShield/pkg/metrics"
+	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
 
-	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/agent"
-	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/config"
-	pb "github.com/fengzhizi319/PrivShield/console/bff-go/proto"
+	"github.com/fengzhizi319/PrivShield-go/console/bff-go/internal/agent"
+	"github.com/fengzhizi319/PrivShield-go/console/bff-go/internal/config"
+	pb "github.com/fengzhizi319/PrivShield-go/console/bff-go/proto"
 )
 
 // testPrivacyServer 是一个只实现 Health 和 Mask 的伪造 gRPC 服务器。

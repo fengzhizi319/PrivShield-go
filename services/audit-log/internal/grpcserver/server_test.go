@@ -22,12 +22,12 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
-	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
-	"github.com/fengzhizi319/PrivShield/pkg/store"
-	"github.com/fengzhizi319/PrivShield/pkg/store/memory"
-	"github.com/fengzhizi319/PrivShield/services/audit-log/internal/agent"
-	"github.com/fengzhizi319/PrivShield/services/audit-log/internal/config"
-	pb "github.com/fengzhizi319/PrivShield/services/audit-log/proto"
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store/memory"
+	"github.com/fengzhizi319/PrivShield-go/services/audit-log/internal/agent"
+	"github.com/fengzhizi319/PrivShield-go/services/audit-log/internal/config"
+	pb "github.com/fengzhizi319/PrivShield-go/services/audit-log/proto"
 )
 
 func setupTestGRPCServer(t *testing.T, agentMux http.Handler) (pb.AuditLogServiceClient, store.AuditStore, func()) {

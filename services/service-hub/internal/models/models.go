@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/pkg/naming"
+	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
 )
 
 // HubStatus represents the scheduling hub's current status and queue telemetry.

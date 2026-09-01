@@ -21,8 +21,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/config"
-	"github.com/fengzhizi319/PrivShield/pkg/metrics"
+	"github.com/fengzhizi319/PrivShield-go/console/bff-go/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
 )
 
 // proxyTestEnv 一套带命中计数与日志捕获的 BFF + 假上游测试环境。

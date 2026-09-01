@@ -6,7 +6,7 @@ package observability
 import (
 	"github.com/gin-gonic/gin"
 
-	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 )
 
 // InitLogger 初始化结构化日志。

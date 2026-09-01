@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package datasourcemgr;
 
-option go_package = "github.com/fengzhizi319/PrivShield/services/datasource-mgr/proto";
+option go_package = "github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/proto";
 
 // DataSourceManagerService 模拟数据源服务 (Mock Data Source Service)
 // 专为开发与调试提供模拟数据源通信与采样，生产环境将由真实数据源替代。

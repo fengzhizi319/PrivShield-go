@@ -29,8 +29,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/pkg/crypto"
-	"github.com/fengzhizi319/PrivShield/pkg/store"
+	"github.com/fengzhizi319/PrivShield-go/pkg/crypto"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store"
 )
 
 const (

@@ -679,7 +679,7 @@ syntax = "proto3";
 
 package datasourcemgr;
 
-option go_package = "github.com/fengzhizi319/PrivShield/services/datasource-mgr/proto";
+option go_package = "github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/proto";
 
 // DataSourceManagerService 数据源管理与提供服务
 // 对外提供高性能数据记录分页抽取、目录清单与连通性探针

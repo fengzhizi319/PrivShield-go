@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	pkgagent "github.com/fengzhizi319/PrivShield/pkg/agent"
-	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
-	"github.com/fengzhizi319/PrivShield/pkg/store"
+	pkgagent "github.com/fengzhizi319/PrivShield-go/pkg/agent"
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store"
 
-	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/config"
 )
 
 func init() {

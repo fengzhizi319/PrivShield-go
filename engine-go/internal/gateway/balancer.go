@@ -3,8 +3,8 @@ package gateway
 import (
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/pkg/circuitbreaker"
-	pgateway "github.com/fengzhizi319/PrivShield/pkg/gateway"
+	"github.com/fengzhizi319/PrivShield-go/pkg/circuitbreaker"
+	pgateway "github.com/fengzhizi319/PrivShield-go/pkg/gateway"
 )
 
 // BackendNode 后端节点

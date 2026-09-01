@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/pkg/store"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store"
 )
 
 // engineLevelHandler returns a mock PrivShield engine that classifies every record

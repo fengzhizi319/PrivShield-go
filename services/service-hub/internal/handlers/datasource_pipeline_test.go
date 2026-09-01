@@ -22,14 +22,14 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/fengzhizi319/PrivShield/pkg/metrics"
-	"github.com/fengzhizi319/PrivShield/pkg/store/memory"
+	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store/memory"
 
-	dspb "github.com/fengzhizi319/PrivShield/services/datasource-mgr/proto"
+	dspb "github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/proto"
 
-	hubagent "github.com/fengzhizi319/PrivShield/services/service-hub/internal/agent"
-	hubconfig "github.com/fengzhizi319/PrivShield/services/service-hub/internal/config"
-	hubdatasource "github.com/fengzhizi319/PrivShield/services/service-hub/internal/datasource"
+	hubagent "github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/agent"
+	hubconfig "github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/config"
+	hubdatasource "github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/datasource"
 )
 
 // mockDataSourceGRPCServer implements dspb.DataSourceManagerServiceServer for integration testing.

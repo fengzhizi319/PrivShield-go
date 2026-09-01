@@ -12,8 +12,8 @@ package catalog
 import (
 	"fmt"
 
-	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/models"
-	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/models"
+	naming "github.com/fengzhizi319/PrivShield-go/pkg/naming"
 )
 
 // schema 是单个数据源的展示元数据 + 字段清单。

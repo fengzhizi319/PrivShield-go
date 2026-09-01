@@ -3,8 +3,8 @@ package security
 import (
 	"github.com/gin-gonic/gin"
 
-	pkgauth "github.com/fengzhizi319/PrivShield/pkg/auth"
-	pkgmiddleware "github.com/fengzhizi319/PrivShield/pkg/middleware"
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
+	pkgmiddleware "github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 )
 
 // AuthMiddleware 返回 Gin 中间件，执行 API Key 认证。

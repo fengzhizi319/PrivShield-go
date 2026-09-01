@@ -31,7 +31,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/pkg/crypto"
+	"github.com/fengzhizi319/PrivShield-go/pkg/crypto"
 )
 
 // 存证哈希链支持的算法与版本标识常量。

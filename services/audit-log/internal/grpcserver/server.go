@@ -16,14 +16,14 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 
-	"github.com/fengzhizi319/PrivShield/pkg/crypto"
-	"github.com/fengzhizi319/PrivShield/pkg/naming"
-	"github.com/fengzhizi319/PrivShield/pkg/store"
-	"github.com/fengzhizi319/PrivShield/pkg/tlsutil"
-	"github.com/fengzhizi319/PrivShield/pkg/validation"
-	"github.com/fengzhizi319/PrivShield/services/audit-log/internal/agent"
-	"github.com/fengzhizi319/PrivShield/services/audit-log/internal/config"
-	pb "github.com/fengzhizi319/PrivShield/services/audit-log/proto"
+	"github.com/fengzhizi319/PrivShield-go/pkg/crypto"
+	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store"
+	"github.com/fengzhizi319/PrivShield-go/pkg/tlsutil"
+	"github.com/fengzhizi319/PrivShield-go/pkg/validation"
+	"github.com/fengzhizi319/PrivShield-go/services/audit-log/internal/agent"
+	"github.com/fengzhizi319/PrivShield-go/services/audit-log/internal/config"
+	pb "github.com/fengzhizi319/PrivShield-go/services/audit-log/proto"
 )
 
 const moduleVia = "audit-log"

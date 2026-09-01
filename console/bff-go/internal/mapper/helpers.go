@@ -20,7 +20,7 @@ import (
 
 	// pb：由 proto/privacy.proto 生成的 gRPC 代码（RecordEntry/DoubleChunk/StringChunk 等消息类型）
 	// pb: generated gRPC code from proto/privacy.proto (RecordEntry/DoubleChunk/StringChunk message types)
-	pb "github.com/fengzhizi319/PrivShield/console/bff-go/proto"
+	pb "github.com/fengzhizi319/PrivShield-go/console/bff-go/proto"
 )
 
 // ---------------------------------------------------------------------------
@@ -224,7 +224,7 @@ func getStringMap(m map[string]any, key string) map[string]string {
 //  3. 将 "fields" 内的 string 值提取为 map[string]string
 //  4. 构造 pb.RecordEntry{Fields: map[string]string}
 //
-// 典型用途：mask_dataframe、k_anonymize/table、classify/table 等表格类接口
+// 典型用途：mask_dataframe、k_anonymize/table、dyn_classify 等表格类接口
 func getRecordEntries(m map[string]any, key string) []*pb.RecordEntry {
 	if v, ok := m[key]; ok {
 		if arr, ok := v.([]any); ok {
@@ -258,7 +258,7 @@ func getRecordEntries(m map[string]any, key string) []*pb.RecordEntry {
 // getRecordEntry 从 map 中提取单个 RecordEntry（protobuf 消息）。
 //
 // 与 getRecordEntries 类似，但仅提取单个记录而非数组。
-// 典型用途：classify/record 等单记录分类接口
+// 典型用途：dyn_classify/record 等单记录分类接口
 func getRecordEntry(m map[string]any, key string) *pb.RecordEntry {
 	if v, ok := m[key]; ok {
 		if mm, ok := v.(map[string]any); ok {

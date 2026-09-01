@@ -25,13 +25,13 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/fengzhizi319/PrivShield/pkg/metrics"
-	"github.com/fengzhizi319/PrivShield/pkg/store"
-	"github.com/fengzhizi319/PrivShield/pkg/store/memory"
-	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/agent"
-	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/config"
-	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/datasource"
-	pb "github.com/fengzhizi319/PrivShield/services/service-hub/proto"
+	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store"
+	"github.com/fengzhizi319/PrivShield-go/pkg/store/memory"
+	"github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/agent"
+	"github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/datasource"
+	pb "github.com/fengzhizi319/PrivShield-go/services/service-hub/proto"
 )
 
 // testCerts holds paths to test certificate files.

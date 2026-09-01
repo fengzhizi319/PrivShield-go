@@ -16,9 +16,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/fengzhizi319/PrivShield/privacy-go-sdk/dp"
-	"github.com/fengzhizi319/PrivShield/privacy-go-sdk/kano"
-	"github.com/fengzhizi319/PrivShield/privacy-go-sdk/masking"
+	"github.com/fengzhizi319/PrivShield-go/privacy-go-sdk/dp"
+	"github.com/fengzhizi319/PrivShield-go/privacy-go-sdk/kano"
+	"github.com/fengzhizi319/PrivShield-go/privacy-go-sdk/masking"
 )
 
 // ──────────────────────────────────────────────

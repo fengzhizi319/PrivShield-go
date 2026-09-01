@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fengzhizi319/PrivShield/pkg/naming"
+	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
 )
 
 func TestAllowedValues(t *testing.T) {

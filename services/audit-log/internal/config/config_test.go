@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 )
 
 func TestConfigDefaults(t *testing.T) {

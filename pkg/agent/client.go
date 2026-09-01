@@ -43,8 +43,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/pkg/circuitbreaker"
-	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
+	"github.com/fengzhizi319/PrivShield-go/pkg/circuitbreaker"
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 )
 
 // Client wraps HTTP calls to the upstream PrivShield agent REST API with multi-node load balancing.
@@ -62,12 +62,12 @@ type Client struct {
 
 	// Per-endpoint circuit breakers / 按上游节点维度独立维护的熔断器组
 	// 单节点故障只熔断该节点流量，其余健康节点继续承接请求（故障隔离而非全局雪崩）。
-	cbMu          sync.Mutex               // 保护熔断器状态变更的互斥锁
+	cbMu          sync.Mutex                         // 保护熔断器状态变更的互斥锁
 	breakers      map[string]*circuitbreaker.Breaker // 归一化节点地址 → 该节点独立的熔断器状态
-	cbOrder       []string                 // 节点配置顺序，保证聚合状态与诊断输出稳定
-	cbThreshold   int                      // 触发单节点熔断的连续失败阈值（默认 5 次）
-	cbCooldown    time.Duration            // 熔断开启后的冷却等待时间（默认 30s，冷却后转为 Half-Open）
-	stateObserver func(node, state string) // 熔断器状态发生流转时的外部回调钩子（用于上报 Prometheus 指标）
+	cbOrder       []string                           // 节点配置顺序，保证聚合状态与诊断输出稳定
+	cbThreshold   int                                // 触发单节点熔断的连续失败阈值（默认 5 次）
+	cbCooldown    time.Duration                      // 熔断开启后的冷却等待时间（默认 30s，冷却后转为 Half-Open）
+	stateObserver func(node, state string)           // 熔断器状态发生流转时的外部回调钩子（用于上报 Prometheus 指标）
 }
 
 // idempotencyKeyType is the context key for propagating X-Idempotency-Key.

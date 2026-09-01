@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"testing"
 
-	pkgagent "github.com/fengzhizi319/PrivShield/pkg/agent"
+	pkgagent "github.com/fengzhizi319/PrivShield-go/pkg/agent"
 )
 
 // fakeNetError 是可控的 net.Error 实现，用于验证按类型（而非文案）判定超时。

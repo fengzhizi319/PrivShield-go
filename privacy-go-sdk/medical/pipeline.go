@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/fengzhizi319/PrivShield/privacy-go-sdk/masking"
+	"github.com/fengzhizi319/PrivShield-go/privacy-go-sdk/masking"
 )
 
 // ──────────────────────────────────────────────

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 )
 
 // engineEnvKeys 是门禁读取的全部环境变量，逐用例清空以隔绝宿主 shell 污染。

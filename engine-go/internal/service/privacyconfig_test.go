@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/fengzhizi319/PrivShield/engine-go/internal/dynclassification"
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/dynclassification"
 )
 
 // TestSafetyFloorMinLevelRejectsUnknownVocabulary pins the P0-2 fail-closed rule:

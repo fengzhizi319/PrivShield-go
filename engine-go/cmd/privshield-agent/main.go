@@ -36,16 +36,16 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 
-	engineconfig "github.com/fengzhizi319/PrivShield/engine-go/internal/config"
-	"github.com/fengzhizi319/PrivShield/engine-go/internal/grpcserver"
-	"github.com/fengzhizi319/PrivShield/engine-go/internal/observability"
-	"github.com/fengzhizi319/PrivShield/engine-go/internal/rest"
-	"github.com/fengzhizi319/PrivShield/engine-go/internal/security"
-	"github.com/fengzhizi319/PrivShield/engine-go/internal/service"
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
-	"github.com/fengzhizi319/PrivShield/pkg/middleware"
-	"github.com/fengzhizi319/PrivShield/pkg/naming"
-	"github.com/fengzhizi319/PrivShield/pkg/tlsutil"
+	engineconfig "github.com/fengzhizi319/PrivShield-go/engine-go/internal/config"
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/grpcserver"
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/observability"
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/rest"
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/security"
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/service"
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
+	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
+	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
+	"github.com/fengzhizi319/PrivShield-go/pkg/tlsutil"
 )
 
 // ──────────────────────────────────────────────

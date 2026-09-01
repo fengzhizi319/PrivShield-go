@@ -10,7 +10,7 @@ import (
 	"os"
 	"strconv"
 
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 )
 
 // Config holds runtime configuration for the mock datasource-mgr server.

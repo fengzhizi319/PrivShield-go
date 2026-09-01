@@ -1,18 +1,18 @@
-module github.com/fengzhizi319/PrivShield/services/service-hub
+module github.com/fengzhizi319/PrivShield-go/services/service-hub
 
 go 1.25.0
 
 require (
-	github.com/fengzhizi319/PrivShield/pkg v0.0.0
-	github.com/fengzhizi319/PrivShield/services/datasource-mgr v0.0.0
+	github.com/fengzhizi319/PrivShield-go/pkg v0.0.0
+	github.com/fengzhizi319/PrivShield-go/services/datasource-mgr v0.0.0
 	github.com/gin-gonic/gin v1.12.0
 	google.golang.org/grpc v1.83.1
 	google.golang.org/protobuf v1.36.11
 )
 
-replace github.com/fengzhizi319/PrivShield/pkg => ../../pkg
+replace github.com/fengzhizi319/PrivShield-go/pkg => ../../pkg
 
-replace github.com/fengzhizi319/PrivShield/services/datasource-mgr => ../../services/datasource-mgr
+replace github.com/fengzhizi319/PrivShield-go/services/datasource-mgr => ../../services/datasource-mgr
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -21,7 +21,6 @@ require (
 	github.com/bytedance/sonic/loader v0.5.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
-	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.12 // indirect
 	github.com/gin-contrib/sse v1.1.0 // indirect
@@ -44,7 +43,6 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
-	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/client_golang v1.22.0 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.62.0 // indirect
@@ -52,7 +50,6 @@ require (
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
