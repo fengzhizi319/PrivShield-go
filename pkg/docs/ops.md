@@ -1,439 +1,403 @@
 # PrivShield 共享基础包 (Shared PKG) — 生产运维与加固手册
 
-> **文档定位**：`pkg` 基础包及底层存储引擎、密码信封、mTLS 证书体系、归档存证与中间件网关的生产部署、性能调优、监控告警与故障排查（Runbook）运维指南。
+> **文档定位**：`pkg` 基础包及底层存储引擎、密码信封、mTLS 证书体系、归档留存与中间件网关的生产部署、性能调优、监控告警与故障排查（Runbook）运维指南。
 
 ---
 
 ## 目录
 
-- [一、全局运维配置参数表](#一全局运维配置参数表)
-  - [1.1 隐私引擎 (privshield-agent)](#11-隐私引擎-privshield-agent)
-  - [1.2 隐私网关 (privshield-gateway)](#12-隐私网关-privshield-gateway)
-  - [1.3 数据服务调度中枢 (service-hub)](#13-数据服务调度中枢-service-hub)
-  - [1.4 数据源资产管理 (datasource-mgr)](#14-数据源资产管理-datasource-mgr)
-  - [1.5 审计存证日志 (audit-log)](#15-审计存证日志-audit-log)
-  - [1.6 统一运维控制台 BFF (console/bff-go)](#16-统一运维控制台-bff-consolebff-go)
-  - [1.7 跨服务共享环境变量](#17-跨服务共享环境变量)
-- [二、存储引擎运维与性能调优](#二存储引擎运维与性能调优)
-  - [2.1 SQLite WAL 生产模式配置](#21-sqlite-wal-生产模式配置)
+- [一、完整环境变量配置表](#一完整环境变量配置表)
+  - [1.1 共享环境变量助手函数](#11-共享环境变量助手函数)
+  - [1.2 audit-log 服务环境变量](#12-audit-log-服务环境变量)
+  - [1.3 service-hub 服务环境变量](#13-service-hub-服务环境变量)
+  - [1.4 datasource-mgr 服务环境变量](#14-datasource-mgr-服务环境变量)
+  - [1.5 跨服务共享变量](#15-跨服务共享变量)
+  - [1.6 可观测性与迁移工具变量](#16-可观测性与迁移工具变量)
+- [二、存储引擎运维](#二存储引擎运维)
+  - [2.1 SQLite WAL 生产模式与完整性校验](#21-sqlite-wal-生产模式与完整性校验)
   - [2.2 PostgreSQL Phase B 分布式集群与连接池调优](#22-postgresql-phase-b-分布式集群与连接池调优)
-  - [2.3 数据库自动化迁移工具 (`store/cmd/migrate`)](#23-数据库自动化迁移工具-storecmdmigrate)
-  - [2.4 归档存证段运维](#24-归档存证段运维)
-  - [2.5 严格存储模式 (Strict Storage)](#25-严格存储模式-strict-storage)
-- [三、商用密码与 mTLS 证书安全运维](#三商用密码与-mtls-证书安全运维)
-  - [3.1 国密 SM4 信封加密与密钥管理](#31-国密-sm4-信封加密与密钥管理)
-  - [3.2 HMAC-SM3 哈希链密钥注入与轮转](#32-hmac-sm3-哈希链密钥注入与轮转)
-  - [3.3 mTLS 客户端证书与 CN 白名单热加载](#33-mtls-客户端证书与-cn-白名单热加载)
-- [四、全栈监控大盘与 Prometheus 告警规则](#四全栈监控大盘与-prometheus-告警规则)
-  - [4.1 业务指标清单 (`pkg/metrics.Collector`)](#41-业务指标清单-packagemetricscollector)
-  - [4.2 传输层 RED 指标 (`pkg/observability.REDMetrics`)](#42-传输层-red-指标-packageobservabilityredmetrics)
-  - [4.3 刷盘器运行时指标 (`pkg/store/flusher`)](#43-刷盘器运行时指标-packagestoreflusher)
-  - [4.4 命名路由观测指标 (`pkg/naming.Observer`)](#44-命名路由观测指标-packagenamingobserver)
-  - [4.5 推荐 Prometheus 告警规则](#45-推荐-prometheus-告警规则)
-- [五、安全门控运维 (Security Gate Operations)](#五安全门控运维-security-gate-operations)
-  - [5.1 ValidateFailClosed 五条铁律](#51-validatefailclosed-五条铁律)
-  - [5.2 常见启动拒绝场景排查](#52-常见启动拒绝场景排查)
-- [六、归档存证运维 (Archive Operations)](#六归档存证运维-archive-operations)
-  - [6.1 归档段格式规范](#61-归档段格式规范)
-  - [6.2 归档段完整性校验](#62-归档段完整性校验)
-  - [6.3 从归档恢复数据](#63-从归档恢复数据)
-  - [6.4 保留策略配置](#64-保留策略配置)
-- [七、核心故障排查手册 (Runbook)](#七核心故障排查手册-runbook)
+  - [2.3 数据库自动化迁移工具](#23-数据库自动化迁移工具)
+  - [2.4 归档运维](#24-归档运维)
+- [三、密码运维](#三密码运维)
+  - [3.1 信封加密体系](#31-信封加密体系)
+  - [3.2 enc:v2: 密钥管理（HKDF-SM3 派生）](#32-encv2-密钥管理hkdf-sm3-派生)
+  - [3.3 enc:v1: 遗留迁移](#33-encv1-遗留迁移)
+  - [3.4 HMAC-SM3 链密钥注入](#34-hmac-sm3-链密钥注入)
+  - [3.5 密钥轮转流程](#35-密钥轮转流程)
+- [四、全栈监控指标](#四全栈监控指标)
+  - [4.1 业务领域指标（pkg/metrics.Collector）](#41-业务领域指标pkgmetricscollector)
+  - [4.2 传输层 RED 指标（pkg/observability.REDMetrics）](#42-传输层-red-指标pkgobservabilityredmetrics)
+  - [4.3 推荐 Prometheus 告警规则](#43-推荐-prometheus-告警规则)
+- [五、安全门禁运维](#五安全门禁运维)
+  - [5.1 ValidateFailClosed 启动期安全不变式](#51-validatefailclosed-启动期安全不变式)
+  - [5.2 五大哨兵错误](#52-五大哨兵错误)
+  - [5.3 IsLoopbackHost 行为](#53-isloopbackhost-行为)
+  - [5.4 零信任默认态](#54-零信任默认态)
+  - [5.5 ValidateFailClosed 故障排查](#55-validatefailclosed-故障排查)
+- [六、mTLS 证书与 CN 白名单运维](#六mtls-证书与-cn-白名单运维)
+- [七、命名 SSOT 运维](#七命名-ssot-运维)
+  - [7.1 注册表管理](#71-注册表管理)
+  - [7.2 Observer 指标解读](#72-observer-指标解读)
+  - [7.3 安全等级词表（L1-L5）](#73-安全等级词表l1-l5)
+- [八、核心故障排查手册 (Runbook)](#八核心故障排查手册-runbook)
 
 ---
 
-## 一、全局运维配置参数表
+## 一、完整环境变量配置表
 
-### 1.1 隐私引擎 (privshield-agent)
+### 1.1 共享环境变量助手函数
 
-> 核心隐私计算引擎，暴露 REST (`:8079`) + gRPC (`:50051`)。
+所有环境变量统一通过 `pkg/config/env.go` 提供的助手函数读取，**严禁在各服务中直接调用 `os.Getenv`**。
 
-#### 监听与生命周期
+| 函数签名 | 用途 | 异常处理 |
+|---|---|---|
+| `EnvString(name, def string) string` | 读取字符串环境变量，未设置或为空时返回默认值 | 空串视为未设置 |
+| `EnvStringFirstSet(names ...string) string` | 依次读取多个环境变量，返回第一个非空值 | 全为空时返回空串 |
+| `EnvStringOptional(name, def string) string` | 区分「未设置」与「显式设为空」，仅完全未设置时使用默认值 | 通过 `os.LookupEnv` 实现 |
+| `EnvInt(name string, def int) int` | 以整数形式读取，缺失或无效时返回默认值 | `strconv.Atoi` 失败则兜底 |
+| `EnvFloat(name string, def float64) float64` | 以浮点数形式读取，缺失或无效时返回默认值 | `strconv.ParseFloat` 失败则兜底 |
+| `EnvBool(name string, def bool) bool` | 以布尔值读取；识别 `"true"`, `"1"`, `"yes"`, `"on"`（不区分大小写） | 其他值一律视为 `false` |
+| `EnvStringSlice(name string) []string` | 以逗号分隔读取为字符串切片，自动去除空白 | 空串返回 `nil` |
 
-| 环境变量 | 类型 | 默认值 | 生产建议 | 说明 |
-|---|---|---|---|---|
-| `PRIVACY_REST_HOST` | string | `127.0.0.1` | `0.0.0.0` | REST HTTP 监听地址 |
-| `PRIVACY_REST_PORT` | int | `8079` | `8079` | REST HTTP 监听端口 |
-| `PRIVACY_GRPC_HOST` | string | `127.0.0.1` | `0.0.0.0` | gRPC 监听地址 |
-| `PRIVACY_GRPC_PORT` | int | `50051` | `50051` | gRPC 监听端口 |
-| `PRIVACY_LOG_LEVEL` | string | `INFO` | `info` | 日志级别：`DEBUG` / `INFO` / `WARN` / `ERROR` |
-| `PRIVACY_PPROF_ENABLED` | bool | `false` | `false` (生产关闭) | 启用 `/debug/pprof` 性能分析端点（需 `ops:admin` 权限） |
-| `PRIVACY_SHUTDOWN_DRAIN_SECONDS` | int | `5` | `10 ~ 30` | HTTP 优雅停机流量排空等待秒数 |
-| `PRIVACY_GRPC_GRACEFUL_STOP_SECONDS` | int | `15` | `15 ~ 30` | gRPC 优雅停机超时后强制关闭秒数 |
+### 1.2 audit-log 服务环境变量
 
-#### TLS / mTLS / 认证
+配置源：`services/audit-log/internal/config/config.go`
 
-| 环境变量 | 类型 | 默认值 | 生产建议 | 说明 |
-|---|---|---|---|---|
-| `PRIVACY_TLS_ENABLED` | bool | `false` | `true` | 启用 TLS（HTTPS + gRPC TLS） |
-| `PRIVACY_TLS_CERT_FILE` | string | `""` | `/etc/privshield/certs/server.crt` | 服务端证书 PEM 路径 |
-| `PRIVACY_TLS_KEY_FILE` | string | `""` | `/etc/privshield/certs/server.key` | 服务端私钥 PEM 路径 |
-| `PRIVACY_TLS_CA_FILE` | string | `""` | `/etc/privshield/certs/ca.crt` | 客户端认证 CA 证书路径 |
-| `PRIVACY_REQUIRE_TLS` | bool | `false` | `true` | 安全门控：为 `true` 时 TLS 未启用则拒绝启动 |
-| `PRIVACY_AUTH_ENABLED` | bool | `false` | `true` | 启用 API Key 认证 |
-| `PRIVACY_AUTH_API_KEY` | string | `""` | KMS 注入 | 单内部 API Key（通配权限），别名 `PRIVACY_API_KEY` |
-| `PRIVACY_AUTH_INTERNAL_API_KEYS` | string | `""` | 格式 `key:name:scope;...` | 多内部 API Key，按名称与作用域精细控制 |
-| `PRIVACY_AUTH_EXTERNAL_API_KEYS` | string | `""` | KMS 注入 | 外部 API Key |
-| `PRIVACY_AUTH_STATIC_API_KEYS` | string | `""` | KMS 注入 | 静态外部 API Key（合并入外部 Key 集） |
-| `PRIVACY_AUTH_INTERNAL_MTLS_ENABLED` | bool | `false` | `true` | 启用 gRPC mTLS 客户端证书认证 |
-| `PRIVACY_AUTH_MTLS_WHITELIST_FILE` | string | `""` | `/etc/privshield/whitelist.yaml` | CN 白名单 YAML 路径（支持秒级热重载） |
-| `PRIVACY_AUTH_MTLS_ALLOWED_CNS` | string | `""` | 逗号分隔 CN 列表 | 补充允许 CN 列表 |
-| `PRIVACY_HEALTH_NO_AUTH` | bool | `true` | `true` | 健康检查端点豁免认证 |
-
-#### 限流
-
-| 环境变量 | 类型 | 默认值 | 生产建议 | 说明 |
-|---|---|---|---|---|
-| `PRIVACY_RATE_LIMIT_ENABLED` | bool | `false` | `true` | 启用全局限流 |
-| `PRIVACY_RATE_LIMIT_RPS` | int | `1000` | `2000 ~ 5000` | 全局每秒请求补充速率 |
-| `PRIVACY_RATE_LIMIT_BURST` | int | `2000` | `4000 ~ 10000` | 全局令牌桶突发容量 |
-| `PRIVACY_RATE_LIMIT_DEFAULT_RPS` | int | `100` | `200 ~ 500` | 安全配置级默认每 IP RPS |
-| `PRIVACY_RATE_LIMIT_DEFAULT_BURST` | int | `200` | `400 ~ 1000` | 安全配置级默认每 IP 突发 |
-| `PRIVACY_RATE_LIMIT_REDIS_URL` | string | `""` | Redis 集群地址 | 分布式限流 Redis URL（空=本地限流） |
-| `PRIVACY_HEALTH_NO_RATE_LIMIT` | bool | `true` | `true` | 健康检查端点豁免限流 |
-
-#### 引擎运行参数
-
-| 环境变量 | 类型 | 默认值 | 生产建议 | 说明 |
-|---|---|---|---|---|
-| `PRIVACY_NAMESPACE` | string | `default` | 按租户设置 | 隐私预算租户隔离命名空间 |
-| `PRIVACY_SERVICE_NAME` | string | `PrivShield` | — | 服务名（用于追踪与诊断标识） |
-| `PRIVACY_RULES_DIR` | string | `rules/domains` | — | 领域分类分级规则目录 |
-| `PRIVACY_STANDARDS_DIR` | string | `rules/standards` | — | 标准映射目录 |
-| `PRIVACY_CONFIG_FILE` | string | `config/privacy.yaml` | — | 隐私策略 YAML 配置文件路径 |
-| `PRIVACY_RULES_RELOAD_CHECK_SECONDS` | int | `5` | `5 ~ 30` | 规则文件 mtime 热重载检测节流间隔秒数（0=禁用节流） |
-| `PRIVACY_IMAGE_ALLOWED_DIRS` | string | `""` | 指定白名单目录 | 医学影像允许读取的目录白名单（逗号分隔，默认含 `data/`、`uploads/`、`samples/`、`$TMPDIR`） |
-| `PRIVACY_DICOM_MAX_FILE_SIZE` | int64 | `268435456` | `268435456` (256MB) | 单个 DICOM 文件最大允许字节数 |
-
-#### LLM 第三层分类
-
-| 环境变量 | 类型 | 默认值 | 生产建议 | 说明 |
-|---|---|---|---|---|
-| `PRIVACY_LLM_ENABLE` | string | `false` | `"true"` (需启用时) | 启用第三层 LLM 动态分类（必须为 `"true"`） |
-| `PRIVACY_LLM_ENDPOINT` | string | `http://localhost:8000/v1/chat/completions` | 内网 LLM 地址 | LLM 服务端点 URL |
-| `PRIVACY_LLM_API_KEY` | string | `""` | KMS 注入 | LLM 服务 Bearer 认证密钥 |
-| `PRIVACY_LLM_MODEL` | string | `qwen3.5` | 按实际模型设置 | LLM 模型名称 |
-| `PRIVACY_LLM_MAX_CONCURRENCY` | int | `4` | `4 ~ 16` | LLM 推理最大并发请求数 |
-| `PRIVACY_LLM_ALLOW_INSECURE_HTTP_ENDPOINT` | bool | `false` | `false` | 允许非回环地址明文 HTTP LLM 端点（生产禁用） |
-
-### 1.2 隐私网关 (privshield-gateway)
-
-> 反向代理网关，暴露 REST (`:8000`) + gRPC (`:50000`)，P2C-EWMA 负载均衡。
-
-| 环境变量 | 类型 | 默认值 | 生产建议 | 说明 |
-|---|---|---|---|---|
-| `GATEWAY_HOST` | string | `127.0.0.1` | `0.0.0.0` | 网关 HTTP 监听地址 |
-| `GATEWAY_PORT` | int | `8000` | `8000` | 网关 HTTP 监听端口 |
-| `GATEWAY_GRPC_HOST` | string | `127.0.0.1` | `0.0.0.0` | 网关 gRPC 监听地址 |
-| `GATEWAY_GRPC_PORT` | int | `50000` | `50000` | 网关 gRPC 监听端口 |
-| `GATEWAY_REQUIRE_TLS` | bool | `false` | `true` | 安全门控：要求 TLS 未启用则拒绝启动 |
-| `GATEWAY_BACKENDS` | string | `127.0.0.1:8079` | 多后端逗号分隔 | 后端 Agent 地址列表 |
-| `GATEWAY_STRATEGY` | string | `p2c` | `p2c` | 负载均衡策略：`p2c` / `round_robin` / `least_conn` |
-| `GATEWAY_METRICS_API_KEY` | string | `""` | KMS 注入 | `/metrics` 端点 Bearer Key（空=开放） |
-
-### 1.3 数据服务调度中枢 (service-hub)
-
-> 流水线任务调度中枢，REST (`:8082`) + gRPC (`:50052`)。
-
-#### 监听与生命周期
-
-| 环境变量 | 类型 | 默认值 | 生产建议 | 说明 |
-|---|---|---|---|---|
-| `SERVICE_HUB_HOST` | string | `127.0.0.1` | `0.0.0.0` | HTTP 监听地址 |
-| `SERVICE_HUB_PORT` | int | `8082` | `8082` | HTTP 监听端口 |
-| `SERVICE_HUB_GRPC_HOST` | string | `127.0.0.1` | `0.0.0.0` | gRPC 监听地址 |
-| `SERVICE_HUB_GRPC_PORT` | int | `50052` | `50052` | gRPC 监听端口 |
-| `SERVICE_HUB_LOG_FORMAT` | string | `json` | `json` | 日志格式：`json` / `text` |
-| `SERVICE_HUB_LOG_LEVEL` | string | `info` | `info` | 日志级别 |
-| `SERVICE_HUB_SHUTDOWN_TIMEOUT` | int | `5` | `10 ~ 30` | HTTP 优雅停机超时秒数 |
-
-#### TLS / 认证 / CORS
-
-| 环境变量 | 类型 | 默认值 | 生产建议 | 说明 |
-|---|---|---|---|---|
-| `SERVICE_HUB_TLS_ENABLED` | bool | `false` | `true` | 启用 TLS |
-| `SERVICE_HUB_TLS_CERT_FILE` | string | `""` | 证书路径 | 服务端证书 PEM |
-| `SERVICE_HUB_TLS_KEY_FILE` | string | `""` | 私钥路径 | 服务端私钥 PEM |
-| `SERVICE_HUB_TLS_CA_FILE` | string | `""` | CA 路径 | 客户端 CA 证书 |
-| `SERVICE_HUB_TLS_CLIENT_AUTH` | string | `""` | `require` | 客户端认证模式 |
-| `SERVICE_HUB_TLS_PINNED_PUBKEY_FILE` | string | `""` | SPKI PEM 路径 | SPKI 公钥钉选 PEM 文件 |
-| `SERVICE_HUB_REQUIRE_TLS` | bool | `false` | `true` | 安全门控：TLS 未启用则拒绝启动 |
-| `SERVICE_HUB_API_KEY` | string | `""` | KMS 注入 | 入站 API Key |
-| `SERVICE_HUB_CORS_ORIGINS` | string | `""` | 指定前端域名 | CORS 允许来源（逗号分隔） |
-
-#### 任务调度与存储
-
-| 环境变量 | 类型 | 默认值 | 生产建议 | 说明 |
-|---|---|---|---|---|
-| `SERVICE_HUB_MAX_QUEUE` | int | `1000` | `2000 ~ 5000` | 最大任务队列深度 |
-| `SERVICE_HUB_SCHEDULE_TIMEOUT` | int | `30` | `30 ~ 60` | 任务调度超时秒数 |
-| `SERVICE_HUB_DB_PATH` | string | `""` | `/var/lib/privshield/hub.db` | SQLite 任务库路径（空=内存模式） |
-| `SERVICE_HUB_PG_DSN` | string | `""` | PostgreSQL 连接串 | Phase B 多副本 PostgreSQL DSN |
-| `SERVICE_HUB_PG_MAX_CONNS` | int | `10` | `N_cpu * 4` (max 64) | PostgreSQL 连接池最大并发 |
-| `SERVICE_HUB_PG_MIN_CONNS` | int | `2` | `max(2, N_cpu)` | PostgreSQL 连接池最小保活 |
-| `SERVICE_HUB_LEASE_TTL` | int | `60` | `60 ~ 120` | 任务租约 TTL 秒数 |
-| `SERVICE_HUB_RETENTION_DAYS` | int | `30` | `30 ~ 90` | 数据保留天数 |
-| `SERVICE_HUB_STRICT_STORAGE` | bool | `true` | `true` | 严格存储模式（存储故障即退出，不静默回退内存） |
-
-#### 上游连接
-
-| 环境变量 | 类型 | 默认值 | 生产建议 | 说明 |
-|---|---|---|---|---|
-| `PRIVACY_AGENT_REST_HOST` | string | `127.0.0.1` | Agent 地址 | 上游 Agent REST 主机 |
-| `PRIVACY_REST_PORT` | int | `8079` | `8079` | 上游 Agent REST 端口 |
-| `PRIVACY_AGENT_API_KEY` | string | `""` | KMS 注入 | 上游 Agent API Key |
-| `PRIVACY_AGENT_URLS` | string | `""` | 多 Agent 逗号分隔 | 多 Agent URL 列表（覆盖单主机配置） |
-| `DATASOURCE_MGR_HOST` | string | `127.0.0.1` | 数据源管理器地址 | 数据源管理器 HTTP 主机 |
-| `DATASOURCE_MGR_PORT` | int | `8083` | `8083` | 数据源管理器 HTTP 端口 |
-| `DATASOURCE_MGR_GRPC_HOST` | string | `127.0.0.1` | 数据源管理器 gRPC 主机 | 数据源管理器 gRPC 主机 |
-| `DATASOURCE_MGR_GRPC_PORT` | int | `50053` | `50053` | 数据源管理器 gRPC 端口 |
-| `SERVICE_HUB_DATASOURCE_API_KEY` | string | `""` | KMS 注入 | 调用数据源管理器的 API Key |
-| `SERVICE_HUB_AUDIT_LOG_URLS` | string | `""` | 审计日志 URL 列表 | 审计日志 REST URL（逗号分隔） |
-| `SERVICE_HUB_AUDIT_LOG_API_KEY` | string | `""` | KMS 注入 | 审计日志 API Key（回退 `AUDIT_LOG_API_KEY`） |
-| `SERVICE_HUB_AUDIT_LOG_TIMEOUT` | int | `10` | `10 ~ 30` | 审计日志提交超时秒数 |
-| `SERVICE_HUB_AUDIT_LOG_MAX_RETRIES` | int | `3` | `3 ~ 5` | 审计日志提交重试次数 |
-
-#### 审计日志客户端 TLS
+#### 网络与监听
 
 | 环境变量 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `SERVICE_HUB_AUDIT_LOG_TLS_ENABLED` | bool | `false` | 启用审计日志客户端 TLS |
-| `SERVICE_HUB_AUDIT_LOG_TLS_CERT_FILE` | string | `""` | 客户端证书（回退 `SERVICE_HUB_TLS_CERT_FILE`） |
-| `SERVICE_HUB_AUDIT_LOG_TLS_KEY_FILE` | string | `""` | 客户端私钥（回退 `SERVICE_HUB_TLS_KEY_FILE`） |
-| `SERVICE_HUB_AUDIT_LOG_TLS_CA_FILE` | string | `""` | 客户端 CA（回退 `SERVICE_HUB_TLS_CA_FILE`） |
+| `AUDIT_LOG_HOST` | string | `"127.0.0.1"` | HTTP 服务监听地址 |
+| `AUDIT_LOG_PORT` | int | `8084` | HTTP 服务监听端口 |
+| `AUDIT_LOG_GRPC_HOST` | string | `"127.0.0.1"` | gRPC 服务监听地址 |
+| `AUDIT_LOG_GRPC_PORT` | int | `50054` | gRPC 服务监听端口 |
+| `AUDIT_LOG_CORS_ORIGINS` | []string | `nil` | 逗号分隔的允许 CORS 来源列表 |
+| `AUDIT_LOG_SHUTDOWN_TIMEOUT` | int | `5` | HTTP 优雅停机超时（秒） |
+
+#### 日志
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `AUDIT_LOG_LOG_FORMAT` | string | `"json"` | 日志输出格式：`"json"`（对接 ELK/Loki）或 `"text"` |
+| `AUDIT_LOG_LOG_LEVEL` | string | `"info"` | 日志级别：`"debug"` / `"info"` / `"warn"` / `"error"` |
+
+#### 存储引擎
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `AUDIT_LOG_DB_PATH` | string | `""` | SQLite 数据库文件路径（空串使用内存模式） |
+| `AUDIT_LOG_PG_DSN` | string | `""` | PostgreSQL 连接串（主优先）；空时回退至 `PG_DSN` |
+| `PG_DSN` | string | `""` | PostgreSQL 连接串回退值（当 `AUDIT_LOG_PG_DSN` 为空时使用） |
+| `AUDIT_LOG_PG_MAX_CONNS` | int | `0` | PostgreSQL 最大连接池大小（0 = 自适应计算） |
+| `AUDIT_LOG_PG_MIN_CONNS` | int | `0` | PostgreSQL 最小常驻连接数（0 = 自适应计算） |
+| `AUDIT_LOG_STRICT_STORAGE` | bool | 继承 `STRICT_STORAGE` | 严格存储模式：存储连接失败时启动失败（不静默回退） |
+| `STRICT_STORAGE` | bool | `true` | 全局严格存储模式回退默认值 |
+
+#### 微批刷盘器
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `AUDIT_LOG_FLUSH_BATCH_SIZE` | int | `0` | 微批刷盘单批最大写入条数（0 = 使用刷盘器默认值 200） |
+| `AUDIT_LOG_FLUSH_INTERVAL_MS` | int | `0` | 刷盘时间窗口（毫秒，0 = 默认 20ms） |
+| `AUDIT_LOG_FLUSH_QUEUE_SIZE` | int | `0` | 环形缓冲队列容量（0 = 默认 10000） |
+| `AUDIT_LOG_FLUSH_ENQUEUE_TIMEOUT_MS` | int | `0` | 队列满时等待槽位的超时时间（毫秒，0 = 默认 500ms） |
+| `AUDIT_LOG_FLUSH_MAX_STAGED` | int | `0` | 内存暂存/重投积压上限（0 = 默认 50000，防存储故障期 OOM） |
+| `AUDIT_LOG_FLUSH_CLOSE_TIMEOUT_MS` | int | `0` | 优雅停机排空等待超时（毫秒，0 = 默认 10s） |
+
+#### 留存与归档
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `AUDIT_LOG_RETENTION_DAYS` | int | `0` | 审计日志保留天数；0 = 永不删除；>0 时触发自动清理（**最小值 1095 / 3 年**，且须同时配置 `AUDIT_LOG_ARCHIVE_DIR` 和 `AUDIT_LOG_ENCRYPTION_KEY`） |
+| `AUDIT_LOG_ARCHIVE_DIR` | string | `"data/archives"` | 归档段文件存放目录路径 |
+| `AUDIT_LOG_ARCHIVE_PAGE_SIZE` | int | `0` | 每段归档读取条数（0 = 默认 500） |
+| `AUDIT_LOG_ENCRYPTION_KEY` | string | `""` | 归档快照信封加密主密钥（主优先）；空时回退至 `PRIVACY_AUDIT_KEY` |
+| `PRIVACY_AUDIT_KEY` | string | `""` | 加密密钥回退值 |
+
+#### 密码与完整性
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `AUDIT_LOG_HASH_KEY` | string | `""` | HMAC-SM3 存证哈希链密钥（局方托管）；空串退回无密钥 SM3（仅用于本地开发兼容，**生产必须配置**） |
+| `AUDIT_LOG_DB_WRITE_ONLY` | bool | `false` | 启用后自检数据库账户是否缺少 UPDATE/DELETE 权限（写入专用存证账户验证） |
+
+#### 鉴权
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `AUDIT_LOG_API_KEY` | string | `""` | 入站 API Key 鉴权密钥（service-hub 外联时亦作为回退密钥） |
+| `AUDIT_LOG_READER_API_KEY` | string | `""` | 只读验证密钥（P1-6 职责分离）；若同时设置，**必须与 `AUDIT_LOG_API_KEY` 不同** |
+| `PRIVACY_AGENT_API_KEY` | string | `""` | 上游隐私计算 Agent REST API 鉴权密钥 |
+
+#### TLS / mTLS
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `AUDIT_LOG_TLS_ENABLED` | bool | `false` | 启用 gRPC TLS/mTLS |
+| `AUDIT_LOG_TLS_CERT_FILE` | string | `""` | 服务端 TLS 证书 PEM 文件路径 |
+| `AUDIT_LOG_TLS_KEY_FILE` | string | `""` | 服务端 TLS 私钥 PEM 文件路径 |
+| `AUDIT_LOG_TLS_CA_FILE` | string | `""` | 客户端认证 CA 证书路径 |
+| `AUDIT_LOG_TLS_CLIENT_AUTH` | string | `""` | 客户端认证模式：`"require"` / `"verify"` / `""` |
+| `AUDIT_LOG_TLS_PINNED_PUBKEY_FILE` | string | `""` | 客户端固定公钥 PEM 文件路径（SPKI 固定） |
+| `AUDIT_LOG_REQUIRE_TLS` | bool | `false` | Fail-closed 生产门禁：为 `true` 时 TLS 未启用则启动失败 |
+| `PRIVACY_AUTH_MTLS_WHITELIST_FILE` | string | `""` | mTLS CN 白名单 YAML 文件路径（三服务共享） |
 
 #### 限流
 
-| 环境变量 | 类型 | 默认值 | 生产建议 | 说明 |
-|---|---|---|---|---|
-| `SERVICE_HUB_RATE_LIMIT_RPS` | int | `100` | `200 ~ 500` | 每 IP 令牌桶 RPS |
-| `SERVICE_HUB_RATE_LIMIT_BURST` | int | `200` | `400 ~ 1000` | 令牌桶突发容量 |
-
-### 1.4 数据源资产管理 (datasource-mgr)
-
-> 数据源资产管理与敏感特征自动探查，REST (`:8083`) + gRPC (`:50053`)。
-
-| 环境变量 | 类型 | 默认值 | 生产建议 | 说明 |
-|---|---|---|---|---|
-| `DATASOURCE_MGR_HOST` | string | `127.0.0.1` | `0.0.0.0` | HTTP 监听地址 |
-| `DATASOURCE_MGR_PORT` | int | `8083` | `8083` | HTTP 监听端口 |
-| `DATASOURCE_MGR_GRPC_HOST` | string | `127.0.0.1` | `0.0.0.0` | gRPC 监听地址 |
-| `DATASOURCE_MGR_GRPC_PORT` | int | `50053` | `50053` | gRPC 监听端口 |
-| `DATASOURCE_MGR_TLS_ENABLED` | bool | `false` | `true` | 启用 TLS |
-| `DATASOURCE_MGR_TLS_CERT_FILE` | string | `""` | 证书路径 | 服务端证书 PEM |
-| `DATASOURCE_MGR_TLS_KEY_FILE` | string | `""` | 私钥路径 | 服务端私钥 PEM |
-| `DATASOURCE_MGR_TLS_CA_FILE` | string | `""` | CA 路径 | 客户端 CA 证书 |
-| `DATASOURCE_MGR_TLS_CLIENT_AUTH` | string | `""` | `require` | 客户端认证模式 |
-| `DATASOURCE_MGR_TLS_PINNED_PUBKEY_FILE` | string | `""` | SPKI PEM 路径 | SPKI 公钥钉选文件 |
-| `DATASOURCE_MGR_REQUIRE_TLS` | bool | `false` | `true` | 安全门控：TLS 未启用则拒绝启动 |
-| `DATASOURCE_MGR_API_KEY` | string | `""` | KMS 注入 | 入站 API Key |
-| `DATASOURCE_MGR_CORS_ORIGINS` | string | `""` | 指定前端域名 | CORS 允许来源 |
-| `DATASOURCE_MGR_LOG_FORMAT` | string | `json` | `json` | 日志格式 |
-| `DATASOURCE_MGR_LOG_LEVEL` | string | `info` | `info` | 日志级别 |
-| `DATASOURCE_MGR_SHUTDOWN_TIMEOUT` | int | `5` | `10 ~ 30` | HTTP 优雅停机超时秒数 |
-| `DATASOURCE_MGR_STRICT_STORAGE` | bool | `true` | `true` | 严格存储模式 |
-| `DATASOURCE_MGR_RATE_LIMIT_RPS` | int | `100` | `200 ~ 500` | 每 IP 令牌桶 RPS |
-| `DATASOURCE_MGR_RATE_LIMIT_BURST` | int | `200` | `400 ~ 1000` | 令牌桶突发容量 |
-
-### 1.5 审计存证日志 (audit-log)
-
-> 不可篡改审计存证服务，REST (`:8084`) + gRPC (`:50054`)。
-
-#### 监听与生命周期
-
-| 环境变量 | 类型 | 默认值 | 生产建议 | 说明 |
-|---|---|---|---|---|
-| `AUDIT_LOG_HOST` | string | `127.0.0.1` | `0.0.0.0` | HTTP 监听地址 |
-| `AUDIT_LOG_PORT` | int | `8084` | `8084` | HTTP 监听端口 |
-| `AUDIT_LOG_GRPC_HOST` | string | `127.0.0.1` | `0.0.0.0` | gRPC 监听地址 |
-| `AUDIT_LOG_GRPC_PORT` | int | `50054` | `50054` | gRPC 监听端口 |
-| `AUDIT_LOG_LOG_FORMAT` | string | `json` | `json` | 日志格式：`json` / `text` |
-| `AUDIT_LOG_LOG_LEVEL` | string | `info` | `info` | 日志级别 |
-| `AUDIT_LOG_SHUTDOWN_TIMEOUT` | int | `5` | `10 ~ 30` | HTTP 优雅停机超时秒数 |
-| `AUDIT_LOG_CORS_ORIGINS` | string | `""` | 指定前端域名 | CORS 允许来源（逗号分隔） |
-
-#### TLS / mTLS / 认证
-
-| 环境变量 | 类型 | 默认值 | 生产建议 | 说明 |
-|---|---|---|---|---|
-| `AUDIT_LOG_TLS_ENABLED` | bool | `false` | `true` | 启用 TLS |
-| `AUDIT_LOG_TLS_CERT_FILE` | string | `""` | 证书路径 | 服务端证书 PEM |
-| `AUDIT_LOG_TLS_KEY_FILE` | string | `""` | 私钥路径 | 服务端私钥 PEM |
-| `AUDIT_LOG_TLS_CA_FILE` | string | `""` | CA 路径 | 客户端 CA 证书 |
-| `AUDIT_LOG_TLS_CLIENT_AUTH` | string | `""` | `require` | 客户端认证模式 |
-| `AUDIT_LOG_TLS_PINNED_PUBKEY_FILE` | string | `""` | SPKI PEM 路径 | SPKI 公钥钉选文件 |
-| `AUDIT_LOG_REQUIRE_TLS` | bool | `false` | `true` | 安全门控：TLS 未启用则拒绝启动 |
-| `AUDIT_LOG_API_KEY` | string | `""` | KMS 注入 | 入站写入 API Key（非回环绑定时必填） |
-| `AUDIT_LOG_READER_API_KEY` | string | `""` | KMS 注入 | 只读验证 API Key（P1-6 职责分离，必须与写入 Key 不同） |
-
-#### 数据库与存储
-
-| 环境变量 | 类型 | 默认值 | 生产建议 | 说明 |
-|---|---|---|---|---|
-| `AUDIT_LOG_DB_PATH` | string | `""` | `/var/lib/privshield/audit.db` | SQLite 数据库路径（空=内存模式） |
-| `AUDIT_LOG_PG_DSN` | string | `""` (回退 `PG_DSN`) | PostgreSQL 连接串 | Phase B 多副本 PostgreSQL DSN |
-| `AUDIT_LOG_PG_MAX_CONNS` | int | `0` (自动) | `N_cpu * 4` (max 64) | PostgreSQL 连接池最大并发（0=自动计算） |
-| `AUDIT_LOG_PG_MIN_CONNS` | int | `0` (自动) | `max(2, N_cpu)` | PostgreSQL 连接池最小保活（0=自动计算） |
-| `AUDIT_LOG_DB_WRITE_ONLY` | bool | `false` | `true` (生产) | 写-only 数据库账户模式：启动自检确认无 UPDATE/DELETE 权限（P1-6 存证不可删） |
-| `AUDIT_LOG_STRICT_STORAGE` | bool | `true` (回退 `STRICT_STORAGE`) | `true` | 严格存储模式：存储连接失败时立即退出，不静默回退内存 |
-
-#### 加密与哈希链
-
-| 环境变量 | 类型 | 默认值 | 生产建议 | 说明 |
-|---|---|---|---|---|
-| `AUDIT_LOG_ENCRYPTION_KEY` | string | `""` (回退 `PRIVACY_AUDIT_KEY`) | 32 位高强度随机串 | SM4-GCM 信封加密主密钥（快照样本 + 归档段加密，非回环绑定时必填，启用保留删除时必填） |
-| `AUDIT_LOG_HASH_KEY` | string | `""` | 密码学安全随机串 | HMAC-SM3 哈希链完整性密钥（由密码管理平台注入，空=无密钥 SM3 仅用于向后兼容） |
-
-#### 微批刷盘器调优
-
-| 环境变量 | 类型 | 默认值 | 内部有效默认 | 生产建议 | 说明 |
-|---|---|---|---|---|---|
-| `AUDIT_LOG_FLUSH_BATCH_SIZE` | int | `0` | `200` | `200 ~ 500` | 单批最大写入条数（0=使用内部默认） |
-| `AUDIT_LOG_FLUSH_INTERVAL_MS` | int | `0` | `20` (ms) | `20 ~ 50` | 最长刷盘等待时间窗口（毫秒） |
-| `AUDIT_LOG_FLUSH_QUEUE_SIZE` | int | `0` | `10000` | `10000 ~ 50000` | 环形缓冲队列容量 |
-| `AUDIT_LOG_FLUSH_ENQUEUE_TIMEOUT_MS` | int | `0` | `500` (ms) | `500 ~ 2000` | 队列满时等待可用槽位超时（毫秒，防越序与阻塞） |
-| `AUDIT_LOG_FLUSH_MAX_STAGED` | int | `0` | `50000` | `50000 ~ 100000` | 内存读己之写暂存映射上限（防存储故障期 OOM） |
-| `AUDIT_LOG_FLUSH_CLOSE_TIMEOUT_MS` | int | `0` | `10000` (ms) | `10000 ~ 30000` | 优雅停机排空等待超时（毫秒） |
-
-#### 归档与保留策略
-
-| 环境变量 | 类型 | 默认值 | 生产建议 | 说明 |
-|---|---|---|---|---|
-| `AUDIT_LOG_ARCHIVE_DIR` | string | `data/archives` | `/var/lib/privshield/archives` | 归档存证段写入目录（启用保留删除时必填） |
-| `AUDIT_LOG_ARCHIVE_PAGE_SIZE` | int | `0` (=500) | `500 ~ 2000` | 每归档批次拉取记录数（0=使用全局默认 500） |
-| `AUDIT_LOG_RETENTION_DAYS` | int | `0` | `0` 或 `>=1095` | 保留天数：`0`=永不物理删除（默认，符合数据安全法三年存证要求）；`>0` 时必须 `>=1095`（3 年），且必须配置归档目录与加密密钥。清理任务每 6 小时执行一次 |
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `AUDIT_LOG_RATE_LIMIT_RPS` | int | `100` | 每客户端 IP 令牌桶每秒补充速率（0 = 不限流） |
+| `AUDIT_LOG_RATE_LIMIT_BURST` | int | `200` | 每客户端 IP 令牌桶突发最大容量 |
 
 #### 上游 Agent 连接
 
 | 环境变量 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `PRIVACY_AGENT_REST_HOST` | string | `127.0.0.1` | 上游 Agent REST 主机 |
+| `PRIVACY_AGENT_REST_HOST` | string | `"127.0.0.1"` | 上游 Agent REST 主机地址 |
 | `PRIVACY_REST_PORT` | int | `8079` | 上游 Agent REST 端口 |
-| `PRIVACY_AGENT_API_KEY` | string | `""` | 上游 Agent API Key |
-| `PRIVACY_AGENT_URLS` | string | `""` | 多 Agent URL 列表（逗号分隔，覆盖单主机） |
+| `PRIVACY_AGENT_URLS` | []string | `nil` | 逗号分隔的上游 Agent REST URL 列表（多节点负载均衡/故障转移）；空时回退为单节点 `AgentBaseURL()` |
+
+### 1.3 service-hub 服务环境变量
+
+配置源：`services/service-hub/internal/config/config.go`
+
+#### 网络与监听
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `SERVICE_HUB_HOST` | string | `"127.0.0.1"` | HTTP 监听地址 |
+| `SERVICE_HUB_PORT` | int | `8082` | HTTP 监听端口 |
+| `SERVICE_HUB_GRPC_HOST` | string | `"127.0.0.1"` | gRPC 监听地址 |
+| `SERVICE_HUB_GRPC_PORT` | int | `50052` | gRPC 监听端口 |
+| `SERVICE_HUB_CORS_ORIGINS` | []string | `nil` | 逗号分隔的允许 CORS 来源列表 |
+| `SERVICE_HUB_SHUTDOWN_TIMEOUT` | int | `5` | HTTP 优雅停机超时（秒） |
+
+#### 日志
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `SERVICE_HUB_LOG_FORMAT` | string | `"json"` | 日志输出格式 |
+| `SERVICE_HUB_LOG_LEVEL` | string | `"info"` | 日志级别 |
+
+#### 调度引擎
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `SERVICE_HUB_MAX_QUEUE` | int | `1000` | 调度引擎最大任务等待队列深度 |
+| `SERVICE_HUB_SCHEDULE_TIMEOUT` | int | `30` | 单步任务调度/执行超时（秒） |
+| `SERVICE_HUB_RETENTION_DAYS` | int | `30` | 终态任务保留天数（0 = 永不清理） |
+| `SERVICE_HUB_LEASE_TTL` | int | `60` | 任务租约 TTL（秒） |
+
+#### 存储
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `SERVICE_HUB_DB_PATH` | string | `""` | SQLite 任务数据库路径（空 = 内存模式） |
+| `SERVICE_HUB_PG_DSN` | string | `""` | PostgreSQL 连接串（多副本 Hub 部署）；空 = 回退 SQLite |
+| `SERVICE_HUB_PG_MAX_CONNS` | int | `10` | PostgreSQL 最大连接池大小 |
+| `SERVICE_HUB_PG_MIN_CONNS` | int | `2` | PostgreSQL 最小常驻连接数 |
+| `SERVICE_HUB_STRICT_STORAGE` | bool | 继承 `STRICT_STORAGE` | 严格存储模式 |
+
+#### 上游数据源管理
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `DATASOURCE_MGR_HOST` | string | `"127.0.0.1"` | 数据源管理器 REST 主机 |
+| `DATASOURCE_MGR_PORT` | int | `8083` | 数据源管理器 REST 端口 |
+| `DATASOURCE_MGR_GRPC_HOST` | string | `"127.0.0.1"` | 数据源管理器 gRPC 主机 |
+| `DATASOURCE_MGR_GRPC_PORT` | int | `50053` | 数据源管理器 gRPC 端口 |
+| `SERVICE_HUB_DATASOURCE_API_KEY` | string | `""` | 外联 datasource-mgr 的 API Key |
+
+#### 审计日志外联
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `SERVICE_HUB_AUDIT_LOG_URLS` | []string | `nil` | 逗号分隔的 audit-log REST URL 列表（多副本轮询） |
+| `SERVICE_HUB_AUDIT_HTTP` | string | `""` | 回退单 audit-log URL（`SERVICE_HUB_AUDIT_LOG_URLS` 为空时使用）；均空则硬编码 `"http://audit-log:8084"` |
+| `SERVICE_HUB_AUDIT_LOG_API_KEY` | string | `""` | 外联 audit-log 的 API Key（主优先）；空时回退至 `AUDIT_LOG_API_KEY` |
+| `SERVICE_HUB_AUDIT_LOG_TIMEOUT` | int | `10` | 单次存证提交超时（秒） |
+| `SERVICE_HUB_AUDIT_LOG_MAX_RETRIES` | int | `3` | 存证提交网络错误/5xx 重试次数（0 = 不重试） |
+| `SERVICE_HUB_AUDIT_LOG_TLS_ENABLED` | bool | `false` | 外联 audit-log 是否使用 TLS 1.3 |
+| `SERVICE_HUB_AUDIT_LOG_TLS_CERT_FILE` | string | `""` | 客户端证书 PEM（回退至 `SERVICE_HUB_TLS_CERT_FILE`） |
+| `SERVICE_HUB_AUDIT_LOG_TLS_KEY_FILE` | string | `""` | 客户端私钥 PEM（回退至 `SERVICE_HUB_TLS_KEY_FILE`） |
+| `SERVICE_HUB_AUDIT_LOG_TLS_CA_FILE` | string | `""` | 根 CA 证书（回退至 `SERVICE_HUB_TLS_CA_FILE`） |
+
+#### 鉴权
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `SERVICE_HUB_API_KEY` | string | `""` | 入站 API Key |
+
+#### TLS / mTLS
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `SERVICE_HUB_TLS_ENABLED` | bool | `false` | 启用 TLS/mTLS |
+| `SERVICE_HUB_TLS_CERT_FILE` | string | `""` | 服务端 TLS 证书 PEM 路径 |
+| `SERVICE_HUB_TLS_KEY_FILE` | string | `""` | 服务端 TLS 私钥 PEM 路径 |
+| `SERVICE_HUB_TLS_CA_FILE` | string | `""` | CA 证书路径 |
+| `SERVICE_HUB_TLS_CLIENT_AUTH` | string | `""` | 客户端认证模式 |
+| `SERVICE_HUB_TLS_PINNED_PUBKEY_FILE` | string | `""` | 客户端固定公钥 PEM（SPKI） |
+| `SERVICE_HUB_REQUIRE_TLS` | bool | `false` | Fail-closed：为 `true` 时 TLS 未启用则启动失败 |
+| `PRIVACY_AUTH_MTLS_WHITELIST_FILE` | string | `""` | CN 白名单 YAML 文件路径 |
 
 #### 限流
 
-| 环境变量 | 类型 | 默认值 | 生产建议 | 说明 |
-|---|---|---|---|---|
-| `AUDIT_LOG_RATE_LIMIT_RPS` | int | `100` | `200 ~ 500` | 每 IP 令牌桶 RPS |
-| `AUDIT_LOG_RATE_LIMIT_BURST` | int | `200` | `400 ~ 1000` | 令牌桶突发容量 |
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `SERVICE_HUB_RATE_LIMIT_RPS` | int | `100` | 令牌桶速率（0 = 不限流） |
+| `SERVICE_HUB_RATE_LIMIT_BURST` | int | `200` | 令牌桶突发容量 |
 
-### 1.6 统一运维控制台 BFF (console/bff-go)
+#### 上游 Agent 连接
 
-> Go gRPC/HTTPS 代理网关，REST (`:8081`) + 可选 gRPC (`:50055`)。
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `PRIVACY_AGENT_REST_HOST` | string | `"127.0.0.1"` | 上游 Agent REST 主机 |
+| `PRIVACY_REST_PORT` | int | `8079` | 上游 Agent REST 端口 |
+| `PRIVACY_AGENT_API_KEY` | string | `""` | 上游 Agent API Key |
+| `PRIVACY_AGENT_URLS` | []string | `nil` | 多 Agent URL 列表 |
 
-| 环境变量 | 类型 | 默认值 | 生产建议 | 说明 |
-|---|---|---|---|---|
-| `PRIVACY_CONSOLE_HOST` | string | `127.0.0.1` | `0.0.0.0` | BFF HTTP 监听地址 |
-| `PRIVACY_CONSOLE_PORT` | int | `8081` | `8081` | BFF HTTP 监听端口 |
-| `PRIVACY_CONSOLE_STATIC_DIR` | string | `../web/dist` | — | 前端 SPA 静态资源目录（空=禁用） |
-| `CONSOLE_API_KEY` | string | `""` | KMS 注入 | BFF 入站 API Key |
-| `CONSOLE_RATE_LIMIT` | int | `600` | `600 ~ 1200` | 每 IP 每分钟速率限制 |
-| `CONSOLE_MAX_UPLOAD_BYTES` | int64 | `10485760` | `10485760` (10MB) | 最大上传字节数 |
-| `PRIVACY_CONSOLE_TLS_ENABLED` | bool | `false` | `true` | 启用 BFF 入站 TLS |
-| `PRIVACY_CONSOLE_REQUIRE_TLS` | bool | `false` | `true` | 安全门控 |
-| `PRIVACY_CONSOLE_TLS_CERT_FILE` | string | `""` | 证书路径 | BFF 服务端证书 |
-| `PRIVACY_CONSOLE_TLS_KEY_FILE` | string | `""` | 私钥路径 | BFF 服务端私钥 |
-| `PRIVACY_CONSOLE_TLS_CA_FILE` | string | `""` | CA 路径 | 客户端 CA 证书 |
-| `PRIVACY_CONSOLE_TLS_CLIENT_AUTH` | string | `""` | `require` | 客户端认证模式 |
-| `PRIVACY_CONSOLE_TLS_PINNED_PUBKEY_FILE` | string | `""` | SPKI PEM 路径 | 公钥钉选文件 |
-| `PRIVACY_CONSOLE_GRPC_ENABLED` | bool | `false` | `true` | 启用 BFF gRPC 代理 |
-| `PRIVACY_CONSOLE_GRPC_HOST` | string | `127.0.0.1` | `0.0.0.0` | BFF gRPC 监听地址 |
-| `PRIVACY_CONSOLE_GRPC_PORT` | int | `50055` | `50055` | BFF gRPC 监听端口 |
-| `PRIVACY_AGENT_GRPC_HOST` | string | `127.0.0.1` | Agent gRPC 地址 | 上游 Agent gRPC 主机 |
-| `PRIVACY_AGENT_GRPC_PORT` | int | `50051` | `50051` | 上游 Agent gRPC 端口 |
-| `PRIVACY_AGENT_TLS_ENABLED` | bool | `false` | `true` | 启用上游 Agent TLS |
-| `PRIVACY_AGENT_TLS_CERT_FILE` | string | `""` | 客户端证书路径 | 客户端证书 PEM |
-| `PRIVACY_AGENT_TLS_KEY_FILE` | string | `""` | 客户端私钥路径 | 客户端私钥 PEM |
-| `PRIVACY_AGENT_TLS_CA_FILE` | string | `""` | CA 路径 | CA 证书 PEM |
-| `PRIVACY_AGENT_TLS_SERVER_NAME` | string | `""` | 服务端 CN | TLS ServerName 覆盖 |
-| `PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY` | bool | `false` | `false` | 跳过服务端证书验证（仅测试） |
-| `PRIVACY_AGENT_RETRY_MAX_ATTEMPTS` | int | `6` | `6 ~ 10` | gRPC 重试最大尝试次数 |
-| `PRIVACY_AGENT_RETRY_INITIAL_BACKOFF` | int | `1` | `1` | 初始重试退避秒数 |
-| `PRIVACY_AGENT_RETRY_MAX_BACKOFF` | int | `8` | `8` | 最大重试退避秒数 |
-| `PRIVACY_GRPC_CALL_TIMEOUT` | duration | `60s` | `60s ~ 120s` | gRPC 调用超时 |
-| `BFF_HUB_URL` | string | `http://127.0.0.1:8082` | 内网 Hub 地址 | 调度中枢 HTTP URL |
-| `BFF_DATASOURCE_URL` | string | `http://127.0.0.1:8083` | 内网数据源地址 | 数据源管理器 HTTP URL |
-| `BFF_AUDIT_URL` | string | `http://127.0.0.1:8084` | 内网审计地址 | 审计日志 HTTP URL |
-| `BFF_HUB_API_KEY` | string | `""` | KMS 注入 | 调用调度中枢 API Key |
-| `BFF_DATASOURCE_API_KEY` | string | `""` | KMS 注入 | 调用数据源管理器 API Key |
-| `BFF_AUDIT_API_KEY` | string | `""` | KMS 注入 | 调用审计日志 API Key |
-| `LB_ALLOWED_HOSTS` | string | `""` | 探针域名列表 | 负载均衡探针主机白名单 |
+### 1.4 datasource-mgr 服务环境变量
 
-### 1.7 跨服务共享环境变量
+配置源：`services/datasource-mgr/internal/config/config.go`
 
-以下环境变量被多个服务共同消费，需在部署编排中统一配置：
+| 环境变量 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `DATASOURCE_MGR_HOST` | string | `"127.0.0.1"` | HTTP 监听地址 |
+| `DATASOURCE_MGR_PORT` | int | `8083` | HTTP 监听端口 |
+| `DATASOURCE_MGR_GRPC_HOST` | string | `"127.0.0.1"` | gRPC 监听地址 |
+| `DATASOURCE_MGR_GRPC_PORT` | int | `50053` | gRPC 监听端口 |
+| `DATASOURCE_MGR_LOG_FORMAT` | string | `"json"` | 日志格式 |
+| `DATASOURCE_MGR_LOG_LEVEL` | string | `"info"` | 日志级别 |
+| `DATASOURCE_MGR_SHUTDOWN_TIMEOUT` | int | `5` | 优雅停机超时（秒） |
+| `DATASOURCE_MGR_API_KEY` | string | `""` | 入站 API Key |
+| `DATASOURCE_MGR_CORS_ORIGINS` | []string | `nil` | CORS 允许来源 |
+| `DATASOURCE_MGR_REQUIRE_TLS` | bool | `false` | Fail-closed TLS 门禁 |
+| `DATASOURCE_MGR_STRICT_STORAGE` | bool | 继承 `STRICT_STORAGE` | 严格存储模式 |
+| `DATASOURCE_MGR_TLS_ENABLED` | bool | `false` | 启用 TLS |
+| `DATASOURCE_MGR_TLS_CERT_FILE` | string | `""` | 服务端证书路径 |
+| `DATASOURCE_MGR_TLS_KEY_FILE` | string | `""` | 服务端私钥路径 |
+| `DATASOURCE_MGR_TLS_CA_FILE` | string | `""` | CA 证书路径 |
+| `DATASOURCE_MGR_TLS_CLIENT_AUTH` | string | `""` | 客户端认证模式 |
+| `DATASOURCE_MGR_TLS_PINNED_PUBKEY_FILE` | string | `""` | 客户端固定公钥 PEM |
+| `PRIVACY_AUTH_MTLS_WHITELIST_FILE` | string | `""` | CN 白名单文件 |
+| `DATASOURCE_MGR_RATE_LIMIT_RPS` | int | `100` | 令牌桶速率 |
+| `DATASOURCE_MGR_RATE_LIMIT_BURST` | int | `200` | 令牌桶突发容量 |
 
-| 环境变量 | 消费服务 | 说明 |
+### 1.5 跨服务共享变量
+
+以下变量被多个服务读取，需确保全局一致配置：
+
+| 变量 | 使用方 | 用途 |
 |---|---|---|
-| `PRIVACY_AUTH_MTLS_WHITELIST_FILE` | agent, service-hub, datasource-mgr, audit-log, console/bff-go | mTLS CN 白名单 YAML 路径 |
-| `PRIVACY_REST_PORT` | agent, service-hub, audit-log, console/bff-go | Agent REST 端口（其他服务作为上游引用） |
-| `PRIVACY_AGENT_REST_HOST` | service-hub, audit-log, console/bff-go | Agent REST 主机（其他服务作为上游引用） |
-| `PRIVACY_AGENT_API_KEY` | service-hub, audit-log, console/bff-go | Agent API Key（其他服务作为上游认证） |
-| `STRICT_STORAGE` | 四个微服务（回退默认） | 全局严格存储模式开关（各服务 `*_STRICT_STORAGE` 优先） |
-| `PG_DSN` | audit-log（回退） | 遗留 PostgreSQL DSN（`AUDIT_LOG_PG_DSN` 为空时回退） |
-| `PRIVACY_AUDIT_KEY` | audit-log（回退） | 遗留加密密钥（`AUDIT_LOG_ENCRYPTION_KEY` 为空时回退） |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | 全服务（`pkg/observability`） | OpenTelemetry OTLP 导出端点 |
-| `PRIVACY_SERVICE_NAME` | 全服务（`pkg/observability`） | 追踪服务名标识 |
+| `PRIVACY_AGENT_REST_HOST` | audit-log, service-hub | 上游 Agent REST 主机 |
+| `PRIVACY_REST_PORT` | audit-log, service-hub | 上游 Agent REST 端口 |
+| `PRIVACY_AGENT_API_KEY` | audit-log, service-hub | 上游 Agent 鉴权密钥 |
+| `PRIVACY_AGENT_URLS` | audit-log, service-hub | 多 Agent 负载均衡 URL 列表 |
+| `PRIVACY_AUTH_MTLS_WHITELIST_FILE` | audit-log, service-hub, datasource-mgr | mTLS CN 白名单 YAML 路径 |
+| `STRICT_STORAGE` | audit-log, service-hub, datasource-mgr | 全局严格存储模式回退默认值 |
+| `AUDIT_LOG_API_KEY` | audit-log (入站), service-hub (出站回退) | 审计日志 API 密钥 |
+| `PG_DSN` | audit-log (回退) | PostgreSQL DSN 回退 |
+| `PRIVACY_AUDIT_KEY` | audit-log (回退) | 加密密钥回退 |
+| `DATASOURCE_MGR_HOST/PORT/GRPC_HOST/GRPC_PORT` | datasource-mgr (自身), service-hub (出站) | 数据源管理器连接参数 |
+
+### 1.6 可观测性与迁移工具变量
+
+| 环境变量 | 使用场景 | 说明 |
+|---|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `pkg/observability/tracing.go` | 分布式追踪 OTLP 端点（设置后启用追踪） |
+| `PRIVACY_SERVICE_NAME` | `pkg/observability/tracing.go` | 追踪服务名称（默认 `"PrivShield"`） |
+| `PRIVSHIELD_PG_TEST_DSN` | 集成测试 | PostgreSQL 集成测试 DSN |
+| `PRIVSHIELD_MIGRATE_PG_DSN` | `pkg/store/cmd/migrate` | 迁移目标 PostgreSQL DSN |
+| `PRIVSHIELD_MIGRATE_SNAPSHOT_VERIFY` | `pkg/store/cmd/migrate` | 快照验证模式 |
+| `AUDIT_LOG_DB_PATH` | `pkg/store/cmd/repairchain` | 修复链工具的 SQLite 路径 |
 
 ---
 
-## 二、存储引擎运维与性能调优
+## 二、存储引擎运维
 
-### 2.1 SQLite WAL 生产模式配置
+### 2.1 SQLite WAL 生产模式与完整性校验
 
-当部署为单节点轻量网关时，系统采用嵌入式 SQLite 作为存储。
+当部署为单节点轻量网关时，系统采用嵌入式 SQLite 作为存储引擎。
 
-#### 关键 PRAGMA 参数与机制：
-1. **WAL 模式 (`PRAGMA journal_mode=WAL`)**：
-   * 写入追加到 `-wal` 文件，读操作直接读取主库与 WAL 快照，实现读写互不阻塞；
-2. **锁重试超时 (`PRAGMA busy_timeout=5000`)**：
-   * 遇到瞬间写锁冲突时，自动在内核层进行最长 5,000ms 的指数重试，消除 `database is locked` 偶发异常；
-3. **安全同步级别 (`PRAGMA synchronous=NORMAL`)**：
-   * 相比 `FULL` 提升 10 倍以上写入性能，且在现代文件系统与 WAL 机制下仍保证掉电不损坏；
-4. **外键约束 (`PRAGMA foreign_keys=ON`)**：
-   * 级联保障快照表与审计日志表的数据完整性。
+#### 关键 PRAGMA 参数
 
-> [!TIP]
-> **目录与权限建议**：确保 `DB_PATH` 所在目录具有可写权限，且同目录下有足够的磁盘空间用于生成 `-wal` 和 `-shm` 共享内存文件。
+1. **WAL 模式 (`PRAGMA journal_mode=WAL`)**：写入追加到 `-wal` 文件，读操作直接读取主库与 WAL 快照，实现读写互不阻塞。
+2. **锁重试超时 (`PRAGMA busy_timeout=5000`)**：遇到瞬时写锁冲突时自动在 5,000ms 内指数重试，消除 `database is locked` 偶发异常。实际 DSN 中配置为 `busy_timeout(10000)`。
+3. **安全同步级别 (`PRAGMA synchronous=NORMAL`)**：相比 `FULL` 提升 10 倍以上写入性能，在 WAL 模式下保证掉电不损坏。
+4. **外键约束 (`PRAGMA foreign_keys=ON`)**：级联保障快照表与审计日志表的数据完整性。
+
+#### 连接池约束（P24 fix）
+
+SQLite 同一时间仅支持一个写入者，连接池参数严格限制：
+
+| 参数 | 值 | 说明 |
+|---|---|---|
+| `MaxOpenConns` | 4 | 最大打开连接数 |
+| `MaxIdleConns` | 2 | 最大空闲连接数 |
+| `MaxConnLifetime` | 5m | 连接最大生命周期 |
+
+#### 启动完整性校验 — `sqlite.ValidateIntegrity`
+
+```go
+// pkg/store/sqlite/init.go
+func ValidateIntegrity(dbPath string) error
+```
+
+通过执行 `PRAGMA integrity_check` 在启动早期探测突发断电导致的数据库文件损坏：
+
+- `dbPath` 为空 → 返回 `nil`（内存模式无需校验）
+- 结果为 `"ok"` → 通过
+- 其他 → 返回 `error`，服务应拒绝启动
+
+**运维操作**：
+
+```bash
+# 手动检查 SQLite 完整性
+sqlite3 /var/lib/privshield/data.db "PRAGMA integrity_check;"
+
+# 检查 WAL 文件状态
+ls -la /var/lib/privshield/data.db*
+```
+
+> **目录与权限建议**：确保 `DB_PATH` 所在目录具有可写权限，且同目录下有足够磁盘空间用于生成 `-wal` 和 `-shm` 共享内存文件。
 
 ### 2.2 PostgreSQL Phase B 分布式集群与连接池调优
 
-面向政务云多副本高并发部署场景，配置 `PG_DSN` 即可无缝切换至 PostgreSQL 存储集群。
+面向政务云多副本高并发部署场景，配置 DSN 即可无缝切换至 PostgreSQL 存储集群。
 
-#### 2.2.1 自适应连接池计算公式 (`pkg/store/postgres/postgres.go`)
-系统根据宿主机/容器的可用 CPU 核心数自动调整连接池大小：
-$$\text{MaxConns} = \min\left(64, \max\left(10, N_{cpu} \times 4\right)\right)$$
-$$\text{MinConns} = \min\left(\text{MaxConns}, \max\left(2, N_{cpu}\right)\right)$$
+#### 容器感知的自适应连接池
 
-* 连接最大空闲时间：`30m`；
-* 连接最长生命周期：`1h`；
-* 健康检查探测周期：`1m`。
+`pkg/store/postgres/postgres.go` 中的 `effectiveNumCPU()` 函数自动探测容器真实 CPU 配额（支持 cgroup v1 和 v2），计算公式：
 
-> [!NOTE]
-> 审计日志服务 (`audit-log`) 可通过 `AUDIT_LOG_PG_MAX_CONNS` / `AUDIT_LOG_PG_MIN_CONNS` 显式覆盖自动计算值（设为 0 则使用上述自适应公式）。调度中枢 (`service-hub`) 同理使用 `SERVICE_HUB_PG_MAX_CONNS` / `SERVICE_HUB_PG_MIN_CONNS`。
-
-#### 2.2.2 审计日志原生分区管理
-PostgreSQL 审计日志表 `audit_logs` 采用按月范围分区（Range Partitioning）：
-```sql
-CREATE TABLE IF NOT EXISTS audit_logs (
-    id VARCHAR(64) NOT NULL,
-    task_id VARCHAR(64),
-    timestamp TIMESTAMPTZ NOT NULL,
-    operation VARCHAR(32) NOT NULL,
-    ...
-    PRIMARY KEY (id, timestamp)
-) PARTITION BY RANGE (timestamp);
-
--- 月度分区示例
-CREATE TABLE IF NOT EXISTS audit_logs_y2026m08 PARTITION OF audit_logs
-    FOR VALUES FROM ('2026-08-01 00:00:00+00') TO ('2026-09-01 00:00:00+00');
+```
+MaxConns = clamp(effectiveNumCPU * 4, 10, 100)
+MinConns = clamp(effectiveNumCPU, 2, 20)
 ```
 
-### 2.3 数据库自动化迁移工具 (`store/cmd/migrate`)
+其中 `clamp(value, min, max)` 将值限制在 `[min, max]` 范围内。不变式约束：`MinConns <= MaxConns`。
 
-`pkg/store/cmd/migrate` 提供了独立且幂等的数据库 Schema 升级 CLI 工具：
+手动覆盖时通过 `*_PG_MAX_CONNS` / `*_PG_MIN_CONNS` 环境变量指定。
+
+#### 连接生命周期管理
+
+| 参数 | 值 | 说明 |
+|---|---|---|
+| `HealthCheckPeriod` | 30s | 连接健康检查探测周期 |
+| `MaxConnLifetime` | 30m | 连接最长生命周期 |
+| `MaxConnIdleTime` | 5m | 空闲连接最大存活时间 |
+
+#### 初始化探测
+
+连接池创建后执行 3 秒超时 Ping 探活，失败则立即返回错误；随后在 30 秒超时内执行 Schema 初始化。
+
+#### 无锁原子租约抢占
+
+PostgreSQL 后端通过 `FOR UPDATE SKIP LOCKED` 实现多 Hub 节点并发竞争式任务领取（`ClaimNext`），无需外部分布式锁（如 Redis/ZooKeeper）。
+
+### 2.3 数据库自动化迁移工具
+
+#### SQLite → PostgreSQL 迁移 (`pkg/store/cmd/migrate`)
 
 ```bash
 # 查看帮助
@@ -446,326 +410,285 @@ go run pkg/store/cmd/migrate/main.go -driver sqlite -dsn /var/lib/privshield/dat
 go run pkg/store/cmd/migrate/main.go -driver postgres -dsn "postgres://user:pwd@127.0.0.1:5432/privshield?sslmode=disable"
 ```
 
-相关环境变量：
-| 环境变量 | 默认值 | 说明 |
-|---|---|---|
-| `PRIVSHIELD_MIGRATE_PG_DSN` | `""` | 迁移工具目标 PostgreSQL DSN |
-| `PRIVSHIELD_MIGRATE_SNAPSHOT_VERIFY` | `skip` | 迁移快照验证模式 |
+特性：幂等插入、哈希链序保持、快照 SM4-GCM 解密验证、迁移后链式验真。
 
-### 2.4 归档存证段运维
+#### 哈希链修复工具 (`pkg/store/cmd/repairchain`)
 
-归档存证段是审计日志保留策略的物理载体，采用加密压缩 + 行哈希链的防篡改格式。
+```bash
+# 只读验链
+go run pkg/store/cmd/repairchain/main.go -mode verify -db /var/lib/privshield/audit.db
 
-#### 归档段文件命名规范
+# 修复断裂链接
+go run pkg/store/cmd/repairchain/main.go -mode repair -db /var/lib/privshield/audit.db
 
-```
-audit-archive-<cutoff>-<seq>.ndjson.gz.enc
-```
-
-| 字段 | 格式 | 说明 |
-|---|---|---|
-| `<cutoff>` | `20060102T150405Z` | 归档截止时间（UTC） |
-| `<seq>` | `%06d` (零填充 6 位) | 同截止时间自增序号，防覆盖（最大 999999） |
-
-#### 清单文件 (Manifest)
-
-每个归档段对应一个 JSON 清单文件：
-
-```
-audit-archive-<cutoff>-<seq>.manifest.json
+# 重签为 HMAC-SM3:v1（注入 AUDIT_LOG_HASH_KEY 后使用）
+go run pkg/store/cmd/repairchain/main.go -mode resign -db /var/lib/privshield/audit.db
 ```
 
-清单结构：
+三种模式：
+- `verify`：扫描链，将记录分类为 canonical / legacy / re-anchor / tampered
+- `repair`：重新锚定断裂的 `prev_hash` 链接并级联重算 `integrity_hash`
+- `resign`：将存量记录升级为 HMAC-SM3 密钥化口径
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `version` | string | 固定 `"privshield-audit-archive/v1"` |
-| `chain_algo` | string | 哈希链算法标识 `"SM3-LINE-CHAIN:v1"` |
-| `encryption` | string | 加密方式标识 `"SM4-GCM/HKDF-SM3(enc:v2)"` |
-| `segment_file` | string | 对应的段文件名 |
-| `created_at` | timestamp | 归档创建时间 |
-| `cutoff` | timestamp | 归档截止时间 |
-| `log_count` | int64 | 归档审计日志条数 |
-| `snapshot_count` | int64 | 归档快照条数 |
-| `first_log_id` | string | 首条日志 ID |
-| `last_log_id` | string | 末条日志 ID |
-| `first_timestamp` | timestamp | 首条日志时间戳 |
-| `last_timestamp` | timestamp | 末条日志时间戳 |
-| `chain_tail` | string | 行哈希链尾值（SM3 累积哈希） |
+### 2.4 归档运维
 
-#### 段内容管线
+#### 归档段文件格式
 
-1. 审计日志与关联快照序列化为 NDJSON 行（`kind: "log"` 或 `kind: "snapshot"`）；
-2. 每行携带 `parameters_json` 字段（因 `store.AuditLog.ParametersJSON` 标记了 `json:"-"`）；
-3. 行哈希链推进：`chain[i] = SM3(chain[i-1] || line[i])`；
-4. Gzip 压缩；
-5. SM4-GCM 信封加密（`enc:v2` 格式，HKDF-SM3 每段派生独立密钥）；
-6. 原子写入 (`O_CREATE|O_EXCL|O_WRONLY` + `fsync`)；
-7. **写后立即回读验证**：写入后对刚落盘的段执行 `VerifySegment` 全量校验，不通过则中止后续删除。
+归档系统在 `AUDIT_LOG_ARCHIVE_DIR` 目录下产出两种文件：
 
-> [!WARNING]
-> **路径穿越防护**：归档器通过 `resolveInDir` 拒绝含 `/`、`\`、`..` 的文件名，并验证解析后路径仍在归档目录内。
+| 文件名模式 | 内容 |
+|---|---|
+| `audit-archive-<cutoff>-<seq>.ndjson.gz.enc` | SM4-GCM(gzip(NDJSON 记录行)) |
+| `audit-archive-<cutoff>-<seq>.manifest.json` | 段元数据清单 |
 
-### 2.5 严格存储模式 (Strict Storage)
+**文件名规则**：
+- `<cutoff>`：截止时间 UTC 格式 `20060102T150405Z`
+- `<seq>`：6 位序号 `%06d`（从 000000 起递增，绝不覆盖既有归档）
 
-所有微服务默认启用严格存储模式 (`STRICT_STORAGE=true`)。
+**段文件内部结构**：
+1. 每行一条 NDJSON 记录（`{"kind":"log",...}` 或 `{"kind":"snapshot",...}`）
+2. 全部行经 gzip 压缩
+3. 压缩结果经 SM4-GCM 信封加密（`enc:v2:` 格式），密钥来自 `AUDIT_LOG_ENCRYPTION_KEY`
 
-**行为规则**：
-- 数据库连接失败时，服务**立即退出** (`log.Fatalf`)，不会静默回退到内存模式；
-- 防止在生产环境中因数据库不可达而丢失数据或在不可靠存储上继续服务；
-- 各服务可通过 `*_STRICT_STORAGE` 独立覆盖（如 `AUDIT_LOG_STRICT_STORAGE`、`SERVICE_HUB_STRICT_STORAGE` 等）；
-- 全局 `STRICT_STORAGE` 作为各服务未设置时的级联回退默认值。
+**行哈希链**：`chain[i] = SM3(chain[i-1] || line[i])`，链尾值写入清单。
 
-**排查**：若服务启动时因存储连接失败而立即退出，检查：
-1. 数据库文件路径是否可写（SQLite）或 DSN 是否正确（PostgreSQL）；
-2. 如确需在开发环境使用内存模式，显式设置 `*_STRICT_STORAGE=false`。
+#### 清单（Manifest）结构
+
+```json
+{
+  "version": "privshield-audit-archive/v1",
+  "chain_algo": "SM3-LINE-CHAIN:v1",
+  "encryption": "SM4-GCM/HKDF-SM3(enc:v2)",
+  "segment_file": "audit-archive-20260801T000000Z-000000.ndjson.gz.enc",
+  "created_at": "2026-08-01T00:00:00Z",
+  "cutoff": "2026-08-01T00:00:00Z",
+  "log_count": 500,
+  "snapshot_count": 500,
+  "first_log_id": "log-xxx",
+  "last_log_id": "log-yyy",
+  "first_timestamp": "2025-01-01T00:00:00Z",
+  "last_timestamp": "2026-07-31T23:59:59Z",
+  "chain_tail": "a1b2c3..."
+}
+```
+
+#### 归档验证流程
+
+`VerifySegment` 函数可独立验真任何归档段（无需访问数据库）：
+
+1. 读取并解析清单文件
+2. 使用密钥解密段文件（SM4-GCM）
+3. gzip 解压得到 NDJSON 原始行
+4. 逐行重算行哈希链 `SM3(chain[i-1] || line[i])`，与清单 `chain_tail` 比对
+5. 校验日志条数、快照条数、边界 ID 与边界时间戳
+6. 对每条日志重算 9 要素 `integrity_hash`，与记录自身存储值比对
+
+#### 归档-before-删除工作流
+
+`Archiver.ArchiveAndCleanup` 执行严格的先归档后删除红线：
+
+1. 从底层存储按链序（旧→新）取出一页到期记录（默认 500 条）
+2. 写入归档段文件 + 清单文件（fsync 确保持久化）
+3. **立即回读验真**（`VerifySegment`），验真失败则拒绝删除
+4. 按该页 ID 精确删除日志及级联快照
+5. 删除失败则中止（不会继续归档下一页，防止「档而未删」或「删而未档」）
+6. 循环直到无更多到期记录
+
+#### 归档故障恢复
+
+| 故障场景 | 处理方式 |
+|---|---|
+| 段文件解密失败 | 检查 `AUDIT_LOG_ENCRYPTION_KEY` 是否与写入时一致 |
+| 行哈希链不匹配 | 段文件被篡改、截断或行序被打乱；需从备份恢复 |
+| 归档成功但删除失败 | 安全中止，不重复归档；手动排查存储连接后重试 |
+| 目录权限不足 | 确保归档目录权限 `0o700`，进程用户可写 |
+| 磁盘空间不足 | `writeFsync` 会在写入后执行 `fsync`，空间不足时立即报错 |
 
 ---
 
-## 三、商用密码与 mTLS 证书安全运维
+## 三、密码运维
 
-### 3.1 国密 SM4 信封加密与密钥管理
+### 3.1 信封加密体系
 
-快照存证表中的 `input_sample` 与 `output_sample` 在落盘前自动通过 `AUDIT_LOG_ENCRYPTION_KEY` 进行 SM4-GCM 认证加密。归档段同样使用此密钥加密。
+`pkg/crypto/envelope.go` 实现基于国密 SM4-GCM (GB/T 32907-2016) 的信封加密。
 
-#### enc:v2 信封格式（当前写入格式）
+**核心参数**：
 
-```
-enc:v2:<Base64( 16-byte salt + 12-byte nonce + SM4-GCM ciphertext + 16-byte auth tag )>
-```
+| 参数 | 值 | 说明 |
+|---|---|---|
+| SM4 密钥长度 | 128 位 (16 字节) | GB/T 32907-2016 标准 |
+| GCM Nonce | 12 字节 | 标准 AEAD 随机数 |
+| GCM Auth Tag | 16 字节 | 认证标签，防篡改 |
+| AAD | 版本前缀 | `"enc:v2:"` 参与认证，防前缀剥离降级 |
 
-**加密流程**：
-1. 拒绝空密钥（返回 `ErrEmptyKey`，无静默明文回退）；
-2. 生成 16 字节随机 salt + 12 字节随机 nonce（`crypto/rand.Reader`）；
-3. 通过 HKDF-Extract/Expand（HMAC-SM3）派生每记录独立的 16 字节 SM4 密钥：
-   - Extract: `HMAC-SM3(salt, secret)`
-   - Expand: 迭代 HMAC-SM3，info = `"PrivShield audit snapshot SM4-GCM v2"`
-4. 使用 SM4-GCM 密封，AAD = `"enc:v2:"`（版本前缀绑定，防降级攻击）；
-5. 输出 `enc:v2:<base64(salt || nonce || ciphertext || tag)>`。
+**落盘格式规范**：
 
-**解密流程**：
-- 按前缀自动分派：`enc:v2:` -> HKDF 密钥派生 + GCM 开启；`enc:v1:` -> SHA-256 密钥派生 + GCM 开启；
-- 无 recognized 前缀的值返回 `ErrUnencryptedValue`（防止前缀剥离降级攻击）。
+| 版本 | 格式 | 密钥派生 | 状态 |
+|---|---|---|---|
+| v2 (当前) | `enc:v2:<Base64(16B salt + 12B nonce + SM4密文 + 16B tag)>` | HKDF-SM3(salt, secret) | **当前写入格式** |
+| v1 (遗留) | `enc:v1:<Base64(12B nonce + SM4密文 + 16B tag)>` | SHA-256(secret)[:16] | **仅可读，不再写入** |
 
-#### enc:v1 遗留格式（仅读取兼容）
+### 3.2 enc:v2: 密钥管理（HKDF-SM3 派生）
 
-```
-enc:v1:<Base64( 12-byte nonce + SM4-GCM ciphertext + 16-byte auth tag )>
-```
+`DeriveKeyHKDF` 使用 RFC 5869 HKDF（Extract-then-Expand），以 SM3 为底层杂凑函数：
 
-- v1 密钥派生：`SHA-256(secret)[:16]`（弱，仅保留向后兼容读取）。
+1. **Extract 阶段**：`PRK = HMAC-SM3(salt, secret)`
+   - 每条记录独立生成 16 字节密码学安全随机 salt（`crypto/rand.Reader`）
+   - 同一口令在不同记录上产出完全不同的派生密钥
+2. **Expand 阶段**：`Key = HKDF-Expand(PRK, info, 16)`
+   - `info = "PrivShield audit snapshot SM4-GCM v2"` 将派生密钥绑定到「审计快照加密」用途
+3. **加密阶段**：`SM4-GCM-Seal(key, nonce, plaintext, aad="enc:v2:")`
+   - 版本前缀作为 AAD 参与认证，剥离/改写前缀会导致认证失败
 
-#### 密钥生成
+**密钥生成**：
 
 ```bash
 # 生成 256 位（32 字符）高强度随机主密钥
 openssl rand -hex 16
+
+# 或通过 K8s Secret 注入
+kubectl create secret generic privshield-audit \
+  --from-literal=AUDIT_LOG_ENCRYPTION_KEY=$(openssl rand -hex 16)
 ```
 
-#### 密钥注入
+**安全保证**：
+- 密钥为空时写入路径直接返回 `ErrEmptyKey`，**绝不静默降级为明文**
+- 无前缀密文返回 `ErrUnencryptedValue`，防止剥离前缀降级攻击
 
-严禁将密钥明文写入配置文件或 Git 仓库，必须通过以下途径注入：
-1. 政务云 KMS 托管分发；
-2. Kubernetes Secret 挂载；
-3. 专属环境变量 `AUDIT_LOG_ENCRYPTION_KEY`（回退 `PRIVACY_AUDIT_KEY`）。
+### 3.3 enc:v1: 遗留迁移
 
-#### 密钥轮转策略
+v1 格式使用 `SHA-256(secret)[:16]` 弱派生，无逐记录 salt，存在离线暴破风险。
 
-**信封加密轮转**：
-1. 旧数据保留 `enc:v2:...` 头部标记；
-2. 更换 `AUDIT_LOG_ENCRYPTION_KEY` 后，新写入数据自动使用新密钥；
-3. 历史数据仍可通过旧密钥解密（需保留旧密钥的离线归档备份）；
-4. 批量重加密：通过离线脚本读取旧数据、用旧密钥解密、再用新密钥重新加密存盘。
+**迁移流程**：
 
-**哈希链密钥轮转**：参见 [3.2 HMAC-SM3 哈希链密钥注入与轮转](#32-hmac-sm3-哈希链密钥注入与轮转)。
-
-### 3.2 HMAC-SM3 哈希链密钥注入与轮转
-
-审计日志的不可篡改完整性由 HMAC-SM3 哈希链保障。链密钥在进程启动时通过原子操作注入：
-
-```go
-store.SetAuditChainKey(cfg.HashKey)   // 原子写入 atomic.Pointer[string]
-```
-
-#### 哈希计算规则
-
-**审计日志链推进**（9 元素前像）：
-```
-prev_hash | log_id | timestamp_utc | algorithm | input_hash | output_hash | user | security_level | params_json
-```
-
-- 时间戳归一化：`timestamp.UTC().Format(time.RFC3339Nano)`；
-- 配置了链密钥：`HMAC-SM3(key, "SM3-HMAC:v1|" + payload)` -> 标签 `SM3-HMAC:v1`；
-- 未配置链密钥：`SM3(payload)` -> 标签 `SM3`（仅向后兼容，生产必须配置密钥）。
-
-**快照完整性哈希**（8 元素前像）：
-```
-snapshotID | auditLogID | prevHash | timestamp | algorithm | inputSample | outputSample | parametersJSON
-```
-
-- 配置了链密钥：`HMAC-SM3(key, "SM3-HMAC:v1-SNAPSHOT|" + payload)`；
-- 未配置链密钥：`SM3(payload)`。
-
-#### 多轨验证机制
-
-`VerifyAuditIntegrityHash` 按以下优先级依次尝试匹配：
-1. HMAC-SM3 (密钥模式，如已配置)
-2. SM3-UTC
-3. SHA-256-UTC
-4. SM3-LocalTZ
-5. SHA-256-LocalTZ
-
-返回 `(bool, label)` 标识是否通过及匹配算法。
-
-#### 链密钥轮转 (`pkg/store/cmd/repairchain`)
-
-`repairchain` CLI 工具提供三种模式：
-
-| 模式 | 说明 |
-|---|---|
-| `verify` (默认) | 只读扫描，分类每条记录为 `canonical` / `legacy` / `re-anchor` / `tampered`，拒绝修复篡改记录 |
-| `repair` | 从首个断链点重锚 `prev_hash`，级联重算 `integrity_hash`，单事务完成，自动 `.bak` 备份 |
-| `resign` | 注入新 `AUDIT_LOG_HASH_KEY`，将所有遗留记录从 SM3/SHA-256 升级到 `SM3-HMAC:v1`，从头重写审计日志与快照表，单事务完成 |
-
-**安全不变量**：
-- 篡改记录**永不**被重新签名（保留取证证据）；
-- 写操作模式执行前自动创建 `.bak` 备份；
-- 时间戳必须 RFC3339Nano 字节级往返一致；
-- 写后验证确认所有记录状态为 `canonical`。
+1. 确认 `AUDIT_LOG_ENCRYPTION_KEY` 已设置为新密钥
+2. 运行迁移工具解密旧数据并以新格式重新加密：
 
 ```bash
-# 验证链完整性（只读）
-AUDIT_LOG_HASH_KEY="your-key" go run pkg/store/cmd/repairchain/main.go -mode verify
-
-# 升级到 HMAC 密钥模式
-AUDIT_LOG_HASH_KEY="new-key" AUDIT_LOG_DB_PATH=/var/lib/privshield/audit.db \
-  go run pkg/store/cmd/repairchain/main.go -mode resign
+# 快照验证模式迁移
+go run pkg/store/cmd/migrate/main.go \
+  -driver sqlite \
+  -dsn /var/lib/privshield/data.db \
+  -snapshot-verify full
 ```
 
-### 3.3 mTLS 客户端证书与 CN 白名单热加载
+3. 迁移工具自动检测 `enc:v1:` 前缀并使用旧派生路径解密，再以 v2 格式重新加密
 
-gRPC 跨域接入采用 mTLS 双向认证，通过 CN 白名单文件精细控制访问权限：
+### 3.4 HMAC-SM3 链密钥注入
 
-#### 白名单配置文件格式 (`whitelist.yaml`)：
-```yaml
-version: "1.0"
-default_scopes: [] # fail-closed: 未知客户端默认拒绝
-entries:
-  - cn: "service-hub-prod-01"
-    scopes: ["*"]
-    enabled: true
-    description: "调度中枢生产主节点"
+`pkg/store/audit_hash.go` 实现存证哈希链的密钥化管理。
 
-  - cn: "audit-collector-node"
-    scopes: ["audit:write", "audit:verify"]
-    enabled: true
-    description: "审计存证同步节点"
+**9 要素前映像结构**：
+```
+prev_hash|log_id|timestamp_utc|algorithm|input_hash|output_hash|user|security_level|params_json
 ```
 
-* **热加载机制**：`WhitelistManager` 在每次请求时通过文件 `mtime` 轮询检查。修改 `whitelist.yaml` 后，**无需重启服务**，秒级生效。
+**写入路径**：
+- 配置 `AUDIT_LOG_HASH_KEY` → `integrity_hash = HMAC-SM3(key, "SM3-HMAC:v1|" + payload)`
+- 未配置 → `integrity_hash = SM3(payload)`（仅用于本地开发）
 
-#### TLS 强制策略
+**注入方法**：
+```bash
+# 服务启动前设置环境变量
+export AUDIT_LOG_HASH_KEY="<局方托管的32字节以上随机密钥>"
+```
 
-所有服务的 TLS 配置强制 `MinVersion: tls.VersionTLS13`（禁止 TLS 1.2 及以下）。
+代码中通过 `store.SetAuditChainKey(key)` 在进程启动时注入一次，运行期改钥会导致既有记录核验失败。
 
-支持公钥钉选 (SPKI Pinning)：通过 `VerifyPeerCertificate` 钩子深度比较 RSA (N, E)、ECDSA (X, Y, Curve) 或 Ed25519 (32-byte key) 公钥，确保证书链之外的额外身份绑定。
+**核验兼容**：`VerifyAuditIntegrityHash` 依次尝试 5 种候选算法：
+1. HMAC-SM3 (密钥化，当前规范)
+2. SM3-UTC (无密钥)
+3. SHA-256-UTC (SHA-256 遗留)
+4. SM3-LocalTZ (本地时区遗留)
+5. SHA-256-LocalTZ (本地时区 SHA-256 遗留)
+
+**存量升级**：注入密钥后，使用 `repairchain` 工具的 `resign` 模式将存量无密钥记录升级为 HMAC-SM3 口径。
+
+### 3.5 密钥轮转流程
+
+```
+步骤 1: 生成新密钥
+        openssl rand -hex 16 > new_key.txt
+
+步骤 2: 编写离线迁移脚本
+        读取旧数据 → DecryptString(ciphertext, old_key) → EncryptString(plaintext, new_key) → 写回
+
+步骤 3: 更新环境变量
+        AUDIT_LOG_ENCRYPTION_KEY=<new_key>
+
+步骤 4: 重启服务（新写入使用新密钥）
+
+步骤 5: 验证
+        调用快照查询接口确认旧数据可正常解密
+```
+
+**注意**：轮转加密密钥不影响存证哈希链。哈希链密钥（`AUDIT_LOG_HASH_KEY`）一旦设定不可更改（运行期改钥导致既有记录核验失败），如需更换必须配合 `repairchain -mode resign` 全量重签。
 
 ---
 
-## 四、全栈监控大盘与 Prometheus 告警规则
+## 四、全栈监控指标
 
-### 4.1 业务指标清单 (`pkg/metrics.Collector`)
+### 4.1 业务领域指标（pkg/metrics.Collector）
 
-每个微服务模块持有独立 `prometheus.Registry` 的 `Collector` 实例，所有指标携带 `module` 常量标签。
+每个微服务模块在启动时调用 `metrics.NewCollector(module)` 创建带独立 `prometheus.Registry` 的指标收集器。所有指标均携带 `module` 常量标签。
 
 #### HTTP 吞吐指标
 
-| Prometheus 指标名 | 类型 | 标签 | Collector 方法 | 含义与阈值建议 |
-|---|---|---|---|---|
-| `http_requests_total` | Counter | `module`, `method`, `path`, `status` | `RecordHTTP(method, path, status, duration)` / `HTTPMiddleware()` | HTTP 请求总量（关注 5xx 占比 > 1%） |
-| `http_request_duration_seconds` | Histogram | `module`, `method`, `path` | 同上 | 接口响应延迟（P99 应 < 100ms） |
+| 指标名称 | 类型 | 标签 | 含义与阈值建议 |
+|---|---|---|---|
+| `http_requests_total` | Counter | `method`, `path`, `status` | HTTP 请求总量（关注 5xx 占比 > 1%） |
+| `http_request_duration_seconds` | Histogram | `method`, `path` | 接口响应延迟（P99 应 < 100ms） |
 
 #### 上游 Agent 调用指标
 
-| Prometheus 指标名 | 类型 | 标签 | Collector 方法 | 含义 |
-|---|---|---|---|---|
-| `agent_requests_total` | Counter | `module`, `endpoint`, `status` | `RecordAgentCall(endpoint, status, duration)` | 上游 Agent 隐私引擎调用总量 |
-| `agent_request_duration_seconds` | Histogram | `module`, `endpoint` | 同上 | 上游 Agent 调用延迟直方图 |
-
-#### 可靠性与容灾指标
-
-| Prometheus 指标名 | 类型 | 标签 | Collector 方法 | 含义 |
-|---|---|---|---|---|
-| `orphaned_tasks_recovered_total` | Counter | `module`, `type` (running/pending) | `RecordOrphanedRecovery(taskType)` | 崩溃重启后自动回收的孤儿任务数 |
-| `tasks_retried_total` | Counter | `module`, `result` (queued/exhausted) | `RecordTaskRetry(result)` | 进入自动重试队列的任务数 |
-| `circuit_breaker_state` | Gauge | `module`, `node` | `SetCircuitBreakerState(node, state)` | 上游节点熔断器状态 (0=closed, 1=open, 2=half_open) |
-
-#### Phase B 租约与调度指标
-
-| Prometheus 指标名 | 类型 | 标签 | Collector 方法 | 含义 |
-|---|---|---|---|---|
-| `task_lease_conflicts_total` | Counter | `module` | `RecordLeaseConflict()` | 租约所有权抢占冲突次数 |
-| `task_lease_expired_total` | Counter | `module` | `RecordLeaseExpired(count)` | 租约超期回收事件总数 |
-| `task_claim_latency_seconds` | Histogram | `module` | `RecordClaimLatency(durationSec)` | `FOR UPDATE SKIP LOCKED` 任务抢占延迟 |
-| `task_transitions_total` | Counter | `module`, `from`, `to`, `result` | `RecordTaskTransition(from, to, result)` | 任务状态机流转次数 |
-| `service_hub_ready` | Gauge | `module` | `SetReady(ready)` | 调度中枢就绪探针 (1=ready, 0=not) |
-
-#### 命名路由与数据源指标
-
-| Prometheus 指标名 | 类型 | 标签 | Collector 方法 | 含义 |
-|---|---|---|---|---|
-| `privshield_api_alias_requests_total` | Counter | `module`, `alias`, `canonical`, `target` | `RecordAPIAlias(alias, canonical, target)` | 使用非规范别名发起的请求数（target: `datasource_id` / `api_code` / `path`） |
-| `privshield_datasource_normalize_errors_total` | Counter | `module`, `reason` | `RecordNormalizeError(reason)` | 标识归一化失败次数（reason: `unknown` / `empty` / `reserved` / `format_invalid`） |
-| `privshield_datasource_requests_total` | Counter | `module`, `datasource_id`, `api_code`, `status` | `RecordDatasourceRequest(datasourceID, apiCode, status)` | 按规范数据源实体处理的请求总数 |
-
-### 4.2 传输层 RED 指标 (`pkg/observability.REDMetrics`)
-
-传输层通用 RED（Rate / Errors / Duration）指标，由 gRPC/HTTP 中间件自动埋点。
-
-| Prometheus 指标名 | 类型 | 标签 | 含义 |
+| 指标名称 | 类型 | 标签 | 含义与阈值建议 |
 |---|---|---|---|
-| `privshield_requests_total` | Counter | `protocol` (http/grpc), `endpoint`, `status` | 全协议请求总量 |
-| `privshield_request_duration_seconds` | Histogram | `protocol`, `endpoint` | 全协议请求延迟直方图 |
+| `agent_requests_total` | Counter | `endpoint`, `status` | 上游隐私计算 Agent 请求总数 |
+| `agent_request_duration_seconds` | Histogram | `endpoint` | Agent 调用延迟直方图 |
 
-自动埋点中间件：
-- HTTP: `REDMetrics.PrometheusMiddleware()` (Gin 中间件)
-- gRPC: `REDMetrics.UnaryServerInterceptor()` (Unary Server Interceptor)
-- `/metrics` 端点: `REDMetrics.GinHandler()`
+#### 可靠性与故障自愈指标
 
-### 4.3 刷盘器运行时指标 (`pkg/store/flusher`)
+| 指标名称 | 类型 | 标签 | 含义与阈值建议 |
+|---|---|---|---|
+| `orphaned_tasks_recovered_total` | Counter | `type` (`"running"` / `"pending"`) | 崩溃重启后自动回收的孤儿任务数 |
+| `tasks_retried_total` | Counter | `result` (`"queued"` / `"exhausted"`) | 进入自动重试队列的任务数 |
+| `circuit_breaker_state` | Gauge | `node` | 上游节点熔断器状态（0=Closed 正常, 1=Open 熔断, 2=HalfOpen 半开探测） |
 
-刷盘器通过原子计数器暴露运行时状态（非 Prometheus 注册，通过诊断接口查询）：
+#### 租约与并发指标
 
-| 方法 | 返回类型 | 含义 |
-|---|---|---|
-| `FlushedTotal()` | int64 | 成功刷盘写入的总条数 |
-| `FailedTotal()` | int64 | 提交尝试耗尽所有重试后失败的总条数（正常应为 0） |
-| `OverflowTotal()` | int64 | 队列持续满溢被拒绝的总条数（正常应为 0） |
-| `EvictedTotal()` | int64 | 有界读缓存淘汰的暂存记录数 |
-| `RetryPending()` | int64 | 工作线程未提交重试积压中的记录数 |
-| `StagedCount()` | int | 当前内存暂存映射中的记录数 |
-| `QueueDepth()` | int | 环形缓冲队列当前等待写入的记录数 |
-| `HasFlushError()` | bool | 当前是否存在未恢复的刷盘错误 |
-| `LastFlushError()` | string | 最近一次刷盘错误描述 |
+| 指标名称 | 类型 | 标签 | 含义与阈值建议 |
+|---|---|---|---|
+| `task_lease_conflicts_total` | Counter | `module` | 租约所有权抢占冲突次数（正常应为 0，持续增长需排查多 Hub 时钟偏差） |
+| `task_lease_expired_total` | Counter | `module` | 租约超期回收事件总数 |
+| `task_claim_latency_seconds` | Histogram | `module` | PostgreSQL `ClaimNext` 抢占延迟（P99 应 < 50ms） |
+| `task_transitions_total` | Counter | `from`, `to`, `result` | 任务状态机流转次数 |
 
-### 4.4 命名路由观测指标 (`pkg/naming.Observer`)
+#### 就绪探针指标
 
-`naming.Observer` 接口定义了命名规范层面的观测契约：
+| 指标名称 | 类型 | 标签 | 含义 |
+|---|---|---|---|
+| `service_hub_ready` | Gauge | `module` | 调度中枢就绪状态（1=可接收流量, 0=未就绪） |
 
-```go
-type Observer interface {
-    RecordAPIAlias(alias, canonical, target string)
-    RecordNormalizeError(reason string)
-}
-```
+#### 命名路由指标
 
-`Collector` 编译期实现此接口 (`var _ naming.Observer = (*Collector)(nil)`)。服务通过 `naming.SetObserver(mc)` 注册后，`Normalize()` / `CheckWritable()` 等调用自动上报指标。未注册时为 no-op。
+| 指标名称 | 类型 | 标签 | 含义与阈值建议 |
+|---|---|---|---|
+| `privshield_api_alias_requests_total` | Counter | `alias`, `canonical`, `target` | 使用非 Canonical 别名的请求数（`target`: `datasource_id` / `api_code` / `path`） |
+| `privshield_datasource_normalize_errors_total` | Counter | `reason` | 标识归一化失败次数（`reason`: `unknown` / `empty` / `reserved` / `format_invalid`） |
+| `privshield_datasource_requests_total` | Counter | `datasource_id`, `api_code`, `status` | 按规范数据源实体处理的请求总数（`status`: `success` / `error` / `fallback`） |
 
-**标签取值规范**：
-- `target`: `"datasource_id"` / `"api_code"` / `"path"`
-- `reason`: `"unknown"` / `"empty"` / `"reserved"` / `"format_invalid"`
+### 4.2 传输层 RED 指标（pkg/observability.REDMetrics）
 
-### 4.5 推荐 Prometheus 告警规则
+`pkg/observability` 提供传输层通用 RED（Rate / Errors / Duration）指标，由 HTTP/gRPC 中间件自动埋点。使用独立的 `prometheus.Registry`，指标名带 `privshield_` 前缀。
+
+| 指标名称 | 类型 | 标签 | 含义 |
+|---|---|---|---|
+| `privshield_requests_total` | Counter | `protocol`, `endpoint`, `status` | 总请求数（`protocol`: `http` / `grpc`） |
+| `privshield_request_duration_seconds` | Histogram | `protocol`, `endpoint` | 请求延迟直方图 |
+
+**与 Collector 的边界**：REDMetrics 度量「请求经过了多少」（传输层自动埋点），Collector 度量「业务做了什么」（Handler 显式上报）。二者互补而非替代。
+
+### 4.3 推荐 Prometheus 告警规则
 
 ```yaml
 groups:
@@ -780,24 +703,6 @@ groups:
           summary: "PrivShield 接口 5xx 错误率超过 2%"
           description: "模块 {{ $labels.module }} 在过去 2 分钟内 5xx 错误率达到 {{ $value }}%"
 
-      - alert: PrivShieldAuditFlusherOverflow
-        expr: increase(audit_flusher_overflow_total[5m]) > 0
-        for: 0m
-        labels:
-          severity: warning
-        annotations:
-          summary: "审计微批缓冲队列发生满溢拒绝"
-          description: "模块 {{ $labels.module }} 在过去 5 分钟内发生了 {{ $value }} 条存证满溢拒绝，请检查存储写入延迟或调大 FLUSH_QUEUE_SIZE。"
-
-      - alert: PrivShieldAuditFlusherFailed
-        expr: increase(audit_flusher_failed_total[5m]) > 0
-        for: 0m
-        labels:
-          severity: critical
-        annotations:
-          summary: "审计微批刷盘写入失败"
-          description: "模块 {{ $labels.module }} 存在 {{ $value }} 条刷盘失败记录，底层存储可能不可用。"
-
       - alert: PrivShieldAgentCircuitBreakerOpen
         expr: circuit_breaker_state == 1
         for: 30s
@@ -805,263 +710,317 @@ groups:
           severity: critical
         annotations:
           summary: "上游隐私计算 Agent 熔断器已触发"
-          description: "目标 {{ $labels.node }} 连续请求失败超过阈值，已进入熔断阻断状态。"
+          description: "目标 {{ $labels.target }} 连续请求失败超过阈值，已进入熔断阻断状态。"
 
-      - alert: PrivShieldNormalizeErrorSpike
-        expr: rate(privshield_datasource_normalize_errors_total[5m]) > 10
-        for: 2m
+      - alert: PrivShieldTaskLeaseConflicts
+        expr: increase(task_lease_conflicts_total[5m]) > 5
+        for: 1m
         labels:
           severity: warning
         annotations:
-          summary: "数据源标识归一化失败率异常升高"
-          description: "模块 {{ $labels.module }} 归一化失败速率达到 {{ $value }}/s，请检查上游入参质量。"
+          summary: "任务租约冲突频繁"
+          description: "模块 {{ $labels.module }} 在过去 5 分钟内发生 {{ $value }} 次租约冲突，请排查多 Hub 时钟同步。"
+
+      - alert: PrivShieldNormalizeErrorsSpike
+        expr: increase(privshield_datasource_normalize_errors_total{reason="unknown"}[5m]) > 10
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "数据源标识归一化失败激增"
+          description: "模块 {{ $labels.module }} 出现大量未知数据源标识请求，可能存在非法调用或客户端配置错误。"
 
       - alert: PrivShieldServiceHubNotReady
         expr: service_hub_ready == 0
-        for: 1m
+        for: 2m
         labels:
           severity: critical
         annotations:
-          summary: "调度中枢就绪探针降级"
-          description: "模块 {{ $labels.module }} 已持续 1 分钟处于未就绪状态。"
+          summary: "调度中枢未就绪"
+          description: "模块 {{ $labels.module }} 持续 2 分钟未就绪，请检查存储连接与依赖服务状态。"
 ```
 
 ---
 
-## 五、安全门控运维 (Security Gate Operations)
+## 五、安全门禁运维
 
-### 5.1 ValidateFailClosed 五条铁律
+### 5.1 ValidateFailClosed 启动期安全不变式
 
-`pkg/config/security.go` 中的 `ValidateFailClosed(req SecurityRequirements)` 在服务启动时执行五项安全校验，**任一不通过则拒绝启动** (`log.Fatalf`)：
+`pkg/config/security.go` 中的 `ValidateFailClosed` 函数在每个服务启动时强制执行安全不变式校验，取代原先「配置缺失 → 静默降级为无鉴权/明文传输」的危险行为。
 
-| # | 规则 | 触发条件 | 错误码 | 含义 |
-|---|---|---|---|---|
-| 1 | API Key 必填 | 监听地址含非回环地址（`0.0.0.0`、NIC IP）且 `APIKey == ""` | `ErrAPIKeyRequired` | 远程暴露必须配置认证密钥 |
-| 2 | TLS 必填 | `RequireTLS == true` 但 `TLSEnabled == false` | `ErrTLSRequired` | 生产安全策略要求传输加密 |
-| 3 | mTLS 白名单必填 | `TLSEnabled && GRPCEnabled` 但 `MTLSWhitelistFile == ""` | `ErrMTLSWhitelistRequired` | gRPC TLS 启用时必须配置 CN 白名单 |
-| 4 | 加密密钥必填 | `RequireEncryptionKey == true` 且 `EncryptionKey == ""` 且非回环暴露 | `ErrEncryptionKeyRequired` | 远程暴露的审计服务必须配置快照加密 |
-| 5 | 哈希链密钥必填 | `RequireHashKey == true` 且 `HashKey == ""` 且非回环暴露 | `ErrChainKeyRequired` | 远程暴露的审计服务必须配置链完整性密钥 |
+**校验规则**：
 
-**回环豁免**：仅绑定 `127.0.0.1` / `localhost` / `::1` / 空地址时，规则 1/4/5 允许无密钥启动（本地开发友好）。
+1. **API Key 强制**：任一监听地址非环回 → 必须配置入站 API Key
+2. **TLS 强制**：`RequireTLS=true` 而 `TLSEnabled=false` → 拒绝启动
+3. **mTLS 白名单强制**：启用 gRPC TLS 但未提供 CN 白名单文件 → 拒绝启动
+4. **加密密钥强制**：`RequireEncryptionKey=true` 且密钥为空、存在非环回监听 → 拒绝启动
+5. **哈希链密钥强制**：`RequireHashKey=true` 且链密钥为空、存在非环回监听 → 拒绝启动
 
-### 5.2 常见启动拒绝场景排查
+### 5.2 五大哨兵错误
 
-#### 场景 A：`ErrAPIKeyRequired` — API Key 为空
-
-**现象**：服务启动日志出现 `API key is required for non-loopback bind`。
-
-**排查**：
-1. 检查监听地址是否配置为 `0.0.0.0` 或 NIC IP；
-2. 若为本地开发，改为 `127.0.0.1` 或配置 `*_API_KEY`；
-3. 若为生产部署，通过 K8s Secret 或 KMS 注入 API Key 环境变量。
-
-#### 场景 B：`ErrTLSRequired` — TLS 要求但未启用
-
-**现象**：服务启动日志出现 `TLS is required but not enabled`。
-
-**排查**：
-1. 确认 `*_REQUIRE_TLS=true` 已设置；
-2. 确认 `*_TLS_ENABLED` 也为 `true`；
-3. 检查证书文件路径是否正确且可读；
-4. 确认 `tlsutil.BuildServerTLSConfig` 未返回错误（强制 TLS 1.3+）。
-
-#### 场景 C：`ErrMTLSWhitelistRequired` — gRPC TLS 启用但无白名单
-
-**现象**：服务启动日志出现 `mTLS whitelist file is required when gRPC TLS is enabled`。
-
-**排查**：
-1. 确认 `PRIVACY_AUTH_MTLS_WHITELIST_FILE` 已设置且指向有效的 YAML 文件；
-2. 确认 YAML 文件格式正确（至少包含 `version` 和 `entries` 字段）；
-3. 确认文件权限允许服务进程读取。
-
-#### 场景 D：`ErrEncryptionKeyRequired` / `ErrChainKeyRequired`
-
-**现象**：审计日志服务启动拒绝，日志提示加密密钥或链密钥未配置。
-
-**排查**：
-1. 非回环绑定时必须配置 `AUDIT_LOG_ENCRYPTION_KEY` 和 `AUDIT_LOG_HASH_KEY`；
-2. 检查环境变量是否通过 K8s Secret 正确注入（注意 base64 编码/解码）；
-3. 检查遗留回退变量名（`PRIVACY_AUDIT_KEY`）是否仍在使用。
-
-#### 场景 E：`AUDIT_LOG_READER_API_KEY` 与 `AUDIT_LOG_API_KEY` 相同
-
-**现象**：审计日志服务启动失败，提示读写 API Key 不能相同。
-
-**排查**：
-1. P1-6 职责分离要求：读取验证角色与写入角色必须使用不同密钥；
-2. 为 `AUDIT_LOG_READER_API_KEY` 配置独立的只读验证密钥。
-
----
-
-## 六、归档存证运维 (Archive Operations)
-
-### 6.1 归档段格式规范
-
-归档段将过期的审计日志与快照打包为不可篡改的加密文件，作为数据保留策略的物理存证。
-
-**完整管线**：
-
-```
-审计日志 + 快照
-    -> NDJSON 序列化 (kind: "log" | "snapshot", 显式携带 parameters_json)
-    -> 行哈希链推进 (chain[i] = SM3(chain[i-1] || line[i]))
-    -> Gzip 压缩
-    -> SM4-GCM 信封加密 (enc:v2, HKDF-SM3 派生独立密钥)
-    -> 原子写入 (O_CREATE|O_EXCL|O_WRONLY + fsync)
-    -> 写后回读全量验证
-```
-
-**文件名格式**：
-```
-audit-archive-20260815T000000Z-000001.ndjson.gz.enc   # 数据段
-audit-archive-20260815T000000Z-000001.manifest.json    # 清单文件
-```
-
-**防篡改机制**：
-- 行哈希链：即使持有密钥的攻击者删除段中某一行，链尾校验也会失败；
-- SM4-GCM 认证加密：无密钥者无法读取或伪造段内容；
-- 写后验证：归档写入后立即回读验证，不通过则中止后续删除操作。
-
-### 6.2 归档段完整性校验
-
-使用 `VerifySegment` 对归档段执行全量完整性验证：
-
-```bash
-# 通过 repairchain 工具的 verify 模式验证链完整性
-AUDIT_LOG_HASH_KEY="your-chain-key" \
-AUDIT_LOG_ENCRYPTION_KEY="your-enc-key" \
-  go run pkg/store/cmd/repairchain/main.go -mode verify
-```
-
-**校验流程**（`archive.VerifySegment`）：
-1. 读取并解析清单文件，验证 `version == "privshield-audit-archive/v1"`；
-2. 交叉验证 `manifest.SegmentFile == segment`（清单与段文件对应关系）；
-3. 读取加密段文件，使用提供的密钥解密 (`crypto.DecryptString`)，Gzip 解压；
-4. 逐行扫描 NDJSON 并重新计算行哈希链；
-5. 对每条 `log` 类型行，调用 `store.VerifyAuditIntegrityHash` 校验 9 元素完整性哈希；
-6. 将重算的链尾与 `manifest.ChainTail` 比对 -- 不匹配 = "evidence modified, truncated or reordered"；
-7. 比对日志/快照计数与边界 ID / 时间戳是否与清单一致。
-
-**校验结果判读**：
-- 全部通过：段完整且未被篡改；
-- 链尾不匹配：段内容被修改、截断或重排；
-- 计数不匹配：段内容不完整；
-- 解密失败：密钥不匹配或段文件损坏。
-
-### 6.3 从归档恢复数据
-
-归档段设计用于独立验证与取证存证保留。恢复流程需手动执行：
-
-1. **解密**：使用 `crypto.DecryptString(sealed, key)` 解密 `.ndjson.gz.enc` 段文件；
-2. **解压**：对解密后的字节流执行 Gzip 解压；
-3. **解析**：逐行解析 NDJSON（每行为 JSON 对象，包含 `kind`、`log`/`snapshot`、`parameters_json` 字段）；
-4. **重导入**：将解析出的记录通过 `store.AuditStore.SaveLogs` 重新写入目标存储。
-
-> [!IMPORTANT]
-> 恢复操作不自动执行链重签。恢复后的记录需要通过 `repairchain` 工具的 `repair` 模式重建链完整性。
-
-### 6.4 保留策略配置
-
-保留策略通过 `AUDIT_LOG_RETENTION_DAYS` 控制：
-
-| 配置值 | 行为 | 约束 |
+| 哨兵错误 | 触发条件 | 修复方法 |
 |---|---|---|
-| `0` (默认) | **永不物理删除**审计日志 | 符合《数据安全法》三年存证要求 |
-| `>= 1095` | 每 6 小时执行归档清理 | 必须同时配置 `AUDIT_LOG_ARCHIVE_DIR` 和 `AUDIT_LOG_ENCRYPTION_KEY` |
-| `1 ~ 1094` | **拒绝启动** | 低于 3 年法定最低保留期限 |
+| `ErrAPIKeyRequired` | 非环回监听但未配置 API Key | 设置对应的 `*_API_KEY` 环境变量，或绑定到 `127.0.0.1` |
+| `ErrTLSRequired` | 部署方声明 `RequireTLS=true` 但 TLS 未启用 | 设置 `*_TLS_ENABLED=true` 并配置证书 |
+| `ErrMTLSWhitelistRequired` | gRPC TLS 启用但未提供 CN 白名单文件 | 设置 `PRIVACY_AUTH_MTLS_WHITELIST_FILE` 指向白名单 YAML |
+| `ErrEncryptionKeyRequired` | 非环回监听且存证加密密钥为空 | 设置 `AUDIT_LOG_ENCRYPTION_KEY` |
+| `ErrChainKeyRequired` | 非环回监听且存证哈希链密钥为空 | 设置 `AUDIT_LOG_HASH_KEY`（局方托管密钥） |
 
-**归档清理流程**（每 6 小时执行）：
-1. 计算截止时间 `cutoff = now - RetentionDays`；
-2. 创建 `Archiver` 并调用 `ArchiveAndCleanup`；
-3. 循环拉取最早过期记录（分页），每页写入一个归档段；
-4. 每段写入后立即执行 `VerifySegment` 全量回读验证；
-5. **验证失败则立即中止**，不执行任何删除（fail-closed：存证永不静默丢失）；
-6. 验证通过后按精确 ID 删除已归档记录；
-7. 删除返回 0 条则中止（防止误删）。
+### 5.3 IsLoopbackHost 行为
+
+`IsLoopbackHost(host string) bool` 判断监听地址是否仅接受本机连接：
+
+| 输入 | 结果 | 说明 |
+|---|---|---|
+| `""` (空串) | `true` | 空串视为本地 |
+| `"localhost"` | `true` | 本地回环 |
+| `"127.0.0.1"`, `"127.x.x.x"` | `true` | 127.0.0.0/8 段全部视为本地 |
+| `"::1"` | `true` | IPv6 环回 |
+| `"host:port"` 形式 | 取主机部分判断 | 通过 `net.SplitHostPort` 解析 |
+| `"0.0.0.0"` | `false` | 全接口监听，对外暴露 |
+| `"::"` | `false` | IPv6 全接口，对外暴露 |
+| 具体网卡 IP | `false` | 视为对外暴露 |
+| 无法解析的主机名 | `false` | **Fail-closed**：不可解析的按对外暴露处理 |
+
+### 5.4 零信任默认态
+
+系统默认采用零信任安全姿态：
+
+- **本地开发**：绑定 `127.0.0.1` 时允许无密钥/无鉴权启动（仅限开发便利）
+- **生产部署**：绑定 `0.0.0.0` 或具体网卡 IP 时，API Key、TLS、加密密钥、哈希链密钥缺一不可
+- **Fail-closed 原则**：所有安全开关缺失即启动失败，绝不静默降级
+
+### 5.5 ValidateFailClosed 故障排查
+
+**症状**：服务启动立即退出，日志中出现哨兵错误。
+
+**排查步骤**：
+
+1. **识别错误类型**：查看启动日志中的具体错误名
+2. **检查监听地址**：确认 `*_HOST` 变量是否意外设为 `0.0.0.0`
+3. **检查密钥配置**：确认所有 `*_API_KEY`、`*_ENCRYPTION_KEY`、`*_HASH_KEY` 已通过 K8s Secret 或环境变量正确注入
+4. **检查 TLS 配置**：确认 `*_TLS_ENABLED` 与 `*_REQUIRE_TLS` 状态一致
+5. **本地开发快速绕过**：将 `*_HOST` 设为 `127.0.0.1` 即可跳过所有安全门禁
 
 ---
 
-## 七、核心故障排查手册 (Runbook)
+## 六、mTLS 证书与 CN 白名单运维
 
-### 7.1 存证哈希链验真失败 (`POST /api/audit/chain/verify` 返回 `valid: false`)
+### 白名单配置文件格式
 
-* **现象**：调用核验接口返回 `broken_at_id: "log-xxx"`, `expected_hash != actual_hash`。
-* **排查流程**：
-  1. 检查 `broken_at_id` 记录的 `timestamp` 是否与前序记录颠倒（时钟跳变）；
-  2. 检查数据库是否存在手动 `UPDATE` 或 `DELETE` 审计日志的操作；
-  3. 检查是否有未经 `BufferedAuditStore` 的直接并发 SQL 插入绕过了单 Worker 哈希绑定；
-  4. 检查是否存在时区配置未归一（已全面采用 `timestamp.UTC().Format(time.RFC3339Nano)` 标准格式）；
-  5. 检查 `AUDIT_LOG_HASH_KEY` 是否在写入与验证之间发生过变更（换密钥后旧记录需 `resign`）。
-* **修复工具**：
-  ```bash
-  # 只读诊断
-  AUDIT_LOG_HASH_KEY="key" AUDIT_LOG_DB_PATH="path" \
-    go run pkg/store/cmd/repairchain/main.go -mode verify
-  # 重锚断链
-  AUDIT_LOG_HASH_KEY="key" AUDIT_LOG_DB_PATH="path" \
-    go run pkg/store/cmd/repairchain/main.go -mode repair
-  ```
+```yaml
+# config/mtls-whitelist.yaml
+version: "1.0"
+clients:
+  - cn: "service-hub.privshield.internal"
+    allowed_scopes:
+      - "/PrivacyService/Process"
+      - "/AuditLog/*"
+    role: "orchestrator"
+    description: "数据服务调度中枢核心客户端"
+    enabled: true
+  - cn: "bff-go.privshield.internal"
+    allowed_scopes: ["*"]
+    role: "gateway"
+    enabled: true
+```
 
-### 7.2 SQLite 锁等待超时 (`database is locked`)
+支持双格式：
+- **标准格式**：`clients` 键 + `allowed_scopes` 字段
+- **遗留格式**：`entries` 键 + `scopes` 字段（向下兼容）
 
-* **现象**：高并发写入时日志中出现 `database is locked`。
-* **排查流程**：
-  1. 确认是否已装配 `flusher.BufferedAuditStore`（未装配时单条落盘易锁库）；
-  2. 确认 SQLite 连接池最大打开数是否合理（SQLite 写入为单进程排他锁，`MaxOpenConns` 不宜超过 4）；
-  3. 确认磁盘 I/O 状态（`iostat -x 1`），若磁盘队列过高，考虑将数据目录挂载至高速 NVMe SSD；
-  4. 业务 QPS 持续超过 1,000 时，配置 `PG_DSN` 平滑迁移至 PostgreSQL Phase B。
+### Scope 匹配规则
 
-### 7.3 敏感样本解密失败 (`failed to decrypt sample`)
+1. **全局通配符** `"*"`：允许访问所有方法
+2. **精确全名匹配**：如 `/PrivacyService/Process`
+3. **前缀通配符**：如 `/AuditLog/*` 匹配所有 `/AuditLog/` 前缀方法
 
-* **现象**：调用快照查询接口返回密文或解密错误。
-* **排查流程**：
-  1. 检查当前实例的 `AUDIT_LOG_ENCRYPTION_KEY` 环境变量是否与数据写入时的密钥一致；
-  2. 检查密文字符串前缀：`enc:v2:` 为当前格式，`enc:v1:` 为遗留格式；
-  3. 检查 Base64 字符串是否在传输中被截断或转义损坏；
-  4. 检查数据库字符集是否为 UTF-8；
-  5. 如存在密钥轮转历史，确认旧密钥的离线备份是否完好。
+### 5 秒热重载机制
 
-### 7.4 归档写入失败
+`DynamicWhitelist` 后台协程每 5 秒通过 `os.Stat` 轮询配置文件 `mtime`：
 
-* **现象**：归档清理任务日志出现 `archive write failed`，审计日志未被删除。
-* **排查流程**：
-  1. 检查 `AUDIT_LOG_ARCHIVE_DIR` 目录是否存在且可写；
-  2. 检查磁盘空间是否充足（归档段含压缩+加密，但仍需足够空间）；
-  3. 检查 `AUDIT_LOG_ENCRYPTION_KEY` 是否配置（保留删除模式下必填）；
-  4. 检查是否有同名文件冲突（序号自动递增至 999999）；
-  5. **注意**：归档失败不会导致数据丢失 -- 删除操作被中止，审计日志保留在原库。
-* **恢复**：修复磁盘空间或目录权限后，下一个 6 小时清理周期将自动重试。
+- 检测到文件变更 → 自动触发 `reload()` 解析
+- 获取写锁全量原子替换 `clients` 映射
+- 热路径（`CheckScope` / `IsAuthorized`）使用读锁，微秒级并发性能
 
-### 7.5 哈希链密钥不匹配 (`chain key mismatch`)
+**修改白名单后无需重启服务**，秒级生效。
 
-* **现象**：`VerifySegment` 或 `VerifyAuditIntegrityHash` 返回验证失败，日志提示密钥不匹配。
-* **排查流程**：
-  1. 确认当前 `AUDIT_LOG_HASH_KEY` 是否与记录写入时的密钥一致；
-  2. 检查记录算法标签：`SM3-HMAC:v1` 为密钥模式，`SM3` 为无密钥模式；
-  3. 如刚执行过密钥轮转，确认是否需要 `resign` 模式升级遗留记录；
-  4. 多轨验证机制会自动尝试多种算法匹配，若所有模式均失败则为真正的篡改或密钥丢失。
-* **修复**：
-  ```bash
-  # 使用新密钥重签所有遗留记录
-  AUDIT_LOG_HASH_KEY="new-key" AUDIT_LOG_DB_PATH="path" \
-    go run pkg/store/cmd/repairchain/main.go -mode resign
-  ```
+### gRPC 拦截器集成
 
-### 7.6 严格存储模式拒绝启动 (`strict storage: connection failed`)
+`pkg/tlsutil` 提供 `UnaryInterceptor` 和 `StreamInterceptor`，从 mTLS 对端证书中提取 CN，调用 `DynamicWhitelist.CheckScope` 进行鉴权。
 
-* **现象**：服务启动后立即退出，日志显示存储连接失败且严格存储模式阻止回退。
-* **排查流程**：
-  1. SQLite 模式：检查 `*_DB_PATH` 目录权限与磁盘空间；
-  2. PostgreSQL 模式：检查 `*_PG_DSN` 连接串、网络连通性与数据库账户权限；
-  3. 若启用了 `AUDIT_LOG_DB_WRITE_ONLY=true`，确认数据库账户确实无 UPDATE/DELETE 权限（这是预期行为，自检通过才是正确状态）；
-  4. 开发环境可临时设置 `*_STRICT_STORAGE=false` 允许回退内存模式。
+---
 
-### 7.7 归档段完整性校验失败
+## 七、命名 SSOT 运维
 
-* **现象**：`VerifySegment` 返回错误：`evidence modified, truncated or reordered`。
-* **排查流程**：
-  1. 确认段文件是否被外部进程修改、截断或重命名；
-  2. 确认解密使用的 `AUDIT_LOG_ENCRYPTION_KEY` 是否与归档时的密钥一致；
-  3. 检查清单文件 `.manifest.json` 是否与段文件匹配（`segment_file` 字段）；
-  4. 如确认段文件物理损坏，从备份恢复原始 `.ndjson.gz.enc` 文件。
-* **注意**：归档段一旦校验失败，**不得**删除对应的数据库记录（如已删除则需从备份恢复）。
+### 7.1 注册表管理
+
+`pkg/naming` 是 PrivShield 跨服务业务标识的**唯一事实源 (Single Source of Truth, SSOT)**。
+
+#### 核心设计约束
+
+1. **唯一标识原则**：一个数据源实体有且仅有一个 canonical `datasource_id`
+2. **Fail-Closed 零逃逸原则**：未知入站值必须报错，严禁静默回退
+3. **代码防腐原则**：业务代码中严禁出现裸数据源字符串字面量
+
+#### 当前注册表
+
+| 序号 | API Code | Datasource ID | 状态 | 领域 | 字段数 | 别名示例 |
+|---|---|---|---|---|---|---|
+| 1 | `api1_yibao` | `ds_yibao` | active | medical | 18 | yibao, 医保, 医保结算 |
+| 2 | `api2_kangyang` | `ds_kangyang` | active | healthcare | 27 | kangyang, 康养, 康养体检 |
+| 3 | (未绑定) | `ds_mock3` | reserved | reserved | - | mock3, 政务 |
+| 4 | (未绑定) | `ds_mock4` | reserved | reserved | - | mock4, 企业, 金融 |
+
+#### 标识格式正则
+
+- `datasource_id`：`^ds_[a-z][a-z0-9_]{1,30}$`
+- `api_code`：`^api[1-9]_[a-z][a-z0-9_]{1,30}$`
+
+#### 别名归一化优先级
+
+1. Canonical ID 精确匹配（如 `"ds_yibao"`）→ 直接返回
+2. API Code 匹配（如 `"api1_yibao"`）→ 触发 `RecordAPIAlias(target="api_code")`
+3. 别名池不区分大小写匹配（如 `"YIBAO.CSV"`）→ 触发 `RecordAPIAlias(target="datasource_id")`
+4. 别名池精确匹配（支持中文 `"医保"`）→ 触发 `RecordAPIAlias`
+5. 全部未命中 → Fail-Closed 报错 `ErrUnknownDataSource`
+
+#### 注册表管理操作
+
+**新增数据源**：
+1. 在 `pkg/naming/naming.go` 的 `Registry` 切片中添加 `Entry`
+2. 定义新的 `const` 常量（`DS*` 和 `API*`）
+3. 添加别名列表
+4. 运行 CI 测试确认无别名冲突（`AliasConflicts()` 必须返回空）
+5. 数据库 Schema 迁移会自动从 Registry 回填 `api_code`
+
+**CI 断言**：
+- `AliasConflicts()` 长度必须为 0
+- `TestSecurityLevelsMatchTaxonomyYAML` 断言词表与 `rules/taxonomies/default.yaml` 同步
+
+### 7.2 Observer 指标解读
+
+`pkg/naming/observer.go` 定义了 `Observer` 接口作为可观测性扩展点。`pkg/metrics.Collector` 编译期实现此接口：
+
+```go
+var _ naming.Observer = (*metrics.Collector)(nil)
+```
+
+**注册方式**：
+
+```go
+mc := metrics.NewCollector("service-hub")
+naming.SetObserver(mc)
+```
+
+#### 指标解读
+
+| 指标 | 含义 | 正常值 | 告警阈值 |
+|---|---|---|---|
+| `privshield_api_alias_requests_total{target="api_code"}` | 业务方通过 api_code 调用（非 canonical） | 正常流量 | 持续增长表示客户端未迁移到 canonical ID |
+| `privshield_api_alias_requests_total{target="datasource_id"}` | 通过别名（slug/文件名/中文名）调用 | 少量正常 | 大量增长表示外部调用方未使用规范 ID |
+| `privshield_datasource_normalize_errors_total{reason="unknown"}` | 未知数据源标识 | 应为 0 | >0 需排查（可能非法调用） |
+| `privshield_datasource_normalize_errors_total{reason="empty"}` | 空标识请求 | 应为 0 | >0 需排查客户端 |
+| `privshield_datasource_normalize_errors_total{reason="reserved"}` | 命中预留位写操作 | 正常 | 大量表示业务方误用预留位 |
+| `privshield_datasource_normalize_errors_total{reason="format_invalid"}` | 格式不合法 | 应为 0 | >0 需排查（调用方漏了边界归一化） |
+
+**标签值常量**：
+- Target：`"datasource_id"` / `"api_code"` / `"path"`
+- Reason：`"unknown"` / `"empty"` / `"reserved"` / `"format_invalid"`
+
+### 7.3 安全等级词表（L1-L5）
+
+`pkg/naming/levels.go` 是数据安全分级的唯一事实源，桥接两套命名体系：
+
+| L1-L5 标识 | Engine 内部名 | 中文名称 | 敏感度排名 |
+|---|---|---|---|
+| `L1` | `public` | 公开数据 | 1 |
+| `L2` | `internal` | 内部数据 | 2 |
+| `L3` | `confidential` | 敏感数据 | 3 |
+| `L4` | `secret` | 高敏感数据 | 4 |
+| `L5` | `top_secret` | 极敏感数据 | 5 |
+
+**核心 API**：
+
+| 函数 | 用途 |
+|---|---|
+| `SecurityLevelIDs()` | 返回 `["L1", "L2", "L3", "L4", "L5"]` |
+| `SecurityLevelNames()` | 返回 `["public", "internal", "confidential", "secret", "top_secret"]` |
+| `SecurityLevelLabel(level)` | 任意输入 → 中文名称（`"L4"` → `"高敏感数据"`） |
+| `SecurityLevelName(level)` | 任意输入 → Engine 内部名（`"L3"` → `"confidential"`） |
+| `NormalizeSecurityLevelID(level)` | 任意输入 → L1-L5 标识 |
+| `SecurityLevelRank(level)` | 敏感度排名（1-5，未知返回 0） |
+| `MaxSecurityLevelID(levels...)` | 返回多个等级中敏感度最高的 |
+
+**约束**：
+- `pkg/validation` 包显式委托给 `naming.SecurityLevelIDs()`，不得自建副本
+- `pkg/store/levels.go` 使用 `naming.SecurityLevelL4/L5` 常量进行审计推荐
+- 必须与 `rules/taxonomies/default.yaml` 的 `levels.*.id` 严格同步（CI 断言）
+
+---
+
+## 八、核心故障排查手册 (Runbook)
+
+### 8.1 存证哈希链验真失败
+
+**现象**：`POST /api/audit/chain/verify` 返回 `valid: false`，`broken_at_id` 指向特定记录。
+
+**排查流程**：
+
+1. 检查 `broken_at_id` 记录的 `timestamp` 是否与前序记录颠倒（时钟跳变）
+2. 检查数据库是否存在手动 `UPDATE` 或 `DELETE` 审计日志的操作
+3. 检查是否有未经 `BufferedAuditStore` 的直接并发 SQL 插入绕过了单 Worker 哈希绑定
+4. 确认时间戳格式是否统一为 UTC RFC3339Nano
+5. 如注入了 `AUDIT_LOG_HASH_KEY`，确认密钥在启动期间未被更改
+
+### 8.2 SQLite 锁等待超时
+
+**现象**：高并发写入时日志中出现 `database is locked`。
+
+**排查流程**：
+
+1. 确认是否已装配 `flusher.BufferedAuditStore`（未装配时单条落盘易锁库）
+2. 确认 SQLite 连接池最大打开数（`MaxOpenConns` 不应超过 4）
+3. 检查磁盘 I/O 状态（`iostat -x 1`），考虑将数据目录挂载至 NVMe SSD
+4. 业务 QPS 持续超过 1,000 时，配置 `PG_DSN` 迁移至 PostgreSQL
+
+### 8.3 敏感样本解密失败
+
+**现象**：快照查询接口返回密文或解密错误。
+
+**排查流程**：
+
+1. 检查 `AUDIT_LOG_ENCRYPTION_KEY` 是否与数据写入时的密钥一致
+2. 检查密文字符串前缀：
+   - `enc:v2:` → 需要 HKDF-SM3 派生路径
+   - `enc:v1:` → 需要 SHA-256 派生路径（旧数据）
+   - 无前缀 → 返回 `ErrUnencryptedValue`，数据可能被篡改
+3. 检查 Base64 字符串是否在传输中被截断或转义损坏
+4. 检查数据库字符集是否为 UTF-8
+
+### 8.4 微批刷盘器异常
+
+**现象**：`HasFlushError()` 返回 `true`，或 `RetryPending()` 持续增长。
+
+**排查流程**：
+
+1. 检查 `LastFlushError()` 获取最近错误描述
+2. 检查底层存储连接是否正常
+3. 查看 `QueueDepth()` 判断队列积压程度
+4. 如 `RetryPending() >= MaxStaged`（默认 50000），将触发 `ErrBacklogSaturated` 快速拒绝新写入
+5. 刷盘器内置指数退避重试（25ms, 50ms, 75ms），最多 `MaxRetries` 次（默认 3）
+
+### 8.5 归档段验证失败
+
+**现象**：`VerifySegment` 返回错误。
+
+**排查流程**：
+
+| 错误信息 | 原因 | 处理 |
+|---|---|---|
+| `line hash chain mismatch` | 段文件被篡改、截断或行序被打乱 | 从备份恢复原始段文件 |
+| `record count mismatch` | 段文件内容被增删 | 从备份恢复 |
+| `boundary log ids mismatch` | 边界记录 ID 不一致 | 检查段文件完整性 |
+| `boundary timestamps mismatch` | 边界时间戳不一致 | 检查段文件完整性 |
+| `integrity hash does not match` | 日志行 9 要素被篡改 | 检查段文件与密钥 |
+| `decrypt segment` 失败 | 密钥不匹配 | 确认 `AUDIT_LOG_ENCRYPTION_KEY` |
