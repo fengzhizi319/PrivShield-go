@@ -18,6 +18,8 @@
 package handlers
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -86,6 +88,7 @@ func SetupRouter(h *Handler) *gin.Engine {
 	r.Use(middleware.TraceMiddleware())             // 分布式追踪 ID 自动注入与双头下发
 	r.Use(pkgobs.RequestLoggerWithModule("app-lz")) // 每请求结构化日志（method/path/status/latency）
 	r.Use(middleware.Recovery(h.logger, "app-lz"))  // 全局 panic 恢复中间件
+	r.Use(gzipResponse())                            // gzip 响应压缩（JSON 文本压缩率 ~70-80%）
 	r.Use(middleware.SecurityHeaders())             // 安全响应头 (CSP/HSTS/X-Frame-Options)
 	r.Use(middleware.MaxBodySize(32 << 20))         // 32 MiB 请求体最大保护
 	r.Use(middleware.MaxConcurrent(1000))           // 并发在途请求上限，超限返回 503
@@ -157,6 +160,41 @@ func corsMiddleware() gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+func gzipResponse() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !strings.Contains(c.Request.Header.Get("Accept-Encoding"), "gzip") {
+			c.Next()
+			return
+		}
+		origWriter := c.Writer
+		buf := &bytes.Buffer{}
+		gz := gzip.NewWriter(buf)
+		c.Writer = &gzipResponseWriter{
+			ResponseWriter: origWriter,
+			gz:             gz,
+			buf:            buf,
+		}
+		c.Header("Vary", "Accept-Encoding")
+		defer func() {
+			gz.Close()
+			origWriter.Header().Set("Content-Encoding", "gzip")
+			origWriter.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+			origWriter.Write(buf.Bytes())
+		}()
+		c.Next()
+	}
+}
+
+type gzipResponseWriter struct {
+	gin.ResponseWriter
+	gz  *gzip.Writer
+	buf *bytes.Buffer
+}
+
+func (g *gzipResponseWriter) Write(data []byte) (int, error) {
+	return g.gz.Write(data)
 }
 
 // setupStaticServing 配置 SPA 静态文件服务。
@@ -564,6 +602,10 @@ func (h *Handler) InvokeDataApi(c *gin.Context) {
 		Stages:        stages,
 		AuditEntryID:  auditEntryID,
 		TotalDuration: totalDuration,
+	}
+	if req.Lean {
+		resp.RawRecords = nil
+		resp.SanitizedData = nil
 	}
 	c.JSON(http.StatusOK, resp)
 }

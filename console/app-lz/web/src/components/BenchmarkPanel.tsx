@@ -157,7 +157,7 @@ export const BenchmarkPanel: React.FC<BenchmarkPanelProps> = ({ apis }) => {
         const reqStart = performance.now();
 
         try {
-          const resp: DataApiSessionResponse = await api.invokeDataApi(targetApiId, batchLimit);
+          const resp: DataApiSessionResponse = await api.invokeDataApi(targetApiId, batchLimit, true);
           const reqDuration = performance.now() - reqStart;
 
           completedCount++;

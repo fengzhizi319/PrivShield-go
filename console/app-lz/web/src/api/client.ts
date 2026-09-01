@@ -236,10 +236,10 @@ export const api = {
    * @param limit 返回记录数上限，默认 5
    * @returns 完整会话结果（含原始数据、脱敏后数据、各阶段耗时）
    */
-  async invokeDataApi(apiId: number, limit = 5): Promise<DataApiSessionResponse> {
+  async invokeDataApi(apiId: number, limit = 5, lean = false): Promise<DataApiSessionResponse> {
     return fetchJSON<DataApiSessionResponse>(`${BASE_URL}/data-api/invoke`, {
       method: 'POST',
-      body: JSON.stringify({ api_id: apiId, limit }),
+      body: JSON.stringify({ api_id: apiId, limit, lean }),
     });
   },
 };
