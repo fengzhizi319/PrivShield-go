@@ -1083,7 +1083,9 @@ func overallSecurityLevel(results ...*dynclassification.ClassificationResult) st
 	ids := make([]string, 0, len(results))
 	for _, res := range results {
 		if res != nil {
-			ids = append(ids, res.LevelID)
+			// 优先使用 Level.LevelID() 方法获取 L1~L5 标识（与 arbitrate 互补，
+			// 确保即使未来新增不经过 arbitrate 的分类路径也能正确取到定级）。
+			ids = append(ids, res.Level.LevelID())
 		}
 	}
 	return naming.MaxSecurityLevelID(ids...)
