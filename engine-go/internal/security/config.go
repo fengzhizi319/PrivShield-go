@@ -84,11 +84,11 @@ func loadSettings() *Settings {
 		RateLimitEnabled:      pkgconfig.EnvBool("PRIVACY_RATE_LIMIT_ENABLED", false),
 		HealthNoRateLimit:     pkgconfig.EnvBool("PRIVACY_HEALTH_NO_RATE_LIMIT", true),
 		MTLSEnabled:           pkgconfig.EnvBool("PRIVACY_AUTH_INTERNAL_MTLS_ENABLED", false),
-		MTLSWhitelistFile:     os.Getenv("PRIVACY_AUTH_MTLS_WHITELIST_FILE"),
+		MTLSWhitelistFile:     pkgconfig.EnvString("PRIVACY_AUTH_MTLS_WHITELIST_FILE", ""),
 		RateLimitDefaultRPS:   pkgconfig.EnvFloat("PRIVACY_RATE_LIMIT_DEFAULT_RPS", 100),
 		RateLimitDefaultBurst: pkgconfig.EnvInt("PRIVACY_RATE_LIMIT_DEFAULT_BURST", 200),
-		RateLimitRedisURL:     os.Getenv("PRIVACY_RATE_LIMIT_REDIS_URL"),
-		MTLSAllowedCNs:        parseStringList(os.Getenv("PRIVACY_AUTH_MTLS_ALLOWED_CNS")),
+		RateLimitRedisURL:     pkgconfig.EnvString("PRIVACY_RATE_LIMIT_REDIS_URL", ""),
+		MTLSAllowedCNs:        parseStringList(pkgconfig.EnvString("PRIVACY_AUTH_MTLS_ALLOWED_CNS", "")),
 	}
 	return s
 }

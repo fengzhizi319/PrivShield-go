@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/observability"
-	pgateway "github.com/fengzhizi319/PrivShield/pkg/gateway"
 	"github.com/fengzhizi319/PrivShield/pkg/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -28,7 +27,7 @@ func NewHTTPProxyHandler(lb *LoadBalancer, metrics *observability.GatewayMetrics
 		// 检查熔断器
 		if !node.CB.Allow() {
 			if metrics != nil {
-				metrics.SetCircuitBreakerState(node.Address, pgateway.CBStateString(node.CB.State()))
+				metrics.SetCircuitBreakerState(node.Address, node.CB.StateString())
 			}
 			middleware.AbortWithError(c, http.StatusServiceUnavailable, "CIRCUIT_OPEN", fmt.Sprintf("后端 %s 熔断器开启", node.Address), "circuit breaker is open")
 			return
@@ -47,7 +46,7 @@ func NewHTTPProxyHandler(lb *LoadBalancer, metrics *observability.GatewayMetrics
 		if err != nil {
 			node.CB.RecordFailure()
 			if metrics != nil {
-				metrics.SetCircuitBreakerState(node.Address, pgateway.CBStateString(node.CB.State()))
+				metrics.SetCircuitBreakerState(node.Address, node.CB.StateString())
 			}
 			middleware.AbortWithError(c, http.StatusInternalServerError, "PROXY_ERROR", "后端代理创建失败", err.Error())
 			return
@@ -71,7 +70,7 @@ func NewHTTPProxyHandler(lb *LoadBalancer, metrics *observability.GatewayMetrics
 		// 上报 Prometheus 指标
 		if metrics != nil {
 			metrics.SetBackendEWMALatency(node.Address, float64(latency.Seconds()))
-			metrics.SetCircuitBreakerState(node.Address, pgateway.CBStateString(node.CB.State()))
+			metrics.SetCircuitBreakerState(node.Address, node.CB.StateString())
 			metrics.SetBackendInFlight(node.Address, node.Address, float64(node.InFlight.Load()))
 			metrics.RecordForwarded(node.Address, c.Writer.Status())
 		}
@@ -84,7 +83,7 @@ func NewHealthCheckHandler(lb *LoadBalancer) gin.HandlerFunc {
 		nodes := lb.Nodes()
 		results := make([]gin.H, 0, len(nodes))
 		for _, n := range nodes {
-			state := pgateway.CBStateString(n.CB.State())
+			state := n.CB.StateString()
 			results = append(results, gin.H{
 				"address":   n.Address,
 				"in_flight": n.InFlight.Load(),

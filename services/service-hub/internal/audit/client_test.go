@@ -14,6 +14,7 @@ import (
 	"time"
 
 	pkgagent "github.com/fengzhizi319/PrivShield/pkg/agent"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 	"github.com/fengzhizi319/PrivShield/pkg/store"
 
 	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/config"
@@ -237,7 +238,7 @@ func TestRecordOutboundHeaders(t *testing.T) {
 	stub := newEvidenceStub(t)
 	client := clientFor([]string{stub.url()}, "", 0)
 
-	ctx := pkgagent.ContextWithIdempotencyKey(pkgagent.ContextWithRequestID(context.Background(), "req-42"), "idem-42")
+	ctx := pkgagent.ContextWithIdempotencyKey(pkgobs.ContextWithRequestID(context.Background(), "req-42"), "idem-42")
 	if _, err := client.RecordOutbound(ctx, sampleFlow()); err != nil {
 		t.Fatalf("RecordOutbound() unexpected error: %v", err)
 	}

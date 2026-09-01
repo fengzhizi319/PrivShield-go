@@ -35,7 +35,7 @@ import (
 	"google.golang.org/grpc"
 	// credentials：基于 TLS 配置的传输凭证，用于加密与双向认证
 
-	pkgagent "github.com/fengzhizi319/PrivShield/pkg/agent"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 	"google.golang.org/grpc/credentials"
 	// insecure：非安全传输凭证，用于本地开发环境（无 TLS）
 	"google.golang.org/grpc/credentials/insecure"
@@ -289,7 +289,7 @@ func (c *Client) WithTrace(ctx context.Context, traceID string) context.Context 
 // It is a convenience wrapper around WithTrace that reads the request ID
 // placed by pkg/middleware.TraceMiddleware or pkg/agent.ContextWithRequestID.
 func (c *Client) WithTraceFromContext(ctx context.Context) context.Context {
-	return c.WithTrace(ctx, pkgagent.RequestIDFromContext(ctx))
+	return c.WithTrace(ctx, pkgobs.RequestIDFromContext(ctx))
 }
 
 // WithAuth returns a context with authentication metadata attached.

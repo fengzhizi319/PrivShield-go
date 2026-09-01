@@ -18,15 +18,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	pkgauth "github.com/fengzhizi319/PrivShield/pkg/auth"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 )
 
 func init() {
@@ -243,8 +244,8 @@ func TestExtractBearer(t *testing.T) {
 		{"Bearer a b", ""},
 	}
 	for _, tt := range tests {
-		if got := extractBearer(tt.header); got != tt.want {
-			t.Errorf("extractBearer(%q) = %q, want %q", tt.header, got, tt.want)
+		if got := pkgauth.ExtractBearerToken(tt.header); got != tt.want {
+			t.Errorf("ExtractBearerToken(%q) = %q, want %q", tt.header, got, tt.want)
 		}
 	}
 }
@@ -302,9 +303,8 @@ func TestRequestID_Generated(t *testing.T) {
 
 // TestStructuredLogger_NoPanic 验证在正常配置 Logger 下，结构化日志中间件正常执行无 panic。
 func TestStructuredLogger_NoPanic(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	r := gin.New()
-	r.Use(StructuredLogger(logger, "test-module"))
+	r.Use(pkgobs.RequestLoggerWithModule("test-module"))
 	r.GET("/test", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
 
 	w := httptest.NewRecorder()
@@ -316,10 +316,10 @@ func TestStructuredLogger_NoPanic(t *testing.T) {
 	}
 }
 
-// TestStructuredLogger_NilLogger 验证 Logger 传入 nil 时自动使用 slog.Default() 兜底不崩溃。
+// TestStructuredLogger_NilLogger 验证 RequestLoggerWithModule 中间件正常执行无 panic。
 func TestStructuredLogger_NilLogger(t *testing.T) {
 	r := gin.New()
-	r.Use(StructuredLogger(nil, "test-module"))
+	r.Use(pkgobs.RequestLoggerWithModule("test-module"))
 	r.GET("/test", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
 
 	w := httptest.NewRecorder()

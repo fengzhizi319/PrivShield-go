@@ -5,17 +5,43 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/fengzhizi319/PrivShield/pkg/middleware"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 )
 
 // IdentityContextKey 用于在 gin.Context 中存储认证身份。
 const IdentityContextKey = "security_identity"
 
-// extractBearerToken 从 Authorization header 提取 Bearer token。
-func extractBearerToken(header string) string {
+// errorEnvelope 是 pkg/auth 内部使用的统一错误响应体结构。
+// 与 pkg/middleware.ErrorEnvelope 字段完全一致，避免 pkg/auth 反向依赖 pkg/middleware。
+type errorEnvelope struct {
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	Detail    any    `json:"detail,omitempty"`
+	TraceID   string `json:"trace_id"`
+	Timestamp string `json:"timestamp"`
+}
+
+// abortWithError 中断请求并以统一错误信封格式输出 JSON 错误响应。
+// 等价于 pkg/middleware.AbortWithError，但提取 traceID 使用 pkg/observability.GetTraceID。
+func abortWithError(c *gin.Context, httpStatus int, code string, message string, detail any) {
+	traceID := pkgobs.GetTraceID(c)
+	c.Header("X-Request-ID", traceID)
+	c.Header("X-Trace-ID", traceID)
+	c.AbortWithStatusJSON(httpStatus, errorEnvelope{
+		Code:      code,
+		Message:   message,
+		Detail:    detail,
+		TraceID:   traceID,
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+	})
+}
+
+// ExtractBearerToken 从 Authorization header 提取 Bearer token。
+func ExtractBearerToken(header string) string {
 	parts := strings.Fields(header)
 	if len(parts) == 2 && strings.EqualFold(parts[0], "bearer") {
 		return parts[1]
@@ -78,22 +104,22 @@ func AuthMiddleware(settings *Settings) gin.HandlerFunc {
 			return
 		}
 
-		token := extractBearerToken(c.GetHeader("Authorization"))
+		token := ExtractBearerToken(c.GetHeader("Authorization"))
 		if token == "" {
-			middleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: missing credentials", nil)
+			abortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: missing credentials", nil)
 			return
 		}
 
 		identity := authenticateAPIKey(settings, token)
 		if identity == nil {
-			middleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: invalid credentials", nil)
+			abortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: invalid credentials", nil)
 			return
 		}
 
 		// 接口级权限校验 (PermissionForRESTPath)
 		requiredPerm := PermissionForRESTPath(path)
 		if requiredPerm != "*" && !identity.HasPermission(requiredPerm) {
-			middleware.AbortWithError(c, http.StatusForbidden, "FORBIDDEN", "Forbidden: insufficient scope", nil)
+			abortWithError(c, http.StatusForbidden, "FORBIDDEN", "Forbidden: insufficient scope", nil)
 			return
 		}
 
@@ -107,11 +133,11 @@ func RequirePermission(permission string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		identity := GetIdentity(c)
 		if identity == nil {
-			middleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "No identity in context", nil)
+			abortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "No identity in context", nil)
 			return
 		}
 		if !identity.HasPermission(permission) {
-			middleware.AbortWithError(c, http.StatusForbidden, "FORBIDDEN", "Forbidden: insufficient scope", nil)
+			abortWithError(c, http.StatusForbidden, "FORBIDDEN", "Forbidden: insufficient scope", nil)
 			return
 		}
 		c.Next()
@@ -123,7 +149,7 @@ func RequireAnyPermission(permissions ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		identity := GetIdentity(c)
 		if identity == nil {
-			middleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "No identity in context", nil)
+			abortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "No identity in context", nil)
 			return
 		}
 		for _, p := range permissions {
@@ -132,7 +158,7 @@ func RequireAnyPermission(permissions ...string) gin.HandlerFunc {
 				return
 			}
 		}
-		middleware.AbortWithError(c, http.StatusForbidden, "FORBIDDEN", "Forbidden: insufficient scope", nil)
+		abortWithError(c, http.StatusForbidden, "FORBIDDEN", "Forbidden: insufficient scope", nil)
 	}
 }
 

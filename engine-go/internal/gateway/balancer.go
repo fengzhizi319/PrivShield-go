@@ -3,6 +3,7 @@ package gateway
 import (
 	"time"
 
+	"github.com/fengzhizi319/PrivShield/pkg/circuitbreaker"
 	pgateway "github.com/fengzhizi319/PrivShield/pkg/gateway"
 )
 
@@ -10,23 +11,23 @@ import (
 type BackendNode = pgateway.BackendNode
 
 // CBState 熔断器状态
-type CBState = pgateway.CBState
+type CBState = circuitbreaker.State
 
 const (
-	CBClosed   = pgateway.CBClosed
-	CBHalfOpen = pgateway.CBHalfOpen
-	CBOpen     = pgateway.CBOpen
+	CBClosed   = circuitbreaker.StateClosed
+	CBHalfOpen = circuitbreaker.StateHalfOpen
+	CBOpen     = circuitbreaker.StateOpen
 )
 
 // CircuitBreaker 三态熔断器
-type CircuitBreaker = pgateway.CircuitBreaker
+type CircuitBreaker = circuitbreaker.Breaker
 
 // LoadBalancer 自适应负载均衡器
 type LoadBalancer = pgateway.LoadBalancer
 
 // NewCircuitBreaker 创建熔断器
-func NewCircuitBreaker(threshold int, cooldown time.Duration) CircuitBreaker {
-	return pgateway.NewCircuitBreaker(threshold, cooldown)
+func NewCircuitBreaker(threshold int, cooldown time.Duration) *CircuitBreaker {
+	return circuitbreaker.NewBreaker(threshold, cooldown)
 }
 
 // NewLoadBalancer 创建负载均衡器

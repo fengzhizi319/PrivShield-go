@@ -1,22 +1,11 @@
 package security
 
 import (
-	"strings"
-
 	"github.com/gin-gonic/gin"
 
 	pkgauth "github.com/fengzhizi319/PrivShield/pkg/auth"
 	pkgmiddleware "github.com/fengzhizi319/PrivShield/pkg/middleware"
 )
-
-// extractBearerToken 从 Authorization header 提取 Bearer token。
-func extractBearerToken(header string) string {
-	parts := strings.Fields(header)
-	if len(parts) == 2 && strings.EqualFold(parts[0], "bearer") {
-		return parts[1]
-	}
-	return ""
-}
 
 // AuthMiddleware 返回 Gin 中间件，执行 API Key 认证。
 // 认证未启用时透传并注入匿名身份。
@@ -84,8 +73,3 @@ func RateLimitMiddleware() gin.HandlerFunc {
 		return key
 	})
 }
-
-// StopRateLimiter 停止限流器后台清理 goroutine。
-// 在新的 pkg/middleware 实现中，每个限流器拥有独立的清理 goroutine；
-// 调用 RateLimitMiddleware 不会启动全局 goroutine，因此本函数保留为空操作以兼容旧调用方。
-func StopRateLimiter() {}

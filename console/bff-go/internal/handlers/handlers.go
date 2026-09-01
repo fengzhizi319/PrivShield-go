@@ -64,7 +64,8 @@ import (
 	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/models"
 	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/samples"
 	pb "github.com/fengzhizi319/PrivShield/console/bff-go/proto"
-	pkgagent "github.com/fengzhizi319/PrivShield/pkg/agent"
+	pkgauth "github.com/fengzhizi319/PrivShield/pkg/auth"
+	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
 	"github.com/fengzhizi319/PrivShield/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield/pkg/middleware"
 	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
@@ -432,25 +433,19 @@ func isAllowedConcurrencyPath(rawPath string) bool {
 }
 
 // agentRestBaseURL 返回 agent REST 服务的基础地址。
-// REST 与 gRPC 是 agent 的两个独立服务，主机/端口可能不同，
-// 当开启 TLS 时自动将协议切换为 https://。
+// 优先使用 config.Load() 预计算的 AgentRESTURL；
+// 未设置时（如单测直接构造 Config）从环境变量或已有字段降级拼接。
 func (s *Server) agentRestBaseURL() string {
-	if u := os.Getenv("PRIVACY_AGENT_REST_URL"); u != "" {
-		return strings.TrimRight(u, "/")
-	}
-	if u := os.Getenv("PRIVACY_AGENT_URL"); u != "" {
-		return strings.TrimRight(u, "/")
+	if s.cfg.AgentRESTURL != "" {
+		return s.cfg.AgentRESTURL
 	}
 
 	scheme := "http"
-	if s.cfg.AgentTLSEnabled || os.Getenv("PRIVACY_TLS_ENABLED") == "true" {
+	if s.cfg.AgentTLSEnabled || pkgconfig.EnvBool("PRIVACY_TLS_ENABLED", false) {
 		scheme = "https"
 	}
 
-	restHost := os.Getenv("PRIVACY_AGENT_REST_HOST")
-	if restHost == "" {
-		restHost = os.Getenv("PRIVACY_REST_HOST")
-	}
+	restHost := pkgconfig.EnvStringFirstSet("PRIVACY_AGENT_REST_HOST", "PRIVACY_REST_HOST")
 	if restHost == "" {
 		restHost = s.cfg.AgentGRPCHost
 	}
@@ -458,10 +453,7 @@ func (s *Server) agentRestBaseURL() string {
 		restHost = "127.0.0.1"
 	}
 
-	restPort := os.Getenv("PRIVACY_REST_PORT")
-	if restPort == "" {
-		restPort = "8079"
-	}
+	restPort := pkgconfig.EnvString("PRIVACY_REST_PORT", "8079")
 
 	return fmt.Sprintf("%s://%s:%s", scheme, restHost, restPort)
 }
@@ -641,7 +633,7 @@ func (s *Server) callRest(ctx context.Context, method, path string, body json.Ra
 		httpReq.Header.Set("Authorization", "Bearer "+s.cfg.AgentAPIKey)
 	}
 	// Propagate distributed trace headers to the upstream Python engine.
-	if rid := pkgagent.RequestIDFromContext(ctx); rid != "" {
+	if rid := pkgobs.RequestIDFromContext(ctx); rid != "" {
 		httpReq.Header.Set("X-Request-ID", rid)
 		httpReq.Header.Set("X-Trace-ID", rid)
 	}
@@ -1017,15 +1009,10 @@ func (s *Server) LbTest(c *gin.Context) {
 }
 
 // grpcCallTimeout 返回单次 gRPC 调用的超时时间。
-//
-// 默认 60 秒；可用环境变量 PRIVACY_GRPC_CALL_TIMEOUT 覆盖（Go duration 格式，如 "30s"）。
-// 作用：waitForReady 开启后，agent 重启期间 RPC 会等待连接恢复，该超时提供兜底，
-// 避免连接长期不可用时请求无限挂起。
+// 超时值在 config.Load() 时从 PRIVACY_GRPC_CALL_TIMEOUT 解析，默认 60s。
 func (s *Server) grpcCallTimeout() time.Duration {
-	if v := os.Getenv("PRIVACY_GRPC_CALL_TIMEOUT"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			return d
-		}
+	if s.cfg.GRPCCallTimeout > 0 {
+		return s.cfg.GRPCCallTimeout
 	}
 	return 60 * time.Second
 }
@@ -1254,7 +1241,7 @@ func securityMiddleware(apiKey string, rateLimit int) (gin.HandlerFunc, func()) 
 		}
 		// API Key 鉴权（配置了才校验）。
 		if apiKey != "" {
-			token := extractBearer(c.GetHeader("Authorization"))
+			token := pkgauth.ExtractBearerToken(c.GetHeader("Authorization"))
 			if subtle.ConstantTimeCompare([]byte(token), []byte(apiKey)) != 1 {
 				middleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHORIZED", "Unauthorized: invalid console api key", nil)
 				return
@@ -1286,15 +1273,6 @@ func securityMiddleware(apiKey string, rateLimit int) (gin.HandlerFunc, func()) 
 		c.Next()
 	}
 	return handler, cleanup
-}
-
-// extractBearer 从 Authorization 头提取 Bearer token，格式不符时返回空字符串。
-func extractBearer(header string) string {
-	parts := strings.Fields(header)
-	if len(parts) == 2 && strings.EqualFold(parts[0], "bearer") {
-		return parts[1]
-	}
-	return ""
 }
 
 // ConcurrencyTest 并发压测：以指定并发度向 agent 发送请求并统计延迟分布与吞吐量。
@@ -1817,7 +1795,7 @@ func proxyCallerIdentity(c *gin.Context) string {
 		return "subject=unknown;ip=unknown"
 	}
 	subject := "anonymous"
-	if extractBearer(c.GetHeader("Authorization")) != "" {
+	if pkgauth.ExtractBearerToken(c.GetHeader("Authorization")) != "" {
 		subject = "console-api-key"
 	}
 	ip := c.ClientIP()

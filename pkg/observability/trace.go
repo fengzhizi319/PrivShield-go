@@ -2,15 +2,39 @@
 package observability
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
-
-	pkgagent "github.com/fengzhizi319/PrivShield/pkg/agent"
 )
+
+// requestIDKeyType is the context key for propagating X-Request-ID to downstream services.
+// requestIDKeyType 是用于在 context 中传播 X-Request-ID 的私有类型键，防止跨包冲突。
+type requestIDKeyType struct{}
+
+var requestIDKey requestIDKeyType
+
+// ContextWithRequestID returns a copy of ctx carrying the given request ID.
+// Downstream HTTP/gRPC clients automatically inject this value as X-Request-ID header,
+// enabling distributed tracing correlation across service boundaries.
+//
+// ContextWithRequestID 将指定的请求 ID 注入 context 副本中。
+// 下游 HTTP/gRPC 客户端会自动提取该值并注入 X-Request-ID 头，实现跨服务边界的分布式追踪。
+func ContextWithRequestID(ctx context.Context, requestID string) context.Context {
+	return context.WithValue(ctx, requestIDKey, requestID)
+}
+
+// RequestIDFromContext extracts request ID from context if present.
+// RequestIDFromContext 从 context 中提取已注入的请求 ID，未找到则返回空串。
+func RequestIDFromContext(ctx context.Context) string {
+	if rid, ok := ctx.Value(requestIDKey).(string); ok {
+		return rid
+	}
+	return ""
+}
 
 const (
 	// TraceIDContextKey 是在 gin.Context 中存储追踪 ID 的专属键名。
@@ -93,7 +117,7 @@ func TraceMiddleware() gin.HandlerFunc {
 		c.Header(TraceHeader, traceID)
 		c.Header(TraceIDHeader, traceID)
 
-		ctx := pkgagent.ContextWithRequestID(c.Request.Context(), traceID)
+		ctx := ContextWithRequestID(c.Request.Context(), traceID)
 		c.Request = c.Request.WithContext(ctx)
 
 		c.Next()

@@ -20,7 +20,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	pkgagent "github.com/fengzhizi319/PrivShield/pkg/agent"
 	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 )
 
@@ -87,19 +86,10 @@ func RequestID() gin.HandlerFunc {
 		// (e.g. pkg/agent) automatically propagate it as X-Request-ID header.
 		// 将请求 ID 注入 request context，使下游 HTTP 客户端
 		//（如 pkg/agent）自动将其作为 X-Request-ID 头传播。
-		ctx := pkgagent.ContextWithRequestID(c.Request.Context(), rid)
+		ctx := pkgobs.ContextWithRequestID(c.Request.Context(), rid)
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	}
-}
-
-// StructuredLogger returns a Gin middleware that logs each request in structured JSON.
-//
-// Deprecated: 已下沉至 pkg/observability.RequestLoggerWithModule。
-// 新代码请直接使用 pkg/observability.RequestLoggerWithModule(module)。
-// 本函数保留为兼容别名，字段与行为与历史实现保持一致。
-func StructuredLogger(_ *slog.Logger, module string) gin.HandlerFunc {
-	return pkgobs.RequestLoggerWithModule(module)
 }
 
 // Recovery returns a Gin middleware that recovers from panics and logs structured errors.

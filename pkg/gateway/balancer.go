@@ -14,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/fengzhizi319/PrivShield/pkg/circuitbreaker"
 )
 
 // ──────────────────────────────────────────────
@@ -24,12 +26,11 @@ import (
 type BackendNode struct {
 	Address       string
 	Weight        int
-	currentWeight atomic.Int32   // Nginx SWRR 当前权重（原子操作）
-	InFlight      atomic.Int64   // 当前在途请求数（原子操作，与 EWMA 锁分离）
-	EWMA          float64        // 指数移动加权平均延迟
-	LastUsed      time.Time      // 最后使用时间
-	CB            CircuitBreaker // 熔断器
-	eWMAMu        sync.Mutex     // 仅保护 EWMA 字段
+	currentWeight atomic.Int32           // Nginx SWRR 当前权重（原子操作）
+	InFlight      atomic.Int64           // 当前在途请求数（原子操作，与 EWMA 锁分离）
+	EWMA          float64                // 指数移动加权平均延迟
+	CB            *circuitbreaker.Breaker // 熔断器
+	eWMAMu        sync.Mutex             // 仅保护 EWMA 字段
 
 	// 反向代理实例与节点生命周期绑定：随节点惰性创建、随节点回收即释放。
 	// 取代早期「全局 sync.Map 缓存 + 后台 TTL 清理 goroutine」方案——
@@ -103,7 +104,7 @@ func (n *BackendNode) ReverseProxy(metrics MetricsRecorder) (*httputil.ReversePr
 		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 			n.CB.RecordFailure()
 			if metrics != nil {
-				metrics.SetCircuitBreakerState(n.Address, CBStateString(n.CB.State()))
+				metrics.SetCircuitBreakerState(n.Address, n.CB.StateString())
 				metrics.RecordForwarded(n.Address, http.StatusBadGateway)
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -113,118 +114,6 @@ func (n *BackendNode) ReverseProxy(metrics MetricsRecorder) (*httputil.ReversePr
 		n.proxy = proxy
 	})
 	return n.proxy, n.proxyErr
-}
-
-// CBStateString returns a human-readable name for a circuit breaker state.
-func CBStateString(s CBState) string {
-	switch s {
-	case CBClosed:
-		return "closed"
-	case CBHalfOpen:
-		return "half_open"
-	case CBOpen:
-		return "open"
-	}
-	return "unknown"
-}
-
-// ──────────────────────────────────────────────
-// 三态熔断器
-// ──────────────────────────────────────────────
-
-// CBState 熔断器状态
-type CBState int
-
-const (
-	CBClosed   CBState = iota // 正常
-	CBHalfOpen                // 半开（探测）
-	CBOpen                    // 熔断
-)
-
-// CircuitBreaker 三态熔断器
-type CircuitBreaker struct {
-	state        CBState
-	failureCount int
-	successCount int
-	threshold    int           // 触发熔断的失败次数
-	halfOpenMax  int           // 半开状态最大探测次数
-	lastFailure  time.Time     // 最近失败时间
-	cooldown     time.Duration // 冷却时间
-	mu           sync.Mutex
-}
-
-// NewCircuitBreaker 创建熔断器
-func NewCircuitBreaker(threshold int, cooldown time.Duration) CircuitBreaker {
-	return CircuitBreaker{
-		state:       CBClosed,
-		threshold:   threshold,
-		halfOpenMax: 3,
-		cooldown:    cooldown,
-	}
-}
-
-// Allow 检查是否允许请求通过
-func (cb *CircuitBreaker) Allow() bool {
-	cb.mu.Lock()
-	defer cb.mu.Unlock()
-
-	switch cb.state {
-	case CBClosed:
-		return true
-	case CBOpen:
-		// 检查冷却期是否已过
-		if time.Since(cb.lastFailure) > cb.cooldown {
-			cb.state = CBHalfOpen
-			cb.successCount = 0
-			return true
-		}
-		return false
-	case CBHalfOpen:
-		return cb.successCount < cb.halfOpenMax
-	}
-	return true
-}
-
-// RecordSuccess 记录成功
-func (cb *CircuitBreaker) RecordSuccess() {
-	cb.mu.Lock()
-	defer cb.mu.Unlock()
-
-	switch cb.state {
-	case CBHalfOpen:
-		cb.successCount++
-		if cb.successCount >= cb.halfOpenMax {
-			cb.state = CBClosed
-			cb.failureCount = 0
-		}
-	case CBClosed:
-		cb.failureCount = 0
-	}
-}
-
-// RecordFailure 记录失败
-func (cb *CircuitBreaker) RecordFailure() {
-	cb.mu.Lock()
-	defer cb.mu.Unlock()
-
-	cb.failureCount++
-	cb.lastFailure = time.Now()
-
-	switch cb.state {
-	case CBClosed:
-		if cb.failureCount >= cb.threshold {
-			cb.state = CBOpen
-		}
-	case CBHalfOpen:
-		cb.state = CBOpen
-	}
-}
-
-// State 返回当前状态
-func (cb *CircuitBreaker) State() CBState {
-	cb.mu.Lock()
-	defer cb.mu.Unlock()
-	return cb.state
 }
 
 // ──────────────────────────────────────────────
@@ -245,7 +134,7 @@ func NewLoadBalancer(addresses []string, strategy string) *LoadBalancer {
 		nodes[i] = &BackendNode{
 			Address: addr,
 			Weight:  1,
-			CB:      NewCircuitBreaker(5, 30*time.Second),
+			CB:      circuitbreaker.NewBreaker(5, 30*time.Second),
 		}
 	}
 	return &LoadBalancer{
@@ -266,7 +155,7 @@ func NewWeightedLoadBalancer(addresses []string, weights []int, strategy string)
 		nodes[i] = &BackendNode{
 			Address: addr,
 			Weight:  w,
-			CB:      NewCircuitBreaker(5, 30*time.Second),
+			CB:      circuitbreaker.NewBreaker(5, 30*time.Second),
 		}
 	}
 	return &LoadBalancer{
@@ -443,7 +332,6 @@ func (n *BackendNode) UpdateEWMA(latency time.Duration, alpha float64) {
 	n.eWMAMu.Lock()
 	defer n.eWMAMu.Unlock()
 	n.EWMA = alpha*float64(latency) + (1-alpha)*n.EWMA
-	n.LastUsed = time.Now()
 }
 
 // IncrementInFlight 增加在途请求数（原子操作）

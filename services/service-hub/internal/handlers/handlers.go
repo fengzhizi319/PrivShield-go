@@ -196,7 +196,7 @@ func (s *Server) persistTask(task *store.Task, transition string) error {
 // RegisterRoutes 在 Gin 路由引擎上挂载完整的中间件链与 REST API 端点。
 // 中间件装配顺序：
 // 1. RequestID: 自动注入链路追踪 X-Request-ID
-// 2. StructuredLogger: 输出包含延迟、状态码、IP 的结构化 JSON/Text 日志
+// 2. RequestLoggerWithModule: 输出包含延迟、状态码、IP 的结构化 JSON/Text 日志
 // 3. Recovery: 拦截 Handler Panic 并返回 500 JSON
 // 4. SecurityHeaders: 注入 CSP、HSTS、X-Content-Type-Options 等安全防护头
 // 5. MaxBodySize: 限制请求体最大 32 MiB，防御超大 Body 内存溢出
@@ -562,7 +562,7 @@ func (s *Server) processTask(task *store.Task, req dispatchRequest, requestID st
 		if stage == "fetch" && s.datasource != nil {
 			if req.Payload == nil || isEmptyPayload(req.Payload) {
 				ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
-				ctx = agent.ContextWithRequestID(ctx, requestID)
+				ctx = pkgobs.ContextWithRequestID(ctx, requestID)
 				if res, err := s.datasource.FetchData(ctx, req.DatasourceID, 10, 0); err == nil && len(res.Records) > 0 {
 					req.Payload = res.Records
 					payloadBytes, _ := json.Marshal(req.Payload)
@@ -584,7 +584,7 @@ func (s *Server) processTask(task *store.Task, req dispatchRequest, requestID st
 		// 定级缺失即任务失败——严禁出现「读不到级别就按默认算子放行」的静默降级路径。
 		if stage == "classify" {
 			ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
-			ctx = agent.ContextWithRequestID(ctx, requestID)
+			ctx = pkgobs.ContextWithRequestID(ctx, requestID)
 			idempotencyKey := fmt.Sprintf("hub-%s-%s-%d", task.ID, stage, task.RetryCount)
 			ctx = agent.ContextWithIdempotencyKey(ctx, idempotencyKey)
 			records := agent.ToRecords(req.Payload)
@@ -652,7 +652,7 @@ func (s *Server) processTask(task *store.Task, req dispatchRequest, requestID st
 		// 任何提交错误都必须使任务终态失败：不存在「已出域但无存证仍标 done」的路径。
 		if stage == "audit" {
 			evCtx, cancel := context.WithTimeout(s.ctx, s.cfg.AuditLogTimeoutDuration())
-			evCtx = agent.ContextWithRequestID(evCtx, requestID)
+			evCtx = pkgobs.ContextWithRequestID(evCtx, requestID)
 			evCtx = agent.ContextWithIdempotencyKey(evCtx, fmt.Sprintf("hub-%s-audit-%d", task.ID, task.RetryCount))
 			_, evErr := audit.RecordOutboundEvidence(evCtx, s.audit, audit.OutboundFlow{
 				Task:          task,

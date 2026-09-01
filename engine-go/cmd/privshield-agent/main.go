@@ -299,9 +299,6 @@ func main() {
 		grpcSrv.Stop()
 	}
 
-	// 4. 停止后台 goroutine（限流清理等），与生命周期绑定
-	security.StopRateLimiter()
-
 	slog.Info("Server stopped gracefully")
 }
 

@@ -56,7 +56,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 	"github.com/fengzhizi319/PrivShield/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield/pkg/naming"
 	"github.com/fengzhizi319/PrivShield/pkg/store"
@@ -91,8 +91,8 @@ func main() {
 	// =========================================================================
 	// 2. Structured Logger Setup / 结构化日志系统初始化
 	// =========================================================================
-	// 使用共享库 pkgconfig.SetupLogger 初始化基于 slog 的全局日志记录器（支持 json/text 格式）。
-	logger := pkgconfig.SetupLogger(cfg.LogFormat, cfg.LogLevel)
+	// 使用共享库 pkgobs.NewLogger 初始化基于 slog 的全局日志记录器（支持 json/text 格式）。
+	logger := pkgobs.NewLogger(cfg.LogFormat, cfg.LogLevel)
 
 	// =========================================================================
 	// 3. Task Store Initialization / 任务持久化存储初始化
@@ -494,7 +494,7 @@ func initLeasedTaskStore(cfg *config.Config, logger *slog.Logger) (store.LeasedT
 		logger.Info("probing PostgreSQL leased task store (Phase B multi-replica Hub)")
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		pgStore, err := postgres.New(
+		pgStore, err := postgres.NewStore(
 			ctx,
 			postgres.Config{
 				DSN:     cfg.PGDSN,

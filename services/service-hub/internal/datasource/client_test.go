@@ -14,6 +14,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/fengzhizi319/PrivShield/pkg/circuitbreaker"
 	dspb "github.com/fengzhizi319/PrivShield/services/datasource-mgr/proto"
 	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/config"
 )
@@ -366,9 +367,8 @@ func TestDatasourceClient_CircuitBreaker(t *testing.T) {
 	}
 
 	client := New(cfg)
-	client.cbThreshold = 2
+	client.breaker = circuitbreaker.NewBreaker(2, 100*time.Millisecond)
 	client.maxRetries = 0
-	client.cbCooldown = 100 * time.Millisecond
 
 	ctx := context.Background()
 

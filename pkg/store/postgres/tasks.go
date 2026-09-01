@@ -106,7 +106,7 @@ func (s *Store) List(filter store.TaskFilter) ([]store.Task, int, error) {
 
 	tasks := make([]store.Task, 0)
 	for rows.Next() {
-		t, err := scanTaskRow(rows)
+		t, err := scanTask(rows)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -197,12 +197,6 @@ func scanTask(row rowScanner) (*store.Task, error) {
 		return nil, fmt.Errorf("postgres: scan task: %w", err)
 	}
 	return &t, nil
-}
-
-func scanTaskRow(rows interface {
-	Scan(dest ...any) error
-}) (*store.Task, error) {
-	return scanTask(rows)
 }
 
 // Compile-time interface assertion / 编译时接口断言

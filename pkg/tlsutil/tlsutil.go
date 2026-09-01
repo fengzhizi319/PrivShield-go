@@ -149,9 +149,9 @@ func BuildServerTLSConfig(cfg *ServerTLSConfig) (*tls.Config, error) {
 		tlsConfig.ClientCAs = caPool
 
 		switch clientAuthMode {
-		case "require", "requireandverify":
+		case "require", "requireandverify", "require_and_verify":
 			tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
-		case "verify":
+		case "verify", "verify_if_given":
 			tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
 		case "request":
 			tlsConfig.ClientAuth = tls.RequestClientCert

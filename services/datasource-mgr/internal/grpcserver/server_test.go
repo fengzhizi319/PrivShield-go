@@ -41,7 +41,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 	"github.com/fengzhizi319/PrivShield/services/datasource-mgr/internal/config"
 	pb "github.com/fengzhizi319/PrivShield/services/datasource-mgr/proto"
 )
@@ -54,7 +54,7 @@ func setupTestGRPCServer(t *testing.T) (pb.DataSourceManagerServiceClient, func(
 
 	// 1. 初始化测试配置与日志记录器
 	cfg := config.Load()
-	logger := pkgconfig.SetupLogger("text", "debug")
+	logger := pkgobs.NewLogger("text", "debug")
 	srvImpl := New(cfg, logger)
 
 	// 2. 随机分配本地可用端口

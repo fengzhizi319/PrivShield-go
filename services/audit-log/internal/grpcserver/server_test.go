@@ -22,7 +22,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 	"github.com/fengzhizi319/PrivShield/pkg/store"
 	"github.com/fengzhizi319/PrivShield/pkg/store/memory"
 	"github.com/fengzhizi319/PrivShield/services/audit-log/internal/agent"
@@ -43,7 +43,7 @@ func setupTestGRPCServer(t *testing.T, agentMux http.Handler) (pb.AuditLogServic
 
 	t.Setenv("PRIVACY_AGENT_URLS", agentURL)
 	cfg := config.Load()
-	logger := pkgconfig.SetupLogger("text", "debug")
+	logger := pkgobs.NewLogger("text", "debug")
 	auditStore := memory.NewAuditStore()
 	agentClient := agent.New(cfg)
 

@@ -23,7 +23,7 @@ import (
 	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/agent"
 	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/config"
 	pb "github.com/fengzhizi319/PrivShield/console/bff-go/proto"
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 )
 
 // mockAgentServer implements pb.PrivacyServiceServer for testing
@@ -69,7 +69,7 @@ func setupBufConnServer(t *testing.T) (pb.PrivacyServiceClient, func()) {
 
 	agentClient := agent.NewFromConnection(conn)
 	cfg := &config.Config{}
-	logger := pkgconfig.SetupLogger("text", "debug")
+	logger := pkgobs.NewLogger("text", "debug")
 	bffServer := New(agentClient, cfg, logger)
 
 	bffLis := bufconn.Listen(buffer)
@@ -195,7 +195,7 @@ func TestGRPCServer_TLS_mTLS(t *testing.T) {
 		ConsoleTLSCAFile:     caFile,
 		ConsoleTLSClientAuth: "require",
 	}
-	logger := pkgconfig.SetupLogger("text", "debug")
+	logger := pkgobs.NewLogger("text", "debug")
 	bffServer := New(nil, cfg, logger)
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")

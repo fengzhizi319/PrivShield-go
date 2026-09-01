@@ -10,7 +10,7 @@ import (
 
 	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/config"
 	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/models"
-	pkgagent "github.com/fengzhizi319/PrivShield/pkg/agent"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
 )
 
@@ -371,7 +371,7 @@ func TestP1_OutboundHeadersInjected(t *testing.T) {
 		AgentAPIKey:      "agent-key-abc",
 	}
 	pool := NewClientPool(cfg)
-	ctx := pkgagent.ContextWithRequestID(context.Background(), "test-trace-123")
+	ctx := pkgobs.ContextWithRequestID(context.Background(), "test-trace-123")
 
 	if _, err := pool.ListTasks(ctx, "pending", 10, 0); err != nil {
 		t.Fatalf("ListTasks failed: %v", err)

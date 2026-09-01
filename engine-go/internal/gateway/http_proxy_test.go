@@ -12,7 +12,6 @@ import (
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/observability"
 	"github.com/gin-gonic/gin"
 
-	pgateway "github.com/fengzhizi319/PrivShield/pkg/gateway"
 	"github.com/fengzhizi319/PrivShield/pkg/middleware"
 )
 
@@ -93,12 +92,12 @@ func TestCbStateString(t *testing.T) {
 		want  string
 	}{
 		{CBClosed, "closed"},
-		{CBHalfOpen, "half_open"},
+		{CBHalfOpen, "half-open"},
 		{CBOpen, "open"},
 		{CBState(99), "unknown"},
 	}
 	for _, tt := range tests {
-		got := pgateway.CBStateString(tt.state)
+		got := tt.state.String()
 		if got != tt.want {
 			t.Errorf("cbStateString(%d) = %q, want %q", tt.state, got, tt.want)
 		}

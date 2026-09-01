@@ -16,6 +16,9 @@ import (
 
 // REDMetrics holds the standard RED (Rate / Errors / Duration) Prometheus metrics.
 // It uses an independent Registry so multiple modules can coexist without conflicts.
+//
+// 与 pkg/metrics.Collector 的边界：REDMetrics 度量传输层通用请求指标（由中间件自动埋点），
+// Collector 度量业务领域多维指标（由 Handler 显式上报）。二者互补而非替代。
 type REDMetrics struct {
 	registry *prometheus.Registry
 

@@ -100,7 +100,7 @@ func (s *TaskStore) List(filter store.TaskFilter) ([]store.Task, int, error) {
 
 	tasks := make([]store.Task, 0)
 	for rows.Next() {
-		t, err := scanTaskRow(rows)
+		t, err := scanTaskFields(rows.Scan)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -184,10 +184,6 @@ func scanTaskFields(scan func(dest ...any) error) (*store.Task, error) {
 
 func scanTask(row *sql.Row) (*store.Task, error) {
 	return scanTaskFields(row.Scan)
-}
-
-func scanTaskRow(rows *sql.Rows) (*store.Task, error) {
-	return scanTaskFields(rows.Scan)
 }
 
 // CleanupOld deletes terminal (completed/failed) tasks older than the cutoff time.

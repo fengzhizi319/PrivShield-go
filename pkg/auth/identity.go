@@ -3,6 +3,8 @@
 // 从 engine-go/internal/security 下沉到 pkg/auth，供 services、console 及 engine-go 统一使用。
 package auth
 
+import "strings"
+
 // Identity 表示已认证的调用者身份。
 type Identity struct {
 	// ServiceType: "internal"（高信任内部服务）或 "external"（外部/公共客户端）。
@@ -49,15 +51,15 @@ func PermissionForRESTPath(path string) string {
 	switch {
 	case path == "/health" || path == "/livez" || path == "/readyz" || path == "/readyz/llm":
 		return "health:read"
-	case hasPrefix(path, "/v1/privacy/mask"):
+	case strings.HasPrefix(path, "/v1/privacy/mask"):
 		return "privacy:mask"
 	case path == "/v1/privacy/hash":
 		return "privacy:hash"
-	case hasPrefix(path, "/v1/privacy/dp/") || hasPrefix(path, "/v1/privacy/ldp/"):
+	case strings.HasPrefix(path, "/v1/privacy/dp/") || strings.HasPrefix(path, "/v1/privacy/ldp/"):
 		return "privacy:dp"
-	case hasPrefix(path, "/v1/privacy/k_anonymize"):
+	case strings.HasPrefix(path, "/v1/privacy/k_anonymize"):
 		return "privacy:kano"
-	case hasPrefix(path, "/v1/privacy/qol/"):
+	case strings.HasPrefix(path, "/v1/privacy/qol/"):
 		return "privacy:qol"
 	case path == "/v1/privacy/budget":
 		return "privacy:budget"
@@ -65,21 +67,21 @@ func PermissionForRESTPath(path string) string {
 		return "privacy:profile"
 	case path == "/v1/privacy/process_file":
 		return "privacy:mask"
-	case hasPrefix(path, "/v1/privacy/classify/"):
+	case strings.HasPrefix(path, "/v1/privacy/classify/"):
 		return "classification:read"
-	case hasPrefix(path, "/v1/dynclassification"):
+	case strings.HasPrefix(path, "/v1/dynclassification"):
 		if path == "/v1/dynclassification/profiles/reload" || path == "/v1/dynclassification/generate_profile" {
 			return "dynclassification:write"
 		}
-	case hasPrefix(path, "/v1/agent"):
+	case strings.HasPrefix(path, "/v1/agent"):
 		return "agent:process"
-	case hasPrefix(path, "/v1/medical"):
+	case strings.HasPrefix(path, "/v1/medical"):
 		return "medical:process"
-	case hasPrefix(path, "/v1/pipeline"):
+	case strings.HasPrefix(path, "/v1/pipeline"):
 		return "pipeline:process"
-	case hasPrefix(path, "/v1/ops/"):
+	case strings.HasPrefix(path, "/v1/ops/"):
 		return "ops:diagnostics"
-	case hasPrefix(path, "/debug/pprof"):
+	case strings.HasPrefix(path, "/debug/pprof"):
 		return "ops:admin"
 	}
 	return "*"
@@ -121,8 +123,4 @@ func PermissionForGRPCMethod(method string) string {
 		return p
 	}
 	return "*"
-}
-
-func hasPrefix(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }

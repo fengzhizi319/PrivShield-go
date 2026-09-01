@@ -85,7 +85,7 @@ func cleanPostgresTables(t *testing.T, ctx context.Context, dsn string) *postgre
 	}
 	defer auditStore.Close()
 
-	taskStore, err := postgres.New(ctx, postgres.Config{DSN: dsn, MaxConn: 3, MinConn: 1}, logger)
+	taskStore, err := postgres.NewStore(ctx, postgres.Config{DSN: dsn, MaxConn: 3, MinConn: 1}, logger)
 	if err != nil {
 		t.Fatalf("create postgres task store: %v", err)
 	}

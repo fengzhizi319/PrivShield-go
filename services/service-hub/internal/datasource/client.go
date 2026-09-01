@@ -38,33 +38,12 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	pkgagent "github.com/fengzhizi319/PrivShield/pkg/agent"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
+	"github.com/fengzhizi319/PrivShield/pkg/circuitbreaker"
 	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
 	dspb "github.com/fengzhizi319/PrivShield/services/datasource-mgr/proto"
 	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/config"
 )
-
-// CircuitState represents the circuit breaker state.
-type CircuitState int
-
-const (
-	CircuitClosed   CircuitState = iota // Normal operation / 正常运行
-	CircuitOpen                         // Tripped, rejecting calls / 熔断中，拒绝调用
-	CircuitHalfOpen                     // Testing recovery / 探测恢复中
-)
-
-func (s CircuitState) String() string {
-	switch s {
-	case CircuitClosed:
-		return "closed"
-	case CircuitOpen:
-		return "open"
-	case CircuitHalfOpen:
-		return "half-open"
-	default:
-		return "unknown"
-	}
-}
 
 // Client handles HTTP/REST and gRPC communication with datasource-mgr.
 // Client 结构体负责与 datasource-mgr 微服务进行双协议通信，管理 HTTP 传输层与 gRPC 连接生命周期。
@@ -78,12 +57,7 @@ type Client struct {
 	// Retry & Circuit Breaker / 重试与熔断配置
 	maxRetries     int
 	retryBaseDelay time.Duration
-	cbMu           sync.Mutex
-	cbState        CircuitState
-	cbFailures     int
-	cbOpenedAt     time.Time
-	cbThreshold    int           // 连续失败熔断阈值（默认 5）
-	cbCooldown     time.Duration // 熔断冷却时间（默认 30s）
+	breaker        *circuitbreaker.Breaker
 
 	mu         sync.RWMutex                        // 保护 gRPC 连接与客户端实例的读写互斥锁
 	grpcConn   *grpc.ClientConn                    // gRPC 底层长连接实例
@@ -129,9 +103,7 @@ func New(cfg *config.Config) *Client {
 		logger:         slog.Default(),
 		maxRetries:     3,
 		retryBaseDelay: 500 * time.Millisecond,
-		cbThreshold:    5,
-		cbCooldown:     30 * time.Second,
-		cbState:        CircuitClosed,
+		breaker:        circuitbreaker.NewBreaker(5, 30*time.Second),
 	}
 }
 
@@ -151,58 +123,30 @@ func (c *Client) Close() error {
 
 // CircuitStateString returns the current circuit breaker status as a string.
 func (c *Client) CircuitStateString() string {
-	c.cbMu.Lock()
-	defer c.cbMu.Unlock()
-	return c.cbState.String()
+	return c.breaker.StateString()
 }
 
 func (c *Client) checkCircuit() error {
-	c.cbMu.Lock()
-	defer c.cbMu.Unlock()
-
-	switch c.cbState {
-	case CircuitClosed:
-		return nil
-	case CircuitOpen:
-		if time.Since(c.cbOpenedAt) >= c.cbCooldown {
-			c.cbState = CircuitHalfOpen
-			c.logger.Info("datasource client circuit breaker half-open, probing recovery")
-			return nil
-		}
-		return fmt.Errorf("datasource circuit breaker open (cooling down)")
-	case CircuitHalfOpen:
-		return nil
-	default:
+	if c.breaker.Allow() {
 		return nil
 	}
+	return fmt.Errorf("datasource circuit breaker open (cooling down)")
 }
 
 func (c *Client) recordSuccess() {
-	c.cbMu.Lock()
-	defer c.cbMu.Unlock()
-
-	c.cbFailures = 0
-	if c.cbState == CircuitHalfOpen {
-		c.cbState = CircuitClosed
+	prev := c.breaker.State()
+	c.breaker.RecordSuccess()
+	if prev == circuitbreaker.StateHalfOpen && c.breaker.State() == circuitbreaker.StateClosed {
 		c.logger.Info("datasource client circuit breaker closed (recovered)")
 	}
 }
 
 func (c *Client) recordFailure() {
-	c.cbMu.Lock()
-	defer c.cbMu.Unlock()
-
-	c.cbFailures++
-	switch c.cbState {
-	case CircuitClosed:
-		if c.cbFailures >= c.cbThreshold {
-			c.cbState = CircuitOpen
-			c.cbOpenedAt = time.Now()
-			c.logger.Warn("datasource client circuit breaker opened", "consecutive_failures", c.cbFailures)
-		}
-	case CircuitHalfOpen:
-		c.cbState = CircuitOpen
-		c.cbOpenedAt = time.Now()
+	prev := c.breaker.State()
+	c.breaker.RecordFailure()
+	if prev == circuitbreaker.StateClosed && c.breaker.State() == circuitbreaker.StateOpen {
+		c.logger.Warn("datasource client circuit breaker opened", "breaker", c.breaker.StateString())
+	} else if prev == circuitbreaker.StateHalfOpen {
 		c.logger.Warn("datasource client circuit breaker re-opened (probe failed)")
 	}
 }
@@ -215,7 +159,7 @@ func (c *Client) doHTTP(req *http.Request) ([]byte, error) {
 		return nil, err
 	}
 
-	if rid := pkgagent.RequestIDFromContext(req.Context()); rid != "" {
+	if rid := pkgobs.RequestIDFromContext(req.Context()); rid != "" {
 		if req.Header.Get("X-Request-ID") == "" {
 			req.Header.Set("X-Request-ID", rid)
 		}
@@ -531,7 +475,7 @@ func (c *Client) getGRPCClient(ctx context.Context) (dspb.DataSourceManagerServi
 
 // wrapGRPCContext injects X-Request-ID and X-Trace-ID to outgoing gRPC metadata if present.
 func (c *Client) wrapGRPCContext(ctx context.Context) context.Context {
-	if rid := pkgagent.RequestIDFromContext(ctx); rid != "" {
+	if rid := pkgobs.RequestIDFromContext(ctx); rid != "" {
 		return metadata.AppendToOutgoingContext(ctx, "x-request-id", rid, "x-trace-id", rid)
 	}
 	return ctx

@@ -31,7 +31,7 @@ import (
 	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/catalog"
 	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/config"
 	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/models"
-	pkgagent "github.com/fengzhizi319/PrivShield/pkg/agent"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
 )
 
@@ -72,7 +72,7 @@ func (c *ClientPool) setHeaders(req *http.Request, serviceID string, requestID s
 		return
 	}
 	if requestID == "" {
-		requestID = pkgagent.RequestIDFromContext(req.Context())
+		requestID = pkgobs.RequestIDFromContext(req.Context())
 	}
 	if requestID != "" {
 		if req.Header.Get("X-Request-ID") == "" {

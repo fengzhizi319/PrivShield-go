@@ -22,13 +22,9 @@ package grpcserver
 
 import (
 	"context"
-	"crypto/rsa"
 	"crypto/tls"
-	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"sync"
 
@@ -39,6 +35,7 @@ import (
 	"github.com/fengzhizi319/PrivShield/services/datasource-mgr/internal/config"
 	"github.com/fengzhizi319/PrivShield/services/datasource-mgr/internal/handlers"
 	pb "github.com/fengzhizi319/PrivShield/services/datasource-mgr/proto"
+	"github.com/fengzhizi319/PrivShield/pkg/tlsutil"
 
 	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
 )
@@ -312,76 +309,17 @@ func toDataQueryResponse(id, name string, total, limit, offset int, rows []map[s
 //  2. 客户端证书验证 (ClientAuth)：支持 RequireAndVerifyClientCert 模式，强制调用方提供合法的客户端证书；
 //  3. 公钥指纹固定 (Public Key Pinning)：通过 VerifyPeerCertificate 回调，精确比对客户端公钥 (RSA Modulus + Exponent)，
 //     即便第三方 CA 发生密钥泄露或签发了伪造证书，只要公钥不匹配即被拒绝连接（零信任防御）。
+// BuildServerTLSConfig constructs a *tls.Config supporting mTLS and public key pinning for both HTTP/HTTPS and gRPC.
+// BuildServerTLSConfig 根据运行配置构造支持 mTLS 双向身份验证和公钥指纹绑定的标准 tls.Config，可同时服务于 HTTPS REST 和 gRPC。
 func BuildServerTLSConfig(cfg *config.Config) (*tls.Config, error) {
-	if !cfg.TLSEnabled {
-		return nil, fmt.Errorf("TLS is disabled in configuration")
-	}
-	if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
-		return nil, fmt.Errorf("TLS cert file and key file must be configured")
-	}
-
-	// 1. 加载服务端证书与私钥
-	cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load server x509 key pair: %w", err)
-	}
-
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS13, // 锁定 TLS 1.3 安全基线
-	}
-
-	// 2. 配置客户端 CA 证书池与认证模式 (ClientAuth)
-	clientAuthMode := strings.ToLower(strings.TrimSpace(cfg.TLSClientAuth))
-	if clientAuthMode != "" {
-		if cfg.TLSCAFile == "" {
-			return nil, fmt.Errorf("TLS CA file must be configured when client auth is enabled")
-		}
-		caPEM, err := os.ReadFile(cfg.TLSCAFile)
-		if err != nil {
-			return nil, fmt.Errorf("read TLS CA file: %w", err)
-		}
-		caPool := x509.NewCertPool()
-		if !caPool.AppendCertsFromPEM(caPEM) {
-			return nil, fmt.Errorf("failed to parse CA certificate from %s", cfg.TLSCAFile)
-		}
-		tlsConfig.ClientCAs = caPool
-
-		switch clientAuthMode {
-		case "require", "requireandverify", "require_and_verify":
-			tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
-		case "verify", "verify_if_given":
-			tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
-		case "request":
-			tlsConfig.ClientAuth = tls.RequestClientCert
-		default:
-			return nil, fmt.Errorf("unknown TLS client auth mode: %s", cfg.TLSClientAuth)
-		}
-	}
-
-	// 3. 配置客户端公钥固定 (Pinned Public Key Verification)
-	if cfg.TLSPinnedPubKeyFile != "" {
-		pinnedKey, err := loadPublicKey(cfg.TLSPinnedPubKeyFile)
-		if err != nil {
-			return nil, fmt.Errorf("load pinned client public key: %w", err)
-		}
-		// 注册对端证书校验钩子，在握手阶段比对公钥
-		tlsConfig.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-			if len(rawCerts) == 0 {
-				return fmt.Errorf("mTLS: client did not present a certificate")
-			}
-			peerCert, err := x509.ParseCertificate(rawCerts[0])
-			if err != nil {
-				return fmt.Errorf("mTLS: failed to parse peer certificate: %w", err)
-			}
-			if !publicKeysEqual(peerCert.PublicKey, pinnedKey) {
-				return fmt.Errorf("mTLS: client public key does not match pinned key")
-			}
-			return nil
-		}
-	}
-
-	return tlsConfig, nil
+	return tlsutil.BuildServerTLSConfig(&tlsutil.ServerTLSConfig{
+		Enabled:          cfg.TLSEnabled,
+		CertFile:         cfg.TLSCertFile,
+		KeyFile:          cfg.TLSKeyFile,
+		CAFile:           cfg.TLSCAFile,
+		ClientAuth:       cfg.TLSClientAuth,
+		PinnedPubKeyFile: cfg.TLSPinnedPubKeyFile,
+	})
 }
 
 // BuildServerCredentials constructs gRPC transport credentials supporting mTLS and public key pinning.
@@ -392,38 +330,4 @@ func BuildServerCredentials(cfg *config.Config) (credentials.TransportCredential
 		return nil, err
 	}
 	return credentials.NewTLS(tlsConfig), nil
-}
-
-// loadPublicKey reads and parses a PEM encoded public key or X.509 certificate file.
-// loadPublicKey 从指定文件中读取并解析 PEM 格式的公钥（PKIX/SubjectPublicKeyInfo）或 X.509 证书公钥。
-func loadPublicKey(path string) (any, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read public key file: %w", err)
-	}
-	block, _ := pem.Decode(data)
-	if block == nil {
-		return nil, fmt.Errorf("no PEM data found in %s", path)
-	}
-	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		// 若不是标准 PUBLIC KEY 块，尝试作为证书解析并提取 PublicKey
-		cert, certErr := x509.ParseCertificate(block.Bytes)
-		if certErr == nil {
-			return cert.PublicKey, nil
-		}
-		return nil, fmt.Errorf("parse public key: %w", err)
-	}
-	return pub, nil
-}
-
-// publicKeysEqual compares two public keys for equality (currently supports RSA).
-// publicKeysEqual 比对两个公钥的数学参数是否完全一致（目前支持 RSA 公钥的 N 模数与 E 指数恒等性校验）。
-func publicKeysEqual(a, b any) bool {
-	rsaA, okA := a.(*rsa.PublicKey)
-	rsaB, okB := b.(*rsa.PublicKey)
-	if okA && okB {
-		return rsaA.N.Cmp(rsaB.N) == 0 && rsaA.E == rsaB.E
-	}
-	return false
 }

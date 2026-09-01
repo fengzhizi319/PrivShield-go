@@ -6,7 +6,6 @@
 package config
 
 import (
-	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -106,34 +105,4 @@ func EnvStringSlice(name string) []string {
 		}
 	}
 	return out
-}
-
-// SetupLogger creates a structured logger based on format and level strings.
-//
-// format: "json" (default) or "text"
-// level:  "debug" | "info" (default) | "warn" | "error"
-//
-// SetupLogger 根据格式与级别字符串创建结构化日志器。
-// 三个模块的 main.go 原先各自维护完全相同的 setupLogger 实现，现统一抽取至本包。
-func SetupLogger(format, level string) *slog.Logger {
-	var logLevel slog.Level
-	switch level {
-	case "debug":
-		logLevel = slog.LevelDebug
-	case "warn":
-		logLevel = slog.LevelWarn
-	case "error":
-		logLevel = slog.LevelError
-	default:
-		logLevel = slog.LevelInfo
-	}
-
-	opts := &slog.HandlerOptions{Level: logLevel}
-	var handler slog.Handler
-	if format == "text" {
-		handler = slog.NewTextHandler(os.Stdout, opts)
-	} else {
-		handler = slog.NewJSONHandler(os.Stdout, opts)
-	}
-	return slog.New(handler)
 }

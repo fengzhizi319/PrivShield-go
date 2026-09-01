@@ -23,6 +23,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	pkgauth "github.com/fengzhizi319/PrivShield/pkg/auth"
 )
 
 // Auth returns an optional API Key authentication middleware.
@@ -67,7 +69,7 @@ func Auth(apiKey string) gin.HandlerFunc {
 		}
 
 		// 提取 Bearer token
-		token := extractBearer(c.GetHeader("Authorization"))
+		token := pkgauth.ExtractBearerToken(c.GetHeader("Authorization"))
 		if token == "" {
 			AbortWithError(c, http.StatusUnauthorized,
 				"UNAUTHORIZED",
@@ -121,7 +123,7 @@ func AuthWithRoles(apiKey, readerKey string, readOnly []ReadOnlyEndpoint) gin.Ha
 			return
 		}
 
-		token := extractBearer(c.GetHeader("Authorization"))
+		token := pkgauth.ExtractBearerToken(c.GetHeader("Authorization"))
 		if token == "" {
 			AbortWithError(c, http.StatusUnauthorized,
 				"UNAUTHORIZED",
@@ -183,17 +185,3 @@ func isReadOnlyEndpoint(method, path string, readOnly []ReadOnlyEndpoint) bool {
 	return false
 }
 
-// extractBearer extracts the Bearer token from the Authorization header.
-// Returns empty string if the header format is invalid.
-//
-// extractBearer 从 Authorization 请求头提取 Bearer 令牌字符串。
-//
-// 执行逻辑：
-// 按空白字符切分，必须刚好为两段且首段不区分大小写等于 "bearer"，成功则返回第二段作为 token。
-func extractBearer(header string) string {
-	parts := strings.Fields(header)
-	if len(parts) == 2 && strings.EqualFold(parts[0], "bearer") {
-		return parts[1]
-	}
-	return ""
-}

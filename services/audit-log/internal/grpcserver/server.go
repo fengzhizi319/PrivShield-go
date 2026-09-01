@@ -4,14 +4,10 @@ package grpcserver
 
 import (
 	"context"
-	"crypto/rsa"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +19,7 @@ import (
 	"github.com/fengzhizi319/PrivShield/pkg/crypto"
 	"github.com/fengzhizi319/PrivShield/pkg/naming"
 	"github.com/fengzhizi319/PrivShield/pkg/store"
+	"github.com/fengzhizi319/PrivShield/pkg/tlsutil"
 	"github.com/fengzhizi319/PrivShield/pkg/validation"
 	"github.com/fengzhizi319/PrivShield/services/audit-log/internal/agent"
 	"github.com/fengzhizi319/PrivShield/services/audit-log/internal/config"
@@ -599,148 +596,22 @@ func recordToProto(rec *store.AuditLog) *pb.AuditLogProto {
 
 // BuildServerCredentials constructs gRPC transport credentials supporting mTLS and public key pinning.
 func BuildServerCredentials(cfg *config.Config) (credentials.TransportCredentials, error) {
-	if !cfg.TLSEnabled {
-		return nil, fmt.Errorf("TLS is disabled in configuration")
-	}
-	if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
-		return nil, fmt.Errorf("TLS cert file and key file must be configured")
-	}
-
-	cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+	tlsConfig, err := BuildServerTLSConfig(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("load server x509 key pair: %w", err)
+		return nil, err
 	}
-
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS13,
-	}
-
-	clientAuthMode := strings.ToLower(strings.TrimSpace(cfg.TLSClientAuth))
-	if clientAuthMode != "" {
-		if cfg.TLSCAFile == "" {
-			return nil, fmt.Errorf("TLS CA file must be configured when client auth is enabled")
-		}
-		caPEM, err := os.ReadFile(cfg.TLSCAFile)
-		if err != nil {
-			return nil, fmt.Errorf("read TLS CA file: %w", err)
-		}
-		caPool := x509.NewCertPool()
-		if !caPool.AppendCertsFromPEM(caPEM) {
-			return nil, fmt.Errorf("failed to parse CA certificate from %s", cfg.TLSCAFile)
-		}
-		tlsConfig.ClientCAs = caPool
-
-		switch clientAuthMode {
-		case "require", "requireandverify":
-			tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
-		case "verify":
-			tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
-		case "request":
-			tlsConfig.ClientAuth = tls.RequestClientCert
-		default:
-			return nil, fmt.Errorf("unknown TLS client auth mode: %s", cfg.TLSClientAuth)
-		}
-	}
-
-	if cfg.TLSPinnedPubKeyFile != "" {
-		pinnedKey, err := loadPublicKey(cfg.TLSPinnedPubKeyFile)
-		if err != nil {
-			return nil, fmt.Errorf("load pinned client public key: %w", err)
-		}
-		tlsConfig.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-			if len(rawCerts) == 0 {
-				return fmt.Errorf("mTLS: client did not present a certificate")
-			}
-			peerCert, err := x509.ParseCertificate(rawCerts[0])
-			if err != nil {
-				return fmt.Errorf("mTLS: failed to parse peer certificate: %w", err)
-			}
-			if !publicKeysEqual(peerCert.PublicKey, pinnedKey) {
-				return fmt.Errorf("mTLS: client public key does not match pinned key")
-			}
-			return nil
-		}
-	}
-
 	return credentials.NewTLS(tlsConfig), nil
-}
-
-func loadPublicKey(path string) (any, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read public key file: %w", err)
-	}
-	block, _ := pem.Decode(data)
-	if block == nil {
-		return nil, fmt.Errorf("no PEM data found in %s", path)
-	}
-	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		cert, certErr := x509.ParseCertificate(block.Bytes)
-		if certErr == nil {
-			return cert.PublicKey, nil
-		}
-		return nil, fmt.Errorf("parse public key: %w", err)
-	}
-	return pub, nil
-}
-
-func publicKeysEqual(a, b any) bool {
-	rsaA, okA := a.(*rsa.PublicKey)
-	rsaB, okB := b.(*rsa.PublicKey)
-	if okA && okB {
-		return rsaA.N.Cmp(rsaB.N) == 0 && rsaA.E == rsaB.E
-	}
-	return false
 }
 
 // BuildServerTLSConfig constructs a *tls.Config for the HTTP REST server.
 // BuildServerTLSConfig 为 HTTP REST 服务器构建 TLS 配置，与 gRPC 共享同一套证书。
 func BuildServerTLSConfig(cfg *config.Config) (*tls.Config, error) {
-	if !cfg.TLSEnabled {
-		return nil, fmt.Errorf("TLS is disabled in configuration")
-	}
-	if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
-		return nil, fmt.Errorf("TLS cert file and key file must be configured")
-	}
-
-	cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load server x509 key pair: %w", err)
-	}
-
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS13,
-	}
-
-	clientAuthMode := strings.ToLower(strings.TrimSpace(cfg.TLSClientAuth))
-	if clientAuthMode != "" {
-		if cfg.TLSCAFile == "" {
-			return nil, fmt.Errorf("TLS CA file must be configured when client auth is enabled")
-		}
-		caPEM, err := os.ReadFile(cfg.TLSCAFile)
-		if err != nil {
-			return nil, fmt.Errorf("read TLS CA file: %w", err)
-		}
-		caPool := x509.NewCertPool()
-		if !caPool.AppendCertsFromPEM(caPEM) {
-			return nil, fmt.Errorf("failed to parse TLS CA certificate from %s", cfg.TLSCAFile)
-		}
-		tlsConfig.ClientCAs = caPool
-
-		switch clientAuthMode {
-		case "require", "requireandverify":
-			tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
-		case "verify":
-			tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
-		case "request":
-			tlsConfig.ClientAuth = tls.RequestClientCert
-		default:
-			return nil, fmt.Errorf("unknown TLS client auth mode: %s", cfg.TLSClientAuth)
-		}
-	}
-
-	return tlsConfig, nil
+	return tlsutil.BuildServerTLSConfig(&tlsutil.ServerTLSConfig{
+		Enabled:          cfg.TLSEnabled,
+		CertFile:         cfg.TLSCertFile,
+		KeyFile:          cfg.TLSKeyFile,
+		CAFile:           cfg.TLSCAFile,
+		ClientAuth:       cfg.TLSClientAuth,
+		PinnedPubKeyFile: cfg.TLSPinnedPubKeyFile,
+	})
 }

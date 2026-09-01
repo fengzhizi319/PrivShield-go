@@ -32,6 +32,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
 )
@@ -206,6 +207,14 @@ type Config struct {
 	// AuditAPIKey：访问 audit-log 的 API Key（可选）。
 	// 对应环境变量 BFF_AUDIT_API_KEY。
 	AuditAPIKey string
+
+	// AgentRESTURL：上游 agent REST 服务的完整基础 URL。
+	// 由 PRIVACY_AGENT_REST_URL / PRIVACY_AGENT_URL 或 host+port+TLS 组合自动构建。
+	AgentRESTURL string
+
+	// GRPCCallTimeout：单次 gRPC 调用的超时时间。
+	// 对应环境变量 PRIVACY_GRPC_CALL_TIMEOUT，默认 60s。
+	GRPCCallTimeout time.Duration
 }
 
 // Load reads all configuration from environment variables and returns a populated Config.
@@ -281,7 +290,49 @@ func Load() *Config {
 		HubAPIKey:        pkgconfig.EnvString("BFF_HUB_API_KEY", ""),
 		DatasourceAPIKey: pkgconfig.EnvString("BFF_DATASOURCE_API_KEY", ""),
 		AuditAPIKey:      pkgconfig.EnvString("BFF_AUDIT_API_KEY", ""),
+
+		// AgentRESTURL: 优先使用完整 URL 环境变量，否则由 host+port+TLS 组合构建
+		AgentRESTURL: buildAgentRESTURL(),
+
+		// GRPCCallTimeout: 单次 gRPC 调用超时，默认 60s
+		GRPCCallTimeout: parseGRPCCallTimeout(),
 	}
+}
+
+// buildAgentRESTURL 构建上游 agent REST 基础 URL。
+// 优先使用 PRIVACY_AGENT_REST_URL / PRIVACY_AGENT_URL 完整 URL；
+// 否则由 host + port + TLS 开关组合构建。
+func buildAgentRESTURL() string {
+	if u := pkgconfig.EnvStringFirstSet("PRIVACY_AGENT_REST_URL", "PRIVACY_AGENT_URL"); u != "" {
+		return strings.TrimRight(u, "/")
+	}
+
+	scheme := "http"
+	if pkgconfig.EnvBool("PRIVACY_AGENT_TLS_ENABLED", false) ||
+		pkgconfig.EnvBool("PRIVACY_AGENT_MTLS_ENABLED", false) ||
+		pkgconfig.EnvBool("PRIVACY_TLS_ENABLED", false) {
+		scheme = "https"
+	}
+
+	restHost := pkgconfig.EnvStringFirstSet("PRIVACY_AGENT_REST_HOST", "PRIVACY_REST_HOST")
+	if restHost == "" {
+		restHost = pkgconfig.EnvString("PRIVACY_AGENT_GRPC_HOST", "127.0.0.1")
+	}
+
+	restPort := pkgconfig.EnvString("PRIVACY_REST_PORT", "8079")
+
+	return fmt.Sprintf("%s://%s:%s", scheme, restHost, restPort)
+}
+
+// parseGRPCCallTimeout 解析单次 gRPC 调用超时时间。
+// 环境变量 PRIVACY_GRPC_CALL_TIMEOUT（Go duration 格式），默认 60s。
+func parseGRPCCallTimeout() time.Duration {
+	if v := pkgconfig.EnvString("PRIVACY_GRPC_CALL_TIMEOUT", ""); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 60 * time.Second
 }
 
 // ConsoleGRPCAddress returns the formatted host:port string for the BFF's gRPC server.

@@ -69,7 +69,7 @@ func New(cfg *config.Config, logger *slog.Logger, mc *metrics.Collector) *Server
 // RegisterRoutes 向 Gin 引擎装配通用安全中间件链并注册全部业务路由端点，执行逻辑如下：
 // 1. 中间件装配链（Middleware Chain）：
 //   - RequestID: 生成并注入全链路追踪 X-Request-ID；
-//   - StructuredLogger: 请求访问日志记录；
+//   - RequestLoggerWithModule: 请求访问日志记录；
 //   - Recovery: Panic 拦截保护，保障进程高可用；
 //   - SecurityHeaders: 注入安全响应头（X-Frame-Options, X-Content-Type-Options 等）；
 //   - CORS: 跨域策略配置；

@@ -48,11 +48,6 @@ func New(cfg *config.Config, mc *metrics.Collector) *Client {
 	return &Client{Client: shared}
 }
 
-// ContextWithRequestID wraps pkgagent.ContextWithRequestID.
-func ContextWithRequestID(ctx context.Context, requestID string) context.Context {
-	return pkgagent.ContextWithRequestID(ctx, requestID)
-}
-
 // ContextWithIdempotencyKey wraps pkgagent.ContextWithIdempotencyKey.
 func ContextWithIdempotencyKey(ctx context.Context, key string) context.Context {
 	return pkgagent.ContextWithIdempotencyKey(ctx, key)

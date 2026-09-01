@@ -28,6 +28,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 	"github.com/fengzhizi319/PrivShield/pkg/store"
 	"github.com/fengzhizi319/PrivShield/pkg/tlsutil"
 	"github.com/fengzhizi319/PrivShield/pkg/validation"
@@ -346,7 +347,7 @@ func (s *GRPCServer) ClassifyAndDispatch(ctx context.Context, req *pb.ClassifyAn
 	payloadJSON := req.PayloadJson
 	if (payloadJSON == "" || payloadJSON == "{}" || payloadJSON == "null") && s.datasource != nil {
 		dsCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		dsCtx = agent.ContextWithRequestID(dsCtx, requestID)
+		dsCtx = pkgobs.ContextWithRequestID(dsCtx, requestID)
 		if res, err := s.datasource.FetchData(dsCtx, normID, 5, 0); err == nil && len(res.Records) > 0 {
 			b, _ := json.Marshal(res.Records[0])
 			payloadJSON = string(b)
@@ -355,7 +356,7 @@ func (s *GRPCServer) ClassifyAndDispatch(ctx context.Context, req *pb.ClassifyAn
 	}
 
 	classifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	classifyCtx = agent.ContextWithRequestID(classifyCtx, requestID)
+	classifyCtx = pkgobs.ContextWithRequestID(classifyCtx, requestID)
 	classifyCtx = agent.ContextWithIdempotencyKey(classifyCtx, fmt.Sprintf("hub-classify-%s", normID))
 	defer cancel()
 
@@ -565,7 +566,7 @@ func (s *GRPCServer) processTask(task *store.Task, operation, payloadJSON string
 		if stage == "fetch" && s.datasource != nil {
 			if payloadJSON == "" || payloadJSON == "{}" || payloadJSON == "null" {
 				ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
-				ctx = agent.ContextWithRequestID(ctx, requestID)
+				ctx = pkgobs.ContextWithRequestID(ctx, requestID)
 				if res, err := s.datasource.FetchDataBySource(ctx, task.Source, 10, 0); err == nil && len(res.Records) > 0 {
 					b, _ := json.Marshal(res.Records)
 					payloadJSON = string(b)
@@ -585,7 +586,7 @@ func (s *GRPCServer) processTask(task *store.Task, operation, payloadJSON string
 		// 调用方传入的 operation 只能上调保护强度，不能下调；定级缺失即任务失败。
 		if stage == "classify" {
 			ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
-			ctx = agent.ContextWithRequestID(ctx, requestID)
+			ctx = pkgobs.ContextWithRequestID(ctx, requestID)
 			idempotencyKey := fmt.Sprintf("hub-%s-%s-%d", task.ID, stage, task.RetryCount)
 			ctx = agent.ContextWithIdempotencyKey(ctx, idempotencyKey)
 			records := agent.ToRecords(payloadJSON)
@@ -680,7 +681,7 @@ func (s *GRPCServer) submitEvidence(parent context.Context, task *store.Task, pr
 	timeout := s.cfg.AuditLogTimeoutDuration()
 	evCtx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
-	evCtx = agent.ContextWithRequestID(evCtx, task.ID)
+	evCtx = pkgobs.ContextWithRequestID(evCtx, task.ID)
 	evCtx = agent.ContextWithIdempotencyKey(evCtx, fmt.Sprintf("hub-%s-audit-%d", task.ID, task.RetryCount))
 
 	_, err := audit.RecordOutboundEvidence(evCtx, s.audit, audit.OutboundFlow{
@@ -808,7 +809,7 @@ func (s *GRPCServer) executeLeasedTask(ctx context.Context, task *store.Task) (f
 
 		if stage == "fetch" && s.datasource != nil && (payloadJSON == "" || payloadJSON == "{}" || payloadJSON == "null") {
 			fetchCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			fetchCtx = agent.ContextWithRequestID(fetchCtx, task.ID)
+			fetchCtx = pkgobs.ContextWithRequestID(fetchCtx, task.ID)
 			result, err := s.datasource.FetchDataBySource(fetchCtx, task.Source, 10, 0)
 			cancel()
 			if err != nil {
@@ -827,7 +828,7 @@ func (s *GRPCServer) executeLeasedTask(ctx context.Context, task *store.Task) (f
 				continue
 			}
 			processCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			processCtx = agent.ContextWithRequestID(processCtx, task.ID)
+			processCtx = pkgobs.ContextWithRequestID(processCtx, task.ID)
 			idempotencyKey := fmt.Sprintf("hub-%s-%s-%d", task.ID, stage, task.RetryCount)
 			processCtx = agent.ContextWithIdempotencyKey(processCtx, idempotencyKey)
 			result, err := s.agent.ProcessAgent(processCtx, records, task.DatasourceID)

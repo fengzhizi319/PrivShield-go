@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/config"
-	pkgagent "github.com/fengzhizi319/PrivShield/pkg/agent"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 )
 
 // ClientPool forwards HTTP requests to the Go microservices with unified
@@ -94,7 +94,7 @@ func (p *ClientPool) Proxy(ctx context.Context, service, method, proxyPath strin
 	if requestID != "" {
 		req.Header.Set("X-Request-ID", requestID)
 		req.Header.Set("X-Trace-ID", requestID)
-	} else if rid := pkgagent.RequestIDFromContext(ctx); rid != "" {
+	} else if rid := pkgobs.RequestIDFromContext(ctx); rid != "" {
 		req.Header.Set("X-Request-ID", rid)
 		req.Header.Set("X-Trace-ID", rid)
 	}

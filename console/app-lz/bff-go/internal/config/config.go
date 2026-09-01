@@ -12,7 +12,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"strconv"
 
 	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
 )
@@ -95,9 +94,8 @@ func Load() *Config {
 	logLevel := pkgconfig.EnvString("APP_LZ_LOG_LEVEL", "info")
 
 	// ── TLS 配置 ──
-	// ParseBool 失败时静默回退到 false（不启用 TLS），避免因格式错误导致启动失败。
-	tlsEnabled, _ := strconv.ParseBool(pkgconfig.EnvString("APP_LZ_TLS_ENABLED", "false"))
-	requireTLS, _ := strconv.ParseBool(pkgconfig.EnvString("APP_LZ_REQUIRE_TLS", "false"))
+	tlsEnabled := pkgconfig.EnvBool("APP_LZ_TLS_ENABLED", false)
+	requireTLS := pkgconfig.EnvBool("APP_LZ_REQUIRE_TLS", false)
 	certFile := pkgconfig.EnvString("APP_LZ_CERT_FILE", "")
 	keyFile := pkgconfig.EnvString("APP_LZ_KEY_FILE", "")
 	clientCAFile := pkgconfig.EnvString("APP_LZ_CLIENT_CA_FILE", "")

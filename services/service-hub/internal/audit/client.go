@@ -46,6 +46,7 @@ import (
 	"github.com/fengzhizi319/PrivShield/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield/pkg/middleware"
 	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 	"github.com/fengzhizi319/PrivShield/pkg/store"
 	"github.com/fengzhizi319/PrivShield/pkg/validation"
 
@@ -386,7 +387,7 @@ func (c *Client) setHeaders(req *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if rid := pkgagent.RequestIDFromContext(req.Context()); rid != "" {
+	if rid := pkgobs.RequestIDFromContext(req.Context()); rid != "" {
 		req.Header.Set("X-Request-ID", rid)
 		req.Header.Set("X-Trace-ID", rid)
 	}

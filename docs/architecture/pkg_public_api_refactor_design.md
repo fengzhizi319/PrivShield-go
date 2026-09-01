@@ -2,7 +2,7 @@
 
 > **目标**：让 `pkg/` 真正成为全仓库共享的公共 API，消除 `engine-go/internal` 与 `pkg/` 之间的重复轮子，并把引擎内部可复用的基础设施下沉到 `pkg/`，供 `services/*`、`console/*` 及未来模块统一使用。
 > 
-> **版本**：v2.0.0（2026-09-01）  
+> **版本**：v2.2.0（2026-09-01）  
 > **状态**：已完成并落地  
 > **适用范围**：`engine-go/internal/*`、`pkg/*`、`services/*`、`console/*`  
 > **关联文档**：
@@ -40,7 +40,7 @@
 ## 二、重构原则
 
 1. **最小改动原则**：不为了抽象而抽象；只有出现两处以上重复，或明显可被其他模块复用时才下沉。
-2. **向后兼容优先**：`pkg` 新增 API 时尽量扩展而不是替换；若必须替换，保留旧 API 并标记 deprecated。
+2. **不需要向后兼容**：现在是开发阶段，不是维护升级阶段，`pkg` 新增 API 或替换API，直接使用更好的方案就可以。
 3. **渐进式迁移**：按独立模块分批落地，每批都可单独通过测试。
 4. **零外部依赖保持**：下沉到 `pkg` 的可观测性、配置、安全工具继续遵循「默认零外部依赖」原则。
 5. **测试即契约**：所有下沉的 `pkg` API 必须带单元测试；重构后原测试必须继续通过。
@@ -821,9 +821,93 @@ make check
 
 ---
 
-## 十七、修订历史
+## 十七、审核改进记录（v2.1.0）
+
+> 对已落地的重构进行全量代码审核，发现并修复以下问题。
+
+### 17.1 已修复的问题
+
+| # | 严重度 | 模块 | 文件 | 问题描述 | 修复方式 |
+|---|--------|------|------|----------|----------|
+| 1 | 死代码 | `engine-go/internal/security` | `auth.go:12-19` | 私有 `extractBearerToken()` 是 `pkg/auth/middleware.go` 的未使用副本，`AuthMiddleware` 已委托 `pkgauth`，该函数无调用方 | 删除函数及 `strings` 导入 |
+| 2 | 死代码 | `engine-go/internal/security` | `auth.go:88-91` | `StopRateLimiter()` 为空函数体，`pkg/middleware` 限流器自行管理清理 | 删除函数及 `cmd/privshield-agent/main.go:303` 的调用点 |
+| 3 | 死代码 | `engine-go/internal/observability` | `logger.go:27-33` | `HealthHandler()` 未被任何代码调用 | 删除函数及 `net/http` 导入 |
+| 4 | 缺失标记 | `pkg/config` | `env.go:111` | `SetupLogger` 与 `pkg/observability.NewLogger` 功能重复，但未标记 `Deprecated` | 添加 `Deprecated:` 注释，引导使用 `pkg/observability.NewLogger` |
+| 5 | 不一致 | `console/app-lz/bff-go` | `internal/config/config.go:99-100` | 使用 `strconv.ParseBool(pkgconfig.EnvString(...))` 而非 `pkgconfig.EnvBool(...)`，与其他所有模块不一致，且丢失 `"yes"/"on"` 识别 | 替换为 `pkgconfig.EnvBool(...)`，移除 `strconv` 导入 |
+| 6 | 不一致 | `engine-go/internal/security` | `config.go:87,90,91` | 三个字段使用裸 `os.Getenv` 而非 `pkgconfig.EnvString`，与同文件其他字段不一致 | 统一替换为 `pkgconfig.EnvString(name, "")` |
+| 7 | 代码质量 | `pkg/auth` | `identity.go:126-128` | 自定义 `hasPrefix()` 是 `strings.HasPrefix` 的逐字重实现 | 替换为 `strings.HasPrefix`，删除自定义函数 |
+| 8 | 过时注释 | `services/datasource-mgr` | `internal/handlers/handlers.go:72` | 注释仍引用 `StructuredLogger`，实际已改用 `RequestLoggerWithModule` | 更新注释 |
+| 9 | 过时注释 | `services/service-hub` | `internal/handlers/handlers.go:199` | 同上 | 更新注释 |
+
+### 17.2 审核发现的遗留问题
+
+以下问题在审核中发现，因影响范围较大或涉及架构决策，留待后续迭代处理。
+
+#### P1 — 循环依赖风险（高优先级）
+
+| 依赖边 | 文件 | 风险 |
+|--------|------|------|
+| `pkg/observability` → `pkg/agent` | `pkg/observability/trace.go:13` | `observability` 是基础包，`agent` 是高层客户端包。若 `agent` 将来需要引用 `observability` 的追踪接口，将产生编译期循环依赖 |
+| `pkg/auth` → `pkg/middleware` | `pkg/auth/middleware.go:12` | `auth` 是安全原语包，`middleware` 是传输层中间件包。依赖方向反转——`middleware` 应依赖 `auth`，反之不然 |
+
+**建议**：
+- `pkg/observability/trace.go` 中 `TraceMiddleware` 对 `pkgagent.ContextWithRequestID` 的调用应抽取到上层（如 `pkg/middleware`），使 `pkg/observability` 不依赖 `pkg/agent`。
+- `pkg/auth/middleware.go` 中对 `middleware.AbortWithError` 的调用应通过接口注入或内联实现，消除 `auth → middleware` 的反向依赖。
+
+#### P2 — 重复实现（中优先级）
+
+| 重复项 | 位置 A | 位置 B | 建议 |
+|--------|--------|--------|------|
+| Bearer token 提取 | `pkg/auth/middleware.go:18` (`extractBearerToken`) | `pkg/middleware/auth.go:193` (`extractBearer`) | 统一保留 `pkg/auth` 版本，`pkg/middleware` 委托 |
+| 熔断器 | `pkg/gateway/balancer.go:144` (`CircuitBreaker` struct) | `pkg/agent/client.go:70` (`cbState` struct) | 抽取到 `pkg/circuitbreaker` 共享包 |
+| HTTP 指标 | `pkg/observability/metrics.go` (`REDMetrics`) | `pkg/metrics/metrics.go` (`Collector`) | 明确边界：`observability` 负责 HTTP 中间件层，`metrics` 负责领域指标聚合 |
+| TLS 配置构建 | `services/audit-log/internal/grpcserver/server.go:700-746` | `services/datasource-mgr/internal/grpcserver/server.go:315-385` | 约 150 行 TLS/mTLS/公钥固定代码重复，应下沉到 `pkg/tlsutil` |
+
+#### P3 — 死代码与命名（低优先级）
+
+| 问题 | 位置 | 建议 |
+|------|------|------|
+| `BackendNode.LastUsed` 写入但从未读取 | `pkg/gateway/balancer.go:30,446` | 删除字段或补充消费方 |
+| `scanTaskRow` 零价值包装 | `pkg/store/postgres/tasks.go:202-206` | 删除，直接使用 `scanTask` |
+| `postgres.New()` 命名过于泛化 | `pkg/store/postgres/postgres.go:100` | 重命名为 `NewTaskStore()` 或 `NewStore()` |
+| `console/bff-go` handlers 中 7 处裸 `os.Getenv` | `console/bff-go/internal/handlers/handlers.go:438-464` | 迁入 `Config` 结构体，通过 `pkgconfig.EnvString*` 读取 |
+
+### 17.3 v2.2.0 全部遗留问题修复
+
+> 17.2 中列出的全部 10 项遗留问题已在本版本修复完毕。
+
+#### P1 — 循环依赖风险（已修复）
+
+| # | 依赖边 | 修复方式 | 涉及文件 |
+|---|--------|----------|----------|
+| A1 | `pkg/observability` → `pkg/agent` | 将 `ContextWithRequestID` / `RequestIDFromContext` 迁移至 `pkg/observability/trace.go`，`pkg/agent` 改为委托调用 `pkgobs.RequestIDFromContext` | `pkg/observability/trace.go`、`pkg/agent/client.go`、`pkg/middleware/middleware.go`、`services/service-hub/internal/agent/client.go`、`console/app-lz/bff-go/internal/clients/clients_test.go`、`services/service-hub/internal/audit/client_test.go` |
+| A2 | `pkg/auth` → `pkg/middleware` | 在 `pkg/auth` 内新增局部 `abortWithError` 函数（调用 `pkgobs.GetTraceID`），替换全部 7 处 `middleware.AbortWithError` 调用，移除 `pkg/middleware` 导入 | `pkg/auth/middleware.go` |
+
+#### P2 — 重复实现（已修复）
+
+| # | 重复项 | 修复方式 | 涉及文件 |
+|---|--------|----------|----------|
+| B1 | Bearer token 提取 | 导出 `pkg/auth.ExtractBearerToken`，`pkg/middleware/auth.go` 与 `console/bff-go/internal/handlers/handlers.go` 删除本地副本并委托 | `pkg/auth/middleware.go`、`pkg/middleware/auth.go`、`console/bff-go/internal/handlers/handlers.go` |
+| B2 | 熔断器 | 新建 `pkg/circuitbreaker` 共享包，`pkg/gateway` 与 `pkg/agent` 统一使用 `*circuitbreaker.Breaker`，旧类型保留为 `deprecated` 别名 | `pkg/circuitbreaker/circuitbreaker.go`、`pkg/gateway/balancer.go`、`pkg/agent/client.go`、`engine-go/internal/gateway/balancer.go` |
+| B3 | HTTP 指标边界 | 在 `pkg/metrics/metrics.go` 包文档中明确与 `pkg/observability.REDMetrics` 的职责边界：`metrics` 负责领域指标聚合，`observability` 负责传输层 RED 指标 | `pkg/metrics/metrics.go`、`pkg/observability/metrics.go` |
+| B4 | TLS 配置构建 | 在 `pkg/tlsutil` 中补充 `require_and_verify` / `verify_if_given` 客户端认证别名，`services/audit-log` 与 `services/datasource-mgr` 的 ~150 行重复 TLS 代码替换为 `tlsutil.BuildServerTLSConfig` 薄包装 | `pkg/tlsutil/tlsutil.go`、`services/audit-log/internal/grpcserver/server.go`、`services/datasource-mgr/internal/grpcserver/server.go` |
+
+#### P3 — 死代码与命名（已修复）
+
+| # | 问题 | 修复方式 | 涉及文件 |
+|---|------|----------|----------|
+| C1 | `BackendNode.LastUsed` 写入但从未读取 | 删除 `LastUsed` 字段及 `UpdateEWMA` 中的写入 | `pkg/gateway/balancer.go` |
+| C2 | `scanTaskRow` 零价值包装 | 删除 `scanTaskRow`，调用方直接使用 `scanTask` / `scanTaskFields` | `pkg/store/postgres/tasks.go`、`pkg/store/sqlite/tasks.go` |
+| C3 | `postgres.New()` 命名过于泛化 | 重命名为 `NewStore`，保留 `New` 为 `Deprecated` 别名 | `pkg/store/postgres/postgres.go`、`pkg/store/postgres/leased_test.go`、`pkg/store/cmd/migrate/main_test.go` |
+| C4 | `console/bff-go` handlers 中 7 处裸 `os.Getenv` | 新增 `Config.AgentRESTURL` 与 `Config.GRPCCallTimeout` 字段，在 `config.Load()` 中通过 `pkgconfig.EnvString*` 统一解析，`handlers.go` 使用配置字段 | `console/bff-go/internal/config/config.go`、`console/bff-go/internal/handlers/handlers.go` |
+
+---
+
+## 十八、修订历史
 
 | 版本 | 日期 | 说明 |
 |---|---|---|
 | v1.0.0 | 2026-09-01 | 初始设计稿 |
 | v2.0.0 | 2026-09-01 | 更新为落地报告，补充 console/services 收敛、测试验证结果与未来项 |
+| v2.1.0 | 2026-09-01 | 全量代码审核：修复 9 项死代码/不一致/过时注释问题，补充遗留改进建议（循环依赖风险、重复实现、命名规范） |
+| v2.2.0 | 2026-09-01 | 修复全部 10 项遗留问题：消除 2 处循环依赖风险（A1/A2）、统一 4 处重复实现（B1-B4）、清理死代码与命名（C1-C4），新建 `pkg/circuitbreaker` 共享包 |

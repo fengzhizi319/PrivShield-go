@@ -5,6 +5,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/fengzhizi319/PrivShield/pkg/circuitbreaker"
 )
 
 // ──────────────────────────────────────────────
@@ -12,7 +14,7 @@ import (
 // ──────────────────────────────────────────────
 
 func TestCircuitBreaker_ClosedToOpen(t *testing.T) {
-	cb := NewCircuitBreaker(3, 100*time.Millisecond)
+	cb := circuitbreaker.NewBreaker(3, 100*time.Millisecond)
 
 	// 初始状态 Closed，允许通过
 	for i := 0; i < 3; i++ {
@@ -25,7 +27,7 @@ func TestCircuitBreaker_ClosedToOpen(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		cb.RecordFailure()
 	}
-	if cb.State() != CBOpen {
+	if cb.State() != circuitbreaker.StateOpen {
 		t.Fatalf("state = %d, want Open (2)", cb.State())
 	}
 
@@ -36,12 +38,12 @@ func TestCircuitBreaker_ClosedToOpen(t *testing.T) {
 }
 
 func TestCircuitBreaker_OpenToHalfOpen(t *testing.T) {
-	cb := NewCircuitBreaker(2, 50*time.Millisecond)
+	cb := circuitbreaker.NewBreaker(2, 50*time.Millisecond)
 
 	// 触发熔断
 	cb.RecordFailure()
 	cb.RecordFailure()
-	if cb.State() != CBOpen {
+	if cb.State() != circuitbreaker.StateOpen {
 		t.Fatal("should be Open")
 	}
 
@@ -52,13 +54,13 @@ func TestCircuitBreaker_OpenToHalfOpen(t *testing.T) {
 	if !cb.Allow() {
 		t.Fatal("should allow probe in HalfOpen state")
 	}
-	if cb.State() != CBHalfOpen {
+	if cb.State() != circuitbreaker.StateHalfOpen {
 		t.Fatalf("state = %d, want HalfOpen (1)", cb.State())
 	}
 }
 
 func TestCircuitBreaker_HalfOpenToClosed(t *testing.T) {
-	cb := NewCircuitBreaker(2, 50*time.Millisecond)
+	cb := circuitbreaker.NewBreaker(2, 50*time.Millisecond)
 
 	// 触发熔断
 	cb.RecordFailure()
@@ -72,13 +74,13 @@ func TestCircuitBreaker_HalfOpenToClosed(t *testing.T) {
 		cb.Allow()
 		cb.RecordSuccess()
 	}
-	if cb.State() != CBClosed {
+	if cb.State() != circuitbreaker.StateClosed {
 		t.Fatalf("state = %d, want Closed (0)", cb.State())
 	}
 }
 
 func TestCircuitBreaker_HalfOpenToOpen(t *testing.T) {
-	cb := NewCircuitBreaker(2, 50*time.Millisecond)
+	cb := circuitbreaker.NewBreaker(2, 50*time.Millisecond)
 
 	// 触发熔断
 	cb.RecordFailure()
@@ -90,7 +92,7 @@ func TestCircuitBreaker_HalfOpenToOpen(t *testing.T) {
 	// HalfOpen 探测失败 → 重新熔断
 	cb.Allow()
 	cb.RecordFailure()
-	if cb.State() != CBOpen {
+	if cb.State() != circuitbreaker.StateOpen {
 		t.Fatalf("state = %d, want Open (2) after HalfOpen failure", cb.State())
 	}
 }
@@ -396,11 +398,8 @@ func TestInFlight_IncrementDecrement(t *testing.T) {
 
 // forceOpenCB 强制打开节点熔断器
 func forceOpenCB(node *BackendNode) {
-	node.CB.mu.Lock()
-	defer node.CB.mu.Unlock()
-	node.CB.state = CBOpen
-	node.CB.lastFailure = time.Now()
-	node.CB.cooldown = 1 * time.Hour // 很长冷却期确保保持 Open
+	node.CB = circuitbreaker.NewBreaker(1, 1*time.Hour)
+	node.CB.RecordFailure()
 }
 
 // ──────────────────────────────────────────────

@@ -4,8 +4,6 @@
 package observability
 
 import (
-	"net/http"
-
 	"github.com/gin-gonic/gin"
 
 	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
@@ -21,13 +19,4 @@ func InitLogger(level string) {
 // 委托给 pkg/observability.RequestLogger，统一全仓库访问日志字段。
 func RequestLogger() gin.HandlerFunc {
 	return pkgobs.RequestLogger()
-}
-
-// HealthHandler 返回健康检查处理器。
-func HealthHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
-	}
 }

@@ -47,7 +47,7 @@ func testLogger() *slog.Logger {
 func setupTestStore(t *testing.T) *postgres.Store {
 	t.Helper()
 	dsn := getTestDSN(t)
-	s, err := postgres.New(context.Background(), postgres.Config{
+	s, err := postgres.NewStore(context.Background(), postgres.Config{
 		DSN:     dsn,
 		MaxConn: 3,
 		MinConn: 1,

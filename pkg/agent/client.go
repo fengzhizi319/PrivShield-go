@@ -42,6 +42,9 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/fengzhizi319/PrivShield/pkg/circuitbreaker"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 )
 
 // Client wraps HTTP calls to the upstream PrivShield agent REST API with multi-node load balancing.
@@ -60,47 +63,11 @@ type Client struct {
 	// Per-endpoint circuit breakers / 按上游节点维度独立维护的熔断器组
 	// 单节点故障只熔断该节点流量，其余健康节点继续承接请求（故障隔离而非全局雪崩）。
 	cbMu          sync.Mutex               // 保护熔断器状态变更的互斥锁
-	breakers      map[string]*cbState      // 归一化节点地址 → 该节点独立的熔断器状态
+	breakers      map[string]*circuitbreaker.Breaker // 归一化节点地址 → 该节点独立的熔断器状态
 	cbOrder       []string                 // 节点配置顺序，保证聚合状态与诊断输出稳定
 	cbThreshold   int                      // 触发单节点熔断的连续失败阈值（默认 5 次）
 	cbCooldown    time.Duration            // 熔断开启后的冷却等待时间（默认 30s，冷却后转为 Half-Open）
 	stateObserver func(node, state string) // 熔断器状态发生流转时的外部回调钩子（用于上报 Prometheus 指标）
-}
-
-// cbState 是单个上游节点的熔断器状态机实例。
-type cbState struct {
-	state    CircuitState // 该节点当前熔断状态（CircuitClosed / CircuitOpen / CircuitHalfOpen）
-	failures int          // 该节点当前连续失败次数（达到阈值触发 Open）
-	openedAt time.Time    // 该节点最近一次进入 Open 状态的时间戳
-}
-
-// CircuitState represents the circuit breaker state.
-// CircuitState 枚举熔断器的三种标准生命周期状态。
-type CircuitState int
-
-// requestIDKeyType is the context key for propagating X-Request-ID to upstream services.
-// requestIDKeyType 是用于在 context 中传播 X-Request-ID 的私有类型键，防止跨包冲突。
-type requestIDKeyType struct{}
-
-var requestIDKey requestIDKeyType
-
-// ContextWithRequestID returns a copy of ctx carrying the given request ID.
-// Downstream Get/Post calls automatically inject this value as X-Request-ID header,
-// enabling distributed tracing correlation across service boundaries.
-//
-// ContextWithRequestID 将指定的请求 ID 注入 context 副本中。
-// Client 在发起 Get/Post 请求时，会自动提取该值并注入 X-Request-ID 头，实现跨服务边界的分布式追踪。
-func ContextWithRequestID(ctx context.Context, requestID string) context.Context {
-	return context.WithValue(ctx, requestIDKey, requestID)
-}
-
-// RequestIDFromContext extracts request ID from context if present.
-// RequestIDFromContext 从 context 中提取已注入的请求 ID，未找到则返回空串。
-func RequestIDFromContext(ctx context.Context) string {
-	if rid, ok := ctx.Value(requestIDKey).(string); ok {
-		return rid
-	}
-	return ""
 }
 
 // idempotencyKeyType is the context key for propagating X-Idempotency-Key.
@@ -122,29 +89,6 @@ func IdempotencyKeyFromContext(ctx context.Context) string {
 		return ik
 	}
 	return ""
-}
-
-const (
-	// CircuitClosed 正常运行状态：所有请求正常下发，连续失败达到 CBThreshold 后转入 CircuitOpen。
-	CircuitClosed CircuitState = iota
-	// CircuitOpen 熔断开启状态：上游出现严重故障，所有请求在客户端被快速拦截拒绝（秒级阻断），冷却 CBCooldown 后转入 CircuitHalfOpen。
-	CircuitOpen
-	// CircuitHalfOpen 半开探测状态：允许放行一个探测请求试探上游健康状态；若试探成功则恢复 CircuitClosed，若试探失败则重新退回 CircuitOpen。
-	CircuitHalfOpen
-)
-
-// String 返回熔断器状态的可读字符串描述（closed / open / half-open / unknown）。
-func (s CircuitState) String() string {
-	switch s {
-	case CircuitClosed:
-		return "closed"
-	case CircuitOpen:
-		return "open"
-	case CircuitHalfOpen:
-		return "half-open"
-	default:
-		return "unknown"
-	}
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -305,7 +249,7 @@ type Config struct {
 // 1. 对未填写的参数设置企业级生产安全默认值（Timeout: 30s, CBThreshold: 5, CBCooldown: 30s, MaxRetries: 3, RetryBaseDelay: 500ms）；
 // 2. 统一合并 BaseURL 与 BaseURLs 为切片集合；
 // 3. 构建专属 http.Transport 连接池（MaxIdleConns: 100, MaxIdleConnsPerHost: 20, IdleConnTimeout: 90s, Keep-Alive 开启）；
-// 4. 初始化熔断器状态为 CircuitClosed。
+// 4. 初始化熔断器状态为 circuitbreaker.StateClosed。
 func New(cfg Config) *Client {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 30 * time.Second
@@ -340,14 +284,14 @@ func New(cfg Config) *Client {
 		DisableKeepAlives:   false,
 	}
 
-	breakers := make(map[string]*cbState, len(urls))
+	breakers := make(map[string]*circuitbreaker.Breaker, len(urls))
 	order := make([]string, 0, len(urls))
 	for _, u := range urls {
 		ep := normalizeEndpoint(u)
 		if _, dup := breakers[ep]; dup {
 			continue
 		}
-		breakers[ep] = &cbState{state: CircuitClosed}
+		breakers[ep] = circuitbreaker.NewBreaker(cfg.CBThreshold, cfg.CBCooldown)
 		order = append(order, ep)
 	}
 
@@ -440,13 +384,13 @@ func (c *Client) pickEndpoint(exclude string) (string, error) {
 }
 
 // breakerFor 返回指定 endpoint 对应的熔断器状态，必要时惰性初始化。
-func (c *Client) breakerFor(endpoint string) *cbState {
+func (c *Client) breakerFor(endpoint string) *circuitbreaker.Breaker {
 	endpoint = normalizeEndpoint(endpoint)
 	c.cbMu.Lock()
 	defer c.cbMu.Unlock()
 	b, ok := c.breakers[endpoint]
 	if !ok {
-		b = &cbState{state: CircuitClosed}
+		b = circuitbreaker.NewBreaker(c.cbThreshold, c.cbCooldown)
 		c.breakers[endpoint] = b
 	}
 	return b
@@ -455,27 +399,21 @@ func (c *Client) breakerFor(endpoint string) *cbState {
 // allowRequest 判定指定节点的熔断器当前是否允许发起请求。
 //
 // 状态转移逻辑：
-//  1. CircuitClosed：允许请求通过；
-//  2. CircuitOpen：自该节点 cbOpenedAt 起已超过冷却时间则转入 CircuitHalfOpen 并放行探测请求，
+//  1. circuitbreaker.StateClosed：允许请求通过；
+//  2. circuitbreaker.StateOpen：自该节点 cbOpenedAt 起已超过冷却时间则转入 circuitbreaker.StateHalfOpen 并放行探测请求，
 //     否则立即返回 ErrCircuitOpen 哨兵，仅拦截发往该节点的流量；
-//  3. CircuitHalfOpen：放行探测请求。
+//  3. circuitbreaker.StateHalfOpen：放行探测请求。
 func (c *Client) allowRequest(endpoint string) error {
 	b := c.breakerFor(endpoint)
-	c.cbMu.Lock()
-	defer c.cbMu.Unlock()
-
-	switch b.state {
-	case CircuitOpen:
-		if time.Since(b.openedAt) >= c.cbCooldown {
-			b.state = CircuitHalfOpen
-			c.logger.Info("circuit breaker half-open, probing recovery", "endpoint", endpoint)
-			c.reportCircuitState(endpoint, CircuitHalfOpen)
-			return nil
-		}
+	prev := b.State()
+	if !b.Allow() {
 		return ErrCircuitOpen
-	default:
-		return nil
 	}
+	if prev == circuitbreaker.StateOpen && b.State() == circuitbreaker.StateHalfOpen {
+		c.logger.Info("circuit breaker half-open, probing recovery", "endpoint", endpoint)
+		c.reportCircuitState(endpoint, circuitbreaker.StateHalfOpen)
+	}
+	return nil
 }
 
 // Health checks the upstream agent health.
@@ -506,7 +444,7 @@ func (c *Client) Get(ctx context.Context, path string) (map[string]any, error) {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	c.setHeaders(req)
-	if rid, ok := ctx.Value(requestIDKey).(string); ok && rid != "" {
+	if rid := pkgobs.RequestIDFromContext(ctx); rid != "" {
 		req.Header.Set("X-Request-ID", rid)
 	}
 	return c.do(req, endpoint)
@@ -519,7 +457,7 @@ func (c *Client) Get(ctx context.Context, path string) (map[string]any, error) {
 func (c *Client) Post(ctx context.Context, path string, payload any) (map[string]any, error) {
 	// Extract request ID from context for automatic distributed tracing correlation.
 	// 从 context 提取请求 ID，实现自动分布式追踪关联。
-	rid, _ := ctx.Value(requestIDKey).(string)
+	rid := pkgobs.RequestIDFromContext(ctx)
 	return c.PostWithRequestID(ctx, path, payload, rid)
 }
 
@@ -563,14 +501,14 @@ func (c *Client) setHeaders(req *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 	if req.Header.Get("X-Request-ID") == "" {
-		if rid := RequestIDFromContext(req.Context()); rid != "" {
+		if rid := pkgobs.RequestIDFromContext(req.Context()); rid != "" {
 			req.Header.Set("X-Request-ID", rid)
 		}
 	}
 	// Inject X-Trace-ID for dual-header trace propagation (aligned with Go TraceMiddleware).
 	// 注入 X-Trace-ID 实现双头追踪传播（与 Go TraceMiddleware 对齐）。
 	if req.Header.Get("X-Trace-ID") == "" {
-		if rid := RequestIDFromContext(req.Context()); rid != "" {
+		if rid := pkgobs.RequestIDFromContext(req.Context()); rid != "" {
 			req.Header.Set("X-Trace-ID", rid)
 		}
 	}
@@ -751,17 +689,17 @@ func (c *Client) CircuitStateString() string {
 }
 
 // state 返回聚合熔断状态（读锁安全）。
-func (c *Client) state() CircuitState {
+func (c *Client) state() circuitbreaker.State {
 	c.cbMu.Lock()
 	defer c.cbMu.Unlock()
 	if len(c.breakers) == 0 {
-		return CircuitClosed
+		return circuitbreaker.StateClosed
 	}
 	allOpen, anyHalfOpen := true, false
 	for _, b := range c.breakers {
-		switch b.state {
-		case CircuitOpen:
-		case CircuitHalfOpen:
+		switch b.State() {
+		case circuitbreaker.StateOpen:
+		case circuitbreaker.StateHalfOpen:
 			allOpen = false
 			anyHalfOpen = true
 		default:
@@ -770,11 +708,11 @@ func (c *Client) state() CircuitState {
 	}
 	switch {
 	case allOpen:
-		return CircuitOpen
+		return circuitbreaker.StateOpen
 	case anyHalfOpen:
-		return CircuitHalfOpen
+		return circuitbreaker.StateHalfOpen
 	default:
-		return CircuitClosed
+		return circuitbreaker.StateClosed
 	}
 }
 
@@ -788,7 +726,7 @@ func (c *Client) EndpointStates() map[string]string {
 
 	states := make(map[string]string, len(c.breakers))
 	for ep, b := range c.breakers {
-		states[ep] = b.state.String()
+		states[ep] = b.State().String()
 	}
 	return states
 }
@@ -809,12 +747,7 @@ func (c *Client) retryEndpoint(current string) (string, error) {
 }
 
 // reportCircuitState 向外部注册的观察者回调上报指定节点的熔断器状态。
-func (c *Client) reportCircuitState(endpoint string, state CircuitState) {
-	c.reportCircuitStateUnlocked(endpoint, state)
-}
-
-// reportCircuitStateUnlocked 在已持有 cbMu 锁的情况下上报节点状态。
-func (c *Client) reportCircuitStateUnlocked(endpoint string, state CircuitState) {
+func (c *Client) reportCircuitState(endpoint string, state circuitbreaker.State) {
 	if c.stateObserver == nil {
 		return
 	}
@@ -827,11 +760,11 @@ func (c *Client) reportCircuitStateUnlocked(endpoint string, state CircuitState)
 	}
 	var stateStr string
 	switch state {
-	case CircuitClosed:
+	case circuitbreaker.StateClosed:
 		stateStr = "closed"
-	case CircuitOpen:
+	case circuitbreaker.StateOpen:
 		stateStr = "open"
-	case CircuitHalfOpen:
+	case circuitbreaker.StateHalfOpen:
 		stateStr = "half_open"
 	default:
 		stateStr = "unknown"
@@ -840,52 +773,29 @@ func (c *Client) reportCircuitStateUnlocked(endpoint string, state CircuitState)
 }
 
 // recordSuccess 记录指定节点的一次成功调用。
-//
-// 执行逻辑：
-// 1. 清零该节点连续失败计数器 failures = 0；
-// 2. 若该节点为 CircuitHalfOpen（半开试探成功），立即切换回 CircuitClosed；
-// 3. 触发外部指标观测器更新。
 func (c *Client) recordSuccess(endpoint string) {
 	b := c.breakerFor(endpoint)
-	c.cbMu.Lock()
-	defer c.cbMu.Unlock()
-
-	b.failures = 0
-	if b.state == CircuitHalfOpen {
-		b.state = CircuitClosed
+	prev := b.State()
+	b.RecordSuccess()
+	cur := b.State()
+	if prev == circuitbreaker.StateHalfOpen && cur == circuitbreaker.StateClosed {
 		c.logger.Info("circuit breaker closed (recovery successful)", "endpoint", endpoint)
 	}
-	c.reportCircuitStateUnlocked(endpoint, b.state)
+	c.reportCircuitState(endpoint, cur)
 }
 
 // recordFailure 记录指定节点的一次失败调用。
-//
-// 执行逻辑：
-// 1. 递增该节点连续失败计数 failures++；
-// 2. 若该节点在 CircuitClosed 状态下失败达到 cbThreshold：切换为 CircuitOpen，记录熔断时间；
-// 3. 若该节点在 CircuitHalfOpen（半开试探）状态下失败：重新切换为 CircuitOpen 并重置冷却计时；
-// 4. 触发外部指标观测器更新。
 func (c *Client) recordFailure(endpoint string) {
 	b := c.breakerFor(endpoint)
-	c.cbMu.Lock()
-	defer c.cbMu.Unlock()
-
-	b.failures++
-	switch b.state {
-	case CircuitClosed:
-		if b.failures >= c.cbThreshold {
-			b.state = CircuitOpen
-			b.openedAt = time.Now()
-			c.logger.Warn("circuit breaker opened",
-				"endpoint", endpoint,
-				"consecutive_failures", b.failures,
-			)
-		}
-	case CircuitHalfOpen:
-		// Probe failed, re-open
-		b.state = CircuitOpen
-		b.openedAt = time.Now()
+	prev := b.State()
+	b.RecordFailure()
+	cur := b.State()
+	if prev == circuitbreaker.StateClosed && cur == circuitbreaker.StateOpen {
+		c.logger.Warn("circuit breaker opened",
+			"endpoint", endpoint,
+		)
+	} else if prev == circuitbreaker.StateHalfOpen && cur == circuitbreaker.StateOpen {
 		c.logger.Warn("circuit breaker re-opened (probe failed)", "endpoint", endpoint)
 	}
-	c.reportCircuitStateUnlocked(endpoint, b.state)
+	c.reportCircuitState(endpoint, cur)
 }

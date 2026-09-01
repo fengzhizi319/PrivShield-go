@@ -97,7 +97,7 @@ func effectiveNumCPU() int32 {
 // 4. 创建 pgxpool.Pool，并执行 3 秒超时 Ping 探活探测；
 // 5. 调用 initSchema 在 30 秒超时时间内初始化 tasks 表结构与索引；
 // 6. 返回初始化就绪的 Store 指针。
-func New(ctx context.Context, cfg Config, logger *slog.Logger) (*Store, error) {
+func NewStore(ctx context.Context, cfg Config, logger *slog.Logger) (*Store, error) {
 	if cfg.DSN == "" {
 		return nil, fmt.Errorf("postgres: DSN must not be empty")
 	}

@@ -348,13 +348,15 @@ func TestCircuitBreaker_RecoveryOnSuccess(t *testing.T) {
 	// Make server healthy
 	shouldFail.Store(false)
 
-	// Probe request should succeed → circuit closes
-	result, err := c.Get(context.Background(), "/test")
-	if err != nil {
-		t.Fatalf("unexpected error after recovery: %v", err)
-	}
-	if result["status"] != "ok" {
-		t.Errorf("status = %v, want ok", result["status"])
+	// Probe requests should succeed → circuit closes after halfOpenMax (3) successes
+	for i := 0; i < 3; i++ {
+		result, err := c.Get(context.Background(), "/test")
+		if err != nil {
+			t.Fatalf("unexpected error after recovery (probe %d): %v", i+1, err)
+		}
+		if result["status"] != "ok" {
+			t.Errorf("status = %v, want ok", result["status"])
+		}
 	}
 
 	if state := c.CircuitStateString(); state != "closed" {
