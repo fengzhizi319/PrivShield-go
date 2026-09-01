@@ -658,3 +658,53 @@ func TestLLMClient_HalfOpenProbeQuota(t *testing.T) {
 		}
 	}
 }
+
+// TestClassificationFunnel_StandardsDefaultLevelFallback P1-3:
+// 当无规则/NER/LLM 匹配时，已加载标准的 default_level 应作为兜底等级（取最高者）。
+func TestClassificationFunnel_StandardsDefaultLevelFallback(t *testing.T) {
+	// 无规则：任何字段都会走到 default 分支
+	cfg := DefaultFunnelConfig()
+	funnel, err := NewClassificationFunnel(nil, nil, nil, cfg)
+	if err != nil {
+		t.Fatalf("NewClassificationFunnel: %v", err)
+	}
+
+	// 禁用 safety floor 的低置信度升级，避免它把等级抬得比标准还高
+	funnel.safetyFloor.UpdateConfig(SafetyFloorConfig{
+		MinLevel:                  LevelInternal,
+		ConfidenceThreshold:       0.0, // 不触发低置信度升级
+		ForceUpgradeOnUncertainty: false,
+		AuditLog:                  true,
+	})
+
+	// 注入两个标准：一个 default_level=internal，一个 default_level=confidential
+	standards := []StandardDef{
+		{
+			StandardID: "gbt43697",
+			GlobalParams: struct {
+				DefaultLevel string `yaml:"default_level"`
+			}{DefaultLevel: "internal"},
+		},
+		{
+			StandardID: "local_standard",
+			GlobalParams: struct {
+				DefaultLevel string `yaml:"default_level"`
+			}{DefaultLevel: "confidential"},
+		},
+	}
+	funnel.SetStandards(standards)
+
+	// 分类一个完全无规则的字段
+	res, err := funnel.Classify(context.Background(), "unknown_field", "some_value")
+	if err != nil {
+		t.Fatalf("Classify failed: %v", err)
+	}
+
+	// 应取最高者 confidential，而非 safety floor 的 internal
+	if res.Level != LevelConfidential {
+		t.Errorf("Level = %q, want %q (highest standard default_level)", res.Level, LevelConfidential)
+	}
+	if !strings.HasPrefix(res.MatchedBy, "standard:") {
+		t.Errorf("MatchedBy = %q, want prefix 'standard:'", res.MatchedBy)
+	}
+}

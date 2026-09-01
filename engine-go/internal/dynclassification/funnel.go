@@ -113,7 +113,6 @@ func (f *ClassificationFunnel) Classify(ctx context.Context, field, value string
 				level, category := mapNERLabelToSecurity(bestEntity.Label)
 				nerRes := &ClassificationResult{
 					Field:      field,
-					Value:      value,
 					Level:      level,
 					Category:   category,
 					Confidence: bestEntity.Confidence,
@@ -153,7 +152,6 @@ func (f *ClassificationFunnel) Classify(ctx context.Context, field, value string
 			if err == nil && llmResp != nil && llmResp.Confidence >= 0.70 {
 				llmRes := &ClassificationResult{
 					Field:      field,
-					Value:      value,
 					Level:      SecurityLevel(llmResp.Level),
 					Category:   llmResp.Category,
 					Confidence: llmResp.Confidence,
@@ -167,6 +165,21 @@ func (f *ClassificationFunnel) Classify(ctx context.Context, field, value string
 
 	// ─── Safety Floor: 兜底安全等级 ───
 	floorRes := f.safetyFloor.Arbitrate(res)
+
+	// ─── P1-3: 标准默认档位兜底 ───
+	// 当分类结果为「default」（无规则/NER/LLM 匹配）时，检查已加载标准的 default_level，
+	// 取最高者作为最终等级（前提是高于当前 safety floor 结果）。
+	if floorRes.MatchedBy == "default" && len(f.standards) > 0 {
+		if stdLevel := f.highestStandardDefaultLevel(); stdLevel != "" {
+			parsed := LevelFromString(stdLevel)
+			if LevelRank(parsed) > LevelRank(floorRes.Level) {
+				floorRes.Level = parsed
+				floorRes.MatchedBy = "standard:" + stdLevel
+				floorRes.Confidence = 0.50 // 标准兜底，置信度固定 0.50
+			}
+		}
+	}
+
 	f.cache.put(cacheKey, floorRes)
 	return floorRes, nil
 }
@@ -176,6 +189,25 @@ func (f *ClassificationFunnel) ClearCache() {
 	if f.cache != nil {
 		f.cache.clear()
 	}
+}
+
+// highestStandardDefaultLevel 扫描已加载标准，返回 global_params.default_level 中等级最高者。
+// 无标准或无 default_level 时返回空串。
+func (f *ClassificationFunnel) highestStandardDefaultLevel() string {
+	best := ""
+	bestRank := -1
+	for _, std := range f.standards {
+		dl := std.GlobalParams.DefaultLevel
+		if dl == "" {
+			continue
+		}
+		r := LevelRank(LevelFromString(dl))
+		if r > bestRank {
+			bestRank = r
+			best = dl
+		}
+	}
+	return best
 }
 
 // LLMStatus 返回 LLM 客户端健康状态（用于 /readyz/llm 探测）。

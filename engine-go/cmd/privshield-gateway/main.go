@@ -84,7 +84,21 @@ func main() {
 	r.GET("/gateway/backends", gateway.NewHealthCheckHandler(lb))
 
 	// Prometheus /metrics 端点（设计文档 §11.1）
-	r.GET("/metrics", gwMetrics.Handler())
+	// P1-6: 可选鉴权 —— 若配置 GATEWAY_METRICS_API_KEY 则要求 Bearer Token，否则保持开放（环回/开发态）
+	metricsHandler := gwMetrics.Handler()
+	if metricsKey := pkgconfig.EnvString("GATEWAY_METRICS_API_KEY", ""); metricsKey != "" {
+		r.GET("/metrics", func(c *gin.Context) {
+			auth := c.GetHeader("Authorization")
+			if !strings.HasPrefix(auth, "Bearer ") || auth[7:] != metricsKey {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+				return
+			}
+			metricsHandler(c)
+		})
+		slog.Info("Gateway /metrics requires Bearer token auth")
+	} else {
+		r.GET("/metrics", metricsHandler)
+	}
 
 	// 反向代理：所有未匹配路由转发给后端（传入 metrics 实时上报 Prometheus 指标）
 	r.NoRoute(gateway.NewHTTPProxyHandler(lb, gwMetrics))

@@ -285,7 +285,6 @@ func (e *RuleEngine) Classify(field, value string) *ClassificationResult {
 				if rule.ID == matchID {
 					result := &ClassificationResult{
 						Field:      field,
-						Value:      value,
 						Level:      rule.Level,
 						Category:   rule.Category,
 						Confidence: 0.90,

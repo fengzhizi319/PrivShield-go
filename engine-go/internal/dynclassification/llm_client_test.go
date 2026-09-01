@@ -404,9 +404,11 @@ func TestLLMClient_PlaintextOptInEnv(t *testing.T) {
 
 	// 即便显式放行明文传输，载荷去标识化约束不受影响
 	t.Setenv(envLLMPlaintextOptIn, "true")
-	c := NewLLMClient(DefaultLLMClientConfig())
+	cfg := DefaultLLMClientConfig()
+	cfg.Endpoint = "http://127.0.0.1:8000/v1/chat/completions" // 显式环回端点
+	c := NewLLMClient(cfg)
 	if err := c.TransportError(); err != nil {
-		t.Fatalf("loopback default must stay allowed: %v", err)
+		t.Fatalf("loopback endpoint must be allowed: %v", err)
 	}
 	if !c.Stats().PayloadDeidentified {
 		t.Error("PayloadDeidentified must remain true regardless of transport opt-in")

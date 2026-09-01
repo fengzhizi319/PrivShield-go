@@ -53,11 +53,12 @@ type LLMClientConfig struct {
 const envLLMPlaintextOptIn = "PRIVACY_LLM_ALLOW_INSECURE_HTTP_ENDPOINT"
 
 // DefaultLLMClientConfig 默认 LLM 客户端配置。
-// 默认端点指向同机（环回）vLLM / mock 服务，这是传输守卫允许的唯一明文 http 形态；
-// 跨主机外送必须改用 https 端点（见 ValidateLLMTransport）。
+// 默认端点为**空串**：Layer-3 默认关闭且不存在任何外送路径（P0-5）。
+// 启用 Layer-3 时必须显式配置 PRIVACY_LLM_ENDPOINT 为 https 端点（或受控内网明文端点 + 显式豁免）；
+// 空端点在 ValidateLLMTransport 中被拒绝，确保不会静默使用不安全的默认值。
 func DefaultLLMClientConfig() LLMClientConfig {
 	return LLMClientConfig{
-		Endpoint:       "http://localhost:8000/v1/chat/completions",
+		Endpoint:       "", // P0-5: 强制显式配置，不提供不安全的默认端点
 		ModelName:      "qwen3.5",
 		MaxConcurrency: 1,
 		Timeout:        30 * time.Second,
