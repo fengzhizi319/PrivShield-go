@@ -1,10 +1,20 @@
 // Package metrics provides shared Prometheus metrics for console Go modules.
 // Package metrics 为控制台各 Go 模块提供共享的 Prometheus 指标定义与 /metrics 端点。
 //
-// 每个模块在启动时调用 NewCollector(module) 创建带模块标签的指标收集器，
-// 再通过 gin handler 暴露 GET /metrics 供 Prometheus 抓取。
-//
-// 每个 Collector 使用独立的 prometheus.Registry，避免全局注册冲突（测试/多实例场景）。
+// ==============================================================================
+// 【架构设计背景与核心价值】
+// 1. 【模块隔离设计】：每个微服务模块在启动时调用 NewCollector(module) 创建带独立
+//    prometheus.Registry 的指标收集器，彻底避免全局注册表并发注册冲突（单测/多实例环境安全）；
+// 2. 【无缝契合命名规范】：Collector 天然实现 naming.Observer 接口，服务只需调用
+//    naming.SetObserver(mc)，即可自动获得跨服务别名解析流量与归一化失败指标统计；
+// 3. 【全景度量覆盖】：
+//    - 基础 HTTP 吞吐、状态码与延迟直方图（http_requests_total / http_request_duration_seconds）；
+//    - 上游 Agent 隐私引擎调用指标（agent_requests_total / agent_request_duration_seconds）；
+//    - 可靠性与故障自愈指标（orphaned_tasks_recovered_total / tasks_retried_total / circuit_breaker_state）；
+//    - PostgreSQL 原子租约与并发冲突指标（task_lease_conflicts_total / task_claim_latency_seconds / service_hub_ready）；
+//    - 数据源与 API 命名路由指标（privshield_api_alias_requests_total / privshield_datasource_normalize_errors_total）。
+// ==============================================================================
+
 package metrics
 
 import (
@@ -19,81 +29,84 @@ import (
 
 // Collector satisfies naming.Observer, so services can register it with
 // naming.SetObserver(mc) and get alias / error counters for free (§7.2).
-// Collector 实现 naming.Observer，服务只需 naming.SetObserver(mc) 即可自动上报指标。
+//
+// 编译期类型断言：确保 Collector 结构体 100% 实现了 naming.Observer 接口。
 var _ naming.Observer = (*Collector)(nil)
 
 // Collector holds module-scoped Prometheus metrics.
-// Collector 持有模块级别的 Prometheus 指标。
+// Collector 持有模块级别的 Prometheus 指标定义与专属注册表。
 type Collector struct {
-	module   string
-	registry *prometheus.Registry
+	module   string               // 当前所属模块名称（作为各指标的固定常量标签 ConstLabels）
+	registry *prometheus.Registry // 模块专属的 Prometheus 注册表，隔离全局状态
 
-	// HTTPRequestsTotal counts HTTP requests by method/path/status.
-	// HTTPRequestsTotal 按 method/path/status 统计 HTTP 请求数。
+	// HTTPRequestsTotal 统计当前微服务处理的 HTTP 请求总数（按 method/path/status 维度）。
 	HTTPRequestsTotal *prometheus.CounterVec
 
-	// HTTPRequestDuration records HTTP request latency histogram.
-	// HTTPRequestDuration 记录 HTTP 请求延迟直方图。
+	// HTTPRequestDuration 记录当前微服务的 HTTP 请求响应延迟直方图（按 method/path 维度，秒级）。
 	HTTPRequestDuration *prometheus.HistogramVec
 
-	// AgentRequestsTotal counts upstream agent calls by endpoint/status.
-	// AgentRequestsTotal 按 endpoint/status 统计上游 agent 调用数。
+	// AgentRequestsTotal 统计调用上游 Agent 隐私计算引擎的请求总数（按 endpoint/status 维度）。
 	AgentRequestsTotal *prometheus.CounterVec
 
-	// AgentRequestDuration records upstream agent call latency.
-	// AgentRequestDuration 记录上游 agent 调用延迟。
+	// AgentRequestDuration 记录调用上游 Agent 隐私计算引擎的延迟直方图（秒级）。
 	AgentRequestDuration *prometheus.HistogramVec
 
-	// OrphanedTasksRecovered counts tasks recovered after crash/restart by type.
-	// OrphanedTasksRecovered 统计崩溃恢复后回收的孤立任务数（按类型）。
+	// OrphanedTasksRecovered 统计系统崩溃重启后自动回收的孤儿任务数（按 type: "running" | "pending" 维度）。
 	OrphanedTasksRecovered *prometheus.CounterVec
 
-	// TasksRetried counts tasks queued for retry by result.
-	// TasksRetried 统计排队重试的任务数（按结果）。
+	// TasksRetried 统计进入自动重试队列的任务数（按 result: "queued" | "exhausted" 维度）。
 	TasksRetried *prometheus.CounterVec
 
-	// CircuitBreakerState tracks circuit breaker state per node.
-	// CircuitBreakerState 跟踪每个节点的熔断器状态。
+	// CircuitBreakerState 记录每个上游节点的断路器实时状态（0=closed 正常, 1=open 熔断, 2=half_open 半开）。
 	CircuitBreakerState *prometheus.GaugeVec
 
 	// ── Phase B: Lease metrics / 租约指标 ──
 
-	// TaskLeaseConflicts counts lease ownership conflicts (lost ownership or stale writes).
-	// TaskLeaseConflicts 统计租约所有权冲突数（失去所有权或过期写入）。
+	// TaskLeaseConflicts 统计租约所有权抢占冲突次数（由于失去所有权或并发版本过期写入）。
 	TaskLeaseConflicts prometheus.Counter
 
-	// TaskLeaseExpired counts lease expiry recovery events.
-	// TaskLeaseExpired 统计租约到期回收事件数。
+	// TaskLeaseExpired 统计由于租约超期而触发的回收事件总数。
 	TaskLeaseExpired prometheus.Counter
 
-	// TaskClaimLatency records task claim (ClaimNext) latency in seconds.
-	// TaskClaimLatency 记录任务领取（ClaimNext）延迟直方图（秒）。
+	// TaskClaimLatency 记录基于 PostgreSQL FOR UPDATE SKIP LOCKED 抢占任务（ClaimNext）的延迟直方图。
 	TaskClaimLatency prometheus.Histogram
 
-	// TaskTransitions counts task state transitions by from/to/result.
-	// TaskTransitions 按 from/to/result 统计任务状态转换次数。
+	// TaskTransitions 按 from/to/result 维度统计任务状态机流转次数。
 	TaskTransitions *prometheus.CounterVec
 
-	// ServiceHubReady indicates whether the service-hub is ready to serve traffic.
-	// ServiceHubReady 指示 service-hub 是否就绪可服务流量（1=ready, 0=not ready）。
+	// ServiceHubReady 指示当前调度中枢是否处于健康就绪状态（1=ready 可接收流量, 0=not ready）。
 	ServiceHubReady prometheus.Gauge
 
 	// ── Canonical Naming & Routing metrics / 命名规范与路由指标 ──
 
-	// APIAliasRequestsTotal counts requests using alias identifiers vs canonical.
+	// APIAliasRequestsTotal 统计使用非 Canonical 别名（如旧 slug、文件名、中文名、api_code）发起的请求数。
 	APIAliasRequestsTotal *prometheus.CounterVec
 
-	// DatasourceNormalizeErrorsTotal counts normalization failures by reason.
+	// DatasourceNormalizeErrorsTotal 统计数据源标识归一化失败或写侧校验被拒绝的次数（按 reason 维度）。
 	DatasourceNormalizeErrorsTotal *prometheus.CounterVec
 
-	// DatasourceRequestsTotal counts datasource processing requests by datasource_id/api_code/status.
+	// DatasourceRequestsTotal 统计按规范数据源实体与 API 编码处理的请求总数（按 datasource_id/api_code/status 维度）。
 	DatasourceRequestsTotal *prometheus.CounterVec
 }
 
 // NewCollector creates and registers a new metrics collector for the given module.
 // Each collector uses its own prometheus.Registry to avoid global registration conflicts.
-// NewCollector 为指定模块创建并注册新的指标收集器。
-// 每个收集器使用独立的 prometheus.Registry，避免全局注册冲突。
+//
+// NewCollector 为指定模块创建并注册全新的指标收集器。
+//
+// 使用方法：
+// 通常在服务的 main.go 初始化阶段单例调用：
+// ```go
+// mc := metrics.NewCollector("service-hub")
+// router.GET("/metrics", mc.Handler())
+// router.Use(mc.HTTPMiddleware())
+// naming.SetObserver(mc)
+// ```
+//
+// 执行逻辑：
+// 1. 创建独立的 prometheus.NewRegistry()；
+// 2. 构造所有 Counter、Gauge 与 HistogramVec 指标，注入 module 常量标签；
+// 3. 调用 reg.MustRegister(...) 将所有指标注册进私有注册表。
 func NewCollector(module string) *Collector {
 	reg := prometheus.NewRegistry()
 
@@ -137,7 +150,7 @@ func NewCollector(module string) *Collector {
 	}
 
 	// Reliability metrics (only registered for modules that need them)
-	// 可靠性指标（仅在需要的模块中注册）
+	// 可靠性与容灾指标
 	c.OrphanedTasksRecovered = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name:        "orphaned_tasks_recovered_total",
@@ -194,7 +207,7 @@ func NewCollector(module string) *Collector {
 		ConstLabels: prometheus.Labels{"module": module},
 	})
 
-	// ── Canonical Naming & Routing metrics ──
+	// ── Canonical Naming & Routing metrics / 命名规范与路由指标 ──
 	c.APIAliasRequestsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name:        "privshield_api_alias_requests_total",
@@ -209,8 +222,7 @@ func NewCollector(module string) *Collector {
 			Help:        "Total identifier normalization errors and fail-closed rejections.",
 			ConstLabels: prometheus.Labels{"module": module},
 		},
-		// 标签必须低卡：原始入站值是调用方可控的无界集合，只能进日志（raw_source 字段），
-		// 不能进标签，否则任一脏 ID 都会永久新增一条时间序列。
+		// 标签必须低基数：原始入站脏值不进标签（防止时序爆炸），仅通过日志输出
 		[]string{"reason"},
 	)
 	c.DatasourceRequestsTotal = prometheus.NewCounterVec(
@@ -244,7 +256,8 @@ func NewCollector(module string) *Collector {
 }
 
 // RecordHTTP records an HTTP request metric.
-// RecordHTTP 记录一次 HTTP 请求指标。
+//
+// RecordHTTP 手动记录一次 HTTP 请求的计数与耗时（秒）。
 func (c *Collector) RecordHTTP(method, path string, status int, durationSec float64) {
 	statusStr := strconv.Itoa(status)
 	c.HTTPRequestsTotal.WithLabelValues(method, path, statusStr).Inc()
@@ -252,7 +265,8 @@ func (c *Collector) RecordHTTP(method, path string, status int, durationSec floa
 }
 
 // RecordAgentCall records an upstream agent call metric.
-// RecordAgentCall 记录一次上游 agent 调用指标。
+//
+// RecordAgentCall 记录一次调用上游 Agent 隐私计算引擎的计数与耗时（秒）。
 func (c *Collector) RecordAgentCall(endpoint string, status string, durationSec float64) {
 	c.AgentRequestsTotal.WithLabelValues(endpoint, status).Inc()
 	c.AgentRequestDuration.WithLabelValues(endpoint).Observe(durationSec)
@@ -260,7 +274,14 @@ func (c *Collector) RecordAgentCall(endpoint string, status string, durationSec 
 
 // HTTPMiddleware returns a Gin middleware that automatically records HTTP request
 // metrics (count and latency histogram) using this collector.
-// HTTPMiddleware 返回自动记录 HTTP 请求指标（请求数与延迟直方图）的 Gin 中间件。
+//
+// HTTPMiddleware 返回自动统计 HTTP 请求指标的 Gin 中间件。
+//
+// 执行逻辑：
+// 1. 记录开始时间 start；
+// 2. 执行后续 handler（ctx.Next()）；
+// 3. 拦截判断当前路径：若为 "/metrics" 端点自身则跳过记录，避免自抓取导致指标无限自增与递归；
+// 4. 计算耗时并调用 RecordHTTP 记录。
 func (c *Collector) HTTPMiddleware() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		start := time.Now()
@@ -272,6 +293,7 @@ func (c *Collector) HTTPMiddleware() gin.HandlerFunc {
 		ctx.Next()
 
 		// Skip metric recording for the /metrics endpoint itself to avoid recursion
+		// 豁免 /metrics 自身，防递归与指标污染
 		if path == "/metrics" {
 			return
 		}
@@ -282,19 +304,22 @@ func (c *Collector) HTTPMiddleware() gin.HandlerFunc {
 }
 
 // RecordOrphanedRecovery records a recovered orphaned task metric.
-// RecordOrphanedRecovery 记录一次孤立任务恢复指标。
+//
+// RecordOrphanedRecovery 记录一次孤立任务恢复事件。
 func (c *Collector) RecordOrphanedRecovery(taskType string) {
 	c.OrphanedTasksRecovered.WithLabelValues(taskType).Inc()
 }
 
 // RecordTaskRetry records a task retry attempt metric.
-// RecordTaskRetry 记录一次任务重试指标。
+//
+// RecordTaskRetry 记录一次任务重试排队或重试耗尽事件。
 func (c *Collector) RecordTaskRetry(result string) {
 	c.TasksRetried.WithLabelValues(result).Inc()
 }
 
 // SetCircuitBreakerState updates the circuit breaker state gauge for a node.
-// SetCircuitBreakerState 更新节点的熔断器状态指标。
+//
+// SetCircuitBreakerState 更新指定节点的断路器状态值（0=closed, 1=open, 2=half_open）。
 func (c *Collector) SetCircuitBreakerState(node string, state string) {
 	var val float64
 	switch state {
@@ -311,31 +336,36 @@ func (c *Collector) SetCircuitBreakerState(node string, state string) {
 // ── Phase B: Lease metric helpers / 租约指标辅助方法 ──
 
 // RecordLeaseConflict increments the lease conflict counter.
-// RecordLeaseConflict 递增租约冲突计数器。
+//
+// RecordLeaseConflict 递增租约所有权冲突计数器。
 func (c *Collector) RecordLeaseConflict() {
 	c.TaskLeaseConflicts.Inc()
 }
 
 // RecordLeaseExpired increments the lease expiry recovery counter.
-// RecordLeaseExpired 递增租约到期回收计数器。
+//
+// RecordLeaseExpired 递增租约到期回收事件计数器。
 func (c *Collector) RecordLeaseExpired(count int) {
 	c.TaskLeaseExpired.Add(float64(count))
 }
 
 // RecordClaimLatency observes a task claim latency.
-// RecordClaimLatency 记录一次任务领取延迟。
+//
+// RecordClaimLatency 记录一次任务抢占（ClaimNext）的耗时（秒）。
 func (c *Collector) RecordClaimLatency(durationSec float64) {
 	c.TaskClaimLatency.Observe(durationSec)
 }
 
 // RecordTaskTransition records a task state transition.
-// RecordTaskTransition 记录一次任务状态转换。
+//
+// RecordTaskTransition 记录一次任务状态机流转事件（from, to, result）。
 func (c *Collector) RecordTaskTransition(from, to, result string) {
 	c.TaskTransitions.WithLabelValues(from, to, result).Inc()
 }
 
 // SetReady sets the service-hub readiness gauge.
-// SetReady 设置 service-hub 就绪状态指标。
+//
+// SetReady 设置当前微服务的就绪探针指标（1 为就绪，0 为未就绪）。
 func (c *Collector) SetReady(ready bool) {
 	if ready {
 		c.ServiceHubReady.Set(1)
@@ -347,27 +377,34 @@ func (c *Collector) SetReady(ready bool) {
 // ── Canonical Naming metric helpers / 命名规范指标辅助方法 ──
 
 // RecordAPIAlias records an alias mapping usage event.
-// target: "api_code" | "datasource_id"
+// target: "api_code" | "datasource_id" | "path"
+//
+// RecordAPIAlias 实现了 naming.Observer 接口，记录别名解析流量事件。
 func (c *Collector) RecordAPIAlias(alias, canonical, target string) {
 	c.APIAliasRequestsTotal.WithLabelValues(alias, canonical, target).Inc()
 }
 
 // RecordNormalizeError records an identifier normalization failure.
 // reason: "unknown" | "reserved" | "empty" | "format_invalid"
-// 原始入站值不进入标签（无界基数），由调用方以 raw_source 日志字段输出。
+//
+// RecordNormalizeError 实现了 naming.Observer 接口，记录标识归一化失败与写侧校验拒绝事件。
 func (c *Collector) RecordNormalizeError(reason string) {
 	c.DatasourceNormalizeErrorsTotal.WithLabelValues(reason).Inc()
 }
 
 // RecordDatasourceRequest records a request by canonical datasource ID and status.
 // status: "success" | "error" | "fallback"
+//
+// RecordDatasourceRequest 记录按规范数据源实体与 API 编码处理的数据流水线请求。
 func (c *Collector) RecordDatasourceRequest(datasourceID, apiCode, status string) {
 	c.DatasourceRequestsTotal.WithLabelValues(datasourceID, apiCode, status).Inc()
 }
 
 // Handler returns a Gin handler that serves Prometheus /metrics endpoint
 // using this collector's custom registry.
-// Handler 返回暴露 Prometheus /metrics 端点的 Gin handler，使用本收集器的自定义注册表。
+//
+// Handler 返回暴露 Prometheus /metrics 文本端点的 Gin 处理函数。
+// 严格使用当前 Collector 私有注册表中的指标，避免拉取未初始化的全局指标。
 func (c *Collector) Handler() gin.HandlerFunc {
 	h := promhttp.HandlerFor(c.registry, promhttp.HandlerOpts{})
 	return func(ctx *gin.Context) {

@@ -5,23 +5,25 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	pkgauth "github.com/fengzhizi319/PrivShield/pkg/auth"
 )
 
 // KeyConfig 表示单个 API Key 配置。
-type KeyConfig struct {
-	Name   string
-	Scopes []string
+type KeyConfig = pkgauth.KeyConfig
+
+// EndpointRateLimit 单端点限流配置。
+type EndpointRateLimit struct {
+	RPS   float64
+	Burst int
 }
 
 // Settings 安全配置，从环境变量加载。
+// 嵌入 pkg/auth.Settings 以复用 scope-based 认证配置。
 type Settings struct {
-	AuthEnabled           bool
-	TLSEnabled            bool
+	pkgauth.Settings
 	RateLimitEnabled      bool
-	HealthNoAuth          bool
 	HealthNoRateLimit     bool
-	InternalKeys          map[string]*KeyConfig // token -> config
-	ExternalKeys          map[string]*KeyConfig // token -> config
 	RateLimitDefaultRPS   float64
 	RateLimitDefaultBurst int
 	RateLimitPerEndpoint  map[string]*EndpointRateLimit
@@ -29,12 +31,6 @@ type Settings struct {
 	MTLSAllowedCNs        []string
 	MTLSWhitelistFile     string
 	MTLSEnabled           bool
-}
-
-// EndpointRateLimit 单端点限流配置。
-type EndpointRateLimit struct {
-	RPS   float64
-	Burst int
 }
 
 var (
@@ -78,18 +74,20 @@ func loadSettings() *Settings {
 	}
 
 	s := &Settings{
-		AuthEnabled:           envBool("PRIVACY_AUTH_ENABLED", false),
-		TLSEnabled:            envBool("PRIVACY_TLS_ENABLED", false),
+		Settings: pkgauth.Settings{
+			AuthEnabled:  envBool("PRIVACY_AUTH_ENABLED", false),
+			TLSEnabled:   envBool("PRIVACY_TLS_ENABLED", false),
+			HealthNoAuth: envBool("PRIVACY_HEALTH_NO_AUTH", true),
+			InternalKeys: internalKeys,
+			ExternalKeys: externalKeys,
+		},
 		RateLimitEnabled:      envBool("PRIVACY_RATE_LIMIT_ENABLED", false),
-		HealthNoAuth:          envBool("PRIVACY_HEALTH_NO_AUTH", true),
 		HealthNoRateLimit:     envBool("PRIVACY_HEALTH_NO_RATE_LIMIT", true),
 		MTLSEnabled:           envBool("PRIVACY_AUTH_INTERNAL_MTLS_ENABLED", false),
 		MTLSWhitelistFile:     os.Getenv("PRIVACY_AUTH_MTLS_WHITELIST_FILE"),
 		RateLimitDefaultRPS:   envFloat("PRIVACY_RATE_LIMIT_DEFAULT_RPS", 100),
 		RateLimitDefaultBurst: envInt("PRIVACY_RATE_LIMIT_DEFAULT_BURST", 200),
 		RateLimitRedisURL:     os.Getenv("PRIVACY_RATE_LIMIT_REDIS_URL"),
-		InternalKeys:          internalKeys,
-		ExternalKeys:          externalKeys,
 		MTLSAllowedCNs:        parseStringList(os.Getenv("PRIVACY_AUTH_MTLS_ALLOWED_CNS")),
 	}
 	return s

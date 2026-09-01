@@ -1,19 +1,34 @@
 // Package middleware — unified API error envelope for cross-language consistency.
-// Package middleware — 跨语言统一 API 错误信封。
+// Package middleware — 跨语言统一 API 响应信封（5 字段规范）。
 //
+// ==============================================================================
+// 【架构规范与跨语言一致性】
 // 所有 Go 微服务（service-hub / datasource-mgr / audit-log / bff-go / app-lz）
-// 与 Python 引擎（engine/observability/envelope.py）共享同一错误响应格式：
+// 与 Python 隐私计算引擎（engine/observability/envelope.py）必须严格共享统一响应格式：
+//
+// 统一错误信封（ErrorEnvelope）：
 //
 //	{
-//	  "code":      "INVALID_ARGUMENT",      // 机器可读错误码枚举
-//	  "message":   "请求参数校验失败",        // 人读摘要
-//	  "detail":    "...",                   // 兼容原 detail 字段
-//	  "trace_id":  "req-1787554500-abc123", // 分布式追踪 ID
-//	  "timestamp": "2026-08-27T09:30:00Z"   // UTC 时间戳
+//	  "code":      "INVALID_ARGUMENT",      // 机器可读错误码枚举（全大写下划线）
+//	  "message":   "请求参数校验失败",        // 人类可读简短摘要
+//	  "detail":    "...",                   // 详细错误细节或字段列表（可选）
+//	  "trace_id":  "req-1787554500-abc123", // 全链路分布式追踪 ID
+//	  "timestamp": "2026-08-31T09:30:00.000Z" // UTC ISO8601/RFC3339 纳秒级时间戳
 //	}
 //
-// 迁移过渡期双轨兼容：响应体同时包含 code / message / detail，
-// 响应头强制下发 X-Request-ID 与 X-Trace-ID。
+// 统一成功信封（SuccessEnvelope）：
+//
+//	{
+//	  "code":      "OK",
+//	  "message":   "操作成功",
+//	  "data":      { ... },
+//	  "trace_id":  "req-1787554500-abc123",
+//	  "timestamp": "2026-08-31T09:30:00.000Z"
+//	}
+//
+// 响应头强制注入：X-Request-ID 与 X-Trace-ID 双头，与响应体内部的 trace_id 严格一致。
+// ==============================================================================
+
 package middleware
 
 import (
@@ -24,33 +39,29 @@ import (
 )
 
 // ErrorEnvelope is the unified error response body structure.
-// ErrorEnvelope 统一错误响应体结构。
-//
-// All Go services and the Python FastAPI engine produce errors in this format,
-// enabling the frontend to use a single interceptor for error parsing.
-// 所有 Go 服务与 Python FastAPI 引擎均按此格式产出错误响应，
-// 使前端可使用单一拦截器统一解析。
+// ErrorEnvelope 统一错误响应体结构（标准 5 字段信封）。
 type ErrorEnvelope struct {
-	Code      string `json:"code"`             // Machine-readable error code / 机器可读错误码
-	Message   string `json:"message"`          // Human-readable summary / 人读摘要
-	Detail    any    `json:"detail,omitempty"` // Detailed error info (optional) / 详细错误信息
-	TraceID   string `json:"trace_id"`         // Distributed trace ID / 分布式追踪 ID
-	Timestamp string `json:"timestamp"`        // UTC timestamp (RFC3339) / UTC 时间戳
+	Code      string `json:"code"`             // 机器可读标准错误码（如 "INVALID_ARGUMENT", "UNAUTHORIZED"）
+	Message   string `json:"message"`          // 人类可读错误摘要
+	Detail    any    `json:"detail,omitempty"` // 详细上下文或字段级错误（可选，若为 nil 则不序列化）
+	TraceID   string `json:"trace_id"`         // 分布式链路追踪 ID
+	Timestamp string `json:"timestamp"`        // UTC 纳秒级时间戳（RFC3339Nano 格式）
 }
 
 // AbortWithError aborts the request and responds with a unified error envelope.
-// AbortWithError 中断请求并以统一错误信封格式响应。
 //
-// Automatically injects X-Request-ID and X-Trace-ID response headers for
-// distributed tracing correlation.
-// 自动注入 X-Request-ID 与 X-Trace-ID 响应头，用于分布式追踪关联。
+// AbortWithError 中断当前请求并以统一错误信封格式输出 JSON 错误响应。
 //
-// Parameters / 参数：
-//   - c: Gin context / Gin 上下文
-//   - httpStatus: HTTP status code / HTTP 状态码
-//   - code: Machine-readable error code (e.g. "INVALID_ARGUMENT") / 机器可读错误码
-//   - message: Human-readable error summary / 人读错误摘要
-//   - detail: Optional detailed error info / 可选的详细错误信息
+// 使用方法：
+// 业务 Handler 参数校验失败、鉴权失败或执行出错时调用：
+// ```go
+// middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "参数缺失", gin.H{"field": "name"})
+// ```
+//
+// 执行逻辑：
+// 1. 调用 GetTraceID(c) 提取当前链路的 traceID；
+// 2. 将 traceID 注入 X-Request-ID 与 X-Trace-ID 响应头；
+// 3. 构建 ErrorEnvelope 结构体，并调用 c.AbortWithStatusJSON(httpStatus, env) 终止请求链。
 func AbortWithError(c *gin.Context, httpStatus int, code string, message string, detail any) {
 	traceID := GetTraceID(c)
 	c.Header("X-Request-ID", traceID)
@@ -65,21 +76,21 @@ func AbortWithError(c *gin.Context, httpStatus int, code string, message string,
 }
 
 // SuccessEnvelope is the unified success response body structure (optional).
-// SuccessEnvelope 统一成功响应体结构（可选使用）。
-//
-// For gradual migration: success responses can optionally wrap data in this
-// envelope to maintain format consistency with error responses.
-// 渐进迁移用：成功响应可选择性使用此信封包裹数据，保持与错误响应的格式一致性。
+// SuccessEnvelope 统一成功响应体结构。
 type SuccessEnvelope struct {
-	Code      string `json:"code"`           // "OK" / 固定为 "OK"
-	Message   string `json:"message"`        // Human-readable message / 人读消息
-	Data      any    `json:"data,omitempty"` // Response payload / 响应数据
-	TraceID   string `json:"trace_id"`       // Distributed trace ID / 分布式追踪 ID
-	Timestamp string `json:"timestamp"`      // UTC timestamp / UTC 时间戳
+	Code      string `json:"code"`           // 固定为 "OK"
+	Message   string `json:"message"`        // 人类可读成功摘要
+	Data      any    `json:"data,omitempty"` // 成功返回的业务载荷（若为 nil 则忽略）
+	TraceID   string `json:"trace_id"`       // 分布式链路追踪 ID
+	Timestamp string `json:"timestamp"`      // UTC 纳秒级时间戳
 }
 
 // RespondWithSuccess responds with a unified success envelope.
-// RespondWithSuccess 以统一成功信封格式响应。
+//
+// RespondWithSuccess 以统一成功信封格式向客户端输出响应。
+//
+// 执行逻辑：
+// 提取 traceID，注入双响应头，并以 JSON 格式输出 SuccessEnvelope。
 func RespondWithSuccess(c *gin.Context, httpStatus int, message string, data any) {
 	traceID := GetTraceID(c)
 	c.Header("X-Request-ID", traceID)
@@ -94,10 +105,9 @@ func RespondWithSuccess(c *gin.Context, httpStatus int, message string, data any
 }
 
 // ErrorCodeFromStatus maps HTTP status codes to standard error code strings.
-// ErrorCodeFromStatus 将 HTTP 状态码映射为标准错误码字串。
 //
-// Used by both Go services and as reference for the Python engine's code_map.
-// Go 服务与 Python 引擎的 code_map 共享同一映射逻辑。
+// ErrorCodeFromStatus 将标准 HTTP 状态码映射为全系统统一的机器可读错误码字符串。
+// 与 Python FastAPI 引擎的 code_map 保持严格映射一致。
 func ErrorCodeFromStatus(status int) string {
 	switch status {
 	case http.StatusBadRequest:
@@ -124,10 +134,9 @@ func ErrorCodeFromStatus(status int) string {
 }
 
 // ExtractErrorMessage extracts the best error message from various response formats.
-// ExtractErrorMessage 从多种响应格式中提取最佳错误消息。
 //
-// Supports: unified envelope (code+message), gin.H (detail/error), and fallback.
-// 支持：统一信封（code+message）、gin.H（detail/error）及回退。
+// ExtractErrorMessage 从多种响应格式与上下文存储中自适应提取最合适的人类可读错误消息。
+// 依次查找："error_code" -> "message" -> "detail" -> "error" -> fallback -> http.StatusText。
 func ExtractErrorMessage(c *gin.Context, fallback string) string {
 	// Try unified envelope format / 尝试统一信封格式
 	if code, exists := c.Get("error_code"); exists {

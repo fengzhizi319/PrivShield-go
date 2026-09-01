@@ -204,13 +204,16 @@ security:
   # ── API Key 认证 ──
   auth:
     # enabled: 是否启用 API Key 认证
+    #   注意：容器以 0.0.0.0 监听即属「非环回暴露」，Go 引擎的启动门禁要求此时必须有入站 Key，
+    #   因此 enabled=true 而未配置 apiKeys / apiKeysSecret 会在 helm 渲染阶段直接报错。
     enabled: false
     # apiKeysSecret: 用户自管的 API Key Secret 名称
-    #   Secret 中须包含名为 api-keys.json 的数据键，内容为：
-    #   {"<api-key>": {"name": "...", "scopes": [...]}}
+    #   Secret 中须包含名为 api-keys 的数据键，值格式：
+    #   token:name:scope1,scope2;token2:name2:*   （注入到 PRIVACY_AUTH_INTERNAL_API_KEYS）
+    #   旧键名 api-keys.json 对应的变量在 Go 侧从不被读取，已停用。
     apiKeysSecret: ""
-    # apiKeys: 直接填写 api-keys.json 内容（不推荐用于生产）
-    #   Chart 会自动生成 <fullname>-secrets Secret 并挂载
+    # apiKeys: 直接填写上述 token:name:scopes 字符串（不推荐用于生产）
+    #   Chart 会自动生成 <fullname>-secrets Secret 的 api-keys 键并挂载
     apiKeys: ""
     # ── 内部 mTLS 客户端证书认证 ──
     internalMtls:
@@ -406,15 +409,22 @@ serviceMonitor:
 
 # ── Layer-3 LLM 独立推理服务（运行时解耦）─────────────────────────────
 # 启用后在独立 Deployment 中运行 vLLM 容器，core 通过 Service（<fullname>-llm:8000）
-# 以 OpenAI 兼容 HTTP 调用 LLM（PRIVACY_LLM_PROVIDER=vllm 走 HTTP 引擎，无需 torch）：
+# 以 OpenAI 兼容 HTTP 调用 LLM：
+#   - engineType=go   → 下发 Go 读取点 PRIVACY_LLM_ENABLE / PRIVACY_LLM_ENDPOINT / PRIVACY_LLM_MODEL
+#   - engineType=python → 下发 PRIVACY_LLM_PROVIDER / PRIVACY_LLM_API_BASE / PRIVACY_LLM_MODEL_NAME
 #   - LLM 升级/重启 → 滚动更新 llm Deployment，core 零感知
 #   - LLM 挂掉/OOM  → core 自动降级 Layer-1 规则 + Layer-2 NER，主服务不受影响
 #   - 启用方式：helm install ... --set llm.enabled=true
 llm:
   # enabled: 是否启用独立的 LLM 推理 Deployment
   enabled: false
-  # provider: core 侧 LLM 后端类型（vllm / openai），对应 PRIVACY_LLM_PROVIDER
+  # provider: 仅 engineType=python 生效（对应 PRIVACY_LLM_PROVIDER：vllm / openai）
   provider: vllm
+  # allowInsecureHTTP: 对应 Go 侧 PRIVACY_LLM_ALLOW_INSECURE_HTTP_ENDPOINT。
+  #   P0-5 红线：Go 引擎默认拒绝非环回 http:// LLM 端点（防止原值/元数据明文出域）。
+  #   本 chart 默认端点是集群内明文 HTTP vLLM Service，确需启用 Layer-3 时显式置 true；
+  #   若换成 https:// 端点则保持 false。
+  allowInsecureHTTP: false
   # apiKey: core 侧调用密钥，对应 PRIVACY_LLM_API_KEY
   apiKey: EMPTY
   # port: LLM 服务端口（Service/容器内监听）

@@ -7,7 +7,6 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -160,16 +159,17 @@ func (s *GRPCServer) RecordAudit(ctx context.Context, req *pb.RecordAuditRequest
 		_ = json.Unmarshal([]byte(req.ParametersJson), &params)
 	}
 
+	// P0 fix: input_hash and output_hash must be supplied by the caller. Server-side fallback
+	// to metadata-only hashes weakens the tamper-evidence binding because it does not cover
+	// the actual data content.
+	if req.InputHash == "" {
+		return nil, status.Error(codes.InvalidArgument, "input_hash is required and must be a cryptographic hash of the actual input data")
+	}
+	if req.OutputHash == "" {
+		return nil, status.Error(codes.InvalidArgument, "output_hash is required and must be a cryptographic hash of the actual output data")
+	}
 	inputHash := req.InputHash
 	outputHash := req.OutputHash
-	if inputHash == "" {
-		h := crypto.SumSM3([]byte(fmt.Sprintf("input|%s|%d|%s|%s", normID, req.InputRows, user, req.ParametersJson)))
-		inputHash = hex.EncodeToString(h[:])
-	}
-	if outputHash == "" {
-		h := crypto.SumSM3([]byte(fmt.Sprintf("output|%s|%d|%s|%s|%s", normID, req.OutputRows, opStatus, secLevel, req.ParametersJson)))
-		outputHash = hex.EncodeToString(h[:])
-	}
 
 	logEntry := &store.AuditLog{
 		ID:             id,
@@ -194,14 +194,16 @@ func (s *GRPCServer) RecordAudit(ctx context.Context, req *pb.RecordAuditRequest
 	}
 
 	// Envelope encrypt sample fields if key is configured
-	encInput := req.InputSample
-	encOutput := req.OutputSample
+	encInput, encOutput := req.InputSample, req.OutputSample
 	if s.cfg.EncryptionKey != "" {
-		if enc, err := crypto.EncryptString(req.InputSample, s.cfg.EncryptionKey); err == nil {
-			encInput = enc
+		var err error
+		if encInput, err = crypto.EncryptString(req.InputSample, s.cfg.EncryptionKey); err != nil {
+			s.logger.Error("failed to encrypt input snapshot sample", "error", err.Error())
+			return nil, status.Errorf(codes.Internal, "failed to encrypt input snapshot sample: %v", err)
 		}
-		if enc, err := crypto.EncryptString(req.OutputSample, s.cfg.EncryptionKey); err == nil {
-			encOutput = enc
+		if encOutput, err = crypto.EncryptString(req.OutputSample, s.cfg.EncryptionKey); err != nil {
+			s.logger.Error("failed to encrypt output snapshot sample", "error", err.Error())
+			return nil, status.Errorf(codes.Internal, "failed to encrypt output snapshot sample: %v", err)
 		}
 	}
 
@@ -370,11 +372,27 @@ func (s *GRPCServer) ListSnapshots(ctx context.Context, req *pb.ListSnapshotsReq
 		inSample := snap.InputSample
 		outSample := snap.OutputSample
 		if s.cfg.EncryptionKey != "" {
-			if dec, err := crypto.DecryptString(inSample, s.cfg.EncryptionKey); err == nil {
-				inSample = dec
+			if crypto.IsEncrypted(inSample) {
+				if dec, err := crypto.DecryptString(inSample, s.cfg.EncryptionKey); err == nil {
+					inSample = dec
+				} else {
+					s.logger.Warn("snapshot sample decryption failed",
+						"snapshot_id", snap.ID, "field", "input_sample", "error", err.Error())
+				}
+			} else if inSample != "" {
+				s.logger.Warn("snapshot sample stored without envelope prefix while encryption is enabled",
+					"snapshot_id", snap.ID, "field", "input_sample")
 			}
-			if dec, err := crypto.DecryptString(outSample, s.cfg.EncryptionKey); err == nil {
-				outSample = dec
+			if crypto.IsEncrypted(outSample) {
+				if dec, err := crypto.DecryptString(outSample, s.cfg.EncryptionKey); err == nil {
+					outSample = dec
+				} else {
+					s.logger.Warn("snapshot sample decryption failed",
+						"snapshot_id", snap.ID, "field", "output_sample", "error", err.Error())
+				}
+			} else if outSample != "" {
+				s.logger.Warn("snapshot sample stored without envelope prefix while encryption is enabled",
+					"snapshot_id", snap.ID, "field", "output_sample")
 			}
 		}
 
@@ -419,16 +437,26 @@ func (s *GRPCServer) VerifyIntegrity(ctx context.Context, req *pb.VerifyIntegrit
 
 	prevHash := snap.PrevHash
 	if prevHash == "" {
+		// Backward compatibility: snapshots written before the P0 fix may have an empty prev_hash.
 		prevHash = log.PrevHash
 	}
 
-	valid, _ := store.VerifyAuditIntegrityHash(
-		snap.IntegrityHash, snap.AuditLogID, prevHash, snap.Timestamp, snap.Algorithm,
-		log.InputHash, log.OutputHash, log.User, log.SecurityLevel, snap.ParametersJSON,
+	// P0 fix: verify the snapshot using its own integrity hash that covers input/output samples.
+	var valid bool
+	valid, _ = store.VerifySnapshotIntegrityHash(
+		snap.IntegrityHash, snap.ID, snap.AuditLogID, prevHash, snap.Timestamp, snap.Algorithm,
+		snap.InputSample, snap.OutputSample, snap.ParametersJSON,
 	)
-	computed := store.ComputeAuditIntegrityHash(
-		snap.AuditLogID, prevHash, snap.Timestamp, snap.Algorithm,
-		log.InputHash, log.OutputHash, log.User, log.SecurityLevel, snap.ParametersJSON,
+	// Legacy fallback: snapshots written before this fix copied the parent audit log's integrity hash.
+	if !valid {
+		valid, _ = store.VerifyAuditIntegrityHash(
+			snap.IntegrityHash, snap.AuditLogID, prevHash, snap.Timestamp, snap.Algorithm,
+			log.InputHash, log.OutputHash, log.User, log.SecurityLevel, snap.ParametersJSON,
+		)
+	}
+	computed := store.ComputeSnapshotIntegrityHash(
+		snap.ID, snap.AuditLogID, prevHash, snap.Timestamp, snap.Algorithm,
+		snap.InputSample, snap.OutputSample, snap.ParametersJSON,
 	)
 
 	expected := req.ExpectedHash
@@ -437,6 +465,7 @@ func (s *GRPCServer) VerifyIntegrity(ctx context.Context, req *pb.VerifyIntegrit
 	}
 	if req.ExpectedHash != "" {
 		valid = computed == req.ExpectedHash
+		// When the caller supplies an explicit expected hash, the matched algorithm label is unknown.
 	}
 
 	msg := "integrity verified: SM3 hash matches non-repudiation proof"
@@ -451,14 +480,16 @@ func (s *GRPCServer) VerifyIntegrity(ctx context.Context, req *pb.VerifyIntegrit
 		ExpectedHash: expected,
 		Message:      msg,
 		Via:          moduleVia,
+		// hash_label is not present in the proto; include it in the message for now.
 	}, nil
 }
 
-// VerifyChain verifies the unbroken cryptographic hash chain of recent records.
+// VerifyChain verifies the unbroken cryptographic hash chain of records.
+// P1 fix: when limit is omitted or zero, the entire chain is verified by default.
 func (s *GRPCServer) VerifyChain(ctx context.Context, req *pb.VerifyChainRequest) (*pb.VerifyChainResponse, error) {
 	limit := int(req.Limit)
-	if limit <= 0 {
-		limit = 1000
+	if limit < 0 {
+		limit = 0
 	}
 
 	res, err := s.audit.VerifyChain(limit)
@@ -472,7 +503,7 @@ func (s *GRPCServer) VerifyChain(ctx context.Context, req *pb.VerifyChainRequest
 		BrokenAtId:    res.BrokenAtID,
 		ExpectedHash:  res.ExpectedHash,
 		ActualHash:    res.ActualHash,
-		Message:       res.Message,
+		Message:       fmt.Sprintf("%s (total_records=%d)", res.Message, res.TotalRecords),
 		Via:           moduleVia,
 	}, nil
 }

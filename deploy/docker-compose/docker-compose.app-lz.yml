@@ -40,6 +40,10 @@ services:
       PRIVACY_LOG_FORMAT: "json"
       PRIVACY_PROFILE: "/etc/PrivShield/privacy-profile.yaml"
       PRIVACY_BUDGET_DB: "/data/budget/budget.db"
+      # P0-1：0.0.0.0 监听 ⇒ 必须配置入站 Key（留空即启动门禁拒绝），
+      # 下面这把 dev-* 明文密钥只供本机联调，任何可路由环境都要换成 .env 里的真实值。
+      PRIVACY_AUTH_ENABLED: "true"
+      PRIVACY_AUTH_INTERNAL_API_KEYS: "${PRIVSHIELD_ENGINE_API_KEY:-dev-engine-key}:dev-app-lz:*"
     volumes:
       - ./privacy-profile.yaml:/etc/PrivShield/privacy-profile.yaml:ro
       - ../../docs/standard:/app/docs/standard:ro
@@ -71,14 +75,25 @@ services:
       SERVICE_HUB_HOST: "0.0.0.0"
       SERVICE_HUB_PORT: "8082"
       SERVICE_HUB_GRPC_PORT: "50052"
-      SERVICE_HUB_AGENT_ADDR: "PrivShield:50051"
-      SERVICE_HUB_AGENT_HTTP: "http://PrivShield:8079"
-      SERVICE_HUB_DATASOURCE_ADDR: "datasource-mgr:50053"
-      SERVICE_HUB_DATASOURCE_HTTP: "http://datasource-mgr:8083"
-      SERVICE_HUB_AUDIT_ADDR: "audit-log:50054"
+      # 上游地址必须用代码真实读取的变量名（原 SERVICE_HUB_AGENT_ADDR / _AGENT_HTTP /
+      # _DATASOURCE_ADDR / _DATASOURCE_HTTP / _AUDIT_ADDR 均不被读取，中枢会退回 127.0.0.1
+      # 默认值而找不到任何上游，已按 P2-1 修正）。中枢侧引擎客户端是纯 REST 实现。
+      PRIVACY_AGENT_REST_HOST: "PrivShield"
+      PRIVACY_REST_PORT: "8079"
+      DATASOURCE_MGR_HOST: "datasource-mgr"
+      DATASOURCE_MGR_PORT: "8083"
+      DATASOURCE_MGR_GRPC_HOST: "datasource-mgr"
+      DATASOURCE_MGR_GRPC_PORT: "50053"
       SERVICE_HUB_AUDIT_HTTP: "http://audit-log:8084"
-      SERVICE_HUB_STORE_BACKEND: "sqlite"
-      SERVICE_HUB_SQLITE_PATH: "/data/service-hub.db"
+      # 注：本服务没有「存储后端开关」类变量（原 SERVICE_HUB_STORE_BACKEND / SERVICE_HUB_SQLITE_PATH
+      # 是从不被代码读取的幽灵变量，已按 P2-1 删除）；后端由 SERVICE_HUB_PG_DSN 是否配置决定，
+      # SQLite 路径的真实变量名是 SERVICE_HUB_DB_PATH。
+      SERVICE_HUB_DB_PATH: "/data/service-hub.db"
+      # ── P0-1 零信任默认态：入站 Key + 三个出站 Key（须与对端入站值一致）──
+      SERVICE_HUB_API_KEY: "${SERVICE_HUB_API_KEY:-dev-service-hub-key}"
+      PRIVACY_AGENT_API_KEY: "${PRIVSHIELD_ENGINE_API_KEY:-dev-engine-key}"
+      SERVICE_HUB_DATASOURCE_API_KEY: "${DATASOURCE_MGR_API_KEY:-dev-datasource-key}"
+      SERVICE_HUB_AUDIT_LOG_API_KEY: "${AUDIT_LOG_API_KEY:-dev-audit-key}"
     volumes:
       - service-hub-data:/data
     depends_on:
@@ -110,7 +125,10 @@ services:
       DATASOURCE_MGR_HOST: "0.0.0.0"
       DATASOURCE_MGR_PORT: "8083"
       DATASOURCE_MGR_GRPC_PORT: "50053"
-      DATASOURCE_MGR_SQLITE_PATH: "/data/datasource-mgr.db"
+      # 注：本服务**没有**数据库/存储类环境变量（原 DATASOURCE_MGR_SQLITE_PATH 是从不被代码读取的
+      # 幽灵变量，已按 P2-1 删除）；示范数据源为 samples/*.csv 真实同构模拟库，/data 卷仅承载上传临时文件。
+      # P0-1：0.0.0.0 监听 ⇒ 必须配置入站 Key（本服务的 Key 同时是 hub / BFF 的出站值）。
+      DATASOURCE_MGR_API_KEY: "${DATASOURCE_MGR_API_KEY:-dev-datasource-key}"
     volumes:
       - datasource-mgr-data:/data
     networks:
@@ -139,7 +157,15 @@ services:
       AUDIT_LOG_HOST: "0.0.0.0"
       AUDIT_LOG_PORT: "8084"
       AUDIT_LOG_GRPC_PORT: "50054"
-      AUDIT_LOG_SQLITE_PATH: "/data/audit-log.db"
+      # 真实变量名是 AUDIT_LOG_DB_PATH（原 AUDIT_LOG_SQLITE_PATH 不被代码读取，属 P2-1 配置漂移）。
+      AUDIT_LOG_DB_PATH: "/data/audit-log.db"
+      # ── P0-1 启动门禁必填：入站 Key + P0-3 快照加密主密钥 + P1-2 哈希链 HMAC 密钥 ──
+      AUDIT_LOG_API_KEY: "${AUDIT_LOG_API_KEY:-dev-audit-key}"
+      AUDIT_LOG_ENCRYPTION_KEY: "${AUDIT_LOG_ENCRYPTION_KEY:-dev-audit-encryption-key-change-me}"
+      AUDIT_LOG_HASH_KEY: "${AUDIT_LOG_HASH_KEY:-dev-audit-hash-key-change-me}"
+      # P0-4：禁止静音降级；P0-8：0 = 永不物理删除存证。
+      AUDIT_LOG_STRICT_STORAGE: "true"
+      AUDIT_LOG_RETENTION_DAYS: "0"
     volumes:
       - audit-log-data:/data
     networks:
@@ -153,7 +179,7 @@ services:
       start_period: 5s
     restart: "no"
 
-  # 5. App-LZ Go BFF 聚合后端 (:8085 / :50055)
+  # 5. App-LZ Go BFF 聚合后端 (:8085，仅 HTTP；本进程无 gRPC 服务端)
   app-lz-bff:
     build:
       context: ../..
@@ -163,7 +189,8 @@ services:
     container_name: privshield-app-lz-bff
     ports:
       - "8085:8085"
-      - "50055:50055"
+    # 注：原先此处的 "50055:50055" 是从 console/bff-go gRPC 端口抄来的配置漂移——
+    # 本 BFF 没有 gRPC 服务端，且两栈同起时端口冲突，已按 P2-1 删除。
     environment:
       APP_LZ_HOST: "0.0.0.0"
       APP_LZ_PORT: "8085"
@@ -175,6 +202,12 @@ services:
       APP_LZ_AUDIT_GRPC: "audit-log:50054"
       APP_LZ_AGENT_URL: "http://PrivShield:8079"
       APP_LZ_AGENT_GRPC: "PrivShield:50051"
+      # ── P0-1：入站 Key + 四个上游出站 Key（须与对端入站值一致，否则 401）──
+      APP_LZ_API_KEY: "${APP_LZ_API_KEY:-dev-app-lz-bff-key}"
+      APP_LZ_HUB_API_KEY: "${SERVICE_HUB_API_KEY:-dev-service-hub-key}"
+      APP_LZ_DATASOURCE_API_KEY: "${DATASOURCE_MGR_API_KEY:-dev-datasource-key}"
+      APP_LZ_AUDIT_API_KEY: "${AUDIT_LOG_API_KEY:-dev-audit-key}"
+      APP_LZ_AGENT_API_KEY: "${PRIVSHIELD_ENGINE_API_KEY:-dev-engine-key}"
     depends_on:
       PrivShield:
         condition: service_healthy

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/big"
 	"net"
@@ -428,6 +429,28 @@ func TestPublicKeysEqualDifferentTypes(t *testing.T) {
 // gRPC Server Method Tests / gRPC 服务方法单元测试
 // ─────────────────────────────────────────────────────────────
 
+// newMockAuditLogServer starts a minimal audit-log stub that accepts POST /api/audit/logs
+// and returns a 201 Created response with a valid-looking evidence record.
+// newMockAuditLogServer 启动一个接受存证写入的最小 audit-log 占位服务，用于测试流水线 audit 阶段。
+func newMockAuditLogServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/audit/logs" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":             "audit-" + fmt.Sprintf("%d", time.Now().UnixNano()),
+			"snapshot_id":    "snap-" + fmt.Sprintf("%d", time.Now().UnixNano()),
+			"integrity_hash": "deadbeef" + strings.Repeat("0", 56),
+			"prev_hash":      "cafebabe" + strings.Repeat("0", 56),
+			"via":            "audit-log-mock",
+		})
+	}))
+}
+
 // setupTestGRPCServer initializes a test GRPCServer with optional mock agent.
 // setupTestGRPCServer 初始化测试用 GRPCServer 实例与 Mock Upstream Agent。
 func setupTestGRPCServer(t *testing.T, agentHandler http.HandlerFunc) (*GRPCServer, *httptest.Server, store.TaskStore) {
@@ -451,7 +474,9 @@ func setupTestGRPCServer(t *testing.T, agentHandler http.HandlerFunc) (*GRPCServ
 		}))
 	}
 
+	auditMock := newMockAuditLogServer(t)
 	t.Setenv("PRIVACY_AGENT_URLS", mockServer.URL)
+	t.Setenv("SERVICE_HUB_AUDIT_LOG_URLS", auditMock.URL)
 	cfg := config.Load()
 	mc := metrics.NewCollector("service-hub-grpc-test")
 	ag := agent.New(cfg, mc)
@@ -532,10 +557,32 @@ func TestGRPCServer_Dispatch(t *testing.T) {
 		}
 	})
 
-	t.Run("Validation_EmptyOperation", func(t *testing.T) {
+	// "test.csv" 不在 canonical 注册表内 → 归一化失败即拒绝（P1-1 source 归一化）。
+	t.Run("Validation_UnknownSource", func(t *testing.T) {
 		_, err := srv.Dispatch(ctx, &pb.DispatchRequest{Source: "test.csv"})
 		if status.Code(err) != codes.InvalidArgument {
 			t.Errorf("expected InvalidArgument, got: %v", err)
+		}
+	})
+
+	t.Run("Validation_InvalidOperation", func(t *testing.T) {
+		_, err := srv.Dispatch(ctx, &pb.DispatchRequest{Source: "yibao.csv", Operation: "not_an_operator"})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Errorf("expected InvalidArgument for unknown operation, got: %v", err)
+		}
+	})
+
+	// P1-1：operation 降级为可选「强度提示」，生效算子由定级推导，因此缺省必须受理。
+	t.Run("Validation_OperationIsOptional", func(t *testing.T) {
+		resp, err := srv.Dispatch(ctx, &pb.DispatchRequest{
+			Source:      "yibao.csv",
+			PayloadJson: `{"name":"张三"}`,
+		})
+		if err != nil {
+			t.Fatalf("dispatch without operation must be accepted: %v", err)
+		}
+		if resp.TaskId == "" {
+			t.Fatalf("expected non-empty task_id, got %+v", resp)
 		}
 	})
 
@@ -569,8 +616,12 @@ func TestGRPCServer_Dispatch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetTask failed: %v", err)
 		}
-		if task.Id != resp.TaskId || task.Source != "yibao.csv" {
-			t.Errorf("task retrieved mismatch: %+v", task)
+		if task.Id != resp.TaskId {
+			t.Errorf("task id mismatch: %+v", task)
+		}
+		// 入站 source 会经 naming 归一化为 canonical datasource_id。
+		if task.Source != "ds_yibao" {
+			t.Errorf("expected normalized source ds_yibao, got %q", task.Source)
 		}
 	})
 }
@@ -733,6 +784,7 @@ func TestGRPCServer_ProcessTask_StopsWhenStatePersistenceFails(t *testing.T) {
 }
 
 func TestGRPCServer_LeaseWorkerClaimsAndCompletesPendingTask(t *testing.T) {
+	auditMock := newMockAuditLogServer(t)
 	taskStore := newLeaseWorkerTestStore(&store.Task{
 		ID:        "leased-task",
 		Status:    "pending",
@@ -741,7 +793,12 @@ func TestGRPCServer_LeaseWorkerClaimsAndCompletesPendingTask(t *testing.T) {
 		Operation: "none",
 		CreatedAt: time.Now(),
 	})
-	server := New(nil, nil, &config.Config{PGDSN: "postgres://test", LeaseTTL: 1}, taskStore, slog.Default())
+	server := New(nil, nil, &config.Config{
+		PGDSN:            "postgres://test",
+		LeaseTTL:         1,
+		AuditLogBaseURLs: []string{auditMock.URL},
+		AuditLogTimeout:  1,
+	}, taskStore, slog.Default())
 	defer server.Shutdown()
 
 	if err := server.StartLeaseWorker("hub-test", time.Second); err != nil {
@@ -871,18 +928,22 @@ func TestGRPCServer_ProcessTask_FailureBranches(t *testing.T) {
 }
 
 func TestGRPCServer_LocalPendingWorker(t *testing.T) {
+	auditMock := newMockAuditLogServer(t)
 	taskStore := memory.NewTaskStore()
-	server := New(nil, nil, &config.Config{}, taskStore, slog.Default())
+	server := New(nil, nil, &config.Config{
+		AuditLogBaseURLs: []string{auditMock.URL},
+		AuditLogTimeout:  1,
+	}, taskStore, slog.Default())
 	defer server.Shutdown()
 
 	task := &store.Task{
-		ID:          "grpc-recovered-task",
-		Status:      "pending",
-		Stage:       "queued",
-		Source:      "test-source",
-		Operation:   "none",
-		PayloadJSON: `{}`,
-		CreatedAt:   time.Now(),
+		ID:        "grpc-recovered-task",
+		Status:    "pending",
+		Stage:     "queued",
+		Source:    "test-source",
+		Operation: "none",
+		// 空载荷避免在 agent 为 nil 的测试路径中进入 engine 分类 stage。
+		CreatedAt: time.Now(),
 	}
 	if err := taskStore.Save(task); err != nil {
 		t.Fatalf("save task: %v", err)

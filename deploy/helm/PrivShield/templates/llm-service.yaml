@@ -2,7 +2,8 @@
 # Layer-3 LLM 推理服务 Service（llm-service.yaml）
 # =============================================================================
 # 为 LLM Deployment 提供集群内部稳定访问入口（<fullname>-llm:<port>）。
-# core 通过 PRIVACY_LLM_API_BASE 环境变量调用（已由 deployment.yaml 注入）。
+# core 通过环境变量调用（deployment.yaml 按 engineType 注入）：Go 引擎为 PRIVACY_LLM_ENDPOINT
+# （完整 /v1/chat/completions URL），Python 引擎为 PRIVACY_LLM_API_BASE（到 /v1 为止）。
 # 仅在 llm.enabled=true 时创建。
 # =============================================================================
 {{- if .Values.llm.enabled }}

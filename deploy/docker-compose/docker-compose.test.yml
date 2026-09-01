@@ -44,7 +44,10 @@ services:
       PRIVACY_PROFILE: "/etc/PrivShield/privacy-profile.yaml"
       PRIVACY_BUDGET_DB: "/data/budget/test-budget.db"
       PRIVACY_TLS_ENABLED: "false"
-      PRIVACY_AUTH_ENABLED: "false"
+      # P0-1 零信任默认态：0.0.0.0 监听 ⇒ 必须配置入站 Key（留空即拒绝启动，不存在静默放行态）。
+      # test-runner 用同一把 key 调用受保护的 /v1/privacy/* 接口；/health 与 /readyz 探活豁免。
+      PRIVACY_AUTH_ENABLED: "true"
+      PRIVACY_AUTH_INTERNAL_API_KEYS: "${PRIVACY_TEST_ENGINE_KEY:-test-engine-key}:ci-test-runner:*"
       PRIVACY_RATE_LIMIT_ENABLED: "false"
     volumes:
       - ./privacy-profile.yaml:/etc/PrivShield/privacy-profile.yaml:ro
@@ -71,6 +74,9 @@ services:
       PRIVACY_AGENT_GRPC_HOST: "PrivShield"
       PRIVACY_AGENT_GRPC_PORT: "50051"
       PRIVACY_AGENT_URL: "http://PrivShield:8079"
+      # P0-1：0.0.0.0 监听 ⇒ BFF 自身入站 Key 必填；调用引擎时带引擎的 test key。
+      CONSOLE_API_KEY: "${CONSOLE_API_KEY:-test-console-key}"
+      PRIVACY_AGENT_API_KEY: "${PRIVACY_TEST_ENGINE_KEY:-test-engine-key}"
     depends_on:
       PrivShield:
         condition: service_healthy
@@ -87,6 +93,9 @@ services:
   test-runner:
     image: curlimages/curl:latest
     container_name: PrivShield-test-runner
+    # 与引擎侧 PRIVACY_AUTH_INTERNAL_API_KEYS 的 token 保持一致（P0-1 默认开启鉴权）
+    environment:
+      PRIVACY_TEST_ENGINE_KEY: "${PRIVACY_TEST_ENGINE_KEY:-test-engine-key}"
     depends_on:
       PrivShield:
         condition: service_healthy
@@ -114,6 +123,7 @@ services:
         echo "3. 测试差分隐私 DP count 接口..."
         DP_RES=$$(curl -fsS -X POST http://PrivShield:8079/v1/privacy/dp/count \
           -H "Content-Type: application/json" \
+          -H "Authorization: Bearer $${PRIVACY_TEST_ENGINE_KEY}" \
           -d '{"values": [1, 0, 1, 1, 0], "params": {"epsilon": 1.0}}')
         echo "   DP Result: $$DP_RES"
         echo "   -> DP count API [PASS]"
@@ -121,6 +131,7 @@ services:
         echo "4. 测试字段脱敏 Mask 接口..."
         MASK_RES=$$(curl -fsS -X POST http://PrivShield:8079/v1/privacy/mask \
           -H "Content-Type: application/json" \
+          -H "Authorization: Bearer $${PRIVACY_TEST_ENGINE_KEY}" \
           -d '{"field_name": "mobile", "value": "13800138000", "context": "medical"}')
         echo "   Mask Result: $$MASK_RES"
         echo "   -> Mask API [PASS]"

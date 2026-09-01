@@ -55,8 +55,14 @@ security:
   auth:
     # 【差异 5：身份认证】开发环境默认关闭；生产环境强制启用 API Key 认证，未携带有效 Key 将返回 401
     enabled: true
-    # 【差异 6：认证凭据管理】必须通过外部自管 Secret 注入（包含 api-keys.json 数据键）
+    # 【差异 6：认证凭据管理】必须通过外部自管 Secret 注入（数据键 api-keys，
+    # 值格式 token:name:scope1,scope2;…，注入 PRIVACY_AUTH_INTERNAL_API_KEYS；
+    # 旧的 api-keys.json 对应的 PRIVACY_AUTH_EXTERNAL_KEYS_JSON 在 Go 侧从不被读取，已停用）
     apiKeysSecret: ""   # 必填：部署时通过 --set security.auth.apiKeysSecret=... 指定
+    internalMtls:
+      # 【P0-1 红线】TLS 开启 + 引擎监听 gRPC ⇒ 必须挂 CN 白名单 ConfigMap，
+      # 否则白名单拦截器根本不注册（等同未做身份鉴别），启动门禁会直接拒绝启动
+      whitelistConfigMap: ""  # 必填：部署时通过 --set security.auth.internalMtls.whitelistConfigMap=... 指定
   rateLimit:
     # 【差异 7：请求限速】开发环境默认关闭；生产环境强制启用速率限制，防止接口滥用与突发雪崩
     enabled: true

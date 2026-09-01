@@ -130,6 +130,12 @@ func CanonicalizePIIField(fieldName string) string {
 
 // ──────────────────────────────────────────────
 // ICD-10 高危诊断编码治理
+//
+// 分级口径的唯一事实源是 rules/domains/medical.yaml 的 RULE_MED_ICD10.intervals
+// （整改项 P1-4：SDK 与规则库双源分歧收敛）。下方逐区间的 level / category 与该表
+// 一一对应，由 medical/icd10_yaml_consistency_test.go 在全编码空间断言差异数为 0，
+// 不得只在本文件单方面改动等级或范畴。
+// category 取值是 rules/taxonomies/default.yaml 的分类体系标识（非本包 FieldCategory）。
 // ──────────────────────────────────────────────
 
 // ICD10FieldNames 诊断编码字段名集合
@@ -145,7 +151,8 @@ var ICD10FieldNames = map[string]bool{
 var icd10Regex = regexp.MustCompile(`^\s*([A-Za-z])(\d{2})(?:\.[xX\d]\d*)?\s*$`)
 
 // ClassifyICD10Code 判定 ICD-10 诊断编码的风险等级与范畴。
-// 返回 (level, category, isHit)。
+// 返回 (level, category, isHit)；未列入高危区间的合法编码 isHit=false，
+// 由调用方按 YAML 的 default_level（L3 通用编码）处置。
 func ClassifyICD10Code(code string) (string, string, bool) {
 	match := icd10Regex.FindStringSubmatch(code)
 	if match == nil {
@@ -155,31 +162,35 @@ func ClassifyICD10Code(code string) (string, string, bool) {
 	var number int
 	fmt.Sscanf(match[2], "%d", &number)
 
-	// L5 极高敏：HIV(B20-B24)、精神分裂症(F20-F29)、亨廷顿舞蹈病(G10)
-	if (letter == "B" && number >= 20 && number <= 24) ||
-		(letter == "F" && number >= 20 && number <= 29) ||
-		(letter == "G" && number == 10) {
-		return "L5", "ICD_HIGH_SENSITIVE", true
+	// L5 极高敏（抹平级）：HIV(B20-B24)、精神分裂症(F20-F29)、亨廷顿舞蹈病(G10)
+	if letter == "B" && number >= 20 && number <= 24 {
+		return "L5", "MEDICAL_ICD10_HIV", true
+	}
+	if letter == "F" && number >= 20 && number <= 29 {
+		return "L5", "MEDICAL_ICD10_PSYCHIATRIC", true
+	}
+	if letter == "G" && number == 10 {
+		return "L5", "MEDICAL_ICD10_GENERAL", true
 	}
 
 	// L4 高敏：性病(A50-A64)、肿瘤(C00-C97/D00-D48)、肝炎(B15-B19)、心梗(I21-I22)、肾衰/尿毒症(N18-N19)、慢阻肺(J44)
 	if letter == "A" && number >= 50 && number <= 64 {
-		return "L4", "ICD_INFECTIOUS", true
+		return "L4", "MEDICAL_ICD10_STD", true
 	}
 	if (letter == "C" && number >= 0 && number <= 97) || (letter == "D" && number >= 0 && number <= 48) {
-		return "L4", "ICD_NEOPLASM", true
+		return "L4", "MEDICAL_ICD10_CANCER", true
 	}
 	if letter == "B" && number >= 15 && number <= 19 {
-		return "L4", "ICD_LIVER", true
+		return "L4", "MEDICAL_ICD10_GENERAL", true
 	}
 	if letter == "I" && (number == 21 || number == 22) {
-		return "L4", "ICD_CARDIOVASCULAR", true
+		return "L4", "MEDICAL_ICD10_GENERAL", true
 	}
 	if letter == "N" && (number == 18 || number == 19) {
-		return "L4", "ICD_RENAL", true
+		return "L4", "MEDICAL_ICD10_GENERAL", true
 	}
 	if letter == "J" && number == 44 {
-		return "L4", "ICD_RESPIRATORY", true
+		return "L4", "MEDICAL_ICD10_GENERAL", true
 	}
 
 	return "", "", false

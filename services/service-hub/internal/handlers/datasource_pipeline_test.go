@@ -350,6 +350,8 @@ func setupFullIntegrationEnvironment(t *testing.T) (*hubdatasource.Client, *huba
 		DatasourceGRPCPort: dsGRPCPort,
 		MaxQueueDepth:      100,
 		ScheduleTimeout:    10,
+		// P0-6：⑥ 存证阶段真实提交，未挂桩服务时任务必然 fail-closed 失败。
+		AuditLogBaseURLs: []string{startEvidenceStub(t).server.URL},
 	}
 
 	dsClient := hubdatasource.New(hubCfg)
@@ -399,7 +401,7 @@ func TestPipeline_API1_Yibao_REST_ClassifyAndDesensitize(t *testing.T) {
 	t.Logf("   原始医保数据样本: %+v", rawRecord)
 
 	// Step 2: 发送原始数据给 Agent 进行动态分类分级
-	classifyResp, err := agentClient.Classify(ctx, rawRecord)
+	classifyResp, err := agentClient.Classify(ctx, []map[string]any{rawRecord})
 	if err != nil {
 		t.Fatalf("Agent Classify failed: %v", err)
 	}
@@ -480,7 +482,7 @@ func TestPipeline_API1_Yibao_GRPC_ClassifyAndDesensitize(t *testing.T) {
 	rawRecord := yibaoData.Records[0]
 
 	// Step 2: 发送给 Agent 评估分类分级
-	classifyResp, err := agentClient.Classify(ctx, rawRecord)
+	classifyResp, err := agentClient.Classify(ctx, []map[string]any{rawRecord})
 	if err != nil {
 		t.Fatalf("Agent Classify failed: %v", err)
 	}
@@ -532,7 +534,7 @@ func TestPipeline_API2_Kangyang_REST_ClassifyAndDesensitize(t *testing.T) {
 	t.Logf("   原始康养数据样本: %+v", rawRecord)
 
 	// Step 2: 发送给 Agent 进行动态分类分级
-	classifyResp, err := agentClient.Classify(ctx, rawRecord)
+	classifyResp, err := agentClient.Classify(ctx, []map[string]any{rawRecord})
 	if err != nil {
 		t.Fatalf("Agent Classify failed: %v", err)
 	}
@@ -583,7 +585,7 @@ func TestPipeline_API2_Kangyang_GRPC_ClassifyAndDesensitize(t *testing.T) {
 	rawRecord := kangyangData.Records[0]
 
 	// Step 2: 发送给 Agent 进行动态分类分级
-	classifyResp, err := agentClient.Classify(ctx, rawRecord)
+	classifyResp, err := agentClient.Classify(ctx, []map[string]any{rawRecord})
 	if err != nil {
 		t.Fatalf("Agent Classify failed: %v", err)
 	}

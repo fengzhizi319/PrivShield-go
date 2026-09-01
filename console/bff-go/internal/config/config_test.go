@@ -3,12 +3,14 @@ package config
 import (
 	"os"
 	"testing"
+
+	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
 )
 
-// TestGetEnvBool 验证布尔环境变量解析逻辑：
+// TestEnvBool 验证 pkgconfig.EnvBool 布尔环境变量解析逻辑：
 // 真值字面量（true/1/yes/on，大小写不敏感）返回 true，其余返回 false，
 // 未设置或为空时返回默认值。
-func TestGetEnvBool(t *testing.T) {
+func TestEnvBool(t *testing.T) {
 	cases := []struct {
 		name     string
 		value    string
@@ -32,7 +34,7 @@ func TestGetEnvBool(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			const key = "TEST_GET_ENV_BOOL"
+			const key = "TEST_ENV_BOOL"
 			if tc.set {
 				t.Setenv(key, tc.value)
 			} else {
@@ -42,9 +44,9 @@ func TestGetEnvBool(t *testing.T) {
 					t.Fatalf("unsetenv %s: %v", key, err)
 				}
 			}
-			got := getEnvBool(key, tc.def)
+			got := pkgconfig.EnvBool(key, tc.def)
 			if got != tc.expected {
-				t.Errorf("getEnvBool(%q, %v) = %v, want %v", tc.value, tc.def, got, tc.expected)
+				t.Errorf("EnvBool(%q, %v) = %v, want %v", tc.value, tc.def, got, tc.expected)
 			}
 		})
 	}

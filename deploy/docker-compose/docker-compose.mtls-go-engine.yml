@@ -17,8 +17,11 @@ services:
       PRIVACY_TLS_CA_FILE: "/certs/ca.crt"
       PRIVACY_AUTH_INTERNAL_MTLS_ENABLED: "true"
       PRIVACY_AUTH_MTLS_ALLOWED_CNS: '["privshield-client", "privacy-console-go-client"]'
+      # P0-1：TLS + gRPC 开启 ⇒ CN 白名单文件必填（缺失即拦截器不注册 → 门禁拒绝启动）
+      PRIVACY_AUTH_MTLS_WHITELIST_FILE: "/etc/PrivShield/mtls-whitelist.yaml"
     volumes:
       - ../../console/bff-go/certs:/certs:ro
+      - ../../config/mtls-whitelist.yaml:/etc/PrivShield/mtls-whitelist.yaml:ro
       - budget-db:/data/budget
     healthcheck:
       test: ["CMD-SHELL", "wget --no-check-certificate -qO- https://localhost:8079/readyz || wget --no-check-certificate -qO- https://localhost:8079/health || exit 1"]
@@ -32,7 +35,9 @@ services:
       PRIVACY_AGENT_TLS_KEY_FILE: "/certs/client.key"
       PRIVACY_AGENT_TLS_SERVER_NAME: "PrivShield"
       PRIVACY_AGENT_URL: "https://PrivShield:8079"
+      PRIVACY_AUTH_MTLS_WHITELIST_FILE: "/etc/PrivShield/mtls-whitelist.yaml"
     volumes:
       - ../../console/bff-go/certs:/certs:ro
+      - ../../config/mtls-whitelist.yaml:/etc/PrivShield/mtls-whitelist.yaml:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8081/api/health || exit 1"]

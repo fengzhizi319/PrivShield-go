@@ -1,25 +1,60 @@
+// Package agent 单元测试套件
+//
+// ==============================================================================
+// 【测试套件设计目标与覆盖范围】
+// 本测试文件验证 Package agent（上游 Agent 共享 HTTP 客户端）的核心功能与高可用保障：
+//  1. 【基础配置与初始化】：验证默认值兜底（30s 超时、5 次失败阈值、30s 冷却）与自定义配置生效；
+//  2. 【HTTP 通信与协议】：验证 GET/POST 请求、健康检查 Health()、JSON 序列化与反序列化；
+//  3. 【请求头注入与追踪】：验证 APIKey Bearer Token 注入、X-Request-ID 显式与 Context 透传；
+//  4. 【多节点负载均衡】：验证多节点集群配置下 Round-Robin 算法请求分布的绝对均匀性；
+//  5. 【三态熔断器完整生命周期】：
+//     - 连续失败达到阈值进入 Open，本地快速阻断请求；
+//     - 冷却时间过后进入 Half-Open 允许单请求试探；
+//     - 试探失败重新回退 Open；试探成功恢复 Closed；
+//     - 间歇性成功调用重置失败计数，防止误熔断；
+//     - 4xx 客户端参数/业务错误不计入服务端节点故障，绝不误触发熔断。
+//  6. 【结构化重试判定（P2-7）】：验证重试与否由 errors.Is / errors.As 决策而非错误文案匹配 ——
+//     仅「写着 connection refused」的普通错误绝不被误判为可重试，真实类型化故障（含逐层包装者）
+//     必然可重试；并验证哨兵错误 ErrTransport / ErrCircuitOpen / ErrEndpointUnavailable 的
+//     对外错误口径与改造前逐字节一致。
+// ==============================================================================
+
 package agent
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
 
+// newTestLogger 创建一个测试专用的结构化日志器，过滤低级别日志以保持测试输出整洁。
 func newTestLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 }
 
 // ─────────────────────────────────────────────────────────────
-// Client basics / 客户端基础测试
+// 1. Client 基础配置与实例化测试
 // ─────────────────────────────────────────────────────────────
 
+// TestNew_Defaults 验证未提供可选参数时，Client 是否正确加载默认配置。
+//
+// 测试目的与断言：
+// - BaseURL 准确解析；
+// - CBThreshold 默认为 5 次连续失败；
+// - CBCooldown 默认为 30 秒。
 func TestNew_Defaults(t *testing.T) {
 	c := New(Config{BaseURL: "http://localhost:8079"})
 	if c.BaseURL() != "http://localhost:8079" {
@@ -33,6 +68,7 @@ func TestNew_Defaults(t *testing.T) {
 	}
 }
 
+// TestNew_CustomConfig 验证传入自定义配置时，所有字段正确覆盖默认值。
 func TestNew_CustomConfig(t *testing.T) {
 	c := New(Config{
 		BaseURL:     "http://example.com",
@@ -53,6 +89,7 @@ func TestNew_CustomConfig(t *testing.T) {
 	}
 }
 
+// TestBaseURL 验证单节点配置下 BaseURL() 方法能够正确返回基础地址。
 func TestBaseURL(t *testing.T) {
 	c := New(Config{BaseURL: "http://test:9090"})
 	if got := c.BaseURL(); got != "http://test:9090" {
@@ -61,9 +98,10 @@ func TestBaseURL(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// GET / POST / Health / 请求测试
+// 2. GET / POST / Health / 协议请求测试
 // ─────────────────────────────────────────────────────────────
 
+// TestGet_Success 验证标准 HTTP GET 请求的发送、响应解析与状态码校验。
 func TestGet_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -87,6 +125,7 @@ func TestGet_Success(t *testing.T) {
 	}
 }
 
+// TestPost_Success 验证标准 HTTP POST 请求的 JSON Payload 编码与响应反序列化。
 func TestPost_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -112,6 +151,7 @@ func TestPost_Success(t *testing.T) {
 	}
 }
 
+// TestPostWithRequestID 验证通过 PostWithRequestID 显式传入的追踪 ID 正确设置到 X-Request-ID 请求头。
 func TestPostWithRequestID(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rid := r.Header.Get("X-Request-ID")
@@ -130,6 +170,7 @@ func TestPostWithRequestID(t *testing.T) {
 	}
 }
 
+// TestBearerTokenInjection 验证配置 APIKey 时，请求中是否自动注入 Authorization: Bearer <key> 头。
 func TestBearerTokenInjection(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
@@ -148,6 +189,7 @@ func TestBearerTokenInjection(t *testing.T) {
 	}
 }
 
+// TestGet_AgentError 验证上游返回 500 内部错误时，Client 能够正确捕获并返回错误。
 func TestGet_AgentError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -162,6 +204,7 @@ func TestGet_AgentError(t *testing.T) {
 	}
 }
 
+// TestHealth_DelegatesToGet 验证 Health() 方法正确代理至 GET /health 请求。
 func TestHealth_DelegatesToGet(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/health" {
@@ -183,9 +226,16 @@ func TestHealth_DelegatesToGet(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Circuit Breaker / 熔断器测试
+// 3. Circuit Breaker / 熔断器生命周期状态机测试
 // ─────────────────────────────────────────────────────────────
 
+// TestCircuitBreaker_OpensAfterThreshold 验证连续失败达到阈值后，熔断器进入 Open 状态并秒级拦截后续请求。
+//
+// 测试逻辑：
+// 1. 设置 CBThreshold=2，MaxRetries=1；
+// 2. 发起 1 次请求（包含 1 次初始请求 + 1 次重试 = 2 次失败），刚好达到阈值 2；
+// 3. 断言熔断器状态切换为 "open"；
+// 4. 发起下一次请求，断言请求在进入网络前被客户端断路器直接秒级拒绝。
 func TestCircuitBreaker_OpensAfterThreshold(t *testing.T) {
 	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -227,6 +277,8 @@ func TestCircuitBreaker_OpensAfterThreshold(t *testing.T) {
 	}
 }
 
+// TestCircuitBreaker_HalfOpenAfterCooldown 验证熔断器在冷却时间过后转为 Half-Open，并允许放行一次探测请求。
+// 若探测请求仍然失败，熔断器重新回退至 Open 状态。
 func TestCircuitBreaker_HalfOpenAfterCooldown(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -262,6 +314,7 @@ func TestCircuitBreaker_HalfOpenAfterCooldown(t *testing.T) {
 	}
 }
 
+// TestCircuitBreaker_RecoveryOnSuccess 验证在 Half-Open 状态下探测请求成功后，熔断器平滑恢复至 Closed 正常状态。
 func TestCircuitBreaker_RecoveryOnSuccess(t *testing.T) {
 	var shouldFail atomic.Bool
 	shouldFail.Store(true)
@@ -309,6 +362,7 @@ func TestCircuitBreaker_RecoveryOnSuccess(t *testing.T) {
 	}
 }
 
+// TestCircuitBreaker_IntermittentSuccessResetsFailureCount 验证偶发的成功调用会重置连续失败计数器，防止偶发网络抖动导致误熔断。
 func TestCircuitBreaker_IntermittentSuccessResetsFailureCount(t *testing.T) {
 	var shouldFail atomic.Bool
 
@@ -360,6 +414,11 @@ func TestCircuitBreaker_IntermittentSuccessResetsFailureCount(t *testing.T) {
 	}
 }
 
+// ─────────────────────────────────────────────────────────────
+// 4. 多节点负载均衡与 4xx 业务错误防误熔断测试
+// ─────────────────────────────────────────────────────────────
+
+// TestMultiNode_RoundRobin 验证配置多节点时，Client 发起的请求能够通过 Round-Robin 算法绝对均匀地分发给每个节点。
 func TestMultiNode_RoundRobin(t *testing.T) {
 	var count1, count2 atomic.Int64
 
@@ -399,6 +458,11 @@ func TestMultiNode_RoundRobin(t *testing.T) {
 	}
 }
 
+// TestCircuitBreaker_ClientError4xx_NoTrip 验证客户端错误（HTTP 4xx，如 400 Bad Request）绝不触发熔断。
+//
+// 架构安全保障：
+// 4xx 代表客户端自身传入的参数、业务字段不合法，并非服务端节点宕机或网络中断。
+// 若将 4xx 计入熔断，恶意攻击者或错误客户端可通过发送大量非法请求瘫痪正常服务的网关。
 func TestCircuitBreaker_ClientError4xx_NoTrip(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
@@ -423,5 +487,340 @@ func TestCircuitBreaker_ClientError4xx_NoTrip(t *testing.T) {
 	// Circuit should still be CLOSED because 4xx does not indicate an agent server outage
 	if state := c.CircuitStateString(); state != "closed" {
 		t.Errorf("state = %s, want closed (4xx errors must not trip circuit breaker)", state)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────
+// 5. 按节点维度熔断与故障转移（P1-9）
+// ─────────────────────────────────────────────────────────────
+
+// TestPerEndpointBreaker_IsolatesDeadNode 验证单节点故障只熔断该节点：
+// 故障节点进入 Open 冷却期后，其余健康节点继续承接全部流量，聚合状态仍为 closed。
+func TestPerEndpointBreaker_IsolatesDeadNode(t *testing.T) {
+	var badCalls, goodCalls atomic.Int32
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		badCalls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("boom"))
+	}))
+	defer bad.Close()
+
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		goodCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"node": "good"})
+	}))
+	defer good.Close()
+
+	c := New(Config{
+		BaseURLs:       []string{bad.URL, good.URL},
+		CBThreshold:    2,
+		CBCooldown:     30 * time.Second,
+		MaxRetries:     1,
+		RetryBaseDelay: time.Millisecond,
+		Logger:         newTestLogger(),
+	})
+
+	succeeded := 0
+	for i := 0; i < 6; i++ {
+		if _, err := c.Get(context.Background(), "/test"); err == nil {
+			succeeded++
+		}
+	}
+
+	states := c.EndpointStates()
+	if states[bad.URL] != "open" {
+		t.Fatalf("dead node must be fused on its own breaker, got %v", states)
+	}
+	if states[good.URL] != "closed" {
+		t.Fatalf("healthy node must stay closed despite the peer outage, got %v", states)
+	}
+	if got := c.CircuitStateString(); got != "closed" {
+		t.Errorf("aggregate state = %s, want closed (one fused node must not black out the cluster)", got)
+	}
+	if succeeded == 0 {
+		t.Fatal("requests must keep succeeding on the healthy node")
+	}
+}
+
+// TestPerEndpointBreaker_AllNodesOpenFastFails 验证全集群熔断时客户端在触网前快速失败，
+// 且错误口径与单节点熔断保持一致，供上层熔断降级逻辑识别。
+func TestPerEndpointBreaker_AllNodesOpenFastFails(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("boom"))
+	}
+	srv1 := httptest.NewServer(http.HandlerFunc(handler))
+	defer srv1.Close()
+	srv2 := httptest.NewServer(http.HandlerFunc(handler))
+	defer srv2.Close()
+
+	c := New(Config{
+		BaseURLs:       []string{srv1.URL, srv2.URL},
+		CBThreshold:    1,
+		MaxRetries:     1,
+		RetryBaseDelay: time.Millisecond,
+		Logger:         newTestLogger(),
+	})
+
+	c.Get(context.Background(), "/test")
+	if got := c.CircuitStateString(); got != "open" {
+		t.Fatalf("aggregate state = %s, want open once every node is fused", got)
+	}
+
+	_, err := c.Get(context.Background(), "/test")
+	if err == nil || err.Error() != "circuit breaker open (cooldown remaining)" {
+		t.Fatalf("error = %v, want the circuit breaker fast-fail error", err)
+	}
+}
+
+// TestRetryFailoverServesFromHealthyNode 验证重试轮次会切换到其他节点，
+// 使单次上游抖动不会演变成整请求失败。
+func TestRetryFailoverServesFromHealthyNode(t *testing.T) {
+	var badCalls, goodCalls atomic.Int32
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		badCalls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte("unavailable"))
+	}))
+	defer bad.Close()
+
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		goodCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"node": "good"})
+	}))
+	defer good.Close()
+
+	c := New(Config{
+		BaseURLs:       []string{bad.URL, good.URL},
+		CBThreshold:    100,
+		MaxRetries:     1,
+		RetryBaseDelay: time.Millisecond,
+		Logger:         newTestLogger(),
+	})
+
+	for i := 0; i < 2; i++ {
+		if _, err := c.Get(context.Background(), "/test"); err != nil {
+			t.Fatalf("request %d should succeed via failover: %v", i, err)
+		}
+	}
+	if badCalls.Load() == 0 {
+		t.Fatal("expected the failing node to be attempted at least once")
+	}
+	if goodCalls.Load() < 2 {
+		t.Fatalf("expected failover to the healthy node, good=%d bad=%d", goodCalls.Load(), badCalls.Load())
+	}
+}
+
+// ─────────────────────────────────────────────────────────────
+// 6. 结构化重试判定（P2-7：errors.Is / errors.As，不再匹配错误文案）
+// ─────────────────────────────────────────────────────────────
+
+// stubTimeoutError 是一个仅通过 net.Error 接口表达「超时」的错误，
+// 其文案刻意不含 "timeout" 字样，用于证明超时判定走接口而非字符串匹配。
+type stubTimeoutError struct{ msg string }
+
+func (e stubTimeoutError) Error() string   { return e.msg }
+func (e stubTimeoutError) Timeout() bool   { return true }
+func (e stubTimeoutError) Temporary() bool { return true }
+
+// TestIsRetryableError_StructuralNotTextual 证明重试判定已完全结构化：
+// 文案「看起来像」网络故障的普通错误一律不重试，而真正的类型化错误（含被逐层包装者）必然重试。
+func TestIsRetryableError_StructuralNotTextual(t *testing.T) {
+	refused := &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
+	dnsFailure := &net.DNSError{Err: "no such host", Name: "agent", Server: "127.0.0.1", IsNotFound: true}
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		// ── 仅文案相似、结构上并非网络故障：绝不可重试（旧字符串匹配会全部误判为可重试）──
+		{name: "textual connection refused look-alike", err: errors.New("dial tcp 127.0.0.1:8079: connect: connection refused"), want: false},
+		{name: "textual reset look-alike", err: errors.New("read tcp: connection reset by peer"), want: false},
+		{name: "textual deadline look-alike", err: errors.New("context deadline exceeded"), want: false},
+		{name: "textual EOF look-alike", err: errors.New("EOF"), want: false},
+		{name: "textual closed-conn look-alike", err: errors.New("use of closed network connection"), want: false},
+		{name: "wrapped textual refused look-alike", err: fmt.Errorf("agent request failed: %w", errors.New("connection refused")), want: false},
+		{name: "4xx client error", err: errors.New("agent returned status 400: invalid argument"), want: false},
+		{name: "response parse error", err: errors.New("parse agent response: invalid character '{'"), want: false},
+		{name: "oversized response", err: errors.New("agent response too large: exceeds 67108864 bytes"), want: false},
+
+		// ── 真实类型化错误：可重试 ──
+		{name: "typed ECONNREFUSED", err: syscall.ECONNREFUSED, want: true},
+		{name: "net.OpError wrapping ECONNREFUSED", err: refused, want: true},
+		{name: "url.Error wrapping refused OpError", err: &url.Error{Op: "Post", URL: "http://127.0.0.1:8079/health", Err: refused}, want: true},
+		{name: "fmt.Errorf-wrapped refused chain", err: fmt.Errorf("agent request failed: %w", &url.Error{Op: "Get", URL: "http://x/y", Err: refused}), want: true},
+		{name: "typed ECONNRESET", err: syscall.ECONNRESET, want: true},
+		{name: "net.OpError wrapping ECONNRESET", err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}, want: true},
+		{name: "context.DeadlineExceeded", err: context.DeadlineExceeded, want: true},
+		{name: "wrapped context.DeadlineExceeded", err: fmt.Errorf("do: %w", context.DeadlineExceeded), want: true},
+		{name: "os.ErrDeadlineExceeded", err: os.ErrDeadlineExceeded, want: true},
+		{name: "io.ErrUnexpectedEOF", err: io.ErrUnexpectedEOF, want: true},
+		{name: "wrapped io.ErrUnexpectedEOF", err: fmt.Errorf("read agent response: %w", io.ErrUnexpectedEOF), want: true},
+		{name: "io.EOF", err: io.EOF, want: true},
+		{name: "net.ErrClosed", err: net.ErrClosed, want: true},
+		{name: "net.Error with Timeout()==true", err: stubTimeoutError{msg: "engine said no"}, want: true},
+
+		// ── 客户端自身的快速失败判定：绝不重试（重试只会放大出站调用）──
+		{name: "ErrCircuitOpen", err: ErrCircuitOpen, want: false},
+		{name: "wrapped ErrCircuitOpen", err: fmt.Errorf("retry blocked: %w", ErrCircuitOpen), want: false},
+		{name: "ErrEndpointUnavailable", err: ErrEndpointUnavailable, want: false},
+		{name: "wrapped ErrEndpointUnavailable", err: fmt.Errorf("pick endpoint: %w", ErrEndpointUnavailable), want: false},
+
+		// ── 传输故障整体口径：根因无法穷举（DNS/TLS/代理）也仍按瞬时故障重试 ──
+		{name: "transport-tagged DNS error", err: newTransportError(dnsFailure), want: true},
+		{name: "transport-tagged opaque error", err: newTransportError(errors.New("something odd from the proxy")), want: true},
+		{name: "nil", err: nil, want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isRetryableError(tc.err); got != tc.want {
+				t.Errorf("isRetryableError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestClassifyTransportReason 校验故障根因分类完全由类型驱动，且有界可枚举。
+func TestClassifyTransportReason(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want transportReason
+	}{
+		{name: "refused", err: os.NewSyscallError("connect", syscall.ECONNREFUSED), want: reasonConnectionRefused},
+		{name: "reset", err: &net.OpError{Op: "accept", Net: "tcp", Err: syscall.ECONNRESET}, want: reasonConnectionReset},
+		{name: "deadline exceeded", err: context.DeadlineExceeded, want: reasonTimeout},
+		{name: "socket deadline", err: os.ErrDeadlineExceeded, want: reasonTimeout},
+		{name: "net.Error timeout", err: stubTimeoutError{msg: "no keyword at all"}, want: reasonTimeout},
+		{name: "unexpected eof", err: io.ErrUnexpectedEOF, want: reasonUnexpectedEOF},
+		{name: "eof", err: &net.OpError{Op: "read", Net: "tcp", Err: io.EOF}, want: reasonUnexpectedEOF},
+		{name: "closed conn", err: net.ErrClosed, want: reasonConnClosed},
+		{name: "unclassifiable dns", err: &net.DNSError{Err: "server misbehaving", IsTemporary: true}, want: reasonUnknown},
+		{name: "plain text error", err: errors.New("connection refused"), want: reasonUnknown},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyTransport(tc.err); got != tc.want {
+				t.Errorf("classifyTransport(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTransportErrorPreservesMessageAndExposesCause 校验 transportError 既透出哨兵与根因，
+// 又不改变对外错误文案（既有依赖错误字符串的调用方与断言不受影响）。
+func TestTransportErrorPreservesMessageAndExposesCause(t *testing.T) {
+	cause := &url.Error{Op: "Post", URL: "http://127.0.0.1:8079/health", Err: &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}}
+	terr := newTransportError(cause)
+
+	if terr.Error() != cause.Error() {
+		t.Errorf("transportError.Error() = %q, want unchanged cause text %q", terr.Error(), cause.Error())
+	}
+	if !errors.Is(terr, ErrTransport) {
+		t.Error("errors.Is(terr, ErrTransport) = false, want true")
+	}
+	if !errors.Is(terr, syscall.ECONNREFUSED) {
+		t.Error("root cause must stay visible through Unwrap for errors.Is")
+	}
+	if errors.Is(terr, ErrCircuitOpen) {
+		t.Error("a transport failure must not be classified as a circuit-breaker verdict")
+	}
+	if terr.reason != reasonConnectionRefused {
+		t.Errorf("reason = %v, want %v", terr.reason, reasonConnectionRefused)
+	}
+}
+
+// TestDoTagsOutboundFailureWithTransportSentinel 用真实出站故障（端口未监听 → 连接被拒）
+// 验证 do() 上抛的错误可被 errors.Is 结构化识别，且文案口径保持不变。
+func TestDoTagsOutboundFailureWithTransportSentinel(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	deadURL := "http://" + ln.Addr().String()
+	if err := ln.Close(); err != nil { // 关闭监听后该端口必然拒绝连接
+		t.Fatalf("close listener: %v", err)
+	}
+
+	c := New(Config{
+		BaseURL:        deadURL,
+		CBThreshold:    100,
+		MaxRetries:     1,
+		RetryBaseDelay: time.Millisecond,
+		Logger:         newTestLogger(),
+	})
+
+	_, err = c.Get(context.Background(), "/health")
+	if err == nil {
+		t.Fatal("expected an error calling a dead endpoint, got nil")
+	}
+	if !errors.Is(err, ErrTransport) {
+		t.Errorf("errors.Is(err, ErrTransport) = false, want true; err = %v", err)
+	}
+	if !errors.Is(err, syscall.ECONNREFUSED) {
+		t.Errorf("errors.Is(err, syscall.ECONNREFUSED) = false, want true; err = %v", err)
+	}
+	if errors.Is(err, ErrCircuitOpen) {
+		t.Error("err must not be a circuit-breaker fast-fail (the breaker is far from tripping)")
+	}
+	if !strings.HasPrefix(err.Error(), "agent request failed after 2 attempts: agent request failed: ") {
+		t.Errorf("error text drifted: %q", err.Error())
+	}
+}
+
+// TestClientFastFailSentinels 校验客户端自身的快速失败路径以哨兵错误表达，
+// 且错误文案与改造前逐字节一致（上层既有断言与看板口径不变）。
+func TestClientFastFailSentinels(t *testing.T) {
+	if got, want := ErrCircuitOpen.Error(), "circuit breaker open (cooldown remaining)"; got != want {
+		t.Errorf("ErrCircuitOpen text = %q, want %q", got, want)
+	}
+	if got, want := ErrEndpointUnavailable.Error(), "no agent endpoint available"; got != want {
+		t.Errorf("ErrEndpointUnavailable text = %q, want %q", got, want)
+	}
+
+	// 未配置任何上游节点 → 配置类快速失败哨兵，且判定为不可重试。
+	noEndpoint := New(Config{Logger: newTestLogger()})
+	if _, err := noEndpoint.Get(context.Background(), "/health"); !errors.Is(err, ErrEndpointUnavailable) {
+		t.Errorf("errors.Is(err, ErrEndpointUnavailable) = false, want true; err = %v", err)
+	}
+	if _, err := noEndpoint.pickEndpoint(""); isRetryableError(err) {
+		t.Error("a missing endpoint must not be classified as retryable")
+	}
+
+	// 单节点被熔断 → 熔断哨兵，且判定为不可重试（出站调用量为 0）。
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("boom"))
+	}))
+	defer srv.Close()
+
+	c := New(Config{
+		BaseURL:        srv.URL,
+		CBThreshold:    1,
+		CBCooldown:     time.Hour,
+		MaxRetries:     0,
+		RetryBaseDelay: time.Millisecond,
+		Logger:         newTestLogger(),
+	})
+	if _, err := c.Get(context.Background(), "/test"); err == nil {
+		t.Fatal("expected the first request to fail")
+	}
+	before := calls.Load()
+	_, err := c.Get(context.Background(), "/test")
+	if !errors.Is(err, ErrCircuitOpen) {
+		t.Errorf("errors.Is(err, ErrCircuitOpen) = false, want true; err = %v", err)
+	}
+	if isRetryableError(err) {
+		t.Error("a fused endpoint must not be classified as retryable")
+	}
+	if got := calls.Load(); got != before {
+		t.Errorf("upstream calls grew from %d to %d: a fused node must reject before touching the network", before, got)
 	}
 }

@@ -7,12 +7,20 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 
 	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
 )
+
+// ErrAuditEndpointRequired 表示中枢未配置任何 audit-log 存证端点，出域动作将无法留痕（P0-6）。
+// 纯环回监听的本机开发形态下启动即拒绝（loud startup rejection），避免「静默不存证」；
+// 存在非环回监听时保持启动但每一条出域任务在 audit 阶段失败（fail-closed），由 main 记录 ERROR 告警。
+var ErrAuditEndpointRequired = errors.New("audit-log evidence endpoint must be configured: set SERVICE_HUB_AUDIT_LOG_URLS (or SERVICE_HUB_AUDIT_HTTP) to the audit-log service, e.g. http://audit-log:8084")
 
 // Config holds all runtime configuration for the service-hub server.
 // Config 结构体保存数据服务调度中枢服务器运行时的所有配置项。
@@ -34,6 +42,21 @@ type Config struct {
 	DatasourceGRPCHost string // 数据源服务 gRPC 主机地址（默认 127.0.0.1）
 	DatasourceGRPCPort int    // 数据源服务 gRPC 端口（默认 50053）
 	DatasourceAPIKey   string // 访问 datasource-mgr 所需的出站 API Key（可选）
+
+	// ── P0-6: 出域 ↔ 存证代码级绑定（service-hub ➔ audit-log 存证客户端）──
+	// 流水线第 ⑥ 阶段（audit）必须真实写入一条存证；提交失败即任务失败，禁止静默完成。
+	AuditLogBaseURLs    []string // audit-log REST 基础地址列表（多副本轮询；空即未配置）
+	AuditLogAPIKey      string   // audit-log 入站鉴权 Key（以 Authorization: Bearer 提交）
+	AuditLogTimeout     int      // 单次存证提交超时秒数（默认 10）
+	AuditLogMaxRetries  int      // 网络错误/5xx 的存证重试次数（默认 3；显式 0 = 不重试）
+	AuditLogTLSEnabled  bool     // 是否以 TLS 1.3（可选双向证书）访问存证节点
+	AuditLogTLSCertFile string   // 存证客户端证书 PEM 路径（为空回退 SERVICE_HUB_TLS_CERT_FILE）
+	AuditLogTLSKeyFile  string   // 存证客户端私钥 PEM 路径（为空回退 SERVICE_HUB_TLS_KEY_FILE）
+	AuditLogTLSCAFile   string   // 校验 audit-log 服务端证书的根 CA 路径（为空回退 SERVICE_HUB_TLS_CA_FILE）
+
+	// RequireTLS 由部署方显式声明「本服务必须启用 TLS」（生产编排），
+	// 而 TLSEnabled 仍为 false 时启动即失败（P0-1 零信任默认态）。
+	RequireTLS bool // 环境变量 SERVICE_HUB_REQUIRE_TLS（默认 false）
 
 	// gRPC 远程过程调用服务网络监听参数
 	GRPCHost string // gRPC 监听主机地址（默认 127.0.0.1）
@@ -58,6 +81,12 @@ type Config struct {
 	DBPath      string   // SQLite 任务数据库文件物理路径（为空表示使用进程内内存存储）
 	LogFormat   string   // 日志输出格式："json"（生产推荐）或 "text"（开发可读）
 	LogLevel    string   // 日志输出级别："debug", "info", "warn", "error"
+
+	// StrictStorage 严格存储模式（P0-4 禁静音降级）：为真时，已配置 SERVICE_HUB_PG_DSN
+	// 却探测失败的进程**拒绝启动**，而不是静默回退到 SQLite/内存 —— 后者会让多副本 Hub
+	// 在无人察觉的情况下失去租约语义（ErrLeaseNotSupported），任务被两副本同时领取。
+	// 默认 true，可用 SERVICE_HUB_STRICT_STORAGE=false 显式放宽（仅容开发/演练环境）。
+	StrictStorage bool
 
 	// Data retention / 数据保留策略
 	RetentionDays int // 终态任务保留天数，超期自动清理（0 = 不清理）
@@ -98,6 +127,23 @@ func Load() *Config {
 		DatasourceGRPCPort: pkgconfig.EnvInt("DATASOURCE_MGR_GRPC_PORT", 50053),
 		DatasourceAPIKey:   pkgconfig.EnvString("SERVICE_HUB_DATASOURCE_API_KEY", ""),
 
+		// ── P0-6: 出域存证客户端（audit-log 服务）──
+		// 端点解析顺序：SERVICE_HUB_AUDIT_LOG_URLS（逗号分隔多副本）
+		// ➔ SERVICE_HUB_AUDIT_HTTP（docker-compose.app-lz.yml 已注入的别名）
+		// ➔ 默认与内置编排一致的全栈服务地址 http://audit-log:8084。
+		AuditLogBaseURLs: auditLogURLsFromEnv(),
+		// Key 解析顺序：SERVICE_HUB_AUDIT_LOG_API_KEY ➔ AUDIT_LOG_API_KEY（存证服务自身的入站密钥）。
+		AuditLogAPIKey:      auditLogAPIKeyFromEnv(),
+		AuditLogTimeout:     pkgconfig.EnvInt("SERVICE_HUB_AUDIT_LOG_TIMEOUT", 10),
+		AuditLogMaxRetries:  pkgconfig.EnvInt("SERVICE_HUB_AUDIT_LOG_MAX_RETRIES", 3),
+		AuditLogTLSEnabled:  pkgconfig.EnvBool("SERVICE_HUB_AUDIT_LOG_TLS_ENABLED", false),
+		AuditLogTLSCertFile: pkgconfig.EnvString("SERVICE_HUB_AUDIT_LOG_TLS_CERT_FILE", ""),
+		AuditLogTLSKeyFile:  pkgconfig.EnvString("SERVICE_HUB_AUDIT_LOG_TLS_KEY_FILE", ""),
+		AuditLogTLSCAFile:   pkgconfig.EnvString("SERVICE_HUB_AUDIT_LOG_TLS_CA_FILE", ""),
+
+		// P0-1 零信任默认态：生产编排显式声明必须 TLS。
+		RequireTLS: pkgconfig.EnvBool("SERVICE_HUB_REQUIRE_TLS", false),
+
 		// gRPC 服务监听参数（默认 127.0.0.1:50052）
 		GRPCHost: pkgconfig.EnvString("SERVICE_HUB_GRPC_HOST", "127.0.0.1"),
 		GRPCPort: pkgconfig.EnvInt("SERVICE_HUB_GRPC_PORT", 50052),
@@ -122,6 +168,9 @@ func Load() *Config {
 		LogFormat:   pkgconfig.EnvString("SERVICE_HUB_LOG_FORMAT", "json"),
 		LogLevel:    pkgconfig.EnvString("SERVICE_HUB_LOG_LEVEL", "info"),
 
+		// P0-4 禁静音降级：默认严格，专用变量优先于全局变量。
+		StrictStorage: pkgconfig.EnvBool("SERVICE_HUB_STRICT_STORAGE", pkgconfig.EnvBool("STRICT_STORAGE", true)),
+
 		// Data retention / 数据保留策略（默认 30 天）
 		RetentionDays: pkgconfig.EnvInt("SERVICE_HUB_RETENTION_DAYS", 30),
 
@@ -141,8 +190,17 @@ func Load() *Config {
 }
 
 // Validate checks that the configuration is consistent and all required files exist.
-// Validate 校验配置一致性：当 TLS 启用时确认证书/私钥文件存在，
-// 在启动早期快速失败并给出清晰错误信息，避免运行时才暴露配置问题。
+// Validate 校验配置一致性并在启动早期快速失败：
+//
+//  1. TLS 启用时确认证书/私钥文件存在；
+//  2. 出域存证（P0-6）：
+//     - 启用存证 TLS 时确认客户端证书/私钥/CA 可读；
+//     - 未配置任何 audit-log 端点时，若全部监听地址均为环回（本机开发形态）→ 直接拒绝启动，
+//     避免「无存证链路却自以为已留痕」；若存在非环回监听 → 允许启动（由 main 记录 ERROR 告警），
+//     但流水线 audit 阶段会让每一条出域任务失败（fail-closed），数据不可能无声出域；
+//  3. 零信任默认态（P0-1）：统一委托 pkgconfig.ValidateFailClosed ——
+//     非环回监听必须配置入站 API Key、RequireTLS 必须真正启用 TLS、
+//     gRPC 启用 TLS 时必须提供 mTLS CN 白名单文件。
 func (c *Config) Validate() error {
 	if c.TLSEnabled {
 		if c.TLSCertFile == "" {
@@ -158,7 +216,112 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("TLS key file not accessible: %s: %w", c.TLSKeyFile, err)
 		}
 	}
-	return nil
+
+	if c.AuditLogTLSEnabled {
+		certFile := firstConfigured(c.AuditLogTLSCertFile, c.TLSCertFile)
+		keyFile := firstConfigured(c.AuditLogTLSKeyFile, c.TLSKeyFile)
+		caFile := firstConfigured(c.AuditLogTLSCAFile, c.TLSCAFile)
+		if certFile == "" || keyFile == "" {
+			return fmt.Errorf("audit-log evidence TLS enabled but no client certificate/key pair is configured " +
+				"(set SERVICE_HUB_AUDIT_LOG_TLS_CERT_FILE and SERVICE_HUB_AUDIT_LOG_TLS_KEY_FILE, or the SERVICE_HUB_TLS_* fallbacks)")
+		}
+		for _, path := range []string{certFile, keyFile, caFile} {
+			if path == "" {
+				continue
+			}
+			if _, err := os.Stat(path); err != nil {
+				return fmt.Errorf("audit-log evidence TLS file not accessible: %s: %w", path, err)
+			}
+		}
+	}
+
+	if len(c.AuditLogURLs()) == 0 && loopbackOnlyBind(c.Host, c.GRPCHost) {
+		return fmt.Errorf("service-hub: %w", ErrAuditEndpointRequired)
+	}
+
+	return pkgconfig.ValidateFailClosed(pkgconfig.SecurityRequirements{
+		ServiceName:       "service-hub",
+		Hosts:             []string{c.Host, c.GRPCHost},
+		APIKey:            c.APIKey,
+		TLSEnabled:        c.TLSEnabled,
+		RequireTLS:        c.RequireTLS,
+		GRPCEnabled:       true, // 中枢进程始终监听 gRPC（默认 :50052）
+		MTLSWhitelistFile: c.MTLSWhitelistFile,
+	})
+}
+
+// auditLogURLsFromEnv resolves the evidence endpoint list from the environment.
+// auditLogURLsFromEnv 按 SERVICE_HUB_AUDIT_LOG_URLS ➔ SERVICE_HUB_AUDIT_HTTP ➔ 内置编排默认值解析。
+func auditLogURLsFromEnv() []string {
+	if urls := pkgconfig.EnvStringSlice("SERVICE_HUB_AUDIT_LOG_URLS"); len(urls) > 0 {
+		return urls
+	}
+	if single := pkgconfig.EnvString("SERVICE_HUB_AUDIT_HTTP", ""); single != "" {
+		return []string{single}
+	}
+	return []string{"http://audit-log:8084"}
+}
+
+// auditLogAPIKeyFromEnv resolves the outbound evidence API key.
+// auditLogAPIKeyFromEnv 优先读取中枢专用变量，回退到 audit-log 服务自身的入站密钥变量，
+// 使单机/同命名空间部署只需注入一次 AUDIT_LOG_API_KEY 即可打通存证链路。
+func auditLogAPIKeyFromEnv() string {
+	if key := pkgconfig.EnvString("SERVICE_HUB_AUDIT_LOG_API_KEY", ""); key != "" {
+		return key
+	}
+	return pkgconfig.EnvString("AUDIT_LOG_API_KEY", "")
+}
+
+// AuditLogURLs returns the configured audit-log evidence endpoints (no hidden defaults).
+// AuditLogURLs 返回已配置的存证端点列表（自动剔除空白项）；未配置时返回 nil，
+// 由调用方按 fail-closed 处理。剔除规则与 audit 客户端构造期的 trimURLs 保持一致，
+// 避免「Validate 认为已配置、客户端认为未配置」的双重口径。
+func (c *Config) AuditLogURLs() []string {
+	if c == nil {
+		return nil
+	}
+	urls := make([]string, 0, len(c.AuditLogBaseURLs))
+	for _, u := range c.AuditLogBaseURLs {
+		if strings.TrimSpace(u) != "" {
+			urls = append(urls, u)
+		}
+	}
+	if len(urls) == 0 {
+		return nil
+	}
+	return urls
+}
+
+// AuditLogTimeoutDuration exposes the per-submission evidence timeout.
+// AuditLogTimeoutDuration 返回单次存证提交的超时时间（非正值回退 10s）。
+func (c *Config) AuditLogTimeoutDuration() time.Duration {
+	seconds := 10
+	if c != nil && c.AuditLogTimeout > 0 {
+		seconds = c.AuditLogTimeout
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+// loopbackOnlyBind reports whether every configured listen host is loopback-only.
+// loopbackOnlyBind 判断给定的全部监听地址是否均为环回（仅本机可访问）。
+func loopbackOnlyBind(hosts ...string) bool {
+	for _, h := range hosts {
+		if !pkgconfig.IsLoopbackHost(h) {
+			return false
+		}
+	}
+	return true
+}
+
+// firstConfigured returns the first non-empty trimmed value.
+// firstConfigured 返回第一个非空（去空白）配置值。
+func firstConfigured(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 // Address returns the full HTTP listen address formatted as "host:port".

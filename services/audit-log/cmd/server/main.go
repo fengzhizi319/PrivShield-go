@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,9 +24,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
+	pkggrpcserver "github.com/fengzhizi319/PrivShield/pkg/grpcserver"
 	"github.com/fengzhizi319/PrivShield/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield/pkg/naming"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 	"github.com/fengzhizi319/PrivShield/pkg/store"
 	"github.com/fengzhizi319/PrivShield/pkg/store/flusher"
 	"github.com/fengzhizi319/PrivShield/pkg/store/memory"
@@ -34,6 +36,7 @@ import (
 	"github.com/fengzhizi319/PrivShield/pkg/tlsutil"
 
 	"github.com/fengzhizi319/PrivShield/services/audit-log/internal/agent"
+	"github.com/fengzhizi319/PrivShield/services/audit-log/internal/archive"
 	"github.com/fengzhizi319/PrivShield/services/audit-log/internal/config"
 	"github.com/fengzhizi319/PrivShield/services/audit-log/internal/grpcserver"
 	"github.com/fengzhizi319/PrivShield/services/audit-log/internal/handlers"
@@ -49,7 +52,19 @@ func main() {
 	}
 
 	// ── Structured logger / 结构化日志 ────────────────────────
-	logger := pkgconfig.SetupLogger(cfg.LogFormat, cfg.LogLevel)
+	pkgobs.InitLogger(cfg.LogFormat, cfg.LogLevel)
+	logger := slog.Default()
+
+	// ── Keyed evidence chain / 密钥化存证哈希（P1-2）───────────────
+	// 存证哈希密钥由局方托管注入；未注入时退回无密钥 SM3，只能证明「未被误改」，
+	// 无法阻止知悉前映像口径者重算哈希，因此生产环境必须配置 AUDIT_LOG_HASH_KEY。
+	store.SetAuditChainKey(cfg.HashKey)
+	if store.AuditChainKey() == "" {
+		logger.Warn("evidence hash chain runs un-keyed (SM3); set AUDIT_LOG_HASH_KEY to the 局方托管 secret so records become forge-proof",
+			"hash_algo", store.ComputeAuditIntegrityHashAlgo())
+	} else {
+		logger.Info("evidence hash chain keyed", "hash_algo", store.ComputeAuditIntegrityHashAlgo())
+	}
 
 	// ── SQLite Integrity Check / SQLite 完整性校验 ──────────────
 	// 启动时校验 SQLite 数据库完整性，检测损坏并阻止服务启动。
@@ -75,12 +90,12 @@ func main() {
 	// ── Agent client / Agent 客户端 ────────────────────────────
 	agentClient := agent.New(cfg)
 
-	// ── Data Retention Cleanup / 数据保留清理协程 ───────────────
-	// 启动后台协程，每 6 小时扫描并清理超过保留期的审计日志，防止 SQLite 无限膨胀。
-	// RetentionDays=0 时禁用清理（适用于调试或短期部署）。
+	// ── Data Retention Cleanup / 存证留存清理协程 ────────────────
+	// 每 6 小时执行一次「先归档后删除」：到期存证先写成加密且可独立验真的归档段，再删除。
+	// RetentionDays=0（默认）永不清理，存证证据始终留在库内。
 	retentionCtx, retentionCancel := context.WithCancel(context.Background())
 	if cfg.RetentionDays > 0 {
-		go auditRetentionLoop(retentionCtx, auditStore, logger, cfg.RetentionDays)
+		go auditRetentionLoop(retentionCtx, auditStore, logger, cfg)
 	}
 
 	// ── HTTP REST Server / HTTP REST 服务器 ──────────────────────
@@ -110,7 +125,7 @@ func main() {
 	}
 
 	// ── gRPC Server (with optional mTLS) / gRPC 服务器（可选 mTLS）──
-	var grpcServer *grpc.Server
+	var grpcServer *pkggrpcserver.Server
 	var serviceImpl *grpcserver.GRPCServer
 
 	// Production hardening: message size limits & keepalive (aligned with Python Agent gRPC server).
@@ -132,6 +147,8 @@ func main() {
 		}),
 	}
 
+	grpcServer = pkggrpcserver.New(cfg.GRPCAddress(), grpcServerOpts...)
+
 	// mTLS CN whitelist authorization for inbound gRPC connections.
 	if cfg.MTLSWhitelistFile != "" {
 		unaryInterceptor, streamInterceptor, dw, err := tlsutil.NewWhitelistInterceptor(cfg.MTLSWhitelistFile)
@@ -139,10 +156,9 @@ func main() {
 			log.Fatalf("failed to load mTLS whitelist: %v", err)
 		}
 		defer dw.Close()
-		grpcServerOpts = append(grpcServerOpts,
-			grpc.UnaryInterceptor(unaryInterceptor),
-			grpc.StreamInterceptor(streamInterceptor),
-		)
+		grpcServer = grpcServer.
+			WithUnaryInterceptor(unaryInterceptor).
+			WithStreamInterceptor(streamInterceptor)
 		logger.Info("gRPC server configured with mTLS CN whitelist",
 			"path", cfg.MTLSWhitelistFile,
 		)
@@ -153,18 +169,17 @@ func main() {
 		if credErr != nil {
 			log.Fatalf("failed to build TLS credentials: %v", credErr)
 		}
-		grpcServer = grpc.NewServer(append(grpcServerOpts, grpc.Creds(creds))...)
+		grpcServer = grpcServer.WithOptions(grpc.Creds(creds))
 		serviceImpl = grpcserver.New(agentClient, cfg, auditStore, logger)
-		pb.RegisterAuditLogServiceServer(grpcServer, serviceImpl)
+		grpcServer.RegisterService(&pb.AuditLogService_ServiceDesc, serviceImpl)
 		logger.Info("gRPC server started with mTLS",
 			"addr", cfg.GRPCAddress(),
 			"tls_cert", cfg.TLSCertFile,
 			"tls_key", cfg.TLSKeyFile,
 		)
 	} else {
-		grpcServer = grpc.NewServer(grpcServerOpts...)
 		serviceImpl = grpcserver.New(agentClient, cfg, auditStore, logger)
-		pb.RegisterAuditLogServiceServer(grpcServer, serviceImpl)
+		grpcServer.RegisterService(&pb.AuditLogService_ServiceDesc, serviceImpl)
 		logger.Info("gRPC server started (insecure)", "addr", cfg.GRPCAddress())
 	}
 
@@ -213,7 +228,7 @@ func main() {
 	}
 
 	go func() {
-		if err := grpcServer.Serve(grpcLis); err != nil {
+		if err := grpcServer.ServeListener(grpcLis); err != nil {
 			logger.Error("gRPC server error", "error", err.Error())
 		}
 	}()
@@ -293,21 +308,56 @@ func main() {
 	}
 }
 
-// auditRetentionLoop periodically deletes audit logs older than retentionDays.
-// auditRetentionLoop 周期性删除超过保留期的审计日志及其关联快照，防止 SQLite 无限膨胀。
-func auditRetentionLoop(ctx context.Context, auditStore store.AuditStore, logger *slog.Logger, retentionDays int) {
+// auditRetentionLoop periodically archives and then deletes audit logs older than retentionDays.
+// auditRetentionLoop 周期性执行「先归档后删除」的存证留存清理：早于保留期的存证先以
+// 加密 + SM3 行哈希链的可验真归档段落盘并回读验真，随后才按归档批次精确删除。
+// 归档或验真任一失败即中止删除（fail-closed），存证证据不会静默丢失。
+func auditRetentionLoop(ctx context.Context, auditStore store.AuditStore, logger *slog.Logger, cfg *config.Config) {
 	ticker := time.NewTicker(6 * time.Hour)
 	defer ticker.Stop()
 
-	logger.Info("audit data retention cleanup started", "retention_days", retentionDays, "interval_hours", 6)
+	logger.Info("audit evidence retention cleanup started",
+		"retention_days", cfg.RetentionDays,
+		"interval_hours", 6,
+		"archive_dir", cfg.ArchiveDir,
+	)
 
-	// Run once immediately on startup / 启动时立即执行一次
-	cutoff := time.Now().AddDate(0, 0, -retentionDays)
-	if deleted, err := auditStore.CleanupOld(cutoff); err != nil {
-		logger.Error("audit retention cleanup failed", "error", err.Error())
-	} else if deleted > 0 {
-		logger.Info("audit retention cleanup completed", "deleted_logs", deleted, "retention_days", retentionDays)
+	runOnce := func() {
+		cutoff := time.Now().AddDate(0, 0, -cfg.RetentionDays)
+		archiver, err := archive.New(archive.Options{
+			ArchiveDir:    cfg.ArchiveDir,
+			EncryptionKey: cfg.EncryptionKey,
+			PageSize:      cfg.ArchivePageSize,
+		}, logger)
+		if err != nil {
+			logger.Error("retention: archive guard unavailable, deletion refused", "error", err.Error())
+			return
+		}
+		stats, err := archiver.ArchiveAndCleanup(auditStore, cutoff)
+		if err != nil {
+			var archived int64
+			var segments int
+			if stats != nil {
+				archived, segments = stats.LogsArchived, len(stats.Segments)
+			}
+			logger.Error("retention: archive-before-delete failed, deletion stopped",
+				"error", err.Error(),
+				"logs_archived", archived,
+				"segments", segments,
+			)
+			return
+		}
+		if stats.LogsArchived > 0 {
+			logger.Info("retention: expired evidence archived then deleted",
+				"logs_archived", stats.LogsArchived,
+				"snapshots_archived", stats.SnapshotsArchived,
+				"logs_deleted", stats.LogsDeleted,
+				"segments", strings.Join(stats.Segments, ","),
+			)
+		}
 	}
+
+	runOnce()
 
 	for {
 		select {
@@ -315,13 +365,7 @@ func auditRetentionLoop(ctx context.Context, auditStore store.AuditStore, logger
 			logger.Info("audit data retention cleanup stopped")
 			return
 		case <-ticker.C:
-			cutoff := time.Now().AddDate(0, 0, -retentionDays)
-			deleted, err := auditStore.CleanupOld(cutoff)
-			if err != nil {
-				logger.Error("audit retention cleanup failed", "error", err.Error())
-			} else if deleted > 0 {
-				logger.Info("audit retention cleanup completed", "deleted_logs", deleted, "retention_days", retentionDays)
-			}
+			runOnce()
 		}
 	}
 }
@@ -333,10 +377,20 @@ func initAuditStore(cfg *config.Config, logger *slog.Logger) (store.AuditStore, 
 	if cfg.PGDSN != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		pgStore, err := postgres.NewAuditStore(ctx, postgres.Config{DSN: cfg.PGDSN}, logger)
+		pgStore, err := postgres.NewAuditStore(ctx, postgres.Config{
+			DSN:     cfg.PGDSN,
+			MaxConn: int32(cfg.PGMaxConn),
+			MinConn: int32(cfg.PGMinConn),
+		}, logger)
 		if err == nil {
 			logger.Info("postgresql audit store initialized (Phase B)")
 			underlying = pgStore
+			if cfg.DBWriteOnly {
+				if err := verifyWriteOnlyPostgres(ctx, pgStore, logger); err != nil {
+					_ = pgStore.Close()
+					return nil, err
+				}
+			}
 		} else {
 			if cfg.StrictStorage {
 				return nil, fmt.Errorf("strict storage mode: PostgreSQL connection probe failed: %w", err)
@@ -347,8 +401,15 @@ func initAuditStore(cfg *config.Config, logger *slog.Logger) (store.AuditStore, 
 
 	// 2. Fallback to SQLite if PG was not used/failed and DBPath is set
 	if underlying == nil && cfg.DBPath != "" {
+		if cfg.DBWriteOnly {
+			return nil, fmt.Errorf("AUDIT_LOG_DB_WRITE_ONLY requires a PostgreSQL write-only role; SQLite file permissions cannot be self-checked, disable the flag or switch to PostgreSQL")
+		}
 		if err := sqlite.ValidateIntegrity(cfg.DBPath); err != nil {
-			logger.Warn("sqlite integrity check warning, recreating database", "path", cfg.DBPath, "error", err.Error())
+			if cfg.StrictStorage {
+				return nil, fmt.Errorf("strict storage mode: SQLite %s failed its integrity check, refusing to start or silently rebuild it: %w", cfg.DBPath, err)
+			}
+			logger.Error("sqlite integrity check failed; the database will be recreated and previously stored evidence is at risk",
+				"path", cfg.DBPath, "error", err.Error())
 		}
 		db, err := sqlite.Open(cfg.DBPath, logger)
 		if err == nil {
@@ -381,7 +442,57 @@ func initAuditStore(cfg *config.Config, logger *slog.Logger) (store.AuditStore, 
 	}
 
 	// 4. Wrap with micro-batch flusher for high-throughput concurrency
-	flusherCfg := flusher.DefaultConfig()
-	bufferedStore := flusher.NewBufferedAuditStore(underlying, flusherCfg, logger)
+	bufferedStore := flusher.NewBufferedAuditStore(underlying, flusherConfigFrom(cfg), logger)
 	return bufferedStore, nil
+}
+
+// flusherConfigFrom 以 flusher.DefaultConfig() 为基线，仅覆盖显式配置为正的参数。
+func flusherConfigFrom(cfg *config.Config) flusher.Config {
+	fc := flusher.DefaultConfig()
+	if cfg.FlushBatchSize > 0 {
+		fc.MaxBatchSize = cfg.FlushBatchSize
+	}
+	if cfg.FlushQueueSize > 0 {
+		fc.BufferSize = cfg.FlushQueueSize
+	}
+	if cfg.FlushIntervalMs > 0 {
+		fc.FlushInterval = time.Duration(cfg.FlushIntervalMs) * time.Millisecond
+	}
+	if cfg.FlushEnqueueTimeoutMs > 0 {
+		fc.EnqueueTimeout = time.Duration(cfg.FlushEnqueueTimeoutMs) * time.Millisecond
+	}
+	if cfg.FlushMaxStaged > 0 {
+		fc.MaxStaged = cfg.FlushMaxStaged
+	}
+	if cfg.FlushCloseTimeoutMs > 0 {
+		fc.CloseTimeout = time.Duration(cfg.FlushCloseTimeoutMs) * time.Millisecond
+	}
+	return fc
+}
+
+// verifyWriteOnlyPostgres 自检存证库连接角色是否为「只写不可改删」账号（P1-6）。
+// 审计表一旦被授予 UPDATE/DELETE 权限，链式存证即可被事后改写，因此自检失败即拒绝启动。
+// 前置条件：表结构由 DBA 预先执行 deploy/sql/audit_writeonly_role.sql 建好。
+func verifyWriteOnlyPostgres(ctx context.Context, pgStore *postgres.AuditStore, logger *slog.Logger) error {
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	granted := make([]string, 0, 4)
+	for _, table := range []string{"audit_logs", "snapshots"} {
+		for _, priv := range []string{"UPDATE", "DELETE"} {
+			ok, err := pgStore.HasTablePrivilege(probeCtx, table, priv)
+			if err != nil {
+				return fmt.Errorf("write-only self-check failed: %w", err)
+			}
+			if ok {
+				granted = append(granted, table+" "+priv)
+			}
+		}
+	}
+	if len(granted) > 0 {
+		return fmt.Errorf("AUDIT_LOG_DB_WRITE_ONLY=true but the connected role still holds %s; grant INSERT/SELECT only (see deploy/sql/audit_writeonly_role.sql)",
+			strings.Join(granted, ", "))
+	}
+	logger.Info("audit store write-only self-check passed", "insert_only_role", true)
+	return nil
 }

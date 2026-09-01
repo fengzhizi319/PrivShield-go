@@ -7,7 +7,7 @@
 # - 构建全套镜像：`make docker-all`
 # - 部署与打包：`make helm-lint` / `make helm-template`
 
-.PHONY: help build test test-race test-unit test-console test-go test-services test-cov check lint format \
+.PHONY: help build test test-race test-unit test-console test-go test-services test-cov check lint format taxonomy-check env-check bench \
         helm-lint helm-template docker-agent docker-services docker-console docker-all clean docs-serve docs-build docs-clean
 
 VERSION ?= 10.0.0
@@ -24,10 +24,13 @@ help:
 	@echo "  test-go        - 运行 Go 全量测试"
 	@echo "  test-services  - 运行三大中台微服务单元测试"
 	@echo "  test-race      - 运行写入路径竞态门禁 (-race: 存储缓冲器 + 审计服务)"
+	@echo "  bench          - 运行仓内性能基线 (privacy-go-sdk + engine-go, 输出含环境指纹)"
 	@echo ""
 	@echo "Quality:"
 	@echo "  lint           - go vet 静态代码检查"
 	@echo "  format         - go fmt 代码格式化"
+	@echo "  taxonomy-check - 数据分级词表一致性门禁 (P1-5)"
+	@echo "  env-check      - 编排环境变量 ↔ Go 读取点一致性门禁 (P2-1)"
 	@echo "  check          - 一键格式化与质量检查"
 	@echo ""
 	@echo "Deployment:"
@@ -63,7 +66,17 @@ format:
 		(cd $$mod && go fmt ./...) || exit 1; \
 	done
 
-check: format lint test
+check: format lint taxonomy-check env-check test
+
+# 等级词表一致性门禁（P1-5）：rules/taxonomies/default.yaml 是唯一事实源，
+# pkg/validation / pkg/naming / engine-go 三处派生口径必须与之一致。
+taxonomy-check:
+	@bash scripts/check_taxonomy_consistency.sh
+
+# 编排变量防漂移门禁（P2-1）：deploy/** 里声明的每个环境变量都必须能在 Go 代码里找到读取点，
+# 否则就是「运维改了配置却不生效」的幽灵变量（历史上曾漂出 DATASOURCE_MGR_DB_PATH 等一批）。
+env-check:
+	@bash scripts/check_orchestration_env_consistency.sh
 
 # ── Testing ──────────────────────────────────────────────────
 
@@ -84,6 +97,27 @@ test-services:
 # -race 依赖 cgo，因此这里不能沿用其它目标的 CGO_ENABLED=0。
 test-race:
 	CGO_ENABLED=1 go test -race -count=1 -timeout 900s ./pkg/store/... ./services/audit-log/...
+
+# ── Benchmarks ───────────────────────────────────────────────
+
+# 性能基线（P2-8）：只跑仓内 Go Benchmark 原语级采样，不等同端到端压测。
+# 头部记录 commit / Go 版本 / CPU 型号 / 核数 / 内核，保证报告可归因、可复现。
+BENCH_OUT ?= /tmp/privshield-bench.txt
+bench:
+	@(echo "# env"; \
+	  echo "commit=$$(git rev-parse HEAD)"; \
+	  echo "branch=$$(git rev-parse --abbrev-ref HEAD)"; \
+	  echo "dirty_files=$$(git status --porcelain | wc -l)"; \
+	  echo "date=$$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
+	  echo "go=$$(go version)"; \
+	  echo "os_arch=$$(go env GOOS)/$$(go env GOARCH)"; \
+	  echo "cpu=$$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ //')"; \
+	  echo "cores=$$(nproc)"; \
+	  echo "kernel=$$(uname -r)"; \
+	  echo; echo "# privacy-go-sdk -count=3"; \
+	  cd privacy-go-sdk && go test -run '^$$' -bench . -benchmem -count=3 ./ldp/... ./masking/... ./kano/... ./dp/...; \
+	  echo; echo "# engine-go -count=3"; \
+	  cd ../engine-go && go test -run '^$$' -bench . -benchmem -count=3 ./internal/dynclassification/... ./internal/service/...) | tee $(BENCH_OUT)
 
 # ── Docker ───────────────────────────────────────────────────
 

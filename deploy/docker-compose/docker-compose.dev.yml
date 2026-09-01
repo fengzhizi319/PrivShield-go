@@ -75,7 +75,11 @@ services:
       PRIVACY_PROFILE: "/etc/PrivShield/privacy-profile.yaml"
       PRIVACY_BUDGET_DB: "/data/budget/budget.db"
       PRIVACY_TLS_ENABLED: "false"
-      PRIVACY_AUTH_ENABLED: "false"
+      # P0-1 零信任默认态：0.0.0.0 监听 ⇒ 必须配置入站 Key，否则启动门禁拒绝启动。
+      # 开发栈因此从「AUTH=false」改成「AUTH=true + 明确命名的 dev 占位密钥」。
+      PRIVACY_AUTH_ENABLED: "true"
+      PRIVACY_AUTH_INTERNAL_API_KEYS: "${PRIVSHIELD_ENGINE_API_KEY:-dev-engine-key}:dev-compose:*"
+      # 限流在开发栈保持关闭（便于压测/联调打满）；生产编排默认 true。
       PRIVACY_RATE_LIMIT_ENABLED: "false"
       PRIVACY_LLM_PROVIDER: "${PRIVACY_LLM_PROVIDER:-vllm}"
       PRIVACY_LLM_API_BASE: "${LLM_API_BASE:-http://vllm:8000/v1}"
@@ -114,6 +118,15 @@ services:
       PRIVACY_AGENT_GRPC_HOST: "PrivShield"
       PRIVACY_AGENT_GRPC_PORT: "50051"
       PRIVACY_AGENT_URL: "http://PrivShield:8079"
+      # ── P0-1 零信任默认态（开发态密钥，可用 .env 覆盖）──
+      CONSOLE_API_KEY: "${CONSOLE_API_KEY:-dev-console-key}"
+      PRIVACY_AGENT_API_KEY: "${PRIVSHIELD_ENGINE_API_KEY:-dev-engine-key}"
+      BFF_HUB_URL: "http://service-hub:8082"
+      BFF_HUB_API_KEY: "${SERVICE_HUB_API_KEY:-dev-service-hub-key}"
+      BFF_DATASOURCE_URL: "http://datasource-mgr:8083"
+      BFF_DATASOURCE_API_KEY: "${DATASOURCE_MGR_API_KEY:-dev-datasource-key}"
+      BFF_AUDIT_URL: "http://audit-log:8084"
+      BFF_AUDIT_API_KEY: "${AUDIT_LOG_API_KEY:-dev-audit-key}"
     depends_on:
       PrivShield:
         condition: service_healthy
@@ -169,6 +182,12 @@ services:
       PRIVACY_AGENT_REST_HOST: "PrivShield"
       PRIVACY_REST_PORT: "8079"
       SERVICE_HUB_DB_PATH: "/app/data/service-hub.db"
+      # ── P0-1 零信任默认态（开发态密钥，可用 .env 覆盖）──
+      SERVICE_HUB_API_KEY: "${SERVICE_HUB_API_KEY:-dev-service-hub-key}"
+      PRIVACY_AGENT_API_KEY: "${PRIVSHIELD_ENGINE_API_KEY:-dev-engine-key}"
+      SERVICE_HUB_DATASOURCE_API_KEY: "${DATASOURCE_MGR_API_KEY:-dev-datasource-key}"
+      SERVICE_HUB_AUDIT_LOG_API_KEY: "${AUDIT_LOG_API_KEY:-dev-audit-key}"
+      # P1-8：开发栈不注入 SERVICE_HUB_PG_DSN ⇒ 中枢走 SQLite 单副本并在启动日志显式告警。
     volumes:
       - service-hub-data-dev:/app/data
     depends_on:
@@ -209,9 +228,10 @@ services:
       DATASOURCE_MGR_PORT: "8083"
       DATASOURCE_MGR_GRPC_HOST: "0.0.0.0"
       DATASOURCE_MGR_GRPC_PORT: "50053"
-      PRIVACY_AGENT_REST_HOST: "PrivShield"
-      PRIVACY_REST_PORT: "8079"
-      DATASOURCE_MGR_DB_PATH: "/app/data/datasource-mgr.db"
+      # 注：本服务**没有**数据库/存储类环境变量（原 DATASOURCE_MGR_DB_PATH 是从不被读取的幽灵变量，
+      # 已按 P2-1 删除）；同时删除本服务不读取的 PRIVACY_AGENT_REST_HOST / PRIVACY_REST_PORT。
+      # P0-1：0.0.0.0 监听 + 暴露原始样本记录 ⇒ 必须配置入站 Key。
+      DATASOURCE_MGR_API_KEY: "${DATASOURCE_MGR_API_KEY:-dev-datasource-key}"
     volumes:
       - datasource-mgr-data-dev:/app/data
     depends_on:
@@ -253,6 +273,13 @@ services:
       PRIVACY_AGENT_REST_HOST: "PrivShield"
       PRIVACY_REST_PORT: "8079"
       AUDIT_LOG_DB_PATH: "/app/data/audit-log.db"
+      # ── P0-1 启动门禁必填：入站 Key + P0-3 快照加密主密钥 + P1-2 哈希链 HMAC 密钥 ──
+      AUDIT_LOG_API_KEY: "${AUDIT_LOG_API_KEY:-dev-audit-key}"
+      AUDIT_LOG_ENCRYPTION_KEY: "${AUDIT_LOG_ENCRYPTION_KEY:-dev-audit-encryption-key-change-me}"
+      AUDIT_LOG_HASH_KEY: "${AUDIT_LOG_HASH_KEY:-dev-audit-hash-key-change-me}"
+      # P0-4：禁止静默降级到内存存储；P0-8：0 = 永不物理删除存证。
+      AUDIT_LOG_STRICT_STORAGE: "true"
+      AUDIT_LOG_RETENTION_DAYS: "0"
     volumes:
       - audit-log-data-dev:/app/data
     depends_on:
@@ -366,6 +393,8 @@ services:
     profiles: ["phase-b"]
     image: postgres:16-alpine
     container_name: privshield-phase-b-postgres-dev
+    # P2-12：套用 synchronous_commit/full_page_writes/log_checkpoints 基线；`-c ssl=off` 仅因 dev 无证书。
+    command: ["postgres", "-D", "/var/lib/postgresql/data/pgdata", "-c", "config_file=/etc/postgresql/postgresql.conf", "-c", "ssl=off"]
     ports:
       - "127.0.0.1:5432:5432"
     environment:
@@ -375,6 +404,7 @@ services:
       PGDATA: "/var/lib/postgresql/data/pgdata"
     volumes:
       - phase-b-pg-data-dev:/var/lib/postgresql/data
+      - ../postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
     networks:
       - backend
     healthcheck:

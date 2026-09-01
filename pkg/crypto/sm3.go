@@ -3,13 +3,11 @@
 package crypto
 
 import (
-	"crypto/sha256"
+	"crypto/hmac"
 	"encoding/binary"
 	"encoding/hex"
-	"fmt"
 	"hash"
 	"math/bits"
-	"time"
 )
 
 // SM3 constants
@@ -52,34 +50,21 @@ func SumSM3Hex(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// ComputeIntegrityHash computes the 9-factor integrity hash for an audit record using SM3 (UTC normalized).
-func ComputeIntegrityHash(prevHash, logID string, timestamp time.Time, algorithm, inputHash, outputHash, user, securityLevel, paramsJSON string) string {
-	data := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%v",
-		prevHash, logID, timestamp.UTC().Format(time.RFC3339Nano), algorithm,
-		inputHash, outputHash, user, securityLevel, paramsJSON)
-	return SumSM3Hex([]byte(data))
+// HMACSM3 returns the keyed SM3 message authentication code (GB/T 32918 / GM/T 0004 based HMAC).
+// HMACSM3 返回基于国密 SM3 的密钥化消息认证码，用于存证哈希链的「可验真不可伪造」锚定。
+func HMACSM3(key, data []byte) [SM3Size]byte {
+	mac := hmac.New(NewSM3, key)
+	mac.Write(data)
+	sum := mac.Sum(nil)
+	var out [SM3Size]byte
+	copy(out[:], sum)
+	return out
 }
 
-// ComputeIntegrityHashLegacySHA256 computes legacy SHA-256 integrity hash for dual-read compatibility verification.
-func ComputeIntegrityHashLegacySHA256(prevHash, logID string, timestamp time.Time, algorithm, inputHash, outputHash, user, securityLevel, paramsJSON string) string {
-	data := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%v",
-		prevHash, logID, timestamp.UTC().Format(time.RFC3339Nano), algorithm,
-		inputHash, outputHash, user, securityLevel, paramsJSON)
-	sum := sha256.Sum256([]byte(data))
+// HMACSM3Hex returns the hex-encoded keyed SM3 MAC of data.
+func HMACSM3Hex(key, data []byte) string {
+	sum := HMACSM3(key, data)
 	return hex.EncodeToString(sum[:])
-}
-
-// VerifyIntegrityHash validates that expectedHash matches either SM3 or legacy SHA-256.
-func VerifyIntegrityHash(expectedHash, prevHash, logID string, timestamp time.Time, algorithm, inputHash, outputHash, user, securityLevel, paramsJSON string) (bool, string) {
-	computedSM3 := ComputeIntegrityHash(prevHash, logID, timestamp, algorithm, inputHash, outputHash, user, securityLevel, paramsJSON)
-	if expectedHash == computedSM3 {
-		return true, computedSM3
-	}
-	computedSHA := ComputeIntegrityHashLegacySHA256(prevHash, logID, timestamp, algorithm, inputHash, outputHash, user, securityLevel, paramsJSON)
-	if expectedHash == computedSHA {
-		return true, computedSHA
-	}
-	return false, computedSM3
 }
 
 func (d *sm3Digest) Reset() {

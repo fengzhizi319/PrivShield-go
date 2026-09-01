@@ -38,9 +38,12 @@ const (
 
 // ClassificationResult 分类结果
 type ClassificationResult struct {
-	Field      string        `json:"field"`
-	Value      string        `json:"value,omitempty"`
+	Field string `json:"field"`
+	Value string `json:"value,omitempty"`
+	// Level 是引擎内部 canonical 词表（public/internal/confidential/secret/top_secret）或
+	// 规则文件原始 L 形式，取决于来源；LevelID 始终是可跨服务消费的 L1~L5 标识。
 	Level      SecurityLevel `json:"level"`
+	LevelID    string        `json:"level_id,omitempty"`
 	Category   string        `json:"category"`
 	Confidence float64       `json:"confidence"`
 	MatchedBy  string        `json:"matched_by"` // "rule:<id>" | "ner" | "llm"

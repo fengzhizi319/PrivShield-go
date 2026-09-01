@@ -1,12 +1,23 @@
-// Phase B: PostgreSQL LeasedTaskStore integration tests.
-// Phase B：PostgreSQL LeasedTaskStore 集成测试。
+// Package postgres_test provides integration tests for PostgreSQL LeasedTaskStore.
+// Package postgres_test 为 PostgreSQL LeasedTaskStore 提供完整的集成测试套件。
 //
-// 运行方式：
+// ==============================================================================
+// 【测试运行与前置条件】
+// 本集成测试依赖真实可用的 PostgreSQL 实例，通过环境变量触发：
 //
 //	PRIVSHIELD_PG_TEST_DSN="postgres://user:pass@localhost:5432/privshield_hub_test" \
 //	go test -tags=integration -v ./pkg/store/postgres/...
 //
-// 若未设置 PRIVSHIELD_PG_TEST_DSN，测试将自动跳过。
+// 若未配置 PRIVSHIELD_PG_TEST_DSN 环境变量，测试将自动安全跳过（Skip）。
+//
+// 【测试场景覆盖】
+// 1. ClaimNext：无 pending 任务返回 nil、正常抢占最高优先级任务、自动跳过 running 任务；
+// 2. CompleteLease：合法 token 正常完成、错误 token 拒绝覆盖；
+// 3. FailLease：终态失败流转、可重试失败回退为 pending 与 retry_count 累加；
+// 4. RenewLease：未超期租约正常续期；
+// 5. RequeueExpiredLeases：过期租约批量回收重置为 pending。
+// ==============================================================================
+
 package postgres_test
 
 import (
@@ -46,7 +57,7 @@ func setupTestStore(t *testing.T) *postgres.Store {
 	}
 	t.Cleanup(func() { s.Close() })
 
-	// Clean up tasks table before each test / 每个测试前清理任务表
+	// 每个测试前清理任务表，保证测试用例环境隔离
 	_, err = s.Pool().Exec(context.Background(), "DELETE FROM tasks")
 	if err != nil {
 		t.Fatalf("failed to clean tasks table: %v", err)
@@ -55,7 +66,7 @@ func setupTestStore(t *testing.T) *postgres.Store {
 }
 
 // ─────────────────────────────────────────────────────────────
-// ClaimNext
+// 1. ClaimNext 抢占测试
 // ─────────────────────────────────────────────────────────────
 
 func TestClaimNext_NoPendingTasks(t *testing.T) {
@@ -73,7 +84,7 @@ func TestClaimNext_ClaimsPendingTask(t *testing.T) {
 	s := setupTestStore(t)
 	now := time.Now()
 
-	// Insert a pending task / 插入一个 pending 任务
+	// 插入一个待调度的 pending 任务
 	err := s.Save(&store.Task{
 		ID:         "task-claim-1",
 		Status:     "pending",
@@ -110,7 +121,7 @@ func TestClaimNext_SkipsRunningTasks(t *testing.T) {
 	s := setupTestStore(t)
 	now := time.Now()
 
-	// Insert a running task (should not be claimed) / 插入 running 任务（不应被领取）
+	// 插入 running 任务（不应被重复抢占）
 	s.Save(&store.Task{
 		ID:         "task-running",
 		Status:     "running",
@@ -118,7 +129,7 @@ func TestClaimNext_SkipsRunningTasks(t *testing.T) {
 		CreatedAt:  now,
 		MaxRetries: 3,
 	})
-	// Insert a pending task / 插入 pending 任务
+	// 插入 pending 任务（应被正常抢占）
 	s.Save(&store.Task{
 		ID:         "task-pending",
 		Status:     "pending",
@@ -137,7 +148,7 @@ func TestClaimNext_SkipsRunningTasks(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// CompleteLease
+// 2. CompleteLease 完成测试
 // ─────────────────────────────────────────────────────────────
 
 func TestCompleteLease_Success(t *testing.T) {
@@ -163,7 +174,7 @@ func TestCompleteLease_Success(t *testing.T) {
 		t.Fatal("expected ok=true")
 	}
 
-	// Verify task is completed / 验证任务已完成
+	// 验证数据库中状态已变为 completed
 	task, _ := s.Get(lease.Task.ID)
 	if task.Status != "completed" {
 		t.Fatalf("expected completed, got %s", task.Status)
@@ -193,7 +204,7 @@ func TestCompleteLease_WrongToken(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// FailLease
+// 3. FailLease 失败处理测试
 // ─────────────────────────────────────────────────────────────
 
 func TestFailLease_Terminal(t *testing.T) {
@@ -250,7 +261,7 @@ func TestFailLease_Retryable(t *testing.T) {
 		t.Fatal("expected ok=true")
 	}
 
-	// Task should be back to pending / 任务应回退为 pending
+	// 可重试任务应回退为 pending 状态，且 retry_count 递增为 1
 	task, _ := s.Get(lease.Task.ID)
 	if task.Status != "pending" {
 		t.Fatalf("expected pending after retryable fail, got %s", task.Status)
@@ -261,7 +272,7 @@ func TestFailLease_Retryable(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// RenewLease
+// 4. RenewLease 续租测试
 // ─────────────────────────────────────────────────────────────
 
 func TestRenewLease_Success(t *testing.T) {
@@ -287,7 +298,7 @@ func TestRenewLease_Success(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// RequeueExpiredLeases
+// 5. RequeueExpiredLeases 过期租约回收测试
 // ─────────────────────────────────────────────────────────────
 
 func TestRequeueExpiredLeases(t *testing.T) {
@@ -298,13 +309,13 @@ func TestRequeueExpiredLeases(t *testing.T) {
 		CreatedAt: now, MaxRetries: 3,
 	})
 
-	// Claim with very short TTL / 使用极短 TTL 领取
+	// 使用极短 TTL 领取任务
 	lease, _ := s.ClaimNext("hub-1", 1*time.Millisecond)
 	if lease == nil {
 		t.Fatal("expected lease")
 	}
 
-	// Wait for lease to expire / 等待租约过期
+	// 等待租约自然超时
 	time.Sleep(10 * time.Millisecond)
 
 	count, err := s.RequeueExpiredLeases(10)
@@ -315,7 +326,7 @@ func TestRequeueExpiredLeases(t *testing.T) {
 		t.Fatalf("expected 1 requeued, got %d", count)
 	}
 
-	// Task should be back to pending / 任务应回退为 pending
+	// 任务应成功回退为 pending 状态
 	task, _ := s.Get(lease.Task.ID)
 	if task.Status != "pending" {
 		t.Fatalf("expected pending after expiry, got %s", task.Status)

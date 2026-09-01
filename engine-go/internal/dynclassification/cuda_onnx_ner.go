@@ -290,6 +290,16 @@ func (e *CudaOnnxNerEngine) IsAvailable() bool {
 	return atomic.LoadInt32(&e.available) != 0
 }
 
+// ModelBacked 实现 ModelBackedNerEngine：仅当初始化成功且注入的 ONNX Runtime
+// 真正就绪时才报告模型推理能力可用。交付构建默认注入 StubOnnxRuntime
+// （CGO 绑定缺失），因此本方法恒为 false（P1-3）。
+func (e *CudaOnnxNerEngine) ModelBacked() bool {
+	if atomic.LoadInt32(&e.available) == 0 {
+		return false
+	}
+	return e.runtime != nil && e.runtime.IsReady()
+}
+
 // Name 返回引擎名称
 func (e *CudaOnnxNerEngine) Name() string {
 	if e.cfg.GPUDeviceID >= 0 {

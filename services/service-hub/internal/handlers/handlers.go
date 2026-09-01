@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,8 +43,11 @@ import (
 	"github.com/fengzhizi319/PrivShield/pkg/validation"
 
 	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/agent"
+	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/audit"
 	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/config"
 	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/datasource"
+	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/models"
+	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/retry"
 )
 
 const moduleVia = "service-hub"
@@ -54,7 +58,7 @@ type dispatchRequest struct {
 	APICode      string `json:"api_code"`
 	DatasourceID string `json:"datasource_id"`
 	Source       string `json:"source"`    // 兼容历史字段
-	Operation    string `json:"operation"` // 脱敏算子（mask/k_anon/dp/none）
+	Operation    string `json:"operation"` // 可选的调用方「强度请求」（mask/k_anon/dp/classify/none）；生效算子由服务端定级推导，只允许上调
 	Payload      any    `json:"payload"`   // 原始记录数据
 	Priority     int    `json:"priority"`  // 执行优先级
 }
@@ -64,6 +68,7 @@ type dispatchRequest struct {
 type Server struct {
 	agent      *agent.Client      // 上游 PrivShield Python Agent 客户端
 	datasource *datasource.Client // 下游 datasource-mgr 数据源服务客户端
+	audit      *audit.Client      // audit-log 存证客户端（P0-6：出域 ↔ 留痕强绑定）
 	cfg        *config.Config     // 模块全局运行配置
 	startTime  time.Time          // 服务启动时间戳（用于计算 Uptime）
 	tasks      store.TaskStore    // 任务持久化存储介质（SQLite 或内存实现）
@@ -77,11 +82,16 @@ type Server struct {
 
 // New creates a new Server instance.
 // New 构造函数初始化 Server 实例，并默认分配容量为 10 的并发任务信号量与优雅停机上下文。
+//
+// 存证客户端在此无条件装配：即使 SERVICE_HUB_AUDIT_LOG_URLS 未配置也保留实例，
+// 其提交必然返回 audit.ErrNotConfigured，由流水线 audit 阶段将任务判定为 failed（fail-closed），
+// 绝不允许「没有存证链路却把出域任务标成 done」。测试通过配置中的 AuditLogBaseURLs 指向桩服务。
 func New(ag *agent.Client, ds *datasource.Client, cfg *config.Config, tasks store.TaskStore, logger *slog.Logger, mc *metrics.Collector) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{
 		agent:      ag,
 		datasource: ds,
+		audit:      audit.New(cfg, mc),
 		cfg:        cfg,
 		startTime:  time.Now(),
 		tasks:      tasks,
@@ -363,12 +373,16 @@ func (s *Server) ListTasks(c *gin.Context) {
 	})
 }
 
-// Dispatch creates a new task and simulates pipeline processing.
-// Dispatch 接收用户显式提交的数据处理任务：
-// 1. 绑定并校验 JSON 请求体（source/datasource_id/api_code 归一化校验、operation 在合法操作集合内）；
+// Dispatch creates a new task and runs the 6-stage pipeline.
+// Dispatch 接收用户提交的数据处理任务：
+// 1. 绑定并校验 JSON 请求体（source/datasource_id/api_code 归一化校验；operation 可选）；
 // 2. 生成全局唯一 TaskID，初始化为 pending/queued 状态并写入 TaskStore；
 // 3. 异步拉起后台协程执行 6 阶段流水线调度（processTask）；
 // 4. 立即返回 202 Accepted 包含 TaskID。
+//
+// 【operation 语义（P1-1）】本字段不再是「执行什么算子」的授权凭据，只是调用方的**强度请求**：
+// 允许缺省（完全由服务端定级推导），取值必须在算子词表内，且流水线只会用它**上调**保护强度。
+// 真正生效的算子在 ③ classify 阶段由引擎定级结果推导并回写 task.operation，随存证落盘。
 func (s *Server) Dispatch(c *gin.Context) {
 	var req dispatchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -404,9 +418,13 @@ func (s *Server) Dispatch(c *gin.Context) {
 	req.APICode = normAPICode
 	req.Source = normID
 
-	if err := validation.AllowedValues("operation", req.Operation, validation.HubOperations); err != nil {
-		middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error(), nil)
-		return
+	// operation 为可选的「强度请求」：缺省即完全交由服务端定级推导（P1-1）。
+	req.Operation = strings.TrimSpace(req.Operation)
+	if req.Operation != "" {
+		if err := validation.AllowedValues("operation", req.Operation, validation.HubOperations); err != nil {
+			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error(), nil)
+			return
+		}
 	}
 
 	taskID := validation.GenerateID("task")
@@ -477,7 +495,9 @@ func (s *Server) Dispatch(c *gin.Context) {
 //
 // ④ 脱敏治理 (desensitize)：已由 ③ 合并完成，快速通过（保留阶段状态追踪）；
 // ⑤ 结果返回 (return)：组装脱敏后的数据对象；
-// ⑥ 审计存证 (audit/done)：记录执行耗时与完成状态并落盘存证。
+// ⑥ 审计存证 (audit)：向独立存证节点 audit-log 真实提交一条含 task_id / api_code /
+// datasource_id / 输入输出指纹的出域存证；提交失败（端点未配置、网络不可达、4xx/5xx）
+// 一律按任务失败处理并落盘，绝不静默推进至 done（P0-6 / G-05）。
 func (s *Server) processTask(task *store.Task, req dispatchRequest, requestID string) {
 	if requestID == "" {
 		requestID = validation.GenerateID("task")
@@ -494,6 +514,7 @@ func (s *Server) processTask(task *store.Task, req dispatchRequest, requestID st
 				"task_id", task.ID, "panic", fmt.Sprintf("%v", r))
 			task.Status = "failed"
 			task.Error = fmt.Sprintf("internal panic: %v", r)
+			task.ErrorClass = retry.ClassInternal
 			now := time.Now()
 			task.CompletedAt = &now
 			task.DurationMs = now.Sub(task.CreatedAt).Milliseconds()
@@ -503,6 +524,14 @@ func (s *Server) processTask(task *store.Task, req dispatchRequest, requestID st
 	}()
 
 	stages := []string{"ingest", "fetch", "classify", "desensitize", "return", "audit"}
+
+	// 出域事实（供 ⑥ 存证使用）：③ 阶段引擎返回的脱敏结果与其中最高敏感级别。
+	var (
+		egressOutput  any
+		egressLevel   string
+		egressHashIn  string
+		egressHashOut string
+	)
 
 	for _, stage := range stages {
 		task.Stage = stage
@@ -519,6 +548,7 @@ func (s *Server) processTask(task *store.Task, req dispatchRequest, requestID st
 		case <-s.ctx.Done():
 			task.Status = "failed"
 			task.Error = "server shutting down"
+			task.ErrorClass = retry.ClassShutdown
 			now := time.Now()
 			task.CompletedAt = &now
 			task.DurationMs = now.Sub(task.CreatedAt).Milliseconds()
@@ -546,19 +576,24 @@ func (s *Server) processTask(task *store.Task, req dispatchRequest, requestID st
 		}
 
 		// 阶段 ③：分类+脱敏一体化 (classify) ── 一次调用 engine 医疗流水线
-		// 替代原先 classify + desensitize 两步分离调用，减少一次网络往返。
-		if stage == "classify" && isPrivacyOperation(req.Operation) {
+		//
+		// P1-1 权限收敛：是否脱敏、脱敏到哪个算子，一律由引擎的「三层四柱五御六类」定级结果决定，
+		// 不再由调用方传入的 operation 决定是否执行。任何携带数据的任务都必须过引擎，
+		// 调用方的算子只允许把保护强度上调（如主动要求 dp），绝不允许下调（如传 none 绕过脱敏）。
+		// 定级缺失即任务失败——严禁出现「读不到级别就按默认算子放行」的静默降级路径。
+		if stage == "classify" {
 			ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
 			ctx = agent.ContextWithRequestID(ctx, requestID)
 			idempotencyKey := fmt.Sprintf("hub-%s-%s-%d", task.ID, stage, task.RetryCount)
 			ctx = agent.ContextWithIdempotencyKey(ctx, idempotencyKey)
 			records := agent.ToRecords(req.Payload)
 			if len(records) > 0 {
-				_, err := s.agent.ProcessMedical(ctx, records)
+				result, err := s.agent.ProcessAgent(ctx, records, task.DatasourceID)
 				cancel()
 				if err != nil {
 					task.Status = "failed"
 					task.Error = fmt.Sprintf("medical pipeline failed at stage %s: %v", stage, err)
+					task.ErrorClass, _ = retry.Classify(err, retry.BiasDownstream)
 					now := time.Now()
 					task.CompletedAt = &now
 					task.DurationMs = now.Sub(task.CreatedAt).Milliseconds()
@@ -566,12 +601,86 @@ func (s *Server) processTask(task *store.Task, req dispatchRequest, requestID st
 					_ = s.persistTask(task, "medical pipeline failure")
 					return
 				}
+				if result == nil {
+					result = &agent.MedicalProcessResult{}
+				}
+
+				level := result.Level
+				if level == "" {
+					level = audit.MaxSensitivityLevel(result.ClassificationReport)
+				}
+				if level == "" {
+					task.Status = "failed"
+					task.Error = fmt.Sprintf("classification failed at stage %s: engine returned no security level", stage)
+					task.ErrorClass = retry.ClassContract
+					now := time.Now()
+					task.CompletedAt = &now
+					task.DurationMs = now.Sub(task.CreatedAt).Milliseconds()
+					s.recordDatasourceRequest(task.DatasourceID, "error")
+					_ = s.persistTask(task, "classification level unavailable")
+					return
+				}
+
+				derived := models.LevelToOperation(level)
+				applied := models.EffectiveOperation(req.Operation, derived)
+				if applied != req.Operation {
+					s.logger.Warn("caller-requested operation overridden by classification result (P1-1 fail-closed)",
+						"task_id", task.ID,
+						"requested_operation", req.Operation,
+						"security_level", level,
+						"applied_operation", applied)
+				}
+				task.Operation = applied
+				req.Operation = applied
+				egressLevel = level
+
+				// 记录真实出域事实：脱敏后载荷，以及 engine 单趟计算得出的国密 SM3 输入/输出指纹
+				// （⑥ 存证直接沿用，实现与引擎侧可对账）。
+				if len(result.SanitizedData) > 0 {
+					egressOutput = result.SanitizedData
+				}
+				egressHashIn, egressHashOut = audit.EngineFingerprints(result.Summary)
 			} else {
 				cancel()
 			}
 		}
 
 		// 阶段 ④：脱敏治理 (desensitize) ── 已由 ③ 医疗流水线合并完成，快速通过
+
+		// 阶段 ⑥：审计存证 (audit) ── 出域动作与不可篡改留痕在代码层面强绑定（P0-6）。
+		// 任何提交错误都必须使任务终态失败：不存在「已出域但无存证仍标 done」的路径。
+		if stage == "audit" {
+			evCtx, cancel := context.WithTimeout(s.ctx, s.cfg.AuditLogTimeoutDuration())
+			evCtx = agent.ContextWithRequestID(evCtx, requestID)
+			evCtx = agent.ContextWithIdempotencyKey(evCtx, fmt.Sprintf("hub-%s-audit-%d", task.ID, task.RetryCount))
+			_, evErr := audit.RecordOutboundEvidence(evCtx, s.audit, audit.OutboundFlow{
+				Task:          task,
+				Protocol:      "rest",
+				SecurityLevel: egressLevel,
+				Input:         req.Payload,
+				Output:        egressOutput,
+				InputHash:     egressHashIn,
+				OutputHash:    egressHashOut,
+			})
+			cancel()
+			if evErr != nil {
+				s.logger.Error("outbound evidence submission failed; task marked failed (P0-6 fail-closed)",
+					"task_id", task.ID,
+					"datasource_id", task.DatasourceID,
+					"api_code", task.APICode,
+					"operation", task.Operation,
+					"error", evErr.Error())
+				task.Status = "failed"
+				task.Error = fmt.Sprintf("audit evidence submission failed at stage %s: %v", stage, evErr)
+				task.ErrorClass, _ = audit.FailureClass(evErr)
+				now := time.Now()
+				task.CompletedAt = &now
+				task.DurationMs = now.Sub(task.CreatedAt).Milliseconds()
+				s.recordDatasourceRequest(task.DatasourceID, "error")
+				_ = s.persistTask(task, "audit evidence failure")
+				return
+			}
+		}
 	}
 
 	// 阶段 ⑤/⑥ 顺利完成：标记任务为 completed 并计算端到端总耗时
@@ -621,16 +730,6 @@ func (s *Server) Pipeline(c *gin.Context) {
 		"stages":   stages,
 		"agent_ok": agentErr == nil,
 	})
-}
-
-// isPrivacyOperation returns true if the operation requires engine privacy processing.
-// isPrivacyOperation 判断算子是否需要调用 engine 医疗流水线（分类+脱敏一体化）。
-func isPrivacyOperation(op string) bool {
-	switch op {
-	case "classify", "mask", "k_anon", "dp":
-		return true
-	}
-	return false
 }
 
 // unknownDatasourceLabel is the bounded metric label value used when a task

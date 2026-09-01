@@ -2,8 +2,11 @@
 // main console/bff-go gateway to the three Go microservices:
 // service-hub, datasource-mgr, and audit-log.
 //
-// It is intentionally thin: it forwards method/path/query/body as-is and only
+// It is intentionally thin: it forwards method/path/query/body and only
 // injects the trace/auth headers required for zero-trust outbound calls.
+// Since P0-7 the method+path allowlist is enforced by the callers in
+// internal/handlers; this layer still refuses non-canonical paths so a dirty
+// path can never be smuggled upstream.
 package microservices
 
 import (
@@ -13,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -54,13 +58,18 @@ func NewClientPool(cfg *config.Config) *ClientPool {
 
 // Proxy forwards a request to the named service and returns the upstream
 // response status, body, and an error if the round-trip itself failed.
-func (p *ClientPool) Proxy(ctx context.Context, service, method, path string, query url.Values, body []byte, contentType, requestID string) (*http.Response, []byte, error) {
+func (p *ClientPool) Proxy(ctx context.Context, service, method, proxyPath string, query url.Values, body []byte, contentType, requestID string) (*http.Response, []byte, error) {
 	base, ok := p.urls[service]
 	if !ok {
 		return nil, nil, fmt.Errorf("unknown microservice: %s", service)
 	}
+	// P0-7 纵深防御：转发层只接受「绝对且已规范化」的路径，拒绝任何 ".."/编码/
+	// 反斜杠混淆形态，防止未来新增调用方绕过 handlers 层的方法 + 路径白名单。
+	if !isCleanProxyPath(proxyPath) {
+		return nil, nil, fmt.Errorf("invalid proxy path for %s", service)
+	}
 
-	u, err := url.Parse(base + path)
+	u, err := url.Parse(base + proxyPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid target URL: %w", err)
 	}
@@ -114,4 +123,16 @@ func (p *ClientPool) Proxy(ctx context.Context, service, method, path string, qu
 // normalizeBaseURL trims trailing slashes so path concatenation is predictable.
 func normalizeBaseURL(u string) string {
 	return strings.TrimRight(u, "/")
+}
+
+// isCleanProxyPath 报告 proxyPath 是否为「绝对且已规范化」的上游路径：
+// 必须由 handlers 层的白名单校验后传入，转发层再次拒绝任何穿越与编码混淆形态。
+func isCleanProxyPath(proxyPath string) bool {
+	if !strings.HasPrefix(proxyPath, "/") {
+		return false
+	}
+	if strings.Contains(proxyPath, "..") || strings.Contains(proxyPath, "%") || strings.Contains(proxyPath, `\`) {
+		return false
+	}
+	return path.Clean(proxyPath) == proxyPath
 }

@@ -1,9 +1,31 @@
+// Package sqlite provides SQLite-backed AuditStore implementation.
+// Package sqlite 提供基于 SQLite 的不可篡改审计日志与快照存储实现。
+//
+// ==============================================================================
+// 【核心设计与互斥保护】
+// 1. 【单写者互斥锁保护 (s.mu)】：
+//    在 SaveLog/SaveLogWithSnapshot/SaveLogsBatch 等写路径中通过互斥锁保护链尾递进与事务执行，
+//    确保单机多协程并发写入时哈希链绝对保序连续；
+// 2. 【事务原子落盘】：
+//    SaveLogWithSnapshot 与 SaveLogsBatch 均在底层显式使用 BEGIN/COMMIT 事务，
+//    避免单条日志或快照发生部分成功的部分写入；
+// 3. 【SQL 聚合报表生成】：
+//    GetStats 与 GenerateReport 利用 SQLite 原生 datetime 与聚合函数快速计算成功率与 Top 操作；
+// 4. 【哈希链规范化序对账 (VerifyChain)】：
+//    采用 `ORDER BY seq ASC, timestamp ASC, id ASC` 规范化链序对账核验，与 PostgreSQL、内存实现
+//    及重签工具 `repairchain` 复用同一口径（P2-4）：`seq` 为单调的锚点锻造序（历史库由 rowid 回填），
+//    决定链的真正回放顺序；`(timestamp, id)` 作为确定性兜底尾序，使同时间戳记录在各后端与
+//    离线工具上始终以同一顺序重放，写入序（GetLatestLog 链尾裁定）与核验序严格互逆，
+//    杜绝「一处判为断链、另一处判为正常」的伪分叉。
+// ==============================================================================
+
 package sqlite
 
 import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,12 +33,15 @@ import (
 )
 
 // AuditStore implements store.AuditStore backed by SQLite.
+// AuditStore 基于 SQLite 实现不可篡改审计日志与快照存储。
 type AuditStore struct {
 	db *sql.DB
 	mu sync.Mutex
 }
 
 // NewAuditStore creates a new SQLite-backed audit store.
+//
+// NewAuditStore 构建 SQLite 审计存储实例并自动初始化表结构。
 func NewAuditStore(db *sql.DB) (*AuditStore, error) {
 	if err := InitAuditTables(db); err != nil {
 		return nil, fmt.Errorf("init audit tables: %w", err)
@@ -24,6 +49,7 @@ func NewAuditStore(db *sql.DB) (*AuditStore, error) {
 	return &AuditStore{db: db}, nil
 }
 
+// SaveLog persists an audit log and computes its hash chain if missing.
 func (s *AuditStore) SaveLog(log *store.AuditLog) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -37,9 +63,9 @@ func (s *AuditStore) SaveLog(log *store.AuditLog) error {
 		log.IntegrityHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 	}
 	_, err := s.db.Exec(`
-		INSERT INTO audit_logs (id, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash,
+		INSERT INTO audit_logs (id, seq, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash,
 			algorithm, parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, COALESCE((SELECT MAX(seq) FROM audit_logs), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, log.ID, log.TaskID, log.APICode, log.DatasourceID, log.Timestamp.Format(time.RFC3339Nano), log.Operation, log.DataSource,
 		log.InputHash, log.OutputHash, log.Algorithm, log.ParametersJSON,
 		log.InputRows, log.OutputRows, log.DurationMs, log.User, log.Status, log.ErrorMessage, log.SecurityLevel,
@@ -48,6 +74,8 @@ func (s *AuditStore) SaveLog(log *store.AuditLog) error {
 }
 
 // SaveLogWithSnapshot persists an audit log and its snapshot as one transaction.
+//
+// SaveLogWithSnapshot 在同一事务内原子持久化审计日志与其关联的数据快照。
 func (s *AuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *store.SnapshotRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -61,11 +89,16 @@ func (s *AuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *store.Sn
 		log.IntegrityHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 	}
 	if snapshot != nil {
+		// P0 fix: snapshot prev_hash binds to the parent log's integrity hash
+		// and its integrity hash covers the snapshot's own sample fields.
 		if snapshot.PrevHash == "" {
-			snapshot.PrevHash = log.PrevHash
+			snapshot.PrevHash = log.IntegrityHash
 		}
 		if snapshot.IntegrityHash == "" {
-			snapshot.IntegrityHash = log.IntegrityHash
+			snapshot.IntegrityHash = store.ComputeSnapshotIntegrityHash(
+				snapshot.ID, snapshot.AuditLogID, snapshot.PrevHash, snapshot.Timestamp, snapshot.Algorithm,
+				snapshot.InputSample, snapshot.OutputSample, snapshot.ParametersJSON,
+			)
 		}
 	}
 
@@ -76,9 +109,9 @@ func (s *AuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *store.Sn
 	defer tx.Rollback()
 
 	if _, err := tx.Exec(`
-		INSERT INTO audit_logs (id, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash,
+		INSERT INTO audit_logs (id, seq, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash,
 			algorithm, parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, COALESCE((SELECT MAX(seq) FROM audit_logs), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, log.ID, log.TaskID, log.APICode, log.DatasourceID, log.Timestamp.Format(time.RFC3339Nano), log.Operation, log.DataSource,
 		log.InputHash, log.OutputHash, log.Algorithm, log.ParametersJSON,
 		log.InputRows, log.OutputRows, log.DurationMs, log.User, log.Status, log.ErrorMessage, log.SecurityLevel,
@@ -96,6 +129,8 @@ func (s *AuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *store.Sn
 }
 
 // SaveLogsBatch saves multiple logs and optional snapshots in a single atomic transaction.
+//
+// SaveLogsBatch 在单个原子事务内批量插入多条日志与快照。
 func (s *AuditStore) SaveLogsBatch(logs []store.AuditLog, snapshots []store.SnapshotRecord) error {
 	if len(logs) == 0 && len(snapshots) == 0 {
 		return nil
@@ -111,9 +146,9 @@ func (s *AuditStore) SaveLogsBatch(logs []store.AuditLog, snapshots []store.Snap
 	defer tx.Rollback()
 
 	logStmt, err := tx.Prepare(`
-		INSERT INTO audit_logs (id, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash,
+		INSERT INTO audit_logs (id, seq, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash,
 			algorithm, parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, COALESCE((SELECT MAX(seq) FROM audit_logs), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
@@ -153,6 +188,7 @@ func (s *AuditStore) SaveLogsBatch(logs []store.AuditLog, snapshots []store.Snap
 	return tx.Commit()
 }
 
+// GetLog retrieves an audit log by ID.
 func (s *AuditStore) GetLog(id string) (*store.AuditLog, error) {
 	row := s.db.QueryRow(`
 		SELECT id, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash, algorithm,
@@ -162,12 +198,16 @@ func (s *AuditStore) GetLog(id string) (*store.AuditLog, error) {
 	return scanAuditLog(row)
 }
 
-// GetLatestLog returns the most recently written audit log.
+// GetLatestLog returns the chain tail, i.e. the last record in the canonical chain order.
+//
+// GetLatestLog 返回链尾记录：按规范化链序 `(seq DESC, timestamp DESC, id DESC)` 取最后一条
+// （P2-4），与 `VerifyChain` 的遍历方向严格互逆，确保「写入侧锚定的上一条」与「核验侧的上一条」
+// 在同时间戳场景下仍是同一条记录，避免写入即误判断链。
 func (s *AuditStore) GetLatestLog() (*store.AuditLog, error) {
 	row := s.db.QueryRow(`
 		SELECT id, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash, algorithm,
 			parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash
-		FROM audit_logs ORDER BY rowid DESC LIMIT 1
+		FROM audit_logs ORDER BY seq DESC, timestamp DESC, id DESC LIMIT 1
 	`)
 	log, err := scanAuditLog(row)
 	if err != nil {
@@ -179,17 +219,18 @@ func (s *AuditStore) GetLatestLog() (*store.AuditLog, error) {
 	return log, nil
 }
 
+// ListLogs returns filtered and paginated audit logs.
 func (s *AuditStore) ListLogs(filter store.AuditFilter) ([]store.AuditLog, int, error) {
 	where, args := buildAuditWhere(filter)
 
-	// Count total
+	// 统计总数
 	countQuery := "SELECT COUNT(*) FROM audit_logs" + where
 	var total int
 	if err := s.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
-	// Fetch rows
+	// 查询行
 	query := `SELECT id, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash, algorithm,
 		parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash
 		FROM audit_logs` + where + " ORDER BY timestamp DESC"
@@ -222,6 +263,7 @@ func (s *AuditStore) ListLogs(filter store.AuditFilter) ([]store.AuditLog, int, 
 	return logs, total, rows.Err()
 }
 
+// GetStats computes aggregated audit statistics via SQLite engine.
 func (s *AuditStore) GetStats() (*store.AuditStats, error) {
 	stats := &store.AuditStats{
 		ByOperation:     make(map[string]int),
@@ -229,12 +271,10 @@ func (s *AuditStore) GetStats() (*store.AuditStats, error) {
 		BySecurityLevel: make(map[string]int),
 	}
 
-	// Total count and average duration
 	if err := s.db.QueryRow("SELECT COUNT(*), COALESCE(AVG(duration_ms), 0) FROM audit_logs").Scan(&stats.TotalOperations, &stats.AvgDurationMs); err != nil {
 		return nil, err
 	}
 
-	// Group by operation
 	rows, err := s.db.Query("SELECT operation, COUNT(*) FROM audit_logs GROUP BY operation")
 	if err != nil {
 		return nil, err
@@ -252,7 +292,6 @@ func (s *AuditStore) GetStats() (*store.AuditStats, error) {
 		return nil, err
 	}
 
-	// Group by status
 	rows2, err := s.db.Query("SELECT status, COUNT(*) FROM audit_logs GROUP BY status")
 	if err != nil {
 		return nil, err
@@ -270,7 +309,6 @@ func (s *AuditStore) GetStats() (*store.AuditStats, error) {
 		return nil, err
 	}
 
-	// Group by security_level
 	rows3, err := s.db.Query("SELECT security_level, COUNT(*) FROM audit_logs WHERE security_level != '' GROUP BY security_level")
 	if err != nil {
 		return nil, err
@@ -308,7 +346,6 @@ func (s *AuditStore) GenerateReport(period string) (*store.AuditReport, error) {
 	whereClause := "WHERE timestamp > datetime('now', ?)"
 	periodParam := "-" + periodDuration
 
-	// 1. Total count and success count in one query
 	var totalCount, successCount int
 	query := fmt.Sprintf("SELECT COUNT(*), COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) FROM audit_logs %s", whereClause)
 	if err := s.db.QueryRow(query, periodParam).Scan(&totalCount, &successCount); err != nil {
@@ -319,7 +356,6 @@ func (s *AuditStore) GenerateReport(period string) (*store.AuditReport, error) {
 		report.SuccessRate = float64(successCount) / float64(totalCount) * 100
 	}
 
-	// 2. Group by security_level
 	query2 := fmt.Sprintf("SELECT security_level, COUNT(*) FROM audit_logs %s AND security_level != '' GROUP BY security_level", whereClause)
 	rows, err := s.db.Query(query2, periodParam)
 	if err != nil {
@@ -338,7 +374,6 @@ func (s *AuditStore) GenerateReport(period string) (*store.AuditReport, error) {
 		return nil, err
 	}
 
-	// 3. Get top operations (ORDER BY count DESC LIMIT 5)
 	query3 := fmt.Sprintf("SELECT operation, COUNT(*) as cnt FROM audit_logs %s GROUP BY operation ORDER BY cnt DESC LIMIT 5", whereClause)
 	rows3, err := s.db.Query(query3, periodParam)
 	if err != nil {
@@ -364,22 +399,10 @@ func (s *AuditStore) GenerateReport(period string) (*store.AuditReport, error) {
 }
 
 func generateRecommendations(byLevel map[string]int, successRate float64) []string {
-	recs := make([]string, 0)
-	if l4 := byLevel["L4"]; l4 > 100 {
-		recs = append(recs, "L4 级别操作频繁，建议审查差分隐私预算消耗")
-	}
-	if l5 := byLevel["L5"]; l5 > 50 {
-		recs = append(recs, "L5 绝密数据操作较多，建议加强访问控制审计")
-	}
-	if successRate < 95 {
-		recs = append(recs, fmt.Sprintf("成功率 %.1f%% 低于 95%%，建议排查失败原因", successRate))
-	}
-	if len(recs) == 0 {
-		recs = append(recs, "审计指标正常，无需特别关注")
-	}
-	return recs
+	return store.BuildAuditRecommendations(byLevel, successRate)
 }
 
+// SaveSnapshot stores a snapshot record in SQLite.
 func (s *AuditStore) SaveSnapshot(snap *store.SnapshotRecord) error {
 	_, err := s.db.Exec(`
 		INSERT INTO snapshots (id, audit_log_id, timestamp, input_sample, output_sample, algorithm, parameters_json, integrity_hash, prev_hash)
@@ -389,6 +412,7 @@ func (s *AuditStore) SaveSnapshot(snap *store.SnapshotRecord) error {
 	return err
 }
 
+// ListSnapshots returns paginated snapshot records.
 func (s *AuditStore) ListSnapshots(limit, offset int) ([]store.SnapshotRecord, int, error) {
 	var total int
 	if err := s.db.QueryRow("SELECT COUNT(*) FROM snapshots").Scan(&total); err != nil {
@@ -419,6 +443,7 @@ func (s *AuditStore) ListSnapshots(limit, offset int) ([]store.SnapshotRecord, i
 	return snaps, total, rows.Err()
 }
 
+// GetSnapshot retrieves a snapshot by ID.
 func (s *AuditStore) GetSnapshot(id string) (*store.SnapshotRecord, error) {
 	row := s.db.QueryRow(`
 		SELECT id, audit_log_id, timestamp, input_sample, output_sample, algorithm, parameters_json, integrity_hash, prev_hash
@@ -427,18 +452,34 @@ func (s *AuditStore) GetSnapshot(id string) (*store.SnapshotRecord, error) {
 	return scanSnapshotRowScanner(row.Scan)
 }
 
-// VerifyChain verifies the unbroken cryptographic hash chain of recent logs.
+// VerifyChain verifies the unbroken cryptographic hash chain of recent logs in SQLite.
+//
+// VerifyChain 按**规范化链序** `(seq ASC, timestamp ASC, id ASC)` 对账核验哈希链完整性。
+// limit <= 0 表示验证全表记录；否则验证最多 limit 条记录。
+//
+// P2-4：核验结论附带机器可读 `Reason`（取值见 store.ChainReason* 枚举），遍历顺序与
+// PostgreSQL、内存实现及重签工具 `repairchain` 同源：`seq`（锚点锻造序，由 P1 引入的单调列）
+// 为首要次序，`(timestamp, id)` 为确定性兜底尾序，使同时间戳记录在所有后端与离线工具上
+// 以同一顺序回放，杜绝「一处判为断链、另一处判为正常」的伪分叉。
 func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, error) {
-	if limit <= 0 || limit > 10000 {
-		limit = 1000
+	const maxLimit = 100000
+	if limit < 0 || limit > maxLimit {
+		limit = maxLimit
 	}
 
-	// The chain follows persistence order, not the timestamp text: timestamps are stored as
-	// offset-bearing RFC3339Nano strings, whose lexicographic order is not chronological.
-	// 哈希链沿用具名顺序（落盘顺序）而非 timestamp 文本：带时区偏移的时间串按字典序排列不等于按时间排列。
-	query := fmt.Sprintf(`SELECT id, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash, algorithm,
+	totalRecords := 0
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM audit_logs").Scan(&totalRecords); err != nil {
+		return nil, err
+	}
+
+	// 规范化链序 (seq, timestamp, id)：seq 为锚点锻造序（等价于落盘序，见 init.go 的 seq 回填），
+	// (timestamp, id) 提供与 PostgreSQL 完全一致的确定性兜底尾序（P2-4）。
+	query := `SELECT id, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash, algorithm,
 		parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash
-		FROM audit_logs ORDER BY rowid ASC LIMIT %d`, limit)
+		FROM audit_logs ORDER BY seq ASC, timestamp ASC, id ASC`
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
 
 	rows, err := s.db.Query(query)
 	if err != nil {
@@ -455,16 +496,23 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 			return nil, err
 		}
 
-		// Check internal hash integrity (canonical SM3, legacy SHA-256 accepted)
 		if log.IntegrityHash != "" {
 			ok, hashLabel := store.VerifyAuditIntegrityHash(log.IntegrityHash, log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 			if !ok {
+				// 锚点仍与上游衔接 ⇒ 记录被「原位改写业务字段」；否则为一般性哈希分叉。两者均判无效（fail-closed）。
+				reason := store.ChainReasonHashMismatch
+				if count == 0 || log.PrevHash == previousHash {
+					reason = store.ChainReasonTamperedPayload
+				}
 				return &store.ChainVerificationResult{
+					Reason:        reason,
 					TotalVerified: count,
+					TotalRecords:  totalRecords,
 					Valid:         false,
 					BrokenAtID:    log.ID,
 					ExpectedHash:  store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON),
 					ActualHash:    log.IntegrityHash,
+					LegacyHashed:  legacyCount,
 					Message:       fmt.Sprintf("integrity hash mismatch at log %s: content modified", log.ID),
 				}, nil
 			}
@@ -473,10 +521,16 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 			}
 		}
 
-		// Check chain continuity with previous record
 		if count > 0 && log.PrevHash != previousHash {
+			// 空锚点单独归因为 missing_prev，便于看板区分「链起点被抹除」与「锚点被替换」。
+			reason := store.ChainReasonBrokenChain
+			if log.PrevHash == "" {
+				reason = store.ChainReasonMissingPrev
+			}
 			return &store.ChainVerificationResult{
+				Reason:        reason,
 				TotalVerified: count,
+				TotalRecords:  totalRecords,
 				Valid:         false,
 				LegacyHashed:  legacyCount,
 				BrokenAtID:    log.ID,
@@ -494,13 +548,24 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 	}
 
 	result := &store.ChainVerificationResult{
+		Reason:        store.ChainReasonOK,
 		TotalVerified: count,
+		TotalRecords:  totalRecords,
 		Valid:         true,
 		LegacyHashed:  legacyCount,
-		Message:       fmt.Sprintf("hash chain verified successfully (%d records checked)", count),
+		Message:       fmt.Sprintf("hash chain verified successfully (%d records checked, %d total records)", count, totalRecords),
 	}
 	if legacyCount > 0 {
-		result.Message = fmt.Sprintf("hash chain verified successfully (%d records checked, %d legacy-hashed records pending canonical SM3 re-signing)", count, legacyCount)
+		// 证据真实但写入于密钥化口径之前：链有效，仅需重签（P2-4 缺口 b）。
+		result.Reason = store.ChainReasonLegacyHashed
+		result.Message = fmt.Sprintf("hash chain verified successfully (%d records checked, %d total records, %d legacy-hashed records pending canonical SM3 re-signing)", count, totalRecords, legacyCount)
+	}
+	// Detect physical deletion: if limit was unset (0 = full scan) and verified count < total records,
+	// it means records in the middle of the chain may have been deleted and the returned subset still appears continuous.
+	if limit <= 0 && count < totalRecords {
+		result.Reason = store.ChainReasonMissingRecords
+		result.Valid = false
+		result.Message = fmt.Sprintf("possible missing records: verified %d records but table has %d total records", count, totalRecords)
 	}
 	return result, rows.Err()
 }
@@ -555,7 +620,7 @@ func buildAuditWhere(filter store.AuditFilter) (string, []any) {
 	return where, args
 }
 
-// CleanupOld deletes audit logs and their associated snapshots older than the cutoff time.
+// CleanupOld deletes audit logs and their snapshots older than the cutoff time.
 func (s *AuditStore) CleanupOld(before time.Time) (int64, error) {
 	cutoff := before.Format(time.RFC3339Nano)
 	_, _ = s.db.Exec(`DELETE FROM snapshots WHERE audit_log_id IN (SELECT id FROM audit_logs WHERE timestamp < ?)`, cutoff)
@@ -564,6 +629,146 @@ func (s *AuditStore) CleanupOld(before time.Time) (int64, error) {
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+// FetchOldestForArchive implements store.AuditArchiveReader for SQLite: it returns the oldest
+// expired logs in the canonical chain order (the same `(seq, timestamp, id)` order VerifyChain
+// replays, so archive order equals chain order) together with the snapshots attached to them.
+//
+// FetchOldestForArchive 按规范化链序 `(seq ASC, timestamp ASC, id ASC)` 返回最早到期的存证日志及其快照，
+// 与 VerifyChain 的回放序及 PostgreSQL 实现保持一致（P2-4）；
+// 时间过滤语义与 CleanupOld 严格一致（timestamp < cutoff），调用方每归档一页即按 ID 删除，
+// 因此无需游标也不会「删而未档」。
+func (s *AuditStore) FetchOldestForArchive(before time.Time, limit int) ([]store.AuditLog, []store.SnapshotRecord, error) {
+	if limit <= 0 {
+		limit = store.DefaultArchivePageSize
+	}
+	cutoff := before.Format(time.RFC3339Nano)
+
+	rows, err := s.db.Query(`
+		SELECT rowid, id, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash, algorithm,
+			parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash
+		FROM audit_logs WHERE timestamp < ? ORDER BY seq ASC, timestamp ASC, id ASC LIMIT ?
+	`, cutoff, limit)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	logs := make([]store.AuditLog, 0, limit)
+	ids := make([]any, 0, limit)
+	for rows.Next() {
+		l, err := scanAuditLogRowWithRowID(rows)
+		if err != nil {
+			return nil, nil, err
+		}
+		logs = append(logs, *l)
+		ids = append(ids, l.ID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	if len(ids) == 0 {
+		return nil, nil, nil
+	}
+
+	snaps := make([]store.SnapshotRecord, 0, len(ids))
+	for start := 0; start < len(ids); start += store.ArchiveIDChunkSize {
+		end := min(start+store.ArchiveIDChunkSize, len(ids))
+		chunk := ids[start:end]
+		placeholders := strings.Repeat("?,", len(chunk))
+		snapQuery := `SELECT id, audit_log_id, timestamp, input_sample, output_sample, algorithm, parameters_json, integrity_hash, prev_hash
+			 FROM snapshots WHERE audit_log_id IN (` + placeholders[:len(placeholders)-1] + `) ORDER BY timestamp ASC, id ASC`
+		snapRows, err := s.db.Query(snapQuery, chunk...)
+		if err != nil {
+			return nil, nil, err
+		}
+		for snapRows.Next() {
+			snap, err := scanSnapshotRow(snapRows)
+			if err != nil {
+				snapRows.Close()
+				return nil, nil, err
+			}
+			snaps = append(snaps, *snap)
+		}
+		err = snapRows.Err()
+		snapRows.Close()
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return logs, snaps, nil
+}
+
+// DeleteLogsByIDs implements store.AuditArchiveReader: it removes exactly the archived logs and
+// their snapshots, chunked inside one transaction per chunk so deletion is never partial.
+//
+// DeleteLogsByIDs 按 ID 精确删除已完成归档的存证日志及其级联快照，
+// 每批在单事务内先删快照后删日志，避免部分成功导致存证悬挂。
+func (s *AuditStore) DeleteLogsByIDs(ids []string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	var deleted int64
+	for start := 0; start < len(ids); start += store.ArchiveIDChunkSize {
+		end := min(start+store.ArchiveIDChunkSize, len(ids))
+		chunk := ids[start:end]
+		placeholders := strings.Repeat("?,", len(chunk))
+		in := placeholders[:len(placeholders)-1]
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+
+		tx, err := s.db.Begin()
+		if err != nil {
+			return deleted, err
+		}
+		if _, err := tx.Exec(`DELETE FROM snapshots WHERE audit_log_id IN (`+in+`)`, args...); err != nil {
+			_ = tx.Rollback()
+			return deleted, err
+		}
+		tag, err := tx.Exec(`DELETE FROM audit_logs WHERE id IN (`+in+`)`, args...)
+		if err != nil {
+			_ = tx.Rollback()
+			return deleted, err
+		}
+		if err := tx.Commit(); err != nil {
+			return deleted, err
+		}
+		n, err := tag.RowsAffected()
+		if err != nil {
+			return deleted, err
+		}
+		deleted += n
+	}
+	return deleted, nil
+}
+
+func scanAuditLogRowWithRowID(rows *sql.Rows) (*store.AuditLog, error) {
+	var rowID int64
+	var l store.AuditLog
+	var ts string
+	var paramsJSON sql.NullString
+	var taskID, apiCode, datasourceID, prevHash, integrityHash sql.NullString
+
+	if err := rows.Scan(&rowID, &l.ID, &taskID, &apiCode, &datasourceID, &ts, &l.Operation, &l.DataSource, &l.InputHash, &l.OutputHash,
+		&l.Algorithm, &paramsJSON, &l.InputRows, &l.OutputRows, &l.DurationMs,
+		&l.User, &l.Status, &l.ErrorMessage, &l.SecurityLevel, &prevHash, &integrityHash); err != nil {
+		return nil, err
+	}
+
+	l.TaskID = taskID.String
+	l.APICode = apiCode.String
+	l.DatasourceID = datasourceID.String
+	l.PrevHash = prevHash.String
+	l.IntegrityHash = integrityHash.String
+	l.ParametersJSON = paramsJSON.String
+	l.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
+	if paramsJSON.Valid {
+		_ = json.Unmarshal([]byte(paramsJSON.String), &l.Parameters)
+	}
+	return &l, nil
 }
 
 func scanAuditFields(scan func(dest ...any) error) (*store.AuditLog, error) {

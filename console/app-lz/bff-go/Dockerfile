@@ -38,7 +38,8 @@ COPY --from=builder /app/server /app/server
 
 RUN chown -R privacy:privacy /app
 
-EXPOSE 8085 50055
+# 仅 HTTP REST 面：本进程没有 gRPC 服务端（原 50055 属 P2-1 配置漂移，已删除）
+EXPOSE 8085
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8085/api/health || exit 1

@@ -49,6 +49,31 @@ spec:
               value: "0.0.0.0"
             - name: SERVICE_HUB_GRPC_PORT
               value: "50052"
+            # ── P0-1 零信任默认态（0.0.0.0 监听 ⇒ 入站 Key 必填；出站 Key 须与对端入站一致）──
+            # 部署前创建：
+            #   kubectl create secret generic service-hub-apikeys \
+            #     --from-literal=api-key=... --from-literal=agent-api-key=... \
+            #     --from-literal=datasource-api-key=... --from-literal=audit-api-key=...
+            - name: SERVICE_HUB_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: service-hub-apikeys
+                  key: api-key
+            - name: PRIVACY_AGENT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: service-hub-apikeys
+                  key: agent-api-key
+            - name: SERVICE_HUB_DATASOURCE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: service-hub-apikeys
+                  key: datasource-api-key
+            - name: SERVICE_HUB_AUDIT_LOG_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: service-hub-apikeys
+                  key: audit-api-key
             - name: SERVICE_HUB_DB_PATH
               value: "/app/data/service-hub.db"
             - name: SERVICE_HUB_LOG_FORMAT

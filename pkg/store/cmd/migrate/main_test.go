@@ -1,3 +1,22 @@
+// Package main provides integration tests for the database migration tool.
+// Package main 为 Phase A (SQLite) 到 Phase B (PostgreSQL) 的数据迁移工具提供集成测试。
+//
+// ==============================================================================
+// 【测试运行前置条件】
+// 测试依赖真实 PostgreSQL 实例：
+//
+//	PRIVSHIELD_PG_TEST_DSN="postgres://user:pass@localhost:5432/privshield_migrate_test" \
+//	go test -tags=integration -v ./pkg/store/cmd/migrate/...
+//
+// 若未配置 PRIVSHIELD_PG_TEST_DSN 环境变量，测试将自动安全跳过（Skip）。
+//
+// 【测试场景覆盖】
+// 1. TestMigrateSQLiteToPostgres：验证任务、审计日志与快照的完整迁移及哈希链对账核验；
+// 2. TestMigrateSQLiteToPostgres_VerifySnapshots：验证迁移后 SM4-GCM 密文快照解密验真模式；
+// 3. TestMigrateSQLiteToPostgres_VerifySnapshotsWrongKey：验证使用错误密钥时解密验真必须报错拦截；
+// 4. TestVerifySnapshotsOnlyMode：验证 -snapshot-verify-mode=only 单独验真模式。
+// ==============================================================================
+
 package main
 
 import (
@@ -60,7 +79,6 @@ func cleanPostgresTables(t *testing.T, ctx context.Context, dsn string) *postgre
 	t.Helper()
 	logger := testLogger()
 
-	// Initialize audit schema first so the snapshots/audit_logs tables exist.
 	auditStore, err := postgres.NewAuditStore(ctx, postgres.Config{DSN: dsn}, logger)
 	if err != nil {
 		t.Fatalf("create postgres audit store: %v", err)
@@ -84,12 +102,15 @@ func cleanPostgresTables(t *testing.T, ctx context.Context, dsn string) *postgre
 	return taskStore
 }
 
+// ─────────────────────────────────────────────────────────────
+// 1. SQLite 到 PostgreSQL 迁移与哈希链核验端到端测试
+// ─────────────────────────────────────────────────────────────
+
 func TestMigrateSQLiteToPostgres(t *testing.T) {
 	ctx := context.Background()
 	dsn := getTestDSN(t)
 	logger := testLogger()
 
-	// Prepare target PostgreSQL tables and clean any leftover test data.
 	taskStore := cleanPostgresTables(t, ctx, dsn)
 	defer taskStore.Close()
 
@@ -101,7 +122,6 @@ func TestMigrateSQLiteToPostgres(t *testing.T) {
 
 	pool := taskStore.Pool()
 
-	// Prepare source SQLite files in a temporary directory.
 	tmpDir := t.TempDir()
 	hubDBPath := filepath.Join(tmpDir, "service-hub.db")
 	auditDBPath := filepath.Join(tmpDir, "audit-log.db")
@@ -159,7 +179,7 @@ func TestMigrateSQLiteToPostgres(t *testing.T) {
 	}
 	_ = auditDB.Close()
 
-	// Run migration.
+	// 执行迁移
 	cfg := runConfig{
 		hubDBPath:          hubDBPath,
 		auditDBPath:        auditDBPath,
@@ -173,7 +193,7 @@ func TestMigrateSQLiteToPostgres(t *testing.T) {
 		t.Fatalf("run migration: %v", err)
 	}
 
-	// Verify migrated counts.
+	// 验证迁移条数
 	var taskCount int
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM tasks").Scan(&taskCount); err != nil {
 		t.Fatalf("count tasks: %v", err)
@@ -196,7 +216,7 @@ func TestMigrateSQLiteToPostgres(t *testing.T) {
 		t.Errorf("expected 1 snapshot, got %d", snapCount)
 	}
 
-	// Verify hash chain integrity.
+	// 验证哈希链在 PostgreSQL 中依然连续且完全有效
 	res, err := auditStore.VerifyChain(0)
 	if err != nil {
 		t.Fatalf("verify chain: %v", err)
@@ -208,6 +228,10 @@ func TestMigrateSQLiteToPostgres(t *testing.T) {
 		t.Errorf("expected 2 verified logs, got %d", res.TotalVerified)
 	}
 }
+
+// ─────────────────────────────────────────────────────────────
+// 2. 密文快照解密验真测试
+// ─────────────────────────────────────────────────────────────
 
 func TestMigrateSQLiteToPostgres_VerifySnapshots(t *testing.T) {
 	ctx := context.Background()
@@ -304,6 +328,10 @@ func TestMigrateSQLiteToPostgres_VerifySnapshots(t *testing.T) {
 	}
 }
 
+// ─────────────────────────────────────────────────────────────
+// 3. 错误解密密钥拦截测试
+// ─────────────────────────────────────────────────────────────
+
 func TestMigrateSQLiteToPostgres_VerifySnapshotsWrongKey(t *testing.T) {
 	ctx := context.Background()
 	dsn := getTestDSN(t)
@@ -380,6 +408,10 @@ func TestMigrateSQLiteToPostgres_VerifySnapshotsWrongKey(t *testing.T) {
 		t.Fatalf("expected migration/verification to fail with wrong key, got nil")
 	}
 }
+
+// ─────────────────────────────────────────────────────────────
+// 4. 单独验真模式测试 (snapshot-verify-mode=only)
+// ─────────────────────────────────────────────────────────────
 
 func TestVerifySnapshotsOnlyMode(t *testing.T) {
 	ctx := context.Background()

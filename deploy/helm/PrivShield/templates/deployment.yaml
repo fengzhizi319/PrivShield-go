@@ -9,7 +9,9 @@
 #   2. Helm 模板引擎将 Go Template 占位符替换为实际值，渲染为纯 K8s YAML
 #   3. 渲染后的 YAML 提交给 K8s API Server（等价 kubectl apply）
 #   4. K8s 创建 Pod，kubelet 根据 env: 字段注入环境变量到容器
-#   5. 容器内 Python 进程通过 os.getenv() 读取环境变量
+#   5. 容器内进程读取环境变量：engineType=go 时 Go 服务 os.Getenv()，
+#      engineType=python 时 Python 服务 os.getenv()。仅某一引擎生效的变量以
+#      「# env-scope: python-engine」注释标注（由 scripts/check_orchestration_env_consistency.sh 校验）。
 #
 # 注意：Helm 本身不"加载"环境变量——它只负责模板渲染。
 #       真正注入环境变量的是 K8s kubelet（容器启动时）。
@@ -91,18 +93,27 @@ spec:
               value: "0.0.0.0"
             - name: PRIVACY_GRPC_PORT
               value: "{{ .Values.service.grpcPort }}"
+            {{- if ne .Values.engineType "go" }}
+            # env-scope: python-engine —— Python 引擎专属读取点：Go 引擎日志固定 JSON（仅
+            # PRIVACY_LOG_LEVEL 可调），参数面走 PRIVACY_CONFIG_FILE + PRIVACY_RULES_DIR。
             - name: PRIVACY_PROFILE
               value: "/etc/PrivShield/privacy-profile.yaml"
-            - name: PRIVACY_LOG_LEVEL
-              value: {{ .Values.agent.logLevel | upper | quote }}
+            # env-scope: python-engine
             - name: PRIVACY_LOG_FORMAT
               value: {{ .Values.agent.logFormat | quote }}
+            {{- end }}
+            - name: PRIVACY_LOG_LEVEL
+              value: {{ .Values.agent.logLevel | upper | quote }}
             - name: PRIVACY_SERVICE_NAME
               value: {{ include "PrivShield.fullname" . | quote }}
             # ── OpenTelemetry 可观测性（可选）──
             {{- with .Values.agent.serviceName }}
+            {{- if ne $.Values.engineType "go" }}
+            # env-scope: python-engine —— Go 引擎只读取 OTEL_EXPORTER_OTLP_ENDPOINT
+            #（见 observability/tracing.go），OTEL_SERVICE_NAME 属 Python 引擎/OTel SDK 读取点。
             - name: OTEL_SERVICE_NAME
               value: {{ . | quote }}
+            {{- end }}
             {{- end }}
             {{- with .Values.agent.otelExporterOtlpEndpoint }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
@@ -110,19 +121,33 @@ spec:
             {{- end }}
             # ── TLS 加密传输（可选）──
             {{- if .Values.security.tls.enabled }}
+            # P0-1 红线：引擎恒定监听 gRPC，TLS 开启即必须提供 CN 白名单文件，
+            # 否则白名单拦截器根本不注册（等同未做身份鉴别），Go 侧启动门禁会拒绝启动。
+            {{- if not .Values.security.auth.internalMtls.whitelistConfigMap }}
+            {{- fail "security.tls.enabled=true 时必须提供 security.auth.internalMtls.whitelistConfigMap（含 mtls-whitelist.yaml 键）：Go 引擎在 TLS+gRPC 开启而无 CN 白名单文件时会被启动门禁拒绝" }}
+            {{- end }}
             - name: PRIVACY_TLS_ENABLED
               value: "true"
             - name: PRIVACY_TLS_CERT_FILE
               value: {{ .Values.security.tls.certFile | quote }}
             - name: PRIVACY_TLS_KEY_FILE
               value: {{ .Values.security.tls.keyFile | quote }}
+            {{- if ne .Values.engineType "go" }}
+            # env-scope: python-engine —— Python 引擎（uvicorn/ssl）读取点。Go 引擎不读这个变量：
+            #   客户端证书认证 → PRIVACY_AUTH_INTERNAL_MTLS_ENABLED + PRIVACY_AUTH_MTLS_WHITELIST_FILE
+            #   加密私钥口令   → Go 的 crypto/tls 不支持带口令私钥，须预先解密后再放进 Secret
             - name: PRIVACY_TLS_CLIENT_AUTH
               value: {{ .Values.security.tls.clientAuth | default "none" | quote }}
+            {{- end }}
             {{- if .Values.security.tls.caSecret }}
             - name: PRIVACY_TLS_CA_FILE
               value: {{ .Values.security.tls.caFile | quote }}
             {{- end }}
             {{- if .Values.security.tls.keyPasswordSecret }}
+            {{- if eq .Values.engineType "go" }}
+            {{- fail "engineType=go 时不支持 security.tls.keyPasswordSecret：Go 引擎无法解密带口令的私钥，请把 PRIVACY_TLS_KEY_FILE 指向未加密私钥" }}
+            {{- end }}
+            # env-scope: python-engine（engineType=go 时上方 fail 已阻断渲染，此变量永不下发到 Go 容器）
             - name: PRIVACY_TLS_KEY_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -130,24 +155,30 @@ spec:
                   key: key-password
             {{- end }}
             {{- end }}
-            # ── API Key 认证（可选）──
+            # ── API Key 认证（P0-1 零信任默认态）──
+            # 注意：Go 引擎只读取 PRIVACY_AUTH_INTERNAL_API_KEYS / PRIVACY_AUTH_EXTERNAL_API_KEYS
+            #（格式 token:name:scope1,scope2，多把以 ; 分隔）。历史模板里的
+            # PRIVACY_AUTH_EXTERNAL_KEYS_JSON 在 Go 侧从不被读取，属配置漂移，已停用。
             {{- if .Values.security.auth.enabled }}
+            {{- if and (not .Values.security.auth.apiKeysSecret) (not .Values.security.auth.apiKeys) }}
+            {{- fail "security.auth.enabled=true 时必须提供 security.auth.apiKeys 或 apiKeysSecret：Go 引擎在非环回监听且无入站 Key 时会被启动门禁拒绝（CrashLoopBackOff）" }}
+            {{- end }}
             - name: PRIVACY_AUTH_ENABLED
               value: "true"
             {{- if .Values.security.auth.apiKeysSecret }}
-            # 外部 Secret（用户自管）
-            - name: PRIVACY_AUTH_EXTERNAL_KEYS_JSON
+            # 外部 Secret（用户自管，数据键 api-keys）
+            - name: PRIVACY_AUTH_INTERNAL_API_KEYS
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.security.auth.apiKeysSecret | quote }}
-                  key: api-keys.json
-            {{- else if .Values.security.auth.apiKeys }}
+                  key: api-keys
+            {{- else }}
             # Chart 自动生成的 Secret
-            - name: PRIVACY_AUTH_EXTERNAL_KEYS_JSON
+            - name: PRIVACY_AUTH_INTERNAL_API_KEYS
               valueFrom:
                 secretKeyRef:
                   name: {{ include "PrivShield.fullname" . }}-secrets
-                  key: api-keys.json
+                  key: api-keys
             {{- end }}
             {{- end }}
             # ── 内部 mTLS 客户端证书认证（可选）──
@@ -175,20 +206,42 @@ spec:
               value: {{ .Values.security.rateLimit.redisUrl | quote }}
             {{- end }}
             {{- if .Values.security.rateLimit.perEndpointJson }}
+            # env-scope: python-engine —— Go 侧限流为内置 32 分片令牌桶（PRIVACY_RATE_LIMIT_RPS/_BURST），
+            # 不读取逐端点 JSON 覆盖。
             - name: PRIVACY_RATE_LIMIT_PER_ENDPOINT_JSON
               value: {{ .Values.security.rateLimit.perEndpointJson | quote }}
             {{- end }}
             {{- end }}
             # ── Layer-3 LLM 推理服务连接（可选）──
             {{- if .Values.llm.enabled }}
+            {{- if eq .Values.engineType "go" }}
+            # Go 引擎读取点与 Python 命名不同：PRIVACY_LLM_ENABLE / _ENDPOINT / _MODEL。
+            # 端点必须是完整 chat/completions URL（Python 侧的 _API_BASE 只到 /v1，Go 不自动补路径）。
+            - name: PRIVACY_LLM_ENABLE
+              value: "true"
+            - name: PRIVACY_LLM_ENDPOINT
+              value: "http://{{ include "PrivShield.fullname" . }}-llm:{{ .Values.llm.port }}/v1/chat/completions"
+            # P0-5：Go 引擎默认拒绝非环回 http:// 端点；本端点为集群内 vLLM 明文 HTTP，
+            # 需显式置 llm.allowInsecureHTTP=true 才下发豁免（默认 false，改用 https 后请置回）。
+            - name: PRIVACY_LLM_ALLOW_INSECURE_HTTP_ENDPOINT
+              value: {{ .Values.llm.allowInsecureHTTP | quote }}
+            - name: PRIVACY_LLM_MODEL
+              value: {{ .Values.llm.servedModelName | quote }}
+            - name: PRIVACY_LLM_API_KEY
+              value: {{ .Values.llm.apiKey | default "EMPTY" | quote }}
+            {{- else }}
+            # env-scope: python-engine —— 以下三个名字仅 Python 引擎读取
             - name: PRIVACY_LLM_PROVIDER
               value: {{ .Values.llm.provider | default "vllm" | quote }}
+            # env-scope: python-engine
             - name: PRIVACY_LLM_API_BASE
               value: "http://{{ include "PrivShield.fullname" . }}-llm:{{ .Values.llm.port }}/v1"
+            # env-scope: python-engine
             - name: PRIVACY_LLM_MODEL_NAME
               value: {{ .Values.llm.servedModelName | quote }}
             - name: PRIVACY_LLM_API_KEY
               value: {{ .Values.llm.apiKey | default "EMPTY" | quote }}
+            {{- end }}
             {{- end }}
             # ── 额外环境变量（用户自定义）──
             {{- with .Values.extraEnv }}

@@ -3,7 +3,6 @@ package handlers
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -27,6 +26,18 @@ import (
 )
 
 const moduleVia = "audit-log"
+
+// auditReadOnlyEndpoints 是「只读核验员 Key」可访问的 方法+路径 白名单（第十二章 P1-6 ②③）。
+// 只放查询与验真端点；POST /api/audit/logs（写存证）与 POST /api/audit/report（报表导出）
+// 刻意排除——核验专区是「被查者」，不得具备任何写入能力。
+var auditReadOnlyEndpoints = []middleware.ReadOnlyEndpoint{
+	{Method: http.MethodGet, Path: "/api/audit/logs"},
+	{Method: http.MethodGet, Path: "/api/audit/stats"},
+	{Method: http.MethodGet, Path: "/api/audit/snapshots"},
+	{Method: http.MethodPost, Path: "/api/audit/snapshots/verify"},
+	{Method: http.MethodGet, Path: "/api/audit/chain/verify"},
+	{Method: http.MethodPost, Path: "/api/audit/chain/verify"},
+}
 
 // Server aggregates HTTP handler dependencies.
 type Server struct {
@@ -60,7 +71,18 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 		r.Use(middleware.RateLimit(s.cfg.RateLimitRPS, s.cfg.RateLimitBurst)) // 每客户端 IP 令牌桶限流
 	}
 	r.Use(middleware.CORS(s.cfg.CORSOrigins))
-	r.Use(middleware.Auth(s.cfg.APIKey))
+	// P1-6 权责分离：数据局核验专区持「只读核验员 Key」，只能命中 auditReadOnlyEndpoints
+	// 这张 方法+路径 白名单；写入端点（POST /api/audit/logs）与报表导出（POST /api/audit/report）
+	// 不在表内，越权直接 403。ReaderAPIKey 为空则退化为原单 Key 语义。
+	r.Use(middleware.AuthWithRoles(s.cfg.APIKey, s.cfg.ReaderAPIKey, auditReadOnlyEndpoints))
+	if s.cfg.ReaderAPIKey == "" {
+		s.logger.Warn("audit reader role disabled: verification endpoints share the write API key (P1-6)",
+			"component", "audit-log", "module", moduleVia)
+	} else {
+		s.logger.Info("audit reader role enabled: verification endpoints restricted to reader key",
+			"component", "audit-log", "module", moduleVia,
+			"readonly_endpoints", len(auditReadOnlyEndpoints))
+	}
 
 	r.GET("/health", s.Health)     // Liveness probe / 存活探针
 	r.GET("/readyz", s.Readyz)     // Readiness probe / 就绪探针
@@ -271,16 +293,21 @@ func (s *Server) CreateLog(c *gin.Context) {
 		return
 	}
 
+	// P0 fix: input_hash and output_hash must be supplied by the caller. Server-side fallback
+	// to metadata-only hashes weakens the tamper-evidence binding because it does not cover
+	// the actual data content.
+	if req.InputHash == "" {
+		middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT",
+			"input_hash is required and must be a cryptographic hash of the actual input data", nil)
+		return
+	}
+	if req.OutputHash == "" {
+		middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT",
+			"output_hash is required and must be a cryptographic hash of the actual output data", nil)
+		return
+	}
 	inputHash := req.InputHash
 	outputHash := req.OutputHash
-	if inputHash == "" {
-		h := crypto.SumSM3([]byte(fmt.Sprintf("input|%s|%d|%s|%s", normID, req.InputRows, req.User, string(paramsJSON))))
-		inputHash = hex.EncodeToString(h[:])
-	}
-	if outputHash == "" {
-		h := crypto.SumSM3([]byte(fmt.Sprintf("output|%s|%d|%s|%s|%s", normID, req.OutputRows, req.Status, req.SecurityLevel, string(paramsJSON))))
-		outputHash = hex.EncodeToString(h[:])
-	}
 
 	log := &store.AuditLog{
 		ID:             logID,
@@ -305,14 +332,18 @@ func (s *Server) CreateLog(c *gin.Context) {
 	}
 
 	// Encrypt sensitive snapshot samples before storage (Envelope Encryption)
-	encInputSample := req.InputSample
-	encOutputSample := req.OutputSample
+	encInputSample, encOutputSample := req.InputSample, req.OutputSample
 	if s.cfg.EncryptionKey != "" {
-		if enc, err := crypto.EncryptString(req.InputSample, s.cfg.EncryptionKey); err == nil {
-			encInputSample = enc
+		var err error
+		if encInputSample, err = crypto.EncryptString(req.InputSample, s.cfg.EncryptionKey); err != nil {
+			s.logger.Error("failed to encrypt input snapshot sample", "error", err.Error())
+			middleware.AbortWithError(c, http.StatusInternalServerError, "ENCRYPTION_FAILED", "failed to encrypt input snapshot sample", nil)
+			return
 		}
-		if enc, err := crypto.EncryptString(req.OutputSample, s.cfg.EncryptionKey); err == nil {
-			encOutputSample = enc
+		if encOutputSample, err = crypto.EncryptString(req.OutputSample, s.cfg.EncryptionKey); err != nil {
+			s.logger.Error("failed to encrypt output snapshot sample", "error", err.Error())
+			middleware.AbortWithError(c, http.StatusInternalServerError, "ENCRYPTION_FAILED", "failed to encrypt output snapshot sample", nil)
+			return
 		}
 	}
 
@@ -384,31 +415,57 @@ func (s *Server) ListSnapshots(c *gin.Context) {
 	}
 
 	// Decrypt sample fields transparently if encrypted
+	var unencrypted []string
 	if s.cfg.EncryptionKey != "" {
 		for i := range snaps {
 			if crypto.IsEncrypted(snaps[i].InputSample) {
 				if dec, err := crypto.DecryptString(snaps[i].InputSample, s.cfg.EncryptionKey); err == nil {
 					snaps[i].InputSample = dec
+				} else {
+					s.logger.Warn("snapshot sample decryption failed",
+						"snapshot_id", snaps[i].ID, "field", "input_sample", "error", err.Error())
 				}
+			} else if snaps[i].InputSample != "" {
+				unencrypted = append(unencrypted, snaps[i].ID)
 			}
 			if crypto.IsEncrypted(snaps[i].OutputSample) {
 				if dec, err := crypto.DecryptString(snaps[i].OutputSample, s.cfg.EncryptionKey); err == nil {
 					snaps[i].OutputSample = dec
+				} else {
+					s.logger.Warn("snapshot sample decryption failed",
+						"snapshot_id", snaps[i].ID, "field", "output_sample", "error", err.Error())
 				}
+			} else if snaps[i].OutputSample != "" {
+				unencrypted = append(unencrypted, snaps[i].ID)
 			}
+		}
+		if len(unencrypted) > 0 {
+			s.logger.Warn("snapshot samples stored without envelope prefix while encryption is enabled",
+				"count", len(unencrypted))
 		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"total":     total,
-		"limit":     limit,
-		"offset":    offset,
-		"snapshots": snaps,
-		"via":       moduleVia,
+		"total":               total,
+		"limit":               limit,
+		"offset":              offset,
+		"snapshots":           snaps,
+		"unencrypted_samples": unencrypted,
+		"via":                 moduleVia,
 	})
 }
 
 // VerifyIntegrity verifies the integrity of a snapshot using its hash.
+//
+// VerifyIntegrity 单条快照验真端点。P2-4 响应补 `reason` 机器可读枚举：
+//   - `ok`：按「当前写入口径」（配置密钥时为 HMAC-SM3）验真通过；
+//   - `legacy_hashed`：仅命中迁移前历史候选（无密钥 SM3 / SHA-256 / 本机时区）——证据真实、
+//     仅需重签，**不得被解读为篡改**；
+//   - `hash_mismatch`：所有候选前映像均无法复原存储哈希，即快照内容（含密文样本）已被改写，
+//     `valid=false`（fail-closed 语义保持不变）。
+//
+// 注：快照核验标签带 `-SNAPSHOT` 后缀，而 `store.IsCanonicalHashLabel` 判定的是日志写入口径，
+// 故比较前需先剥离该后缀。
 func (s *Server) VerifyIntegrity(c *gin.Context) {
 	var req struct {
 		SnapshotID string `json:"snapshot_id" binding:"required"`
@@ -432,31 +489,65 @@ func (s *Server) VerifyIntegrity(c *gin.Context) {
 
 	prevHash := snap.PrevHash
 	if prevHash == "" {
+		// Backward compatibility: snapshots written before the P0 fix may have an empty prev_hash.
 		prevHash = log.PrevHash
 	}
 
-	valid, _ := store.VerifyAuditIntegrityHash(
-		snap.IntegrityHash, snap.AuditLogID, prevHash, snap.Timestamp, snap.Algorithm,
-		log.InputHash, log.OutputHash, log.User, log.SecurityLevel, snap.ParametersJSON,
+	// P0 fix: verify the snapshot using its own integrity hash that covers input/output samples.
+	valid, hashLabel := store.VerifySnapshotIntegrityHash(
+		snap.IntegrityHash, snap.ID, snap.AuditLogID, prevHash, snap.Timestamp, snap.Algorithm,
+		snap.InputSample, snap.OutputSample, snap.ParametersJSON,
 	)
-	expectedHash := store.ComputeAuditIntegrityHash(
-		snap.AuditLogID, prevHash, snap.Timestamp, snap.Algorithm,
-		log.InputHash, log.OutputHash, log.User, log.SecurityLevel, snap.ParametersJSON,
+	// Legacy fallback: snapshots written before this fix copied the parent audit log's integrity hash.
+	if !valid {
+		valid, hashLabel = store.VerifyAuditIntegrityHash(
+			snap.IntegrityHash, snap.AuditLogID, prevHash, snap.Timestamp, snap.Algorithm,
+			log.InputHash, log.OutputHash, log.User, log.SecurityLevel, snap.ParametersJSON,
+		)
+	}
+	expectedHash := store.ComputeSnapshotIntegrityHash(
+		snap.ID, snap.AuditLogID, prevHash, snap.Timestamp, snap.Algorithm,
+		snap.InputSample, snap.OutputSample, snap.ParametersJSON,
 	)
 
+	// P2-4：把「为什么验真通过/失败」结构化透出，避免看板解析 hash_label 字符串猜口径。
+	reason := store.ChainReasonHashMismatch
+	legacyHashed := false
+	if valid {
+		// 快照标签带 -SNAPSHOT 后缀，IsCanonicalHashLabel 按日志写入口径判定，故先剥离再比较。
+		if store.IsCanonicalHashLabel(strings.TrimSuffix(hashLabel, "-SNAPSHOT")) {
+			reason = store.ChainReasonOK
+		} else {
+			reason = store.ChainReasonLegacyHashed
+			legacyHashed = true
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"snapshot_id": req.SnapshotID,
-		"valid":       valid,
-		"expected":    expectedHash,
-		"actual":      snap.IntegrityHash,
-		"prev_hash":   prevHash,
-		"via":         moduleVia,
+		"snapshot_id":   req.SnapshotID,
+		"valid":         valid,
+		"reason":        reason,
+		"legacy_hashed": legacyHashed,
+		"hash_label":    hashLabel,
+		"expected":      expectedHash,
+		"actual":        snap.IntegrityHash,
+		"prev_hash":     prevHash,
+		"via":           moduleVia,
 	})
 }
 
-// VerifyChain verifies the cryptographic hash chain of recent records.
+// VerifyChain verifies the cryptographic hash chain of records.
+// P1 fix: when limit is omitted or zero, the entire chain is verified by default, and the
+// response includes total_records so callers can detect physical deletion.
+//
+// VerifyChain 哈希链对账验真端点。P2-4 补齐验真响应信息量：
+//   - `reason`：机器可读核验结论枚举（ok / legacy_hashed / tampered_payload / hash_mismatch /
+//     broken_chain / missing_prev / missing_records），看板无需再解析英文 `message` 字符串；
+//   - `legacy_hashed`：以「迁移前历史口径」（无密钥 SM3 / SHA-256 / 本机时区）验真通过的记录数，
+//     属于「证据真实、仅待重签」，**不代表被篡改**；此时 `valid` 仍为 true 且 `reason` 为
+//     `legacy_hashed`，与真实失配（`tampered_payload` / `hash_mismatch`，`valid=false`）严格区分。
 func (s *Server) VerifyChain(c *gin.Context) {
-	limit := 1000
+	limit := 0
 	if lStr := c.Query("limit"); lStr != "" {
 		if l, err := strconv.Atoi(lStr); err == nil && l > 0 {
 			limit = l
@@ -477,7 +568,10 @@ func (s *Server) VerifyChain(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
+		"reason":         res.Reason,
+		"legacy_hashed":  res.LegacyHashed,
 		"total_verified": res.TotalVerified,
+		"total_records":  res.TotalRecords,
 		"valid":          res.Valid,
 		"broken_at_id":   res.BrokenAtID,
 		"expected_hash":  res.ExpectedHash,
@@ -513,4 +607,3 @@ func (s *Server) GenerateReport(c *gin.Context) {
 		"recommendations":   report.Recommendations,
 	})
 }
-

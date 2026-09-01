@@ -2,7 +2,8 @@
 # PrivShield 配置 ConfigMap（configmap.yaml）
 # =============================================================================
 # 存储 privacy-profile.yaml 配置文件，挂载到容器 /etc/PrivShield/ 目录。
-# 代码通过 PRIVACY_PROFILE 环境变量读取此文件，按 primitives 段覆盖内置默认参数。
+# 仅 engineType=python 时生效：Python 引擎通过 PRIVACY_PROFILE 读取本文件并按 primitives 段覆盖默认参数；
+# Go 引擎改读 PRIVACY_CONFIG_FILE（config/privacy.yaml）+ PRIVACY_RULES_DIR，不读取本 profile 文件。
 # =============================================================================
 apiVersion: v1
 kind: ConfigMap

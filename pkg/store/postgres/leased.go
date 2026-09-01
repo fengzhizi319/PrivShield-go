@@ -1,12 +1,22 @@
-// Phase B: LeasedTaskStore — Atomic task ownership via PostgreSQL.
-// Phase B：基于 PostgreSQL 的原子任务领取与租约管理。
+// Package postgres implements Phase B LeasedTaskStore: atomic task ownership via PostgreSQL.
+// Package postgres 实现 Phase B LeasedTaskStore：基于 PostgreSQL 的原子任务领取与独占租约管理。
 //
-// ClaimNext uses FOR UPDATE SKIP LOCKED to enable lock-free competitive claiming
-// among multiple Hub replicas. Each lease carries a unique token so that stale
-// owners cannot overwrite results after a lease has been reassigned.
-//
-// ClaimNext 使用 FOR UPDATE SKIP LOCKED 实现多 Hub 副本间的无阻塞竞争领取。
-// 每个租约携带唯一令牌，防止过期所有者在租约已被重新分配后覆盖结果。
+// ==============================================================================
+// 【核心算法与并发控制】
+// 1. 【无阻塞原子竞争领取 (FOR UPDATE SKIP LOCKED)】：
+//    ClaimNext 通过单条短事务将 CTE 候选筛选与行级锁定结合，多副本 Hub 节点并发竞争时，
+//    自动跳过已被锁定的行，无任何锁等待或死锁风险；
+// 2. 【16 字节随机令牌防脑裂覆盖 (Lease Token)】：
+//    每个分配的租约携带唯一随机 Hex 令牌（generateToken）。当所有者发生长 GC、假死或网络分区导致租约超期
+//    被其他副本接管后，过期所有者后续执行的 CompleteLease / FailLease 均因 token 不匹配返回 false，
+//    严防陈旧数据覆盖；
+// 3. 【可重试失败与指数退避 (FailLease)】：
+//    若 failure.Retryable 为 true 且 retry_count < max_retries，任务重置为 pending 并设置
+//    retry_after = NOW() + min(5 * 2^retry_count, 60) 秒；若达到最大重试次数则强制置为 terminal failed；
+// 4. 【过期租约自动回收 (RequeueExpiredLeases)】：
+//    定期扫描 running 但 lease_expires_at <= NOW() 的任务，重置为 pending 等待重新调度。
+// ==============================================================================
+
 package postgres
 
 import (
@@ -20,17 +30,18 @@ import (
 )
 
 // ClaimNext atomically claims the next pending task for the given owner.
-// 使用 FOR UPDATE SKIP LOCKED 实现无阻塞竞争领取；无可用任务时返回 (nil, nil)。
 //
-// The operation is a single short transaction:
-//  1. SELECT one pending row FOR UPDATE SKIP LOCKED (skip rows locked by other replicas)
-//  2. UPDATE it to running + write lease metadata
-//  3. RETURNING the full row
+// ClaimNext 原子抢占下一个待执行任务。
 //
-// 整个操作为单个短事务：
-//  1. SELECT 一行 pending 任务 FOR UPDATE SKIP LOCKED（跳过被其他副本锁定的行）
-//  2. UPDATE 为 running + 写入租约元数据
-//  3. RETURNING 返回完整行
+// 执行逻辑：
+//  1. 生成 16 字节随机十六进制令牌 token；
+//  2. 执行单条 SQL 短事务：
+//     a. CTE candidate：筛选 status='pending' 且到达重试时间 retry_after 的任务，按 priority 降序、created_at 升序排列，
+//     使用 FOR UPDATE SKIP LOCKED 锁定 1 行（自动跳过其他副本正在处理的行）；
+//     b. UPDATE tasks：将状态置为 running、stage 置为 running、写入 lease_owner、lease_token、lease_expires_at 并自增 version；
+//     c. RETURNING：返回被领取的完整任务行；
+//  3. 若无可用 pending 任务，返回 (nil, nil)；
+//  4. 返回包装后的 store.TaskLease 结构体。
 func (s *Store) ClaimNext(owner string, leaseTTL time.Duration) (*store.TaskLease, error) {
 	ctx := context.Background()
 	token := generateToken()
@@ -56,13 +67,13 @@ func (s *Store) ClaimNext(owner string, leaseTTL time.Duration) (*store.TaskLeas
 		    version = version + 1
 		WHERE id IN (SELECT id FROM candidate)
 		RETURNING id, status, stage, source, api_code, datasource_id, operation, priority, created_at, started_at,
-			completed_at, duration_ms, error, retry_count, retry_after, trace_id,
+			completed_at, duration_ms, error, error_class, retry_count, retry_after, trace_id,
 			lease_owner, lease_token, lease_expires_at, version, max_retries
 	`, owner, token, fmt.Sprintf("%.0f", leaseTTL.Seconds()))
 
 	task, err := scanTask(row)
 	if err != nil {
-		// No rows returned = no pending tasks available / 无可用任务
+		// 无行返回表示当前没有可调度的 pending 任务
 		if err.Error() == "no rows in result set" {
 			return nil, nil
 		}
@@ -78,8 +89,12 @@ func (s *Store) ClaimNext(owner string, leaseTTL time.Duration) (*store.TaskLeas
 }
 
 // RenewLease extends the lease for a task, conditional on ownership and non-expiry.
-// 续租操作，条件为当前所有者持有有效且未过期的租约。
-// 返回 false 表示租约已过期或所有权已丢失。
+//
+// RenewLease 延长任务租约。
+//
+// 执行逻辑：
+// 仅当 id、status='running'、lease_owner、lease_token 均匹配且 lease_expires_at > NOW()（未过期）时
+// 延长过期时间并自增版本号；返回 false 表示已失去所有权。
 func (s *Store) RenewLease(id, owner, token string, leaseTTL time.Duration) (bool, error) {
 	ctx := context.Background()
 	tag, err := s.pool.Exec(ctx, `
@@ -99,8 +114,12 @@ func (s *Store) RenewLease(id, owner, token string, leaseTTL time.Duration) (boo
 }
 
 // CompleteLease marks a task as completed, conditional on ownership.
-// 条件完成操作：仅当当前副本仍持有有效租约时才标记完成。
-// 返回 false 表示当前副本已失去所有权（其他副本可能已接管）。
+//
+// CompleteLease 将任务标记为完成终态。
+//
+// 执行逻辑：
+// 仅当当前副本持有合法且未超期的租约时，将任务状态置为 completed、记录 completed_at 与实际执行耗时 duration_ms，
+// 并清空租约过期时间；返回 false 表示已失去所有权。
 func (s *Store) CompleteLease(id, owner, token string, result store.TaskResult) (bool, error) {
 	ctx := context.Background()
 	tag, err := s.pool.Exec(ctx, `
@@ -124,19 +143,26 @@ func (s *Store) CompleteLease(id, owner, token string, result store.TaskResult) 
 }
 
 // FailLease marks a task as failed, conditional on ownership.
-// 条件失败操作：仅当当前副本仍持有有效租约时才标记失败。
-// 若 failure.Retryable 为 true 且重试次数未耗尽，任务回退为 pending 等待重试。
-// 返回 false 表示当前副本已失去所有权。
+//
+// FailLease 标记任务执行失败。
+//
+// 执行逻辑：
+//  1. 若 failure.Retryable 为 true：
+//     a. 若 retry_count < max_retries：将状态重置为 pending、清空租约所有者、累加 retry_count，
+//     并按 min(5 * 2^retry_count, 60) 秒计算指数退避时间 retry_after；
+//     b. 若重试次数已达上限（retry_count >= max_retries）：强制转为终态 failed，记录耗时与错误信息；
+//  2. 若不可重试（failure.Retryable 为 false）：直接置为终态 failed。
 func (s *Store) FailLease(id, owner, token string, failure store.TaskFailure) (bool, error) {
 	ctx := context.Background()
 
 	if failure.Retryable {
-		// Retryable failure: reset to pending with backoff / 可重试失败：回退为 pending 并设置退避
+		// 可重试失败：回退为 pending 并设置退避
 		tag, err := s.pool.Exec(ctx, `
 			UPDATE tasks
 			SET status = 'pending',
 			    stage = 'queued',
 			    error = $4,
+			    error_class = $5,
 			    retry_count = retry_count + 1,
 			    retry_after = NOW() + (LEAST(5 * POWER(2, retry_count), 60)::TEXT || ' seconds')::INTERVAL,
 			    lease_owner = '',
@@ -149,7 +175,7 @@ func (s *Store) FailLease(id, owner, token string, failure store.TaskFailure) (b
 			  AND lease_token = $3
 			  AND lease_expires_at > NOW()
 			  AND retry_count < max_retries
-		`, id, owner, token, failure.Error)
+		`, id, owner, token, failure.Error, failure.ErrorClass)
 		if err != nil {
 			return false, fmt.Errorf("postgres: fail lease (retryable): %w", err)
 		}
@@ -157,13 +183,12 @@ func (s *Store) FailLease(id, owner, token string, failure store.TaskFailure) (b
 			return true, nil
 		}
 
-		// A valid lease at its retry limit must become terminal. Leaving it
-		// running would let lease recovery requeue a task that ClaimNext can no
-		// longer claim because retry_count has reached max_retries.
+		// 重试次数已耗尽，流转为终态 failed
 		tag, err = s.pool.Exec(ctx, `
 			UPDATE tasks
 			SET status = 'failed',
 			    error = $4,
+			    error_class = $5,
 			    completed_at = NOW(),
 			    duration_ms = EXTRACT(EPOCH FROM (NOW() - started_at)) * 1000,
 			    lease_expires_at = NULL,
@@ -174,18 +199,19 @@ func (s *Store) FailLease(id, owner, token string, failure store.TaskFailure) (b
 			  AND lease_token = $3
 			  AND lease_expires_at > NOW()
 			  AND retry_count >= max_retries
-		`, id, owner, token, failure.Error)
+		`, id, owner, token, failure.Error, failure.ErrorClass)
 		if err != nil {
 			return false, fmt.Errorf("postgres: fail lease after retry exhaustion: %w", err)
 		}
 		return tag.RowsAffected() > 0, nil
 	}
 
-	// Non-retryable failure: mark as terminal failed / 不可重试失败：标记为终态 failed
+	// 不可重试失败：直接标记为终态 failed
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE tasks
 		SET status = 'failed',
 		    error = $4,
+		    error_class = $5,
 		    completed_at = NOW(),
 		    duration_ms = EXTRACT(EPOCH FROM (NOW() - started_at)) * 1000,
 		    lease_expires_at = NULL,
@@ -195,7 +221,7 @@ func (s *Store) FailLease(id, owner, token string, failure store.TaskFailure) (b
 		  AND lease_owner = $2
 		  AND lease_token = $3
 		  AND lease_expires_at > NOW()
-	`, id, owner, token, failure.Error)
+	`, id, owner, token, failure.Error, failure.ErrorClass)
 	if err != nil {
 		return false, fmt.Errorf("postgres: fail lease (terminal): %w", err)
 	}
@@ -203,8 +229,8 @@ func (s *Store) FailLease(id, owner, token string, failure store.TaskFailure) (b
 }
 
 // RequeueExpiredLeases reclaims tasks whose lease has expired.
-// 批量回收过期租约：将 running 但租约已过期的任务回退为 pending。
-// 使用条件 UPDATE 确保不会覆盖仍健康副本的租约。
+//
+// RequeueExpiredLeases 批量回收过期租约：将 running 状态且 lease_expires_at <= NOW() 的任务重置为 pending。
 func (s *Store) RequeueExpiredLeases(limit int) (int, error) {
 	ctx := context.Background()
 	if limit <= 0 {
@@ -236,7 +262,7 @@ func (s *Store) RequeueExpiredLeases(limit int) (int, error) {
 }
 
 // generateToken creates a random 16-byte hex token for lease identification.
-// generateToken 生成 16 字节随机十六进制令牌，用于租约唯一标识。
+// generateToken 生成 16 字节安全随机十六进制字符串作为租约令牌。
 func generateToken() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)

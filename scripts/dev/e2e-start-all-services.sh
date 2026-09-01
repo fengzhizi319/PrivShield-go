@@ -187,6 +187,7 @@ start_service_hub() {
 
     SERVICE_HUB_HOST=127.0.0.1 SERVICE_HUB_PORT="$port" \
         SERVICE_HUB_AGENT_REST_HOST=127.0.0.1 SERVICE_HUB_AGENT_REST_PORT=8079 \
+        SERVICE_HUB_AUDIT_LOG_URLS="http://127.0.0.1:${AUDIT_LOG_PORT:-8084}" \
         SERVICE_HUB_DB_PATH="${DATA_DIR}/service-hub.db" \
         ./bin/service-hub > "${LOGS_DIR}/service-hub_e2e.log" 2>&1 &
     echo $! > "$pid_file"

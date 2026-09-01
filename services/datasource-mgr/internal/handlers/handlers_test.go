@@ -11,12 +11,16 @@
 // 7. Schema 元数据探查（TestGetMetadata）；
 // 8. 访问审计日志（TestGetAccessAudit）；
 // 9. 模拟数据重新播种端点（TestSeedDataSources）。
+// 10. P0-4 数据完整性严格模式：样本全量可读 + 损坏行拒绝静音降级（TestLoadCSVRecords_*Strict*）。
 package handlers
 
 import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -326,5 +330,74 @@ func TestLoadCSVRecords_AllowedFiles(t *testing.T) {
 		if total <= 0 || len(records) == 0 {
 			t.Errorf("expected records for %s, got total=%d len=%d", name, total, len(records))
 		}
+	}
+}
+
+// TestLoadCSVRecords_ShippedSamplesSurviveStrictMode 保证 P0-4 的「默认严格」不会误伤生产：
+// 官方自带的两份样本数据在严格完整性模式下必须整份读完（记录数与非严格模式一致），
+// 否则 DATASOURCE_MGR_STRICT_STORAGE 的默认值就等于把已有查询接口打挂。
+// TestLoadCSVRecords_ShippedSamplesSurviveStrictMode pins the fail-closed default: the shipped
+// mock datasets must parse completely under strict integrity, otherwise defaulting
+// DATASOURCE_MGR_STRICT_STORAGE=true to would break every existing sample query.
+func TestLoadCSVRecords_ShippedSamplesSurviveStrictMode(t *testing.T) {
+	defer SetStrictDataIntegrity(strictDataIntegrity.Load())
+
+	SetStrictDataIntegrity(false)
+	baseline := map[string]int{}
+	for _, name := range []string{"yibao.csv", "kangyang.csv"} {
+		_, total, err := LoadCSVRecords(name, 1000, 0)
+		if err != nil {
+			t.Fatalf("lenient load of %s failed: %v", name, err)
+		}
+		baseline[name] = total
+	}
+
+	SetStrictDataIntegrity(true)
+	for _, name := range []string{"yibao.csv", "kangyang.csv"} {
+		records, total, err := LoadCSVRecords(name, 1000, 0)
+		if err != nil {
+			t.Fatalf("strict load of %s failed: %v", name, err)
+		}
+		if total != baseline[name] || len(records) != baseline[name] {
+			t.Errorf("strict mode lost rows for %s: total=%d len=%d, want %d", name, total, len(records), baseline[name])
+		}
+	}
+}
+
+// TestLoadCSVRecords_StrictModeAbortsOnCorruptRow 是 P0-4 的核心断言：
+// 损坏行在严格模式下必须上抛为错误（旧实现 `continue` 静音丢弃，调用方拿到缺行数据却返回 200）；
+// 显式关闭严格模式时才允许降级为静音跳过。
+// TestLoadCSVRecords_StrictModeAbortsOnCorruptRow asserts the no-silent-degradation contract: a
+// malformed line aborts the whole load under strict mode and is only skipped when strict storage is
+// explicitly turned off.
+func TestLoadCSVRecords_StrictModeAbortsOnCorruptRow(t *testing.T) {
+	defer SetStrictDataIntegrity(strictDataIntegrity.Load())
+
+	// findCSVFile resolves allow-listed names against relative candidate dirs, so a per-test
+	// working directory lets us feed a fixture without touching the repository samples.
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "samples"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	corrupt := "id,name\n1,\"unclosed\n2,ok\n"
+	if err := os.WriteFile(filepath.Join(dir, "samples", "yibao.csv"), []byte(corrupt), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	t.Chdir(dir)
+
+	SetStrictDataIntegrity(true)
+	if _, _, err := LoadCSVRecords("yibao.csv", 10, 0); err == nil {
+		t.Fatal("strict mode must abort on a corrupt row, got nil error")
+	} else if !strings.Contains(err.Error(), "malformed record") {
+		t.Errorf("expected malformed-record error, got %v", err)
+	}
+
+	SetStrictDataIntegrity(false)
+	records, total, err := LoadCSVRecords("yibao.csv", 10, 0)
+	if err != nil {
+		t.Fatalf("lenient mode should skip the corrupt row, got %v", err)
+	}
+	if total >= 2 || len(records) >= 2 {
+		t.Fatalf("expected the corrupt row to be silently dropped, got total=%d", total)
 	}
 }

@@ -1,31 +1,41 @@
 # =============================================================================
 # PrivShield - 生产级 Docker Compose 编排 (Production Orchestration)
 # =============================================================================
-# 生产环境专用编排文件，提供：
-#   1. 全链路 TLS 强加密传输与 API Key 鉴权
-#   2. 生产级 JSON 结构化日志，便于集中式日志收集 (ELK / Loki)
-#   3. 分布式限流支持 (可选集成 Redis 后端)
-#   4. 严格的容器资源配额 (Limits / Reservations) 与安全加固 (no-new-privileges)
-#   5. 纯生产镜像运行（不挂载宿主机源码），保障环境一致性
-#   6. 容器异常自动重启策略 (restart: always)
-#   7. 持久化数据命名卷 (SQLite 预算库、审计日志、Redis、Prometheus、Grafana)
+# 生产环境专用编排文件。**安全开关默认即为加固态**（不再是可关可开的选项）：
+#   1. 全链路 TLS 强加密传输 + API Key 强鉴权 + 每客户端 IP 令牌桶限流
+#   2. Fail-Closed 启动门禁（pkg/config.ValidateFailClosed）：
+#        · 监听非环回地址（容器内 bridge 网络必须 0.0.0.0）却未配置入站 API Key → 拒绝启动；
+#        · *_REQUIRE_TLS=true 而 *_TLS_ENABLED=false → 拒绝启动（防「漏配证书仍照常明文服务」）；
+#        · 启用 gRPC TLS 但未注入 mTLS CN 白名单文件 → 拒绝启动（防「以为已双向认证、实则未注册拦截器」）；
+#        · audit-log 远程暴露但缺少快照加密密钥 AUDIT_LOG_ENCRYPTION_KEY → 拒绝启动（防快照明文落盘）；
+#        · audit-log 远程暴露但缺少存证链密钥 AUDIT_LOG_HASH_KEY → 拒绝启动（防可被重算伪造的无密钥哈希）；
+#        · 存储档位（*_STRICT_STORAGE 默认 true）：audit-log 打不开持久化存储或 SQLite 完整性校验失败、
+#          service-hub 配置了 SERVICE_HUB_PG_DSN 却探测失败 → 一律拒绝启动，绝不静默降级到 SQLite/内存。
+#     ⇒ 本文件中所有 `:?` 变量都是**运营方必填项**：留空即 `docker compose up` 直接失败，
+#       我们刻意不为其设置空默认值（空默认值等于关闭鉴权）。密钥材料一律来自 .env / 证书卷 / Secret，
+#       清单内不出现任何字面量密钥。
+#   3. PostgreSQL 为**默认档位**（phase-b-postgres 不再挂 profile）：service-hub 原子租约
+#      （多副本防脑裂）与 audit-log 存证链均依赖它；详见 §12.1.2 P1-8 与 README「PostgreSQL 前提」。
+#   4. 存证留存显式化：AUDIT_LOG_RETENTION_DAYS=0（永不物理删除）+ AUDIT_LOG_ARCHIVE_DIR 挂载归档卷。
+#   5. 生产级 JSON 结构化日志（便于 ELK / Loki 采集）、纯镜像运行（不挂载源码）、
+#      restart: always、no-new-privileges、持久化命名卷。
 #
 # 🚀 启动方式 / Usage:
-#   # 1. 基础生产模式（Core Agent + Go 代理 + Nginx Web + Redis 限流）
+#   # 1. 准备 .env（必填密钥与密码见 .env.prod.example）与证书目录
+#   cp .env.prod.example .env && mkdir -p certs secrets
+#   # 2. 基础生产模式（Agent + Console + 中台三服务 + Redis + PostgreSQL）
 #   docker compose -f docker-compose.prod.yml up -d
-#
-#   # 2. 启用 GPU 大模型推理（vLLM 独立容器）
+#   # 3. 启用 GPU 大模型推理（vLLM 独立容器）
 #   docker compose -f docker-compose.prod.yml --profile llm up -d
-#
-#   # 3. 启用生产全栈监控（Prometheus + Grafana）
+#   # 4. 启用生产全栈监控（Prometheus + Grafana）
 #   docker compose -f docker-compose.prod.yml --profile monitoring up -d
 #
-#   # 4. 全量生产套件拉起（Agent + Console + LLM + Redis + Monitoring）
-#   docker compose -f docker-compose.prod.yml --profile llm --profile monitoring up -d
-#
 # ⚠️ 生产前置准备 / Prerequisites:
-#   - 准备服务端证书: 创建 deploy/docker-compose/certs/ 目录并放置 tls.crt 与 tls.key
-#   - 准备环境变量: cp .env.prod.example .env 并配置密钥与密码
+#   - 证书：deploy/docker-compose/certs/ 下按服务放置 <svc>/tls.crt、tls.key 与 ca.crt
+#     （可用 scripts/dev/generate_all_test_certs.sh 生成内部 CA 后再替换为局方签发证书）；
+#   - mTLS CN 白名单：secrets/mtls-whitelist.yaml（各服务共用或按服务拆分）；
+#   - 环境变量：.env 中的 *_API_KEY / PG_PASSWORD / AUDIT_LOG_ENCRYPTION_KEY 必须为强随机值，
+#     禁止复用 .env.prod.example 中的示例值，禁止提交到 Git。
 # =============================================================================
 
 # =============================================================================
@@ -56,13 +66,18 @@ volumes:
   # 审计日志持久化
   audit-logs:
     driver: local
-  # 中台微服务数据持久化
+  # 中台微服务数据持久化（仅 SQLite 档位使用；生产默认 PostgreSQL 档位，见下方 phase-b-postgres）
   service-hub-data:
     driver: local
   datasource-mgr-data:
     driver: local
   audit-log-data:
     driver: local
+  # 存证归档段落盘位置（AUDIT_LOG_ARCHIVE_DIR=/app/data/archives）落在上面 audit-log-data
+  # 卷内：镜像以 privacy 属主预置 /app/data，容器非 root 可直接写入；若另挂独立卷到镜像中
+  # 不存在的路径（如 /var/lib/privshield/archive），Docker 会以 root:root 创建挂载点导致
+  # 归档写入失败。要做分离保管，请自行准备属主正确的目录后以 bind 方式挂载同一路径。
+  # 归档段必须独立备份/对象存储同步，否则「先归档后清理」等于销毁证据。
   # 分布式限流 Redis 数据持久化
   redis-data:
     driver: local
@@ -72,7 +87,7 @@ volumes:
   # Grafana 面板与用户数据
   grafana-data:
     driver: local
-  # Phase B: PostgreSQL 数据持久化（多副本 Hub 模式）
+  # PostgreSQL 数据持久化（生产默认档位：多副本 Hub 租约 + 存证链）
   phase-b-pg-data:
     driver: local
 
@@ -99,37 +114,54 @@ services:
       - "50051:50051" # gRPC (TLS)
     environment:
       # 基础网络与服务标识
+      # 容器在 bridge 网络必须绑定 0.0.0.0（127.0.0.1 只会让其他容器无法访问）。
       PRIVACY_REST_HOST: "0.0.0.0"
       PRIVACY_REST_PORT: "8079"
-      PRIVACY_GRPC_HOST: "0.0.0.0"
       PRIVACY_GRPC_PORT: "50051"
+      # 注：Go Agent 的 gRPC 监听地址在代码内固定为 0.0.0.0（engine-go/cmd/privshield-agent/main.go
+      # 的 grpcAddr），编排层不存在 PRIVACY_GRPC_HOST 读取点，故不再设置该幽灵变量（P2-1）。
       PRIVACY_SERVICE_NAME: "PrivShield-prod"
       PRIVACY_LOG_LEVEL: "${PRIVACY_LOG_LEVEL:-INFO}"
-      PRIVACY_LOG_FORMAT: "json"
-      PRIVACY_PROFILE: "/etc/PrivShield/privacy-profile.yaml"
-      PRIVACY_BUDGET_DB: "/data/budget/budget.db"
+      # 分类分级规则与参数 Profile（Go 引擎实际读取的两个路径变量）
+      PRIVACY_CONFIG_FILE: "${PRIVACY_CONFIG_FILE:-/app/config/privacy.yaml}"
+      PRIVACY_RULES_DIR: "${PRIVACY_RULES_DIR:-/app/rules/domains}"
+      # 隐私预算租户隔离命名空间
+      PRIVACY_NAMESPACE: "${PRIVACY_NAMESPACE:-prod}"
 
-      # 生产安全：TLS 加密
-      PRIVACY_TLS_ENABLED: "${PRIVACY_TLS_ENABLED:-true}"
-      PRIVACY_TLS_CERT_FILE: "${PRIVACY_TLS_CERT_FILE:-/certs/tls.crt}"
-      PRIVACY_TLS_KEY_FILE: "${PRIVACY_TLS_KEY_FILE:-/certs/tls.key}"
-      PRIVACY_TLS_CLIENT_AUTH: "${PRIVACY_TLS_CLIENT_AUTH:-none}"
+      # ── 生产安全：TLS（必填，缺证书即启动失败）──
+      PRIVACY_TLS_ENABLED: "true"
+      PRIVACY_REQUIRE_TLS: "${PRIVACY_REQUIRE_TLS:-true}"
+      PRIVACY_TLS_CERT_FILE: "${PRIVACY_TLS_CERT_FILE:-/certs/agent/tls.crt}"
+      PRIVACY_TLS_KEY_FILE: "${PRIVACY_TLS_KEY_FILE:-/certs/agent/tls.key}"
+      PRIVACY_TLS_CA_FILE: "${PRIVACY_TLS_CA_FILE:-/certs/ca.crt}"
+      # 启用 gRPC TLS 后必须注入 mTLS CN 白名单文件，否则 fail-closed 门禁拒绝启动
+      # （白名单文件缺失＝任何通过 CA 校验的客户端都能调用全部方法，属不可接受状态）。
+      PRIVACY_AUTH_INTERNAL_MTLS_ENABLED: "${PRIVACY_AUTH_INTERNAL_MTLS_ENABLED:-true}"
+      PRIVACY_AUTH_MTLS_WHITELIST_FILE: "${PRIVACY_AUTH_MTLS_WHITELIST_FILE:?PRIVACY_AUTH_MTLS_WHITELIST_FILE is required in production: the Agent refuses to start gRPC with TLS but without an mTLS CN whitelist file}"
 
-      # 生产安全：API Key 鉴权
-      PRIVACY_AUTH_ENABLED: "${PRIVACY_AUTH_ENABLED:-true}"
-      PRIVACY_AUTH_EXTERNAL_KEYS_JSON: "${PRIVACY_AUTH_EXTERNAL_KEYS_JSON:-}"
+      # ── 生产安全：API Key 鉴权（Fail-Closed，无密钥即拒绝启动）──
+      PRIVACY_AUTH_ENABLED: "true"
+      # 格式：token:name:scope1,scope2;token2:name2:...（engine-go/internal/security/config.go parseAPIKeys）
+      # 必须来自 .env / Secret，绝不在清单中写字面量；留空会让 compose 直接失败而不是静默放行。
+      PRIVACY_AUTH_INTERNAL_API_KEYS: "${PRIVACY_AUTH_INTERNAL_API_KEYS:?PRIVACY_AUTH_INTERNAL_API_KEYS is required in production (format token:name:scopes;...): the service refuses to boot with an empty inbound API key on a non-loopback bind}"
+      PRIVACY_AUTH_EXTERNAL_API_KEYS: "${PRIVACY_AUTH_EXTERNAL_API_KEYS:?PRIVACY_AUTH_EXTERNAL_API_KEYS is required in production: external callers must hold a scoped key (empty default would fail the boot gate)}"
 
-      # 生产安全：速率限制 (连接内置 Redis)
-      PRIVACY_RATE_LIMIT_ENABLED: "${PRIVACY_RATE_LIMIT_ENABLED:-true}"
+      # ── 生产安全：速率限制（连接内置 Redis）──
+      PRIVACY_RATE_LIMIT_ENABLED: "true"
       PRIVACY_RATE_LIMIT_DEFAULT_RPS: "${PRIVACY_RATE_LIMIT_DEFAULT_RPS:-50}"
       PRIVACY_RATE_LIMIT_DEFAULT_BURST: "${PRIVACY_RATE_LIMIT_DEFAULT_BURST:-100}"
       PRIVACY_RATE_LIMIT_REDIS_URL: "${PRIVACY_RATE_LIMIT_REDIS_URL:-redis://redis:6379/0}"
 
-      # Layer-3 LLM 连接 (解耦架构)
-      PRIVACY_LLM_PROVIDER: "${PRIVACY_LLM_PROVIDER:-vllm}"
-      PRIVACY_LLM_API_BASE: "${LLM_API_BASE:-http://vllm:8000/v1}"
-      PRIVACY_LLM_MODEL_NAME: "${PRIVACY_LLM_MODEL_NAME:-Qwen3.5-0.8B-Privacy-Classifier-Smoother}"
+      # ── Layer-3 LLM 连接（解耦架构）──
+      # 合规基线为 false（政务明文零接触大模型）；开启时端点必须是 https，
+      # 明文 http:// 仅允许显式设置 PRIVACY_LLM_ALLOW_INSECURE_HTTP_ENDPOINT=true 的同网段内网模型服务。
+      PRIVACY_LLM_ENABLE: "${PRIVACY_LLM_ENABLE:-false}"
+      PRIVACY_LLM_ENDPOINT: "${PRIVACY_LLM_ENDPOINT:-https://vllm.internal/v1/chat/completions}"
+      PRIVACY_LLM_MODEL: "${PRIVACY_LLM_MODEL:-Qwen3.5-0.8B-Privacy-Classifier-Smoother}"
+      # PRIVACY_LLM_API_KEY 不属于启动门禁项（Layer-3 默认关闭），沿用 vLLM 约定的 "EMPTY"；
+      # 一旦 PRIVACY_LLM_ENABLE=true，必须在 .env 中为该键填入真实值（内网 vLLM 才允许保持 EMPTY）。
       PRIVACY_LLM_API_KEY: "${LLM_API_KEY:-EMPTY}"
+      PRIVACY_LLM_MAX_CONCURRENCY: "${PRIVACY_LLM_MAX_CONCURRENCY:-1}"
     volumes:
       - ./privacy-profile.yaml:/etc/PrivShield/privacy-profile.yaml:ro
       - ./certs:/certs:ro
@@ -211,18 +243,53 @@ services:
     environment:
       PRIVACY_CONSOLE_HOST: "0.0.0.0"
       PRIVACY_CONSOLE_PORT: "8081"
+      # 上游 Agent（gRPC + REST）走 TLS：必须校验服务端证书，禁止 skip-verify。
       PRIVACY_AGENT_GRPC_HOST: "PrivShield"
       PRIVACY_AGENT_GRPC_PORT: "50051"
       PRIVACY_AGENT_URL: "https://PrivShield:8079"
-      PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY: "true"
+      PRIVACY_AGENT_TLS_ENABLED: "true"
+      PRIVACY_AGENT_TLS_CA_FILE: "${PRIVACY_AGENT_TLS_CA_FILE:-/certs/ca.crt}"
+      PRIVACY_AGENT_TLS_SERVER_NAME: "${PRIVACY_AGENT_TLS_SERVER_NAME:-PrivShield}"
+      PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY: "false"
+      # 客户端证书（Agent 侧开启 mTLS 时必须提供，CN 需在白名单内）
+      PRIVACY_AGENT_TLS_CERT_FILE: "${PRIVACY_AGENT_TLS_CERT_FILE:-/certs/console-client/tls.crt}"
+      PRIVACY_AGENT_TLS_KEY_FILE: "${PRIVACY_AGENT_TLS_KEY_FILE:-/certs/console-client/tls.key}"
+      # 调用 Agent 的出站密钥（必须与 PRIVACY_AUTH_INTERNAL_API_KEYS 中的 token 一致）
+      PRIVACY_AGENT_API_KEY: "${PRIVACY_AGENT_API_KEY:?PRIVACY_AGENT_API_KEY is required in production: the Agent rejects unauthenticated calls}"
+      # ── BFF 自身入站鉴权 + TLS（非环回监听，缺密钥则进程拒绝启动）──
+      CONSOLE_API_KEY: "${CONSOLE_API_KEY:?CONSOLE_API_KEY is required in production: an empty console key exposes the raw-record proxy bypass (P0-7)}"
+      CONSOLE_RATE_LIMIT: "${CONSOLE_RATE_LIMIT:-600}"
+      PRIVACY_CONSOLE_TLS_ENABLED: "true"
+      PRIVACY_CONSOLE_TLS_CERT_FILE: "${PRIVACY_CONSOLE_TLS_CERT_FILE:-/certs/console/tls.crt}"
+      PRIVACY_CONSOLE_TLS_KEY_FILE: "${PRIVACY_CONSOLE_TLS_KEY_FILE:-/certs/console/tls.key}"
+      # ── 直连中台三服务的出站密钥（与各服务 *_API_KEY 一致）──
+      # ⚠️ 东西向 REST 仍是 http://：Go 侧这三条链路的基础地址硬编码 http 方案且没有自定义 CA/客户端证书入口
+      # （services/service-hub/internal/config/config.go DatasourceBaseURL、console/bff-go/internal/microservices/client.go），
+      # 因此本编排把这三条腿限制在 `backend: internal` 隔离网络内；北向（console/业务方）链路一律 TLS。
+      # 切换到 https 需先补客户端 TLS 支持，届时同步修改本段。
+      BFF_HUB_URL: "http://service-hub:8082"
+      BFF_HUB_API_KEY: "${BFF_HUB_API_KEY:?BFF_HUB_API_KEY is required in production}"
+      BFF_DATASOURCE_URL: "http://datasource-mgr:8083"
+      BFF_DATASOURCE_API_KEY: "${BFF_DATASOURCE_API_KEY:?BFF_DATASOURCE_API_KEY is required in production}"
+      BFF_AUDIT_URL: "http://audit-log:8084"
+      BFF_AUDIT_API_KEY: "${BFF_AUDIT_API_KEY:?BFF_AUDIT_API_KEY is required in production}"
+    volumes:
+      - ./certs:/certs:ro
+      - ./secrets:/etc/PrivShield/secrets:ro
     depends_on:
       PrivShield:
+        condition: service_healthy
+      service-hub:
+        condition: service_healthy
+      datasource-mgr:
+        condition: service_healthy
+      audit-log:
         condition: service_healthy
     networks:
       - frontend
       - backend
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8081/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsk https://localhost:8081/health || curl -fs http://localhost:8081/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -295,22 +362,59 @@ services:
       - "50052:50052"
     volumes:
       - service-hub-data:/app/data
+      - ./certs:/certs:ro
+      - ./secrets:/etc/PrivShield/secrets:ro
     environment:
       SERVICE_HUB_HOST: "0.0.0.0"
       SERVICE_HUB_PORT: "8082"
       SERVICE_HUB_GRPC_HOST: "0.0.0.0"
       SERVICE_HUB_GRPC_PORT: "50052"
+      # ── Fail-Closed：TLS 强制 + 入站密钥必填 ──
+      SERVICE_HUB_TLS_ENABLED: "true"
+      SERVICE_HUB_REQUIRE_TLS: "${SERVICE_HUB_REQUIRE_TLS:-true}"
+      SERVICE_HUB_TLS_CERT_FILE: "${SERVICE_HUB_TLS_CERT_FILE:-/certs/service-hub/tls.crt}"
+      SERVICE_HUB_TLS_KEY_FILE: "${SERVICE_HUB_TLS_KEY_FILE:-/certs/service-hub/tls.key}"
+      SERVICE_HUB_TLS_CA_FILE: "${SERVICE_HUB_TLS_CA_FILE:-/certs/ca.crt}"
+      # gRPC 已启用 TLS ⇒ 必须注入 CN 白名单文件，否则拒绝启动（防空洞式「假双向认证」）
+      PRIVACY_AUTH_MTLS_WHITELIST_FILE: "${PRIVACY_AUTH_MTLS_WHITELIST_FILE:?PRIVACY_AUTH_MTLS_WHITELIST_FILE is required in production: every gRPC server with TLS enabled refuses to boot without a client-certificate CN whitelist file}"
+      SERVICE_HUB_API_KEY: "${SERVICE_HUB_API_KEY:?SERVICE_HUB_API_KEY is required in production: hub binds 0.0.0.0 in the container, so an empty key aborts startup}"
+      # ── 限流（每客户端 IP 令牌桶）──
+      SERVICE_HUB_RATE_LIMIT_RPS: "${SERVICE_HUB_RATE_LIMIT_RPS:-100}"
+      SERVICE_HUB_RATE_LIMIT_BURST: "${SERVICE_HUB_RATE_LIMIT_BURST:-200}"
+      # ── 上游 Agent：走 https（PRIVACY_AGENT_URLS 覆盖硬编码 http 基址）+ 出站密钥 ──
+      PRIVACY_AGENT_URLS: "${PRIVACY_AGENT_URLS:-https://PrivShield:8079}"
       PRIVACY_AGENT_REST_HOST: "PrivShield"
       PRIVACY_REST_PORT: "8079"
-      SERVICE_HUB_DB_PATH: "/app/data/service-hub.db"
+      PRIVACY_AGENT_API_KEY: "${PRIVACY_AGENT_API_KEY:?PRIVACY_AGENT_API_KEY is required in production}"
+      # ── 上游 datasource-mgr 出站密钥（REST 基址由代码固定 http，见 backend internal 网段说明）──
+      DATASOURCE_MGR_HOST: "datasource-mgr"
+      DATASOURCE_MGR_PORT: "8083"
+      DATASOURCE_MGR_GRPC_HOST: "datasource-mgr"
+      DATASOURCE_MGR_GRPC_PORT: "50053"
+      SERVICE_HUB_DATASOURCE_API_KEY: "${SERVICE_HUB_DATASOURCE_API_KEY:?SERVICE_HUB_DATASOURCE_API_KEY is required in production}"
+      # ── P1-8：默认 PostgreSQL 档位（tasks 表 + FOR UPDATE SKIP LOCKED 原子租约）──
+      # 多副本 service-hub 的前提；未配置 PG 时 Hub 走 SQLite/内存并返回 store.ErrLeaseNotSupported，
+      # 启动日志会打出「Set SERVICE_HUB_PG_DSN for multi-replica Hub support」告警。
+      # 密码来自 .env / Secret，不在清单中写字面量；留空即 compose 直接失败。
+      SERVICE_HUB_PG_DSN: "postgresql://${PG_USER:?PG_USER is required in production}:${PG_PASSWORD:?PG_PASSWORD is required in production}@phase-b-postgres:5432/${PG_DATABASE:-privshield}?sslmode=require"
+      # ── P0-4 禁静音降级：已配置 SERVICE_HUB_PG_DSN 却探测失败 → 拒绝启动 ──
+      # 静默回退到 SQLite/内存会让多副本 Hub 无声丢失租约语义（同一任务被两副本领取），
+      # 因此 strict 档位把「降级」变成启动失败；仅开发/演练环境可显式置 false 放宽。
+      SERVICE_HUB_STRICT_STORAGE: "${SERVICE_HUB_STRICT_STORAGE:-true}"
+      SERVICE_HUB_PG_MAX_CONNS: "${SERVICE_HUB_PG_MAX_CONNS:-25}"
+      SERVICE_HUB_PG_MIN_CONNS: "${SERVICE_HUB_PG_MIN_CONNS:-5}"
+      SERVICE_HUB_LEASE_TTL: "${SERVICE_HUB_LEASE_TTL:-60}"
+      SERVICE_HUB_RETENTION_DAYS: "${SERVICE_HUB_RETENTION_DAYS:-30}"
     depends_on:
       PrivShield:
+        condition: service_healthy
+      phase-b-postgres:
         condition: service_healthy
     networks:
       - frontend
       - backend
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8082/api/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsk https://localhost:8082/api/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -340,14 +444,32 @@ services:
       - "50053:50053"
     volumes:
       - datasource-mgr-data:/app/data
+      - ./certs:/certs:ro
+      - ./secrets:/etc/PrivShield/secrets:ro
     environment:
       DATASOURCE_MGR_HOST: "0.0.0.0"
       DATASOURCE_MGR_PORT: "8083"
       DATASOURCE_MGR_GRPC_HOST: "0.0.0.0"
       DATASOURCE_MGR_GRPC_PORT: "50053"
+      # ── Fail-Closed：TLS 强制 + 入站密钥必填 ──
+      DATASOURCE_MGR_TLS_ENABLED: "true"
+      DATASOURCE_MGR_REQUIRE_TLS: "${DATASOURCE_MGR_REQUIRE_TLS:-true}"
+      DATASOURCE_MGR_TLS_CERT_FILE: "${DATASOURCE_MGR_TLS_CERT_FILE:-/certs/datasource-mgr/tls.crt}"
+      DATASOURCE_MGR_TLS_KEY_FILE: "${DATASOURCE_MGR_TLS_KEY_FILE:-/certs/datasource-mgr/tls.key}"
+      DATASOURCE_MGR_TLS_CA_FILE: "${DATASOURCE_MGR_TLS_CA_FILE:-/certs/ca.crt}"
+      # verify（默认）：证书若提供则必须通过 CA 校验；改 require 会把容器内无客户端证书的
+      # curl 探活一起拒掉（healthcheck 随之失效），需要 HTTP 面强制 mTLS 时请同时为探针挂客户端证书。
+      DATASOURCE_MGR_TLS_CLIENT_AUTH: "${DATASOURCE_MGR_TLS_CLIENT_AUTH:-verify}"
+      PRIVACY_AUTH_MTLS_WHITELIST_FILE: "${PRIVACY_AUTH_MTLS_WHITELIST_FILE:?PRIVACY_AUTH_MTLS_WHITELIST_FILE is required in production}"
+      DATASOURCE_MGR_API_KEY: "${DATASOURCE_MGR_API_KEY:?DATASOURCE_MGR_API_KEY is required in production: an empty key would expose the raw medical sample records (P0-1/P0-7)}"
+      # ── P0-4 禁静音降级：损坏/异常数据行报错而非静默丢弃或降级为内存态 ──
+      DATASOURCE_MGR_STRICT_STORAGE: "${DATASOURCE_MGR_STRICT_STORAGE:-true}"
+      DATASOURCE_MGR_RATE_LIMIT_RPS: "${DATASOURCE_MGR_RATE_LIMIT_RPS:-100}"
+      DATASOURCE_MGR_RATE_LIMIT_BURST: "${DATASOURCE_MGR_RATE_LIMIT_BURST:-200}"
+      # 注：本服务**没有**数据库/存储类环境变量（DATASOURCE_MGR_DB_PATH 是从不被读取的幽灵变量，
+      # 已按 P2-1 删除）。示范数据源为 samples/*.csv 真实同构模拟库，/app/data 卷仅承载上传临时文件。
       PRIVACY_AGENT_REST_HOST: "PrivShield"
       PRIVACY_REST_PORT: "8079"
-      DATASOURCE_MGR_DB_PATH: "/app/data/datasource-mgr.db"
     depends_on:
       PrivShield:
         condition: service_healthy
@@ -355,7 +477,7 @@ services:
       - frontend
       - backend
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8083/api/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsk https://localhost:8083/api/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -385,23 +507,76 @@ services:
       - "50054:50054"
     volumes:
       - audit-log-data:/app/data
+      # 存证归档段落盘位置（AUDIT_LOG_ARCHIVE_DIR）= /app/data/archives，落在上面这个
+      # 已由镜像预置为 privacy 属主的命名卷内；容器以非 root 运行，若把独立卷挂到镜像中
+      # 不存在的路径（如 /var/lib/privshield/archive），Docker 会以 root:root 创建挂载点，
+      # 归档写入将直接失败。要用独立卷做分离保管，请同时挂到 /app/data 下的子目录或自行 chown。
+      - ./certs:/certs:ro
+      - ./secrets:/etc/PrivShield/secrets:ro
     environment:
       AUDIT_LOG_HOST: "0.0.0.0"
       AUDIT_LOG_PORT: "8084"
       AUDIT_LOG_GRPC_HOST: "0.0.0.0"
       AUDIT_LOG_GRPC_PORT: "50054"
-      AUDIT_LOG_DB_PATH: "/app/data/audit-log.db"
+      # ── Fail-Closed：TLS 强制 + 入站密钥 + 快照加密密钥必填（缺一即拒绝启动）──
+      AUDIT_LOG_TLS_ENABLED: "true"
+      AUDIT_LOG_REQUIRE_TLS: "${AUDIT_LOG_REQUIRE_TLS:-true}"
+      AUDIT_LOG_TLS_CERT_FILE: "${AUDIT_LOG_TLS_CERT_FILE:-/certs/audit-log/tls.crt}"
+      AUDIT_LOG_TLS_KEY_FILE: "${AUDIT_LOG_TLS_KEY_FILE:-/certs/audit-log/tls.key}"
+      AUDIT_LOG_TLS_CA_FILE: "${AUDIT_LOG_TLS_CA_FILE:-/certs/ca.crt}"
+      # verify（默认）：提供证书即校验；改 require 会连容器内无客户端证书的 curl 探活一起拒绝。
+      AUDIT_LOG_TLS_CLIENT_AUTH: "${AUDIT_LOG_TLS_CLIENT_AUTH:-verify}"
+      PRIVACY_AUTH_MTLS_WHITELIST_FILE: "${PRIVACY_AUTH_MTLS_WHITELIST_FILE:?PRIVACY_AUTH_MTLS_WHITELIST_FILE is required in production}"
+      AUDIT_LOG_API_KEY: "${AUDIT_LOG_API_KEY:?AUDIT_LOG_API_KEY is required in production: an empty key makes the fail-open auth middleware admit every caller (P0-1)}"
+      # 只读核验员 Key（数据局核验专区专用）：生产形态必须与写账凭证分开，
+      # 否则「被查者握着查账凭证」（P1-6）。写端点对此 Key 返回 403，两把相同则服务拒绝启动。
+      AUDIT_LOG_READER_API_KEY: "${AUDIT_LOG_READER_API_KEY:?AUDIT_LOG_READER_API_KEY is required in production: the verification zone must not share the evidence-write key (P1-6 权责分离)}"
+      # 快照信封加密主密钥：缺失时样本明文落盘且降级不可检测（P0-3），远程监听下服务直接拒绝启动。
+      AUDIT_LOG_ENCRYPTION_KEY: "${AUDIT_LOG_ENCRYPTION_KEY:?AUDIT_LOG_ENCRYPTION_KEY is required in production: snapshots would otherwise be written in plaintext and lose evidentiary value}"
+      # 链式存证的 HMAC-SM3 密钥（局方托管），使「抗抵赖」不再依赖无密钥杂凑（P1-2）。
+      AUDIT_LOG_HASH_KEY: "${AUDIT_LOG_HASH_KEY:?AUDIT_LOG_HASH_KEY is required in production: keyed chain hashes are what make the evidence chain non-repudiable}"
+      AUDIT_LOG_RATE_LIMIT_RPS: "${AUDIT_LOG_RATE_LIMIT_RPS:-100}"
+      AUDIT_LOG_RATE_LIMIT_BURST: "${AUDIT_LOG_RATE_LIMIT_BURST:-200}"
+      # ── P0-4：存储不可用即中止，禁止静默降级到 SQLite / 内存 ──
+      AUDIT_LOG_STRICT_STORAGE: "true"
+      # ── P1-8：存证默认落 PostgreSQL（与 Hub 同集群、可独立实例；sslmode=require）──
+      # 默认沿用属主账号（PG_USER/PG_PASSWORD）；要把连接切到「只写存证角色」
+      # privshield_audit_writer（deploy/sql/audit_writeonly_role.sql 创建）时，
+      # 在 .env 里覆盖 PG_AUDIT_USER / PG_AUDIT_PASSWORD 并把 AUDIT_LOG_DB_WRITE_ONLY 置 true。
+      # 注意：属主账号可改删存证，等保三级「审计记录防篡改」的最后一环因此尚未闭合，
+      # 见下方 P1-6 阻塞说明。
+      AUDIT_LOG_PG_DSN: "postgresql://${PG_AUDIT_USER:-${PG_USER:?PG_USER is required in production}}:${PG_AUDIT_PASSWORD:-${PG_PASSWORD:?PG_PASSWORD is required in production}}@phase-b-postgres:5432/${PG_DATABASE:-privshield}?sslmode=require"
+      AUDIT_LOG_PG_MAX_CONNS: "${AUDIT_LOG_PG_MAX_CONNS:-25}"
+      AUDIT_LOG_PG_MIN_CONNS: "${AUDIT_LOG_PG_MIN_CONNS:-5}"
+      # ── P1-6：只写角色启动自检（has_table_privilege UPDATE/DELETE 必须为 false）。
+      # ⚠️ 现状只能默认 false，两条路都走不通（已在 postgres:16-alpine 实测）：
+      #   ① 以只写角色连接 → pkg/store/postgres/audit.go 的 initAuditSchema 每次启动都执行
+      #      `ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS ...`，返回 42501
+      #      "must be owner of table audit_logs"，服务在 STRICT_STORAGE 下直接退出；
+      #   ② 以属主账号连接 → 属主隐含全部权限，has_table_privilege(...,'UPDATE')=t，
+      #      verifyWriteOnlyPostgres 自检必然失败。
+      # 需要 Go 侧先把 schema 初始化移出启动路径（独立 migrate 入口 / 只写角色跳过 DDL），
+      # 完成后本开关改回 true，并按 deploy/sql/audit_writeonly_role.sql 授权。──
+      AUDIT_LOG_DB_WRITE_ONLY: "${AUDIT_LOG_DB_WRITE_ONLY:-false}"
+      # ── P0-8：证据留存口径显式化。0 = 永不物理删除（等保三级 / 数安法二十一条）；
+      # 若要开启自动清理，必须 >=1095 天，且归档目录与加密密钥均已配置，否则服务拒绝启动。──
+      AUDIT_LOG_RETENTION_DAYS: "${AUDIT_LOG_RETENTION_DAYS:-0}"
+      AUDIT_LOG_ARCHIVE_DIR: "${AUDIT_LOG_ARCHIVE_DIR:-/app/data/archives}"
+      AUDIT_LOG_ARCHIVE_PAGE_SIZE: "${AUDIT_LOG_ARCHIVE_PAGE_SIZE:-500}"
       PRIVACY_AGENT_REST_HOST: "PrivShield"
       PRIVACY_REST_PORT: "8079"
-      PRIVACY_AGENT_API_KEY: "${PRIVACY_AGENT_API_KEY:-}"
+      PRIVACY_AGENT_URLS: "${PRIVACY_AGENT_URLS:-https://PrivShield:8079}"
+      PRIVACY_AGENT_API_KEY: "${PRIVACY_AGENT_API_KEY:?PRIVACY_AGENT_API_KEY is required in production}"
     depends_on:
       PrivShield:
+        condition: service_healthy
+      phase-b-postgres:
         condition: service_healthy
     networks:
       - frontend
       - backend
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8084/api/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsk https://localhost:8084/api/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -533,30 +708,39 @@ services:
     restart: always
 
   # ===========================================================================
-  # 11. Phase B: PostgreSQL 多副本 service-hub 原子租约后端 (Profile: phase-b)
-  #    PORT: 5432
-  #    启用：docker compose -f docker-compose.prod.yml --profile phase-b up -d
+  # 11. PostgreSQL：多副本 Hub 原子租约 + 审计存证集群（**生产默认档位**，P1-8）
+  #    PORT: 5432（宿主机仅绑 127.0.0.1；容器间经 backend 网络访问）
+  #    启用：docker compose -f docker-compose.prod.yml up -d（不再需要 --profile phase-b）
+  #    注：只写角色授权与时间分区**不在启动时自动执行**——DDL/权限属 DBA 变更窗口，
+  #        需由迁移角色依次执行 deploy/sql/audit_writeonly_role.sql 与
+  #        deploy/sql/audit_partition.sql（后者仅用于新装/迁移）。
   # ===========================================================================
   phase-b-postgres:
-    profiles: ["phase-b"]
     image: postgres:16-alpine
     container_name: privshield-phase-b-postgres-prod
     pull_policy: if_not_present
     security_opt:
       - no-new-privileges:true
+    # 挂载合规级 postgresql.conf 并显式指向它（P2-12）：synchronous_commit=on 保证
+    # 「已确认落证」的记录不会因进程/主机崩溃而丢失，存证持久性不得换取吞吐。
+    command: ["postgres", "-D", "/var/lib/postgresql/data/pgdata", "-c", "config_file=/etc/postgresql/postgresql.conf"]
     ports:
       - "127.0.0.1:5432:5432"
     environment:
-      POSTGRES_DB: "privshield_hub"
-      POSTGRES_USER: "${PG_USER:-privshield}"
+      POSTGRES_DB: "${PG_DATABASE:-privshield}"
+      POSTGRES_USER: "${PG_USER:?PG_USER is required in production}"
       POSTGRES_PASSWORD: "${PG_PASSWORD:?PG_PASSWORD must be set in .env for production}"
       PGDATA: "/var/lib/postgresql/data/pgdata"
     volumes:
       - phase-b-pg-data:/var/lib/postgresql/data
+      - ../postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      # postgresql.conf 中 ssl=on 需要读到服务端证书（certs/postgres/tls.crt|tls.key + certs/ca.crt），
+      # 证书缺失时 postmaster 直接拒绝启动（fail-closed），而不是降级成明文链路。
+      - ./certs:/certs:ro
     networks:
       - backend
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-privshield} -d privshield_hub"]
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:?PG_USER is required in production} -d ${PG_DATABASE:-privshield}"]
       interval: 10s
       timeout: 5s
       retries: 3

@@ -31,8 +31,8 @@ func TestCanonicalizePIIField(t *testing.T) {
 func TestClassifyAndRedactICD10Code(t *testing.T) {
 	// L5: HIV (B20-B24)
 	level, cat, ok := ClassifyICD10Code("B20.900")
-	if !ok || level != "L5" || cat != "ICD_HIGH_SENSITIVE" {
-		t.Errorf("B20.900 classify = (%q, %q, %v), want (L5, ICD_HIGH_SENSITIVE, true)", level, cat, ok)
+	if !ok || level != "L5" || cat != "MEDICAL_ICD10_HIV" {
+		t.Errorf("B20.900 classify = (%q, %q, %v), want (L5, MEDICAL_ICD10_HIV, true)", level, cat, ok)
 	}
 	if got := RedactICD10Code("B20.900"); got != "" {
 		t.Errorf("RedactICD10Code(B20.900) = %q, want empty string", got)
@@ -40,17 +40,17 @@ func TestClassifyAndRedactICD10Code(t *testing.T) {
 
 	// L4: Neoplasm (C34.900)
 	level, cat, ok = ClassifyICD10Code("C34.900")
-	if !ok || level != "L4" || cat != "ICD_NEOPLASM" {
-		t.Errorf("C34.900 classify = (%q, %q, %v), want (L4, ICD_NEOPLASM, true)", level, cat, ok)
+	if !ok || level != "L4" || cat != "MEDICAL_ICD10_CANCER" {
+		t.Errorf("C34.900 classify = (%q, %q, %v), want (L4, MEDICAL_ICD10_CANCER, true)", level, cat, ok)
 	}
-	if got := RedactICD10Code("C34.900"); got != "[L4-ICD_NEOPLASM]" {
-		t.Errorf("RedactICD10Code(C34.900) = %q, want [L4-ICD_NEOPLASM]", got)
+	if got := RedactICD10Code("C34.900"); got != "[L4-MEDICAL_ICD10_CANCER]" {
+		t.Errorf("RedactICD10Code(C34.900) = %q, want [L4-MEDICAL_ICD10_CANCER]", got)
 	}
 
 	// L4: STD (A53.900)
 	level, cat, ok = ClassifyICD10Code("A53.900")
-	if !ok || level != "L4" || cat != "ICD_INFECTIOUS" {
-		t.Errorf("A53.900 classify = (%q, %q, %v), want (L4, ICD_INFECTIOUS, true)", level, cat, ok)
+	if !ok || level != "L4" || cat != "MEDICAL_ICD10_STD" {
+		t.Errorf("A53.900 classify = (%q, %q, %v), want (L4, MEDICAL_ICD10_STD, true)", level, cat, ok)
 	}
 
 	// Non-sensitive code (I10)
@@ -161,8 +161,10 @@ func TestProcessRecordsFullPipeline(t *testing.T) {
 	if san1["id_card_no"] != "110101********1234" {
 		t.Errorf("sanitized id_card_no = %q, want '110101********1234'", san1["id_card_no"])
 	}
-	if san1["birth_date"] != "1990-05" {
-		t.Errorf("sanitized birth_date = %q, want '1990-05'", san1["birth_date"])
+	// 出生日期按标准规范 §6.1 行 4 粗粒度化到**年份**（泛化而非丢弃）。
+	// 旧断言 "1990-05" 对应的是整改前的月级截断默认值，现已收紧为年级。
+	if san1["birth_date"] != "1990" {
+		t.Errorf("sanitized birth_date = %q, want '1990'", san1["birth_date"])
 	}
 	if san1["icd_code"] != "" {
 		t.Errorf("sanitized icd_code for B20.900 = %q, want empty string (purged)", san1["icd_code"])

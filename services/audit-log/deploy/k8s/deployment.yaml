@@ -53,6 +53,43 @@ spec:
               value: "privshield"
             - name: PRIVACY_REST_PORT
               value: "8079"
+            # ── P0-1 启动门禁必填项（任一缺失则进程拒绝启动，不存在静默放行/明文落盘）──
+            # 部署前创建：
+            #   kubectl create secret generic audit-log-keys \
+            #     --from-literal=api-key="$(openssl rand -hex 16)" \
+            #     --from-literal=encryption-key="$(openssl rand -hex 16)" \
+            #     --from-literal=hash-key="$(openssl rand -hex 16)" \
+            #     --from-literal=reader-api-key="$(openssl rand -hex 16)"
+            # （AUDIT_LOG_HASH_KEY 应由局方密码平台托管；轮换后需用
+            #   go run ./pkg/cmd/repair_hash_chain -dsn … -write-only 重签存量行）
+            - name: AUDIT_LOG_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: audit-log-keys
+                  key: api-key
+            # P1-6 权责分离：数据局核验专区持此只读 Key，仅可查询/验真
+            #（GET /api/audit/logs|stats|snapshots、*/verify），写存证与报表导出返回 403。
+            # 与 api-key 相同会被启动校验直接拒绝（相同即等于未隔离）。
+            - name: AUDIT_LOG_READER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: audit-log-keys
+                  key: reader-api-key
+            - name: AUDIT_LOG_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: audit-log-keys
+                  key: encryption-key
+            - name: AUDIT_LOG_HASH_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: audit-log-keys
+                  key: hash-key
+            # P0-4：禁止静默降级；P0-8：0 = 永不物理删除存证。
+            - name: AUDIT_LOG_STRICT_STORAGE
+              value: "true"
+            - name: AUDIT_LOG_RETENTION_DAYS
+              value: "0"
             - name: AUDIT_LOG_DB_PATH
               value: "/app/data/audit-log.db"
             - name: AUDIT_LOG_LOG_FORMAT

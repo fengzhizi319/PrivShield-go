@@ -1,3 +1,15 @@
+// Package sqlite provides SQLite-backed TaskStore implementation.
+// Package sqlite 提供基于 SQLite 的任务流水线存储接口实现。
+//
+// ==============================================================================
+// 【核心特性与优化】
+// 1. 【Save / INSERT OR REPLACE】：通过 SQLite 原生语法实现幂等保存；
+// 2. 【List / SQL 级分页】：支持带 status 过滤的 SQL 级 LIMIT / OFFSET 分页；
+// 3. 【Counts / GROUP BY 聚合】：在 SQLite 引擎层执行状态聚合；
+// 4. 【scanTaskFields 抽象复用 (P45 fix)】：复用 Row 与 Rows 扫描逻辑，减少重复代码；
+// 5. 【CleanupOld】：支持定时清理终态过期任务。
+// ==============================================================================
+
 package sqlite
 
 import (
@@ -9,12 +21,14 @@ import (
 )
 
 // TaskStore implements store.TaskStore backed by SQLite.
-// TaskStore 实现基于 SQLite 的 store.TaskStore。
+// TaskStore 基于 SQLite 实现 store.TaskStore 接口。
 type TaskStore struct {
 	db *sql.DB
 }
 
 // NewTaskStore creates a new SQLite-backed task store.
+//
+// NewTaskStore 创建并初始化 SQLite 任务存储实例。
 func NewTaskStore(db *sql.DB) (*TaskStore, error) {
 	if err := InitTaskTables(db); err != nil {
 		return nil, fmt.Errorf("init task tables: %w", err)
@@ -22,6 +36,7 @@ func NewTaskStore(db *sql.DB) (*TaskStore, error) {
 	return &TaskStore{db: db}, nil
 }
 
+// Save inserts or replaces a task in SQLite.
 func (s *TaskStore) Save(task *store.Task) error {
 	_, err := s.db.Exec(`
 		INSERT OR REPLACE INTO tasks (id, status, stage, source, api_code, datasource_id, operation, priority, created_at, payload_json, retry_count, retry_after, trace_id)
@@ -31,16 +46,18 @@ func (s *TaskStore) Save(task *store.Task) error {
 	return err
 }
 
+// Get retrieves a task by ID.
 func (s *TaskStore) Get(id string) (*store.Task, error) {
 	row := s.db.QueryRow(`
-		SELECT id, status, stage, source, api_code, datasource_id, operation, priority, created_at, started_at, completed_at, duration_ms, error, retry_count, retry_after, trace_id
+		SELECT id, status, stage, source, api_code, datasource_id, operation, priority, created_at, started_at, completed_at, duration_ms, error, error_class, retry_count, retry_after, trace_id
 		FROM tasks WHERE id = ?
 	`, id)
 	return scanTask(row)
 }
 
+// List returns filtered and paginated tasks.
 func (s *TaskStore) List(filter store.TaskFilter) ([]store.Task, int, error) {
-	// Count total
+	// 统计总数
 	countQuery := "SELECT COUNT(*) FROM tasks"
 	var total int
 	var args []any
@@ -52,8 +69,8 @@ func (s *TaskStore) List(filter store.TaskFilter) ([]store.Task, int, error) {
 		return nil, 0, err
 	}
 
-	// Fetch rows
-	query := "SELECT id, status, stage, source, api_code, datasource_id, operation, priority, created_at, started_at, completed_at, duration_ms, error, retry_count, retry_after, trace_id FROM tasks"
+	// 分页查询行
+	query := "SELECT id, status, stage, source, api_code, datasource_id, operation, priority, created_at, started_at, completed_at, duration_ms, error, error_class, retry_count, retry_after, trace_id FROM tasks"
 	if filter.Status != "" {
 		query += " WHERE status = ?"
 	}
@@ -92,15 +109,17 @@ func (s *TaskStore) List(filter store.TaskFilter) ([]store.Task, int, error) {
 	return tasks, total, rows.Err()
 }
 
+// Update modifies an existing task's fields in SQLite.
 func (s *TaskStore) Update(task *store.Task) error {
 	_, err := s.db.Exec(`
-		UPDATE tasks SET status=?, stage=?, api_code=?, datasource_id=?, started_at=?, completed_at=?, duration_ms=?, error=?, retry_count=?, retry_after=?, trace_id=?
+		UPDATE tasks SET status=?, stage=?, api_code=?, datasource_id=?, started_at=?, completed_at=?, duration_ms=?, error=?, error_class=?, retry_count=?, retry_after=?, trace_id=?
 		WHERE id=?
 	`, task.Status, task.Stage, task.APICode, task.DatasourceID, nullTime(task.StartedAt), nullTime(task.CompletedAt),
-		task.DurationMs, task.Error, task.RetryCount, nullTime(task.RetryAfter), task.TraceID, task.ID)
+		task.DurationMs, task.Error, task.ErrorClass, task.RetryCount, nullTime(task.RetryAfter), task.TraceID, task.ID)
 	return err
 }
 
+// Counts computes task counts aggregated by status in SQLite.
 func (s *TaskStore) Counts() (store.TaskCounts, error) {
 	var c store.TaskCounts
 	rows, err := s.db.Query("SELECT status, COUNT(*) FROM tasks GROUP BY status")
@@ -129,15 +148,14 @@ func (s *TaskStore) Counts() (store.TaskCounts, error) {
 }
 
 // scanTaskFields scans common task fields from any scanner interface.
-// P45 fix: extract common scanning logic to eliminate duplication between
-// scanTask (*sql.Row) and scanTaskRow (*sql.Rows).
+// P45 fix: 抽象通用扫描逻辑，消除 scanTask 与 scanTaskRow 的重复代码。
 func scanTaskFields(scan func(dest ...any) error) (*store.Task, error) {
 	var t store.Task
 	var createdAt string
-	var startedAt, completedAt, errMsg, retryAfter sql.NullString
+	var startedAt, completedAt, errMsg, errClass, retryAfter sql.NullString
 
 	err := scan(&t.ID, &t.Status, &t.Stage, &t.Source, &t.APICode, &t.DatasourceID, &t.Operation, &t.Priority,
-		&createdAt, &startedAt, &completedAt, &t.DurationMs, &errMsg,
+		&createdAt, &startedAt, &completedAt, &t.DurationMs, &errMsg, &errClass,
 		&t.RetryCount, &retryAfter, &t.TraceID)
 	if err != nil {
 		return nil, err
@@ -155,6 +173,7 @@ func scanTaskFields(scan func(dest ...any) error) (*store.Task, error) {
 		}
 	}
 	t.Error = errMsg.String
+	t.ErrorClass = errClass.String
 	if retryAfter.Valid {
 		if ts, err := time.Parse(time.RFC3339Nano, retryAfter.String); err == nil {
 			t.RetryAfter = &ts
@@ -163,18 +182,15 @@ func scanTaskFields(scan func(dest ...any) error) (*store.Task, error) {
 	return &t, nil
 }
 
-// scanTask scans a single task from a QueryRow.
 func scanTask(row *sql.Row) (*store.Task, error) {
 	return scanTaskFields(row.Scan)
 }
 
-// scanTaskRow scans a single task from a Rows iterator.
 func scanTaskRow(rows *sql.Rows) (*store.Task, error) {
 	return scanTaskFields(rows.Scan)
 }
 
 // CleanupOld deletes terminal (completed/failed) tasks older than the cutoff time.
-// CleanupOld 删除早于截止时间的终态（completed/failed）任务，防止 SQLite 无限膨胀。
 func (s *TaskStore) CleanupOld(before time.Time) (int64, error) {
 	cutoff := before.Format(time.RFC3339Nano)
 	result, err := s.db.Exec(

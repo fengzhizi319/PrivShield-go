@@ -36,6 +36,7 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os/signal"
@@ -46,9 +47,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
+	pkggrpcserver "github.com/fengzhizi319/PrivShield/pkg/grpcserver"
 	"github.com/fengzhizi319/PrivShield/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield/pkg/naming"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 	"github.com/fengzhizi319/PrivShield/pkg/tlsutil"
 	"github.com/fengzhizi319/PrivShield/services/datasource-mgr/internal/config"
 	"github.com/fengzhizi319/PrivShield/services/datasource-mgr/internal/grpcserver"
@@ -72,9 +74,18 @@ func main() {
 	// =========================================================================
 	// 2. Structured Logger Setup / 结构化日志系统初始化
 	// =========================================================================
-	// 使用共享库 pkgconfig.SetupLogger 初始化基于 slog 的全局结构化日志记录器，
+	// 使用共享库 pkg/observability.InitLogger 初始化基于 slog 的全局结构化日志记录器，
 	// 支持 JSON（生产环境推荐，便于 Loki/ELK 采集）与 Text（本地开发高可读）两种格式。
-	logger := pkgconfig.SetupLogger(cfg.LogFormat, cfg.LogLevel)
+	pkgobs.InitLogger(cfg.LogFormat, cfg.LogLevel)
+	logger := slog.Default()
+
+	// =========================================================================
+	// 2.5 Strict storage / 严格存储模式（P0-4 禁静音降级）
+	// =========================================================================
+	// 默认开启：样本/探查数据文件出现损坏行时直接上抛为请求失败，
+	// 而不是静默丢弃记录后照常返回 200（调用方无法感知数据集被缩小）。
+	handlers.SetStrictDataIntegrity(cfg.StrictStorage)
+	logger.Info("datasource-mgr storage posture", "strict_data_integrity", cfg.StrictStorage)
 
 	// =========================================================================
 	// 3. HTTP REST Server Setup / HTTP REST 路由与服务器构建
@@ -130,7 +141,7 @@ func main() {
 	//   支持基于证书指纹（Pinned Public Key）或 ClientAuth（RequireAndVerifyClientCert）强校验；
 	// - 未开启 TLS:
 	//   创建标准明文 gRPC Server 实例，适用于本地快速开发或由 Service Mesh (如 Istio/Envoy) 代理 TLS 的场景。
-	var grpcServer *grpc.Server
+	var grpcServer *pkggrpcserver.Server
 	var serviceImpl *grpcserver.GRPCServer
 
 	// Production hardening: message size limits & keepalive (aligned with Python Agent gRPC server).
@@ -152,6 +163,8 @@ func main() {
 		}),
 	}
 
+	grpcServer = pkggrpcserver.New(cfg.GRPCAddress(), grpcServerOpts...)
+
 	// mTLS CN whitelist authorization for inbound gRPC connections.
 	if cfg.MTLSWhitelistFile != "" {
 		unaryInterceptor, streamInterceptor, dw, err := tlsutil.NewWhitelistInterceptor(cfg.MTLSWhitelistFile)
@@ -159,10 +172,9 @@ func main() {
 			log.Fatalf("failed to load mTLS whitelist: %v", err)
 		}
 		defer dw.Close()
-		grpcServerOpts = append(grpcServerOpts,
-			grpc.UnaryInterceptor(unaryInterceptor),
-			grpc.StreamInterceptor(streamInterceptor),
-		)
+		grpcServer = grpcServer.
+			WithUnaryInterceptor(unaryInterceptor).
+			WithStreamInterceptor(streamInterceptor)
 		logger.Info("gRPC server configured with mTLS CN whitelist",
 			"path", cfg.MTLSWhitelistFile,
 		)
@@ -173,18 +185,17 @@ func main() {
 		if credErr != nil {
 			log.Fatalf("failed to build TLS credentials: %v", credErr)
 		}
-		grpcServer = grpc.NewServer(append(grpcServerOpts, grpc.Creds(creds))...)
+		grpcServer = grpcServer.WithOptions(grpc.Creds(creds))
 		serviceImpl = grpcserver.New(cfg, logger)
-		pb.RegisterDataSourceManagerServiceServer(grpcServer, serviceImpl)
+		grpcServer.RegisterService(&pb.DataSourceManagerService_ServiceDesc, serviceImpl)
 		logger.Info("mock datasource-mgr gRPC server started with mTLS",
 			"addr", cfg.GRPCAddress(),
 			"tls_cert", cfg.TLSCertFile,
 			"tls_key", cfg.TLSKeyFile,
 		)
 	} else {
-		grpcServer = grpc.NewServer(grpcServerOpts...)
 		serviceImpl = grpcserver.New(cfg, logger)
-		pb.RegisterDataSourceManagerServiceServer(grpcServer, serviceImpl)
+		grpcServer.RegisterService(&pb.DataSourceManagerService_ServiceDesc, serviceImpl)
 		logger.Info("mock datasource-mgr gRPC server started (insecure)", "addr", cfg.GRPCAddress())
 	}
 
@@ -199,6 +210,8 @@ func main() {
 		"grpc_addr", cfg.GRPCAddress(),
 		"tls_enabled", cfg.TLSEnabled,
 		"auth_enabled", cfg.APIKey != "",
+		"require_tls", cfg.RequireTLS,
+		"strict_storage", cfg.StrictStorage,
 		"cors_origins", len(cfg.CORSOrigins),
 		"shutdown_timeout", cfg.ShutdownTimeout,
 		"log_format", cfg.LogFormat,
@@ -242,7 +255,7 @@ func main() {
 	// 💡 【核心执行机制与请求处理全流程 / How gRPC Handles Connections & Requests】：
 	//
 	// a. 【连接监听与接收 (TCP Accept & TLS Handshake)】：
-	//    `grpcServer.Serve(grpcLis)` 内部执行标准的 `for { rawConn, err := grpcLis.Accept(); ... }` 阻塞循环：
+	//    `grpcServer.ServeListener(grpcLis)` 内部执行标准的 `for { rawConn, err := grpcLis.Accept(); ... }` 阻塞循环：
 	//    - 当上游（如 service-hub 或外部微服务）发起连接时，Accept() 接收底层的 raw TCP 连接；
 	//    - 若开启 mTLS（`cfg.TLSEnabled=true`），立即进行 TLS 1.3 握手，执行证书链校验与公钥固定 (SPKI Pinning)；
 	//    - 握手成功后，为该 TCP 连接创建独立的 HTTP/2 传输层处理器 (transport)，单个 TCP 即可支持高并发 Stream 多路复用。
@@ -271,7 +284,7 @@ func main() {
 	//       - 函数：`GetYibaoRecords(limit, offset)`、`GetKangyangRecords(limit, offset)`
 	// ─────────────────────────────────────────────────────────────────────────
 	go func() {
-		if err := grpcServer.Serve(grpcLis); err != nil {
+		if err := grpcServer.ServeListener(grpcLis); err != nil {
 			logger.Error("gRPC server error", "error", err.Error())
 		}
 	}()

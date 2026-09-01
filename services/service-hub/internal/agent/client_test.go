@@ -97,7 +97,7 @@ func TestAgentClient(t *testing.T) {
 			"name":  "张三",
 			"phone": "13800138000",
 		}
-		res, err := client.Classify(ctx, payload)
+		res, err := client.Classify(ctx, []map[string]any{payload})
 		if err != nil {
 			t.Fatalf("Classify() failed: %v", err)
 		}

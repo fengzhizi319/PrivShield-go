@@ -1,8 +1,11 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"testing"
+
+	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
 )
 
 // TestLoadDefaults tests that Load() populates expected default values when no environment variables are set.
@@ -201,5 +204,224 @@ func TestDatasourceConfig(t *testing.T) {
 	}
 	if cfg.DatasourceGRPCAddress() != "127.0.0.1:50053" {
 		t.Errorf("expected 127.0.0.1:50053, got %s", cfg.DatasourceGRPCAddress())
+	}
+}
+
+// TestAuditLogEndpointResolution tests the evidence endpoint resolution order:
+// SERVICE_HUB_AUDIT_LOG_URLS ➔ SERVICE_HUB_AUDIT_HTTP ➔ compose-matching default.
+// TestAuditLogEndpointResolution 校验存证端点解析优先级：专用多副本变量 ➔
+// 编排已注入的 SERVICE_HUB_AUDIT_HTTP 别名 ➔ 与 docker-compose 内置服务名一致的回退默认值。
+func TestAuditLogEndpointResolution(t *testing.T) {
+	t.Run("default matches compose", func(t *testing.T) {
+		cfg := Load()
+		urls := cfg.AuditLogURLs()
+		if len(urls) != 1 || urls[0] != "http://audit-log:8084" {
+			t.Fatalf("expected compose default [http://audit-log:8084], got %#v", urls)
+		}
+		if cfg.AuditLogTimeout != 10 || cfg.AuditLogMaxRetries != 3 {
+			t.Errorf("evidence timeout/retry defaults mismatch: timeout=%d retries=%d", cfg.AuditLogTimeout, cfg.AuditLogMaxRetries)
+		}
+		if cfg.RequireTLS {
+			t.Error("RequireTLS must default to false (local development stays usable)")
+		}
+	})
+
+	t.Run("compose alias SERVICE_HUB_AUDIT_HTTP is honored", func(t *testing.T) {
+		t.Setenv("SERVICE_HUB_AUDIT_LOG_URLS", "")
+		t.Setenv("SERVICE_HUB_AUDIT_HTTP", "http://audit-log:8084")
+		cfg := Load()
+		if got := cfg.AuditLogURLs(); len(got) != 1 || got[0] != "http://audit-log:8084" {
+			t.Fatalf("SERVICE_HUB_AUDIT_HTTP not honored: %#v", got)
+		}
+	})
+
+	t.Run("explicit urls and key override everything", func(t *testing.T) {
+		t.Setenv("SERVICE_HUB_AUDIT_LOG_URLS", "https://audit-a:8084, https://audit-b:8084")
+		t.Setenv("SERVICE_HUB_AUDIT_HTTP", "http://should-be-ignored:1")
+		t.Setenv("SERVICE_HUB_AUDIT_LOG_TIMEOUT", "4")
+		t.Setenv("SERVICE_HUB_AUDIT_LOG_MAX_RETRIES", "0")
+		t.Setenv("SERVICE_HUB_REQUIRE_TLS", "true")
+		cfg := Load()
+		if got := cfg.AuditLogURLs(); len(got) != 2 || got[1] != "https://audit-b:8084" {
+			t.Fatalf("multi-replica urls mismatch: %#v", got)
+		}
+		if cfg.AuditLogTimeout != 4 || cfg.AuditLogMaxRetries != 0 {
+			t.Errorf("timeout/retries mismatch: timeout=%d retries=%d", cfg.AuditLogTimeout, cfg.AuditLogMaxRetries)
+		}
+		if !cfg.RequireTLS {
+			t.Error("SERVICE_HUB_REQUIRE_TLS=true must set RequireTLS")
+		}
+	})
+
+	t.Run("audit-log inbound key is reused as fallback", func(t *testing.T) {
+		t.Setenv("SERVICE_HUB_AUDIT_LOG_API_KEY", "")
+		t.Setenv("AUDIT_LOG_API_KEY", "shared-audit-key")
+		if got := Load().AuditLogAPIKey; got != "shared-audit-key" {
+			t.Fatalf("expected AUDIT_LOG_API_KEY fallback, got %q", got)
+		}
+		t.Setenv("SERVICE_HUB_AUDIT_LOG_API_KEY", "hub-own-key")
+		if got := Load().AuditLogAPIKey; got != "hub-own-key" {
+			t.Fatalf("expected dedicated variable to win, got %q", got)
+		}
+	})
+}
+
+// TestAuditLogTimeoutDuration tests the evidence timeout accessor fallback.
+// TestAuditLogTimeoutDuration 校验存证超时访问器：非正值（含未初始化的零值配置）回退 10s。
+func TestAuditLogTimeoutDuration(t *testing.T) {
+	if got := (&Config{AuditLogTimeout: 3}).AuditLogTimeoutDuration().String(); got != "3s" {
+		t.Errorf("expected 3s, got %s", got)
+	}
+	if got := (&Config{}).AuditLogTimeoutDuration().String(); got != "10s" {
+		t.Errorf("zero value must fall back to 10s, got %s", got)
+	}
+	var nilCfg *Config
+	if got := nilCfg.AuditLogURLs(); got != nil {
+		t.Errorf("nil config must report no endpoints, got %#v", got)
+	}
+}
+
+// TestValidateFailClosedZeroTrust tests the P0-1 zero-trust default posture:
+// loopback binds may start without an inbound key, remote binds must not.
+// TestValidateFailClosedZeroTrust 校验 P0-1 零信任默认态（Gate G-02）：
+// 纯环回监听允许免密本机开发；对外暴露（0.0.0.0 / 具体网卡地址）缺 Key 必须启动即拒绝；
+// RequireTLS 声明为真但未启用 TLS 时同样必须拒绝启动。
+func TestValidateFailClosedZeroTrust(t *testing.T) {
+	base := func() *Config {
+		return &Config{
+			Host: "127.0.0.1", GRPCHost: "127.0.0.1",
+			// 存证链路已配置：本用例只考察零信任默认态，避免与 P0-6 判定纠缠。
+			AuditLogBaseURLs: []string{"http://audit-log:8084"},
+		}
+	}
+
+	t.Run("loopback without api key is accepted", func(t *testing.T) {
+		cfg := base()
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("loopback bind without API key must validate, got %v", err)
+		}
+	})
+
+	t.Run("remote bind without api key is rejected", func(t *testing.T) {
+		for _, host := range []string{"0.0.0.0", "10.20.30.40"} {
+			cfg := base()
+			cfg.Host = host
+			err := cfg.Validate()
+			if !errors.Is(err, pkgconfig.ErrAPIKeyRequired) {
+				t.Fatalf("bind %s: expected ErrAPIKeyRequired, got %v", host, err)
+			}
+		}
+	})
+
+	t.Run("remote gRPC bind without api key is rejected", func(t *testing.T) {
+		cfg := base()
+		cfg.GRPCHost = "0.0.0.0"
+		if err := cfg.Validate(); !errors.Is(err, pkgconfig.ErrAPIKeyRequired) {
+			t.Fatalf("expected ErrAPIKeyRequired, got %v", err)
+		}
+	})
+
+	t.Run("remote bind with api key is accepted", func(t *testing.T) {
+		cfg := base()
+		cfg.Host = "0.0.0.0"
+		cfg.GRPCHost = "0.0.0.0"
+		cfg.APIKey = "hub-inbound-key"
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("remote bind with API key must validate, got %v", err)
+		}
+	})
+
+	t.Run("require tls without tls is rejected", func(t *testing.T) {
+		cfg := base()
+		cfg.RequireTLS = true
+		if err := cfg.Validate(); !errors.Is(err, pkgconfig.ErrTLSRequired) {
+			t.Fatalf("expected ErrTLSRequired, got %v", err)
+		}
+	})
+
+	t.Run("tls without whitelist file is rejected", func(t *testing.T) {
+		cert := t.TempDir() + "/server.crt"
+		key := t.TempDir() + "/server.key"
+		for _, p := range []string{cert, key} {
+			if err := os.WriteFile(p, []byte("PEM"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cfg := base()
+		cfg.APIKey = "hub-inbound-key"
+		cfg.TLSEnabled = true
+		cfg.TLSCertFile = cert
+		cfg.TLSKeyFile = key
+		if err := cfg.Validate(); !errors.Is(err, pkgconfig.ErrMTLSWhitelistRequired) {
+			t.Fatalf("expected ErrMTLSWhitelistRequired, got %v", err)
+		}
+		cfg.MTLSWhitelistFile = "mtls-whitelist.yaml"
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("tls + whitelist must validate, got %v", err)
+		}
+	})
+}
+
+// TestValidateEvidenceEndpointRequired tests the P0-6 startup posture for a
+// missing audit-log endpoint: loud rejection on a loopback-only dev bind, and
+// (by contrast) a remote bind keeps Validate() free of that error so the
+// pipeline can fail closed per task instead of the process refusing to boot.
+// TestValidateEvidenceEndpointRequired 校验未配置存证端点时的启动策略：
+// 全环回监听（本机开发形态）直接拒绝启动（loud startup rejection）；
+// 远程绑定则放行进程，由 ⑥ audit 阶段逐条任务 fail-closed 失败。
+func TestValidateEvidenceEndpointRequired(t *testing.T) {
+	t.Run("loopback bind without evidence endpoint is rejected", func(t *testing.T) {
+		cfg := &Config{Host: "127.0.0.1", GRPCHost: "localhost"}
+		err := cfg.Validate()
+		if !errors.Is(err, ErrAuditEndpointRequired) {
+			t.Fatalf("expected ErrAuditEndpointRequired, got %v", err)
+		}
+	})
+
+	t.Run("blank endpoints are treated as unconfigured", func(t *testing.T) {
+		cfg := &Config{Host: "127.0.0.1", GRPCHost: "127.0.0.1", AuditLogBaseURLs: []string{"  ", ""}}
+		if err := cfg.Validate(); !errors.Is(err, ErrAuditEndpointRequired) {
+			t.Fatalf("expected ErrAuditEndpointRequired, got %v", err)
+		}
+	})
+
+	t.Run("remote bind without evidence endpoint still enforces inbound key", func(t *testing.T) {
+		cfg := &Config{Host: "0.0.0.0", GRPCHost: "0.0.0.0"}
+		err := cfg.Validate()
+		if errors.Is(err, ErrAuditEndpointRequired) {
+			t.Fatalf("remote bind must not be refused at startup for a missing endpoint (tasks fail closed instead), got %v", err)
+		}
+		if !errors.Is(err, pkgconfig.ErrAPIKeyRequired) {
+			t.Fatalf("expected ErrAPIKeyRequired for remote bind, got %v", err)
+		}
+	})
+
+	t.Run("evidence tls without client keypair is rejected", func(t *testing.T) {
+		cfg := &Config{
+			Host: "127.0.0.1", GRPCHost: "127.0.0.1",
+			AuditLogBaseURLs:   []string{"https://audit-log:8084"},
+			AuditLogTLSEnabled: true,
+		}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected error for evidence TLS without client certificate material")
+		}
+	})
+}
+
+// TestStrictStorageDefault tests the P0-4 no-silent-degradation default and its
+// variable precedence (service-specific wins over the global STRICT_STORAGE).
+// TestStrictStorageDefault 校验 P0-4 禁静音降级：默认即为严格模式，
+// 且 SERVICE_HUB_STRICT_STORAGE 优先于全局 STRICT_STORAGE，便于按需单独放宽。
+func TestStrictStorageDefault(t *testing.T) {
+	t.Setenv("STRICT_STORAGE", "")
+	t.Setenv("SERVICE_HUB_STRICT_STORAGE", "")
+	if !Load().StrictStorage {
+		t.Fatal("StrictStorage must default to true (no silent loss of lease semantics)")
+	}
+
+	t.Setenv("STRICT_STORAGE", "true")
+	t.Setenv("SERVICE_HUB_STRICT_STORAGE", "false")
+	if Load().StrictStorage {
+		t.Fatal("SERVICE_HUB_STRICT_STORAGE=false must win over the global STRICT_STORAGE")
 	}
 }

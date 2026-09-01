@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"runtime"
 	"sync"
+
+	"github.com/fengzhizi319/PrivShield/pkg/naming"
 )
 
 // ──────────────────────────────────────────────
@@ -37,6 +39,16 @@ func LevelFromString(s string) SecurityLevel {
 	default:
 		return LevelPublic
 	}
+}
+
+// LevelID 返回本等级在规则库（rules/taxonomies/default.yaml）中的 L1~L5 标识：
+// "confidential" → "L3"，已是 L 形式时幂等返回。词表外取值返回空串，绝不静默兜底为某个等级。
+//
+// 下游消费者（service-hub 的定级→算子映射、audit-log 的 security_level 枚举）统一使用 L 形式，
+// 而引擎内部 canonical 名称只在引擎内流转；跨服务响应必须补齐 level_id，否则历史上当分类结果
+// 只回 "confidential" 时，中枢会读不到级别并把算子降级为默认值（P1-1 根因）。
+func (l SecurityLevel) LevelID() string {
+	return naming.NormalizeSecurityLevelID(string(l))
 }
 
 // LevelRank 返回安全等级排名（越高越敏感）
@@ -71,10 +83,14 @@ type SafetyFloorConfig struct {
 	AuditLog bool
 }
 
-// DefaultSafetyFloorConfig 默认安全底线配置
+// DefaultSafetyFloorConfig 默认安全底线配置。
+//
+// MinLevel 默认为 LevelInternal（P0-2 默认拒绝）：配置文件缺失时，引擎不再把
+// 「没有任何底线」当成默认态 —— public 底线等价于「未定级字段可原样出域」。
+// 需要 public 底线的部署必须显式写 safety_floor.min_level: "public"。
 func DefaultSafetyFloorConfig() SafetyFloorConfig {
 	return SafetyFloorConfig{
-		MinLevel:                  LevelPublic,
+		MinLevel:                  LevelInternal,
 		ConfidenceThreshold:       0.6,
 		ForceUpgradeOnUncertainty: true,
 		AuditLog:                  true,

@@ -153,7 +153,7 @@ func (s *GRPCServer) GetMockData3(ctx context.Context, req *pb.DataQueryRequest)
 		return nil, status.Errorf(codes.Internal, "get mock3 records: %v", err)
 	}
 
-	return toDataQueryResponse("ds_mock3", "预留政务数据源 3", total, limit, offset, rows), nil
+	return toDataQueryResponse(naming.DSMock3, "预留政务数据源 3", total, limit, offset, rows), nil
 }
 
 // GetMockData4 implements API 4: queries reserved municipal dataset 4.
@@ -173,7 +173,7 @@ func (s *GRPCServer) GetMockData4(ctx context.Context, req *pb.DataQueryRequest)
 		return nil, status.Errorf(codes.Internal, "get mock4 records: %v", err)
 	}
 
-	return toDataQueryResponse("ds_mock4", "预留政务数据源 4", total, limit, offset, rows), nil
+	return toDataQueryResponse(naming.DSMock4, "预留政务数据源 4", total, limit, offset, rows), nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

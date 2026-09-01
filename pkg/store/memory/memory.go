@@ -1,8 +1,17 @@
 // Package memory provides in-memory fallback implementations of the store interfaces.
-// Package memory 为 store 接口提供内存实现，用于开发/测试场景。
+// Package memory 为 store 接口提供基于纯内存的存储实现，用于本地快速开发与集成测试场景。
 //
-// 当 DB_PATH 环境变量为空时，各模块自动回退到内存实现。
-// 进程重启后数据会丢失，生产环境应使用 SQLite 实现。
+// ==============================================================================
+// 【适用场景与安全设计】
+// 1. 【降级回退】：当环境变量中未配置 DB_PATH 或数据库连接串时，各微服务自动降级回退至此内存实现；
+// 2. 【进程隔离与生命周期】：进程重启后数据即刻丢失，生产环境严禁使用，应使用 SQLite 或 PostgreSQL；
+// 3. 【并发安全】：所有内存读写均通过 sync.RWMutex 读写互斥锁保护，保证多协程并发安全；
+// 4. 【排序性能 (P46 fix)】：全量 List 查询统一采用 Go 标准库 sort.Slice（O(N log N) 快速排序），避免 O(N^2) 冒泡排序；
+// 5. 【内存有界保护 (P60 fix)】：通过硬性上限常量（maxAuditRecords = 10,000, maxAuditLogs = 50,000, maxSnapshots = 50,000）
+//    在超限时自动丢弃最旧数据，彻底防止测试与长时间运行过程中的内存无界膨胀与 OOM；
+// 6. 【租约桩实现】：LeasedTaskStore 接口各租约方法均返回 ErrLeaseNotSupported，明确标识内存模式不支持跨副本原子租约。
+// ==============================================================================
+
 package memory
 
 import (
@@ -15,20 +24,28 @@ import (
 )
 
 // ─────────────────────────────────────────────────────────────
-// TaskStore / 任务内存存储
+// 1. TaskStore / 任务流水线内存存储
 // ─────────────────────────────────────────────────────────────
 
 // TaskStore implements store.TaskStore backed by an in-memory map.
+// TaskStore 基于 Go 原生 map + sync.RWMutex 实现任务持久化接口。
 type TaskStore struct {
 	mu    sync.RWMutex
 	tasks map[string]*store.Task
 }
 
 // NewTaskStore creates a new in-memory task store.
+// NewTaskStore 初始化并返回一个空的任务内存存储实例。
 func NewTaskStore() *TaskStore {
 	return &TaskStore{tasks: make(map[string]*store.Task)}
 }
 
+// Save inserts or updates a task in memory.
+//
+// 执行逻辑：
+// 1. 获取写锁 mu.Lock()；
+// 2. 执行浅拷贝副本存储，避免外部在并发中修改入参指针导致数据竞态；
+// 3. 存入 tasks 映射表。
 func (s *TaskStore) Save(task *store.Task) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -37,6 +54,12 @@ func (s *TaskStore) Save(task *store.Task) error {
 	return nil
 }
 
+// Get retrieves a task by ID from memory.
+//
+// 执行逻辑：
+// 1. 获取读锁 mu.RLock()；
+// 2. 查找对应 ID，若不存在返回未找到错误；
+// 3. 返回任务实体的浅拷贝副本。
 func (s *TaskStore) Get(id string) (*store.Task, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -48,6 +71,13 @@ func (s *TaskStore) Get(id string) (*store.Task, error) {
 	return &cp, nil
 }
 
+// List returns filtered and paginated tasks ordered by CreatedAt descending.
+//
+// 执行逻辑：
+// 1. 获取读锁 mu.RLock()；
+// 2. 遍历所有任务，匹配 Status 过滤条件并追加到临时切片；
+// 3. 使用 sort.Slice 按 CreatedAt 降序排列；
+// 4. 应用 Offset 与 Limit 进行内存切片截断分页并返回。
 func (s *TaskStore) List(filter store.TaskFilter) ([]store.Task, int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -61,12 +91,12 @@ func (s *TaskStore) List(filter store.TaskFilter) ([]store.Task, int, error) {
 	}
 	total := len(all)
 
-	// P46 fix: use sort.Slice (O(n log n)) instead of bubble sort (O(n²)) for production workloads.
+	// P46 fix: use sort.Slice (O(n log n)) instead of bubble sort (O(n²))
 	sort.Slice(all, func(i, j int) bool {
 		return all[j].CreatedAt.Before(all[i].CreatedAt)
 	})
 
-	// Apply pagination / 应用分页
+	// 应用内存分页
 	start := filter.Offset
 	if start > len(all) {
 		start = len(all)
@@ -83,6 +113,12 @@ func (s *TaskStore) List(filter store.TaskFilter) ([]store.Task, int, error) {
 	return all, total, nil
 }
 
+// Update modifies an existing task in memory.
+//
+// 执行逻辑：
+// 1. 获取写锁 mu.Lock()；
+// 2. 检查任务是否存在，若不存在返回错误；
+// 3. 存入新副本覆盖原任务。
 func (s *TaskStore) Update(task *store.Task) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -94,6 +130,11 @@ func (s *TaskStore) Update(task *store.Task) error {
 	return nil
 }
 
+// Counts returns aggregated task counts by status.
+//
+// 执行逻辑：
+// 1. 获取读锁 mu.RLock()；
+// 2. 遍历所有任务累加 pending/running/completed/failed 计数。
 func (s *TaskStore) Counts() (store.TaskCounts, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -128,7 +169,7 @@ func (s *TaskStore) CleanupOld(before time.Time) (int64, error) {
 	return count, nil
 }
 
-// ── Phase B: LeasedTaskStore stubs (not supported) / 租约桩实现（不支持） ──
+// ── Phase B: LeasedTaskStore 桩实现（内存模式不支持租约） ──
 
 // ClaimNext is not supported on in-memory store; returns ErrLeaseNotSupported.
 func (s *TaskStore) ClaimNext(owner string, leaseTTL time.Duration) (*store.TaskLease, error) {
@@ -156,7 +197,7 @@ func (s *TaskStore) RequeueExpiredLeases(limit int) (int, error) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// DataSourceStore / 数据源内存存储
+// 2. DataSourceStore / 数据源内存存储
 // ─────────────────────────────────────────────────────────────
 
 // DataSourceStore implements store.DataSourceStore backed by an in-memory map.
@@ -167,7 +208,7 @@ type DataSourceStore struct {
 }
 
 // maxAuditRecords is the maximum number of access audit records retained in memory.
-// P60 fix: cap in-memory audit records to prevent unbounded memory growth.
+// P60 fix: 内存访问审计记录上限设为 10,000 条，超出自动淘汰最旧记录。
 const maxAuditRecords = 10_000
 
 // NewDataSourceStore creates a new in-memory data source store.
@@ -178,6 +219,7 @@ func NewDataSourceStore() *DataSourceStore {
 	}
 }
 
+// SaveDS stores a data source in memory.
 func (s *DataSourceStore) SaveDS(ds *store.DataSource) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -186,6 +228,7 @@ func (s *DataSourceStore) SaveDS(ds *store.DataSource) error {
 	return nil
 }
 
+// GetDS retrieves a data source by ID from memory.
 func (s *DataSourceStore) GetDS(id string) (*store.DataSource, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -197,6 +240,7 @@ func (s *DataSourceStore) GetDS(id string) (*store.DataSource, error) {
 	return &cp, nil
 }
 
+// ListDS returns data sources ordered by CreatedAt descending.
 func (s *DataSourceStore) ListDS(filter store.DataSourceFilter) ([]store.DataSource, int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -206,12 +250,10 @@ func (s *DataSourceStore) ListDS(filter store.DataSourceFilter) ([]store.DataSou
 	}
 	total := len(result)
 
-	// P46 fix: use sort.Slice instead of bubble sort.
 	sort.Slice(result, func(i, j int) bool {
 		return result[j].CreatedAt.Before(result[i].CreatedAt)
 	})
 
-	// Apply pagination
 	if filter.Limit > 0 {
 		start := filter.Offset
 		if start > len(result) {
@@ -226,6 +268,7 @@ func (s *DataSourceStore) ListDS(filter store.DataSourceFilter) ([]store.DataSou
 	return result, total, nil
 }
 
+// DeleteDS removes a data source from memory.
 func (s *DataSourceStore) DeleteDS(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -236,6 +279,7 @@ func (s *DataSourceStore) DeleteDS(id string) error {
 	return nil
 }
 
+// UpdateDS updates a data source in memory.
 func (s *DataSourceStore) UpdateDS(ds *store.DataSource) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -247,18 +291,19 @@ func (s *DataSourceStore) UpdateDS(ds *store.DataSource) error {
 	return nil
 }
 
+// SaveAudit records an access audit log with capacity bounds.
 func (s *DataSourceStore) SaveAudit(rec *store.AccessAuditRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cp := *rec
 	s.auditRecords = append(s.auditRecords, cp)
-	// P60 fix: drop oldest records when capacity is exceeded to prevent unbounded memory growth.
 	if len(s.auditRecords) > maxAuditRecords {
 		s.auditRecords = s.auditRecords[len(s.auditRecords)-maxAuditRecords:]
 	}
 	return nil
 }
 
+// ListAudit returns filtered audit records by data source ID.
 func (s *DataSourceStore) ListAudit(dsID string, limit, offset int) ([]store.AccessAuditRecord, int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -271,7 +316,6 @@ func (s *DataSourceStore) ListAudit(dsID string, limit, offset int) ([]store.Acc
 	}
 	total := len(filtered)
 
-	// Apply pagination
 	if limit > 0 {
 		start := offset
 		if start > len(filtered) {
@@ -287,7 +331,7 @@ func (s *DataSourceStore) ListAudit(dsID string, limit, offset int) ([]store.Acc
 }
 
 // ─────────────────────────────────────────────────────────────
-// AuditStore / 审计日志内存存储
+// 3. AuditStore / 审计日志内存存储
 // ─────────────────────────────────────────────────────────────
 
 // AuditStore implements store.AuditStore backed by in-memory slices.
@@ -298,11 +342,11 @@ type AuditStore struct {
 }
 
 // maxAuditLogs is the maximum number of audit logs retained in memory.
-// P60 fix: cap in-memory audit logs to prevent unbounded memory growth.
+// P60 fix: 内存审计日志上限设为 50,000 条。
 const maxAuditLogs = 50_000
 
 // maxSnapshots is the maximum number of snapshots retained in memory.
-// P60 fix: cap in-memory snapshots to prevent unbounded memory growth.
+// P60 fix: 内存快照上限设为 50,000 条。
 const maxSnapshots = 50_000
 
 // NewAuditStore creates a new in-memory audit store.
@@ -313,6 +357,7 @@ func NewAuditStore() *AuditStore {
 	}
 }
 
+// SaveLog saves an audit log and calculates its hash chain in memory.
 func (s *AuditStore) SaveLog(log *store.AuditLog) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -326,14 +371,13 @@ func (s *AuditStore) SaveLog(log *store.AuditLog) error {
 
 	cp := *log
 	s.logs = append(s.logs, cp)
-	// P60 fix: drop oldest logs when capacity is exceeded to prevent unbounded memory growth.
 	if len(s.logs) > maxAuditLogs {
 		s.logs = s.logs[len(s.logs)-maxAuditLogs:]
 	}
 	return nil
 }
 
-// SaveLogWithSnapshot stores an audit log and its snapshot while holding one lock.
+// SaveLogWithSnapshot stores an audit log and its snapshot atomically.
 func (s *AuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *store.SnapshotRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -368,7 +412,7 @@ func (s *AuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *store.Sn
 	return nil
 }
 
-// SaveLogsBatch saves multiple logs and snapshots in memory atomically.
+// SaveLogsBatch saves multiple logs and snapshots in memory.
 func (s *AuditStore) SaveLogsBatch(logs []store.AuditLog, snapshots []store.SnapshotRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -389,6 +433,7 @@ func (s *AuditStore) SaveLogsBatch(logs []store.AuditLog, snapshots []store.Snap
 	return nil
 }
 
+// GetLog retrieves an audit log by ID.
 func (s *AuditStore) GetLog(id string) (*store.AuditLog, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -412,6 +457,7 @@ func (s *AuditStore) GetLatestLog() (*store.AuditLog, error) {
 	return &cp, nil
 }
 
+// ListLogs returns filtered and paginated audit logs.
 func (s *AuditStore) ListLogs(filter store.AuditFilter) ([]store.AuditLog, int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -447,12 +493,10 @@ func (s *AuditStore) ListLogs(filter store.AuditFilter) ([]store.AuditLog, int, 
 
 	total := len(filtered)
 
-	// P46 fix: use sort.Slice instead of bubble sort.
 	sort.Slice(filtered, func(i, j int) bool {
 		return filtered[j].Timestamp.Before(filtered[i].Timestamp)
 	})
 
-	// Apply pagination / 应用分页
 	start := filter.Offset
 	if start > len(filtered) {
 		start = len(filtered)
@@ -469,6 +513,7 @@ func (s *AuditStore) ListLogs(filter store.AuditFilter) ([]store.AuditLog, int, 
 	return filtered, total, nil
 }
 
+// GetStats computes aggregated audit statistics in memory.
 func (s *AuditStore) GetStats() (*store.AuditStats, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -496,11 +541,11 @@ func (s *AuditStore) GetStats() (*store.AuditStats, error) {
 	return stats, nil
 }
 
+// GenerateReport generates an audit compliance report based on memory records.
 func (s *AuditStore) GenerateReport(period string) (*store.AuditReport, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Parse period to duration
 	var periodDuration time.Duration
 	switch period {
 	case "1h":
@@ -518,7 +563,6 @@ func (s *AuditStore) GenerateReport(period string) (*store.AuditReport, error) {
 		BySecurityLevel: make(map[string]int),
 	}
 
-	// Filter by period and compute statistics
 	byOp := make(map[string]int)
 	successCount := 0
 	totalCount := 0
@@ -542,7 +586,6 @@ func (s *AuditStore) GenerateReport(period string) (*store.AuditReport, error) {
 		report.SuccessRate = float64(successCount) / float64(totalCount) * 100
 	}
 
-	// Get top operations
 	type kv struct {
 		Key   string
 		Value int
@@ -563,39 +606,21 @@ func (s *AuditStore) GenerateReport(period string) (*store.AuditReport, error) {
 		topOps = append(topOps, fmt.Sprintf("%s (%d)", kv.Key, kv.Value))
 	}
 	report.TopOperations = topOps
-
-	// Generate recommendations
 	report.Recommendations = generateRecommendations(report.BySecurityLevel, report.SuccessRate)
 
 	return report, nil
 }
 
-// generateRecommendations generates audit recommendations based on statistics.
 func generateRecommendations(byLevel map[string]int, successRate float64) []string {
-	recs := make([]string, 0)
-
-	if l4 := byLevel["L4"]; l4 > 100 {
-		recs = append(recs, "L4 级别操作频繁，建议审查差分隐私预算消耗")
-	}
-	if l5 := byLevel["L5"]; l5 > 50 {
-		recs = append(recs, "L5 绝密数据操作较多，建议加强访问控制审计")
-	}
-	if successRate < 95 {
-		recs = append(recs, fmt.Sprintf("成功率 %.1f%% 低于 95%%，建议排查失败原因", successRate))
-	}
-	if len(recs) == 0 {
-		recs = append(recs, "审计指标正常，无需特别关注")
-	}
-
-	return recs
+	return store.BuildAuditRecommendations(byLevel, successRate)
 }
 
+// SaveSnapshot saves an evidence snapshot record in memory.
 func (s *AuditStore) SaveSnapshot(snap *store.SnapshotRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cp := *snap
 	s.snapshots = append(s.snapshots, cp)
-	// P60 fix: drop oldest snapshots when capacity is exceeded to prevent unbounded memory growth.
 	if len(s.snapshots) > maxSnapshots {
 		s.snapshots = s.snapshots[len(s.snapshots)-maxSnapshots:]
 	}
@@ -603,20 +628,17 @@ func (s *AuditStore) SaveSnapshot(snap *store.SnapshotRecord) error {
 }
 
 // ListSnapshots returns paginated snapshots with total count.
-// P35 fix: return total count for proper pagination instead of len(snaps).
 func (s *AuditStore) ListSnapshots(limit, offset int) ([]store.SnapshotRecord, int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	sorted := make([]store.SnapshotRecord, len(s.snapshots))
 	copy(sorted, s.snapshots)
-	// P46 fix: use sort.Slice instead of bubble sort.
 	sort.Slice(sorted, func(i, j int) bool {
 		return sorted[j].Timestamp.Before(sorted[i].Timestamp)
 	})
 	total := len(sorted)
 
-	// P30 fix: apply offset + limit for proper pagination
 	start := offset
 	if start > len(sorted) {
 		start = len(sorted)
@@ -633,6 +655,7 @@ func (s *AuditStore) ListSnapshots(limit, offset int) ([]store.SnapshotRecord, i
 	return sorted, total, nil
 }
 
+// GetSnapshot retrieves a snapshot by ID.
 func (s *AuditStore) GetSnapshot(id string) (*store.SnapshotRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -645,12 +668,10 @@ func (s *AuditStore) GetSnapshot(id string) (*store.SnapshotRecord, error) {
 	return nil, fmt.Errorf("snapshot %s not found", id)
 }
 
-// CleanupOld deletes audit logs and their associated snapshots older than the cutoff time.
-// CleanupOld 删除早于截止时间的审计日志及其关联快照，防止内存无限增长。
+// CleanupOld deletes audit logs and their snapshots older than the cutoff time.
 func (s *AuditStore) CleanupOld(before time.Time) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Collect IDs of old audit logs for snapshot cleanup
 	oldIDs := make(map[string]struct{})
 	kept := make([]store.AuditLog, 0, len(s.logs))
 	var count int64
@@ -663,7 +684,6 @@ func (s *AuditStore) CleanupOld(before time.Time) (int64, error) {
 		}
 	}
 	s.logs = kept
-	// Remove associated snapshots
 	keptSnaps := make([]store.SnapshotRecord, 0, len(s.snapshots))
 	for _, snap := range s.snapshots {
 		if _, ok := oldIDs[snap.AuditLogID]; !ok {
@@ -674,7 +694,87 @@ func (s *AuditStore) CleanupOld(before time.Time) (int64, error) {
 	return count, nil
 }
 
+// FetchOldestForArchive implements store.AuditArchiveReader for the in-memory store: expired logs
+// are returned oldest-first (insertion order equals chain order) together with their snapshots.
+//
+// FetchOldestForArchive 返回最早到期的内存存证日志（写入序即链序）及其关联快照。
+func (s *AuditStore) FetchOldestForArchive(before time.Time, limit int) ([]store.AuditLog, []store.SnapshotRecord, error) {
+	if limit <= 0 {
+		limit = store.DefaultArchivePageSize
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	logs := make([]store.AuditLog, 0, min(limit, len(s.logs)))
+	ids := make(map[string]struct{}, limit)
+	for _, l := range s.logs {
+		if len(logs) >= limit {
+			break
+		}
+		if l.Timestamp.Before(before) {
+			logs = append(logs, l)
+			ids[l.ID] = struct{}{}
+		}
+	}
+	if len(logs) == 0 {
+		return nil, nil, nil
+	}
+
+	snaps := make([]store.SnapshotRecord, 0, len(logs))
+	for _, snap := range s.snapshots {
+		if _, ok := ids[snap.AuditLogID]; ok {
+			snaps = append(snaps, snap)
+		}
+	}
+	return logs, snaps, nil
+}
+
+// DeleteLogsByIDs implements store.AuditArchiveReader: it removes exactly the archived logs and
+// their cascading snapshots from memory.
+//
+// DeleteLogsByIDs 精确删除已归档的内存存证日志及其级联快照。
+func (s *AuditStore) DeleteLogsByIDs(ids []string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	idSet := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		idSet[id] = struct{}{}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keptLogs := make([]store.AuditLog, 0, len(s.logs))
+	removed := make(map[string]struct{}, len(ids))
+	var deleted int64
+	for _, l := range s.logs {
+		if _, ok := idSet[l.ID]; ok {
+			removed[l.ID] = struct{}{}
+			deleted++
+			continue
+		}
+		keptLogs = append(keptLogs, l)
+	}
+	s.logs = keptLogs
+
+	keptSnaps := make([]store.SnapshotRecord, 0, len(s.snapshots))
+	for _, snap := range s.snapshots {
+		if _, ok := removed[snap.AuditLogID]; ok {
+			continue
+		}
+		keptSnaps = append(keptSnaps, snap)
+	}
+	s.snapshots = keptSnaps
+	return deleted, nil
+}
+
 // VerifyChain verifies the unbroken cryptographic hash chain of recent in-memory logs.
+//
+// VerifyChain 逐条核验内存中日志记录的密码学防篡改哈希链完整性（P2-4），结论附带机器可读
+// `Reason`。本内存实现中切片的**入队顺序即 `seq`（锚点锻造序）**，因此必须按入队顺序回放，
+// 不得按 timestamp 重排——客户端时间戳与入队顺序交错时会把合法链误判为断链；
+// `(timestamp, id)` 仅是各后端共享的确定性兜底尾序。
 func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -682,6 +782,7 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 	if limit <= 0 || limit > len(s.logs) {
 		limit = len(s.logs)
 	}
+	totalRecords := len(s.logs)
 
 	var previousHash string
 	count := 0
@@ -692,9 +793,16 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 		if l.IntegrityHash != "" {
 			ok, hashLabel := store.VerifyAuditIntegrityHash(l.IntegrityHash, l.ID, l.PrevHash, l.Timestamp, l.Algorithm, l.InputHash, l.OutputHash, l.User, l.SecurityLevel, l.ParametersJSON)
 			if !ok {
+				// 锚点仍与上游衔接 ⇒ 记录被「原位改写业务字段」；否则为一般性哈希分叉。两者均判无效（fail-closed）。
+				reason := store.ChainReasonHashMismatch
+				if count == 0 || l.PrevHash == previousHash {
+					reason = store.ChainReasonTamperedPayload
+				}
 				expectedHash := store.ComputeAuditIntegrityHash(l.ID, l.PrevHash, l.Timestamp, l.Algorithm, l.InputHash, l.OutputHash, l.User, l.SecurityLevel, l.ParametersJSON)
 				return &store.ChainVerificationResult{
+					Reason:        reason,
 					TotalVerified: count,
+					TotalRecords:  totalRecords,
 					Valid:         false,
 					LegacyHashed:  legacyCount,
 					BrokenAtID:    l.ID,
@@ -709,8 +817,15 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 		}
 
 		if count > 0 && l.PrevHash != previousHash {
+			// 空锚点单独归因为 missing_prev，便于看板区分「链起点被抹除」与「锚点被替换」。
+			reason := store.ChainReasonBrokenChain
+			if l.PrevHash == "" {
+				reason = store.ChainReasonMissingPrev
+			}
 			return &store.ChainVerificationResult{
+				Reason:        reason,
 				TotalVerified: count,
+				TotalRecords:  totalRecords,
 				Valid:         false,
 				LegacyHashed:  legacyCount,
 				BrokenAtID:    l.ID,
@@ -728,24 +843,25 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 	}
 
 	result := &store.ChainVerificationResult{
+		Reason:        store.ChainReasonOK,
 		TotalVerified: count,
+		TotalRecords:  totalRecords,
 		Valid:         true,
 		LegacyHashed:  legacyCount,
 		Message:       fmt.Sprintf("hash chain verified successfully (%d records checked)", count),
 	}
 	if legacyCount > 0 {
+		// 证据真实但写入于密钥化口径之前：链有效，仅需重签（P2-4 缺口 b）。
+		result.Reason = store.ChainReasonLegacyHashed
 		result.Message = fmt.Sprintf("hash chain verified successfully (%d records checked, %d legacy-hashed records pending canonical SM3 re-signing)", count, legacyCount)
 	}
 	return result, nil
 }
 
-// Ensure interface compliance at compile time.
+// 编译期接口一致性检查。
 var (
 	_ store.TaskStore       = (*TaskStore)(nil)
-	_ store.LeasedTaskStore = (*TaskStore)(nil) // Methods return ErrLeaseNotSupported at runtime.
+	_ store.LeasedTaskStore = (*TaskStore)(nil) // 运行时方法返回 ErrLeaseNotSupported
 	_ store.DataSourceStore = (*DataSourceStore)(nil)
 	_ store.AuditStore      = (*AuditStore)(nil)
 )
-
-// Unused import guard.
-var _ = time.Now

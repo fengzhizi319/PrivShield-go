@@ -6,24 +6,29 @@
 //   - 信号处理：SIGINT/SIGTERM 优雅停机
 //
 // 环境变量：
-//   - PRIVACY_REST_HOST / PRIVACY_REST_PORT：REST 监听地址
-//   - PRIVACY_GRPC_HOST / PRIVACY_GRPC_PORT：gRPC 监听地址
+//   - PRIVACY_REST_HOST / PRIVACY_REST_PORT：REST 监听地址（默认 127.0.0.1，容器编排显式注入 0.0.0.0）
+//   - PRIVACY_GRPC_HOST / PRIVACY_GRPC_PORT：gRPC 监听地址（默认 127.0.0.1）
 //   - PRIVACY_LOG_LEVEL：日志级别（DEBUG/INFO/WARN/ERROR）
 //   - PRIVACY_TLS_ENABLED：是否启用 TLS (HTTPS / gRPC TLS)
+//   - PRIVACY_REQUIRE_TLS：生产编排声明「必须加密」，TLS 关闭时启动即失败
 //   - PRIVACY_TLS_CERT_FILE / PRIVACY_TLS_KEY_FILE / PRIVACY_TLS_CA_FILE：证书路径
+//   - PRIVACY_AUTH_ENABLED + PRIVACY_AUTH_INTERNAL_API_KEYS：入站 API Key 鉴权
 //   - PRIVACY_AUTH_INTERNAL_MTLS_ENABLED：是否启用 mTLS 客户端双向认证
+//   - PRIVACY_AUTH_MTLS_WHITELIST_FILE：gRPC 客户端证书 CN 白名单（启用 TLS/mTLS 时必填）
+//
+// 启动门禁（P0-1 零信任默认态，见 internal/config.Validate）：非环回监听且未配置入站凭据、
+// 声明需要 TLS 却未启用、启用 gRPC TLS 却缺少 CN 白名单文件，均直接终止进程而非静默降级。
 package main
 
 import (
 	"context"
-	"fmt"
+	"log"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -32,12 +37,14 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 
+	engineconfig "github.com/fengzhizi319/PrivShield/engine-go/internal/config"
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/grpcserver"
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/observability"
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/rest"
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/security"
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/service"
 	"github.com/fengzhizi319/PrivShield/pkg/middleware"
+	"github.com/fengzhizi319/PrivShield/pkg/naming"
 	"github.com/fengzhizi319/PrivShield/pkg/tlsutil"
 )
 
@@ -56,32 +63,19 @@ var (
 // ──────────────────────────────────────────────
 
 type Config struct {
-	RESTHost       string
-	RESTPort       int
-	GRPCPort       int
+	// Runtime 承载监听面与安全开关，并提供 P0-1 fail-closed 门禁 Validate()。
+	*engineconfig.Runtime
 	LogLevel       string
 	RateLimitRPS   int
 	RateLimitBurst int
-	TLSEnabled     bool
-	TLSCertFile    string
-	TLSKeyFile     string
-	TLSCAFile      string
-	MTLSEnabled    bool
 }
 
 func loadConfig() Config {
 	return Config{
-		RESTHost:       getEnv("PRIVACY_REST_HOST", "0.0.0.0"),
-		RESTPort:       getEnvInt("PRIVACY_REST_PORT", 8079),
-		GRPCPort:       getEnvInt("PRIVACY_GRPC_PORT", 50051),
+		Runtime:        engineconfig.LoadAgent(),
 		LogLevel:       getEnv("PRIVACY_LOG_LEVEL", "INFO"),
 		RateLimitRPS:   getEnvInt("PRIVACY_RATE_LIMIT_RPS", 1000),
 		RateLimitBurst: getEnvInt("PRIVACY_RATE_LIMIT_BURST", 2000),
-		TLSEnabled:     getEnvBool("PRIVACY_TLS_ENABLED", false),
-		TLSCertFile:    getEnv("PRIVACY_TLS_CERT_FILE", ""),
-		TLSKeyFile:     getEnv("PRIVACY_TLS_KEY_FILE", ""),
-		TLSCAFile:      getEnv("PRIVACY_TLS_CA_FILE", ""),
-		MTLSEnabled:    getEnvBool("PRIVACY_AUTH_INTERNAL_MTLS_ENABLED", false),
 	}
 }
 
@@ -91,6 +85,12 @@ func loadConfig() Config {
 
 func main() {
 	cfg := loadConfig()
+
+	// P0-1 零信任默认态：在打开任何监听端口之前通过 fail-closed 门禁，
+	// 命中红线（远端无密钥 / 声明 TLS 却未启用 / mTLS 白名单缺失 / 证书不可读）直接终止进程。
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("invalid configuration: %v", err)
+	}
 
 	// 初始化日志
 	observability.InitLogger(cfg.LogLevel)
@@ -111,6 +111,11 @@ func main() {
 
 	// 初始化 Prometheus 指标收集器（设计文档 §11.1）
 	engineMetrics := observability.NewEngineMetrics()
+
+	// 注册 pkg/naming 观测器（P2-5）：别名命中与归一化失败既以结构化告警入日志，
+	// 也计入 privshield_api_alias_requests_total / privshield_datasource_normalize_errors_total，
+	// 与中台四服务同名同标签，直连枚举探测不再在指标面静默。
+	naming.SetObserver(namingObserver{metrics: engineMetrics})
 
 	// ── REST API (Gin) ──
 	gin.SetMode(gin.ReleaseMode)
@@ -136,7 +141,7 @@ func main() {
 	// Prometheus /metrics 端点（设计文档 §11.1）
 	router.GET("/metrics", engineMetrics.Handler())
 
-	restAddr := fmt.Sprintf("%s:%d", cfg.RESTHost, cfg.RESTPort)
+	restAddr := cfg.RESTAddress()
 	restServer := &http.Server{
 		Addr:         restAddr,
 		Handler:      router,
@@ -146,7 +151,7 @@ func main() {
 	}
 
 	go func() {
-		if cfg.TLSEnabled && cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+		if cfg.TLSEnabled {
 			slog.Info("REST HTTPS server starting", "addr", restAddr, "cert", cfg.TLSCertFile)
 			if err := restServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && err != http.ErrServerClosed {
 				slog.Error("REST HTTPS server error", "err", err)
@@ -162,7 +167,7 @@ func main() {
 	}()
 
 	// ── gRPC Server ──
-	grpcAddr := fmt.Sprintf("0.0.0.0:%d", cfg.GRPCPort)
+	grpcAddr := cfg.GRPCAddress()
 	grpcLis, err := net.Listen("tcp", grpcAddr)
 	if err != nil {
 		slog.Error("gRPC listen failed", "err", err)
@@ -183,7 +188,7 @@ func main() {
 		}),
 	}
 
-	if cfg.TLSEnabled && cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+	if cfg.TLSEnabled {
 		clientAuth := ""
 		if cfg.MTLSEnabled {
 			clientAuth = "require"
@@ -203,23 +208,28 @@ func main() {
 		slog.Info("gRPC TLS credentials enabled", "mtls", cfg.MTLSEnabled)
 	}
 
-	whitelistPath := getEnv("PRIVACY_AUTH_MTLS_WHITELIST_FILE", "")
+	// mTLS CN 白名单拦截器：路径已由门禁保证「启用 gRPC TLS / internal mTLS 时必然存在」，
+	// 这里再对「已给路径却拿不到拦截器」的情形显式终止，杜绝静默跳过注册。
+	whitelistPath := cfg.MTLSWhitelistFile
 	if whitelistPath != "" {
 		unaryInter, streamInter, _, err := tlsutil.NewWhitelistInterceptor(whitelistPath)
 		if err != nil {
 			slog.Error("Failed to init mTLS whitelist interceptor", "err", err)
 			os.Exit(1)
 		}
-		if unaryInter != nil {
-			grpcOpts = append(grpcOpts, grpc.UnaryInterceptor(unaryInter))
+		if unaryInter == nil || streamInter == nil {
+			slog.Error("mTLS whitelist interceptor was not registered; refusing to serve gRPC without CN authorization",
+				"path", whitelistPath)
+			os.Exit(1)
 		}
-		if streamInter != nil {
-			grpcOpts = append(grpcOpts, grpc.StreamInterceptor(streamInter))
-		}
+		grpcOpts = append(grpcOpts,
+			grpc.ChainUnaryInterceptor(unaryInter),
+			grpc.ChainStreamInterceptor(streamInter),
+		)
 		slog.Info("mTLS CN whitelist interceptor enabled", "path", whitelistPath)
 	}
 
-	grpcSrv := grpcserver.NewServer(svc, grpcOpts...)
+	grpcSrv := grpcserver.NewServer(svc, grpcOpts...).WithMetrics(engineMetrics)
 	go func() {
 		slog.Info("gRPC server starting", "addr", grpcAddr)
 		if err := grpcSrv.Serve(grpcLis); err != nil {
@@ -233,11 +243,22 @@ func main() {
 		"rest_addr", restAddr,
 		"grpc_addr", grpcAddr,
 		"tls_enabled", cfg.TLSEnabled,
+		"require_tls", cfg.RequireTLS,
 		"mtls_enabled", cfg.MTLSEnabled,
+		"mtls_whitelist_file", cfg.MTLSWhitelistFile,
+		"auth_enabled", cfg.AuthEffectivelyEnabled(),
+		"rate_limit_rps", cfg.RateLimitRPS,
 		"log_level", cfg.LogLevel,
 		"budget_total_epsilon", budgetStatus["total_epsilon"],
 		"budget_remaining_epsilon", budgetStatus["remaining_epsilon"],
 	)
+
+	// 本地环回无密钥开发形态：门禁已放行，但必须显式告警，防止被误当作生产形态长期运行。
+	if !cfg.AuthEffectivelyEnabled() && !cfg.TLSEnabled {
+		slog.Warn("running with authentication and TLS DISABLED on a loopback bind; " +
+			"for any exposed deployment set PRIVACY_AUTH_ENABLED=true with PRIVACY_AUTH_INTERNAL_API_KEYS " +
+			"and PRIVACY_TLS_ENABLED=true (plus PRIVACY_AUTH_MTLS_WHITELIST_FILE)")
+	}
 
 	// 等待退出信号
 	quit := make(chan os.Signal, 1)
@@ -288,6 +309,22 @@ func main() {
 // 辅助函数
 // ──────────────────────────────────────────────
 
+// namingObserver 同时以结构化日志与 Prometheus 计数承载 pkg/naming 的漂移事件（P2-5）。
+// 基数策略与 pkg/metrics 侧一致：原始脏值只入日志，指标标签只用 canonical / 有界枚举。
+type namingObserver struct {
+	metrics *observability.EngineMetrics
+}
+
+func (o namingObserver) RecordAPIAlias(alias, canonical, target string) {
+	slog.Warn("naming alias used", "alias", alias, "canonical", canonical, "target", target)
+	o.metrics.RecordNamingAlias(alias, canonical, target)
+}
+
+func (o namingObserver) RecordNormalizeError(reason string) {
+	slog.Warn("naming normalize failed", "reason", reason)
+	o.metrics.RecordNamingError(reason)
+}
+
 func getEnv(key, defaultVal string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -302,13 +339,6 @@ func getEnvInt(key string, defaultVal int) int {
 			return defaultVal
 		}
 		return n
-	}
-	return defaultVal
-}
-
-func getEnvBool(key string, defaultVal bool) bool {
-	if v := os.Getenv(key); v != "" {
-		return strings.EqualFold(v, "true") || v == "1"
 	}
 	return defaultVal
 }

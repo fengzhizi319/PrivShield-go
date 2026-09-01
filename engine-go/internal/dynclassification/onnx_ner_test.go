@@ -300,6 +300,81 @@ func TestOnnxNerEngineIsAvailable(t *testing.T) {
 }
 
 // ──────────────────────────────────────────────
+// NER 能力诚实口径（P1-3）
+// ──────────────────────────────────────────────
+
+// modelBackedStubNer 是「真实模型驱动」NER 引擎的测试替身，
+// 用于证明 modelBacked 口径来自引擎真实状态而非硬编码常量。
+type modelBackedStubNer struct{ backed bool }
+
+func (s *modelBackedStubNer) Extract(_ context.Context, _ string) ([]NerEntity, error) {
+	return nil, nil
+}
+func (s *modelBackedStubNer) IsAvailable() bool { return true }
+func (s *modelBackedStubNer) Name() string      { return "stub-model-ner" }
+func (s *modelBackedStubNer) ModelBacked() bool { return s.backed }
+
+func TestNerEngineModelBacked(t *testing.T) {
+	if NerEngineModelBacked(NewRuleBasedNerEngine()) {
+		t.Error("正则降级桩 rule-based-ner 不得被判定为模型驱动（P1-3）")
+	}
+	if NerEngineModelBacked(NewOnnxNerEngine(DefaultOnnxNerConfig())) {
+		t.Error("ONNX 骨架未加载模型，不得被判定为模型驱动")
+	}
+	if NerEngineModelBacked(NewCudaOnnxNerEngine(DefaultCudaOnnxNerConfig())) {
+		t.Error("默认 StubOnnxRuntime 下 CUDA 引擎不得被判定为模型驱动")
+	}
+	if NerEngineModelBacked(nil) {
+		t.Error("nil 引擎必须返回 false")
+	}
+	if !NerEngineModelBacked(&modelBackedStubNer{backed: true}) {
+		t.Error("真实模型驱动的引擎应返回 true（证明口径非硬编码 false）")
+	}
+	if NerEngineModelBacked(&modelBackedStubNer{backed: false}) {
+		t.Error("模型未就绪的引擎应返回 false")
+	}
+}
+
+func TestClassificationFunnelNerStatus(t *testing.T) {
+	// 生产装配口径（service.go 传入 NewRuleBasedNerEngine()）：正则桩 → 非模型驱动。
+	funnel, err := NewClassificationFunnel(nil, NewRuleBasedNerEngine(), nil, DefaultFunnelConfig())
+	if err != nil {
+		t.Fatalf("NewClassificationFunnel: %v", err)
+	}
+	backend, modelBacked := funnel.NerStatus()
+	if backend != "rule-based-ner" {
+		t.Errorf("backend = %q, want %q", backend, "rule-based-ner")
+	}
+	if modelBacked {
+		t.Error("默认构建中 ner modelBacked 必须为 false（ONNX 模型未交付）")
+	}
+
+	// nil 引擎时漏斗回落到正则桩，口径同样为 false。
+	def, err := NewClassificationFunnel(nil, nil, nil, DefaultFunnelConfig())
+	if err != nil {
+		t.Fatalf("NewClassificationFunnel: %v", err)
+	}
+	if b, mb := def.NerStatus(); b != "rule-based-ner" || mb {
+		t.Errorf("默认回落口径 = (%q, %v), want (\"rule-based-ner\", false)", b, mb)
+	}
+
+	// 真实模型引擎在位时应如实上报 true。
+	wired, err := NewClassificationFunnel(nil, &modelBackedStubNer{backed: true}, nil, DefaultFunnelConfig())
+	if err != nil {
+		t.Fatalf("NewClassificationFunnel: %v", err)
+	}
+	if b, mb := wired.NerStatus(); b != "stub-model-ner" || !mb {
+		t.Errorf("模型驱动口径 = (%q, %v), want (\"stub-model-ner\", true)", b, mb)
+	}
+
+	// 未装配引擎（直接构造，绕过 New 的回落）时报告 none/false。
+	empty := &ClassificationFunnel{}
+	if b, mb := empty.NerStatus(); b != "none" || mb {
+		t.Errorf("未装配口径 = (%q, %v), want (\"none\", false)", b, mb)
+	}
+}
+
+// ──────────────────────────────────────────────
 // FallbackChain 测试
 // ──────────────────────────────────────────────
 

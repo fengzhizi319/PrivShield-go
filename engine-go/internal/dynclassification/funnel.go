@@ -4,6 +4,8 @@
 //  1. Layer 1（规则层）：基于 Aho-Corasick 自动机与字段名正则快速匹配（零 ML 开销，< 50μs）；
 //  2. Layer 2（NER 实体层）：Small-NER 实体抽取（识别姓名、证件、电话、住址、疾病诊断、ICD-10 等）；
 //  3. Layer 3（LLM 仲裁层）：通过 HTTP 连接池调度外部独立 LLM（vLLM / Ollama），无需内嵌 PyTorch；
+//     升级载荷「只送特征、不送原值」（P0-5）：仅字段名 + 值形态指纹 + 前层候选标签，
+//     且端点必须为 https 或环回明文，否则 fail closed 回退 Safety Floor；
 //  4. Safety Floor（安全底线）：全链路异常/超时时的 Fail-closed 安全托底。
 package dynclassification
 
@@ -89,6 +91,8 @@ func (f *ClassificationFunnel) Classify(ctx context.Context, field, value string
 	}
 
 	// ─── Layer 2: Small-NER 实体抽取 ───
+	// candidates 仅收集前层的标签与统计量（不含实体文本），供 Layer 3 仲裁参考。
+	var candidates []LLMCandidate
 	if f.cfg.EnableNER && f.nerEngine != nil && f.nerEngine.IsAvailable() && value != "" {
 		entities, err := f.nerEngine.Extract(ctx, value)
 		if err == nil && len(entities) > 0 {
@@ -106,19 +110,34 @@ func (f *ClassificationFunnel) Classify(ctx context.Context, field, value string
 				f.cache.put(cacheKey, nerRes)
 				return nerRes, nil
 			}
+			// 未达阈值：只把「标签 + 等级 + 置信度」下传为候选，实体文本本身绝不出域
+			level, category := mapNERLabelToSecurity(bestEntity.Label)
+			candidates = append(candidates, LLMCandidate{
+				Source:     "ner:" + bestEntity.Label,
+				Level:      string(level),
+				Category:   category,
+				Confidence: bestEntity.Confidence,
+			})
 		}
 	}
 
 	// ─── Layer 3: 外部 LLM 仲裁服务 ───
+	// P0-5「只送特征、不送原值」：升级载荷由 ClassifyShape 内部指纹化，原值不外送。
 	if f.cfg.EnableLLM && f.llmClient != nil {
+		if res != nil && res.MatchedBy != "" && res.MatchedBy != "default" {
+			candidates = append([]LLMCandidate{{
+				Source:     res.MatchedBy,
+				Level:      string(res.Level),
+				Category:   res.Category,
+				Confidence: res.Confidence,
+			}}, candidates...)
+		}
+
 		llmCtx, cancel := context.WithTimeout(ctx, f.cfg.LLMTimeout)
 		defer cancel()
 
 		if f.llmClient.IsAvailable(llmCtx) {
-			llmResp, err := f.llmClient.Classify(llmCtx, LLMRequest{
-				Field: field,
-				Value: value,
-			})
+			llmResp, err := f.llmClient.ClassifyShape(llmCtx, field, value, candidates)
 			if err == nil && llmResp != nil && llmResp.Confidence >= 0.70 {
 				llmRes := &ClassificationResult{
 					Field:      field,
@@ -159,6 +178,34 @@ func (f *ClassificationFunnel) LLMStatus(ctx context.Context) (configured, avail
 		return true, false
 	}
 	return true, f.llmClient.IsAvailable(ctx)
+}
+
+// NerStatus 返回 Layer 2 实际装配的 NER 引擎口径，供 /ops/diagnostics 诚实上报（P1-3）。
+// 返回 (backend, modelBacked)：
+//   - backend: 引擎实现名（NerEngine.Name()）；未装配时为 "none"
+//   - modelBacked: 是否装配了真实模型驱动（ONNX / CUDA）且当前可推理的 NER 引擎；
+//     默认装配的正则降级桩 rule-based-ner 恒为 false。
+func (f *ClassificationFunnel) NerStatus() (backend string, modelBacked bool) {
+	if f.nerEngine == nil {
+		return "none", false
+	}
+	return f.nerEngine.Name(), NerEngineModelBacked(f.nerEngine)
+}
+
+// LLMEscalationStats 返回 Layer-3 升级外送诊断快照（升级次数、载荷去标识化与传输安全态），
+// 供 /ops/diagnostics 类上报直接消费。Layer 3 关闭时计数器天然为 0；
+// 未配置客户端时返回零值并标记 PayloadDeidentified=true，表示不存在未去标识化的外送。
+func (f *ClassificationFunnel) LLMEscalationStats() LLMClientStats {
+	if f.llmClient == nil {
+		return LLMClientStats{PayloadDeidentified: true}
+	}
+	return f.llmClient.Stats()
+}
+
+// LLMEnabled 返回 Layer-3 外部仲裁是否**真实启用**：配置开关为真且客户端已装配。
+// 诊断上报必须据此口径，禁止写死 available=true 把未启用的能力宣称为已交付（P1-3）。
+func (f *ClassificationFunnel) LLMEnabled() bool {
+	return f.cfg.EnableLLM && f.llmClient != nil
 }
 
 // CacheStats 返回分类缓存命中统计（使用原子计数器，无需遍历分片）

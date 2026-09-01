@@ -17,21 +17,32 @@ import (
 	"google.golang.org/grpc/status"
 
 	pb "github.com/fengzhizi319/PrivShield/engine-go/internal/grpcserver/proto"
+	"github.com/fengzhizi319/PrivShield/engine-go/internal/observability"
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/service"
+	pkggrpcserver "github.com/fengzhizi319/PrivShield/pkg/grpcserver"
 )
 
 // Server gRPC 隐私服务服务端
 type Server struct {
 	pb.UnimplementedPrivacyServiceServer
-	svc      *service.PrivacyService
-	grpcSrv  *grpc.Server
-	grpcOpts []grpc.ServerOption
+	svc     *service.PrivacyService
+	metrics *observability.EngineMetrics
+	*pkggrpcserver.Server
 }
 
 // NewServer 创建 gRPC 服务端实例
 // 可选传入 grpc.ServerOption（如 Keepalive、TLS 凭证、mTLS 白名单拦截器）
 func NewServer(svc *service.PrivacyService, opts ...grpc.ServerOption) *Server {
-	return &Server{svc: svc, grpcOpts: opts}
+	return &Server{
+		svc:    svc,
+		Server: pkggrpcserver.New("", opts...),
+	}
+}
+
+// WithMetrics 注入 engine-go 指标收集器，用于记录 gRPC 统一 metrics。
+func (s *Server) WithMetrics(m *observability.EngineMetrics) *Server {
+	s.metrics = m
+	return s
 }
 
 // Serve 启动 gRPC 服务（阻塞）
@@ -41,25 +52,13 @@ func (s *Server) Serve(lis net.Listener) error {
 		grpc.MaxSendMsgSize(64 * 1024 * 1024), // 64MB 发送上限
 		grpc.MaxConcurrentStreams(250),        // 并发流限制
 	}
-	allOpts := append(builtinOpts, s.grpcOpts...)
-	s.grpcSrv = grpc.NewServer(allOpts...)
-	pb.RegisterPrivacyServiceServer(s.grpcSrv, s)
+	s.WithOptions(builtinOpts...)
+	if s.metrics != nil {
+		s.WithUnaryInterceptor(s.metrics.UnaryServerInterceptor())
+	}
+	pb.RegisterPrivacyServiceServer(s.Server, s)
 	slog.Info("gRPC server starting (Protobuf + Type-Safe)", "addr", lis.Addr())
-	return s.grpcSrv.Serve(lis)
-}
-
-// GracefulStop 优雅停机
-func (s *Server) GracefulStop() {
-	if s.grpcSrv != nil {
-		s.grpcSrv.GracefulStop()
-	}
-}
-
-// Stop 强制停止 gRPC 服务端（用于超时回退）
-func (s *Server) Stop() {
-	if s.grpcSrv != nil {
-		s.grpcSrv.Stop()
-	}
+	return s.ServeListener(lis)
 }
 
 // ──────────────────────────────────────────────

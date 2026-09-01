@@ -1,76 +1,45 @@
-// Package observability — engine-go Prometheus 指标定义与 /metrics 端点。
+// Package observability — engine-go Prometheus 指标扩展。
 //
-// 对齐设计文档 §11.1 指标规约与 pkg/metrics 命名规范：
-//   - 自定义指标使用 privshield_ 前缀
-//   - Counter 以 _total 结尾
-//   - Histogram 以 _duration_seconds 结尾
-//
-// 指标清单（对齐 Python engine/observability/metrics.py）：
-//   - privshield_requests_total{protocol,endpoint,status}
-//   - privshield_request_duration_seconds{protocol,endpoint}
-//   - privshield_classification_total{engine,level,domain}
-//   - privshield_budget_consumed_total{namespace,mechanism}
-//   - privshield_ner_inference_seconds{device,batch_size}
+// 通用 RED 指标已下沉至 pkg/observability.REDMetrics；本包只保留引擎专属业务指标。
 package observability
 
 import (
 	"strconv"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"google.golang.org/grpc"
+
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 )
 
-// EngineMetrics 持有 engine-go 全部 Prometheus 指标。
+// EngineMetrics 持有 engine-go 的 RED 指标 + 隐私计算业务指标。
 type EngineMetrics struct {
-	registry *prometheus.Registry
-
-	// RequestsTotal 按 protocol/endpoint/status 统计请求总数。
-	// 对齐 §11.1 privacy_requests_total。
-	RequestsTotal *prometheus.CounterVec
-
-	// RequestDuration 按 protocol/endpoint 记录请求延迟直方图。
-	// 对齐 §11.1 privacy_request_duration_seconds。
-	RequestDuration *prometheus.HistogramVec
+	*pkgobs.REDMetrics
 
 	// ClassificationTotal 按 engine/level/domain 统计分类命中数。
-	// 对齐 §11.1 privacy_classification_total。
 	ClassificationTotal *prometheus.CounterVec
 
 	// BudgetConsumedTotal 按 namespace/mechanism 统计 DP 预算消耗。
-	// 对齐 §11.1 privacy_budget_consumed_total。
 	BudgetConsumedTotal *prometheus.CounterVec
 
 	// NerInferenceSeconds GPU/CPU NER 推理耗时直方图。
-	// 对齐 §11.1 privacy_ner_gpu_inference_seconds（扩展支持 CPU 设备）。
 	NerInferenceSeconds *prometheus.HistogramVec
+
+	// APIAliasRequestsTotal 统计入站标识命中别名映射的请求数。
+	APIAliasRequestsTotal *prometheus.CounterVec
+
+	// DatasourceNormalizeErrorsTotal 统计标识归一化失败与 fail-closed 拒绝数。
+	DatasourceNormalizeErrorsTotal *prometheus.CounterVec
 }
 
 // NewEngineMetrics 创建并注册 engine-go 指标集合。
-// 使用独立 Registry 避免全局注册冲突。
+// 通用 RED 指标由 pkg/observability.NewREDMetrics 提供，避免与 pkg 侧重复实现。
 func NewEngineMetrics() *EngineMetrics {
-	reg := prometheus.NewRegistry()
+	red := pkgobs.NewREDMetrics()
 
 	m := &EngineMetrics{
-		registry: reg,
-
-		RequestsTotal: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "privshield_requests_total",
-				Help: "Total requests processed by the privacy engine.",
-			},
-			[]string{"protocol", "endpoint", "status"},
-		),
-
-		RequestDuration: prometheus.NewHistogramVec(
-			prometheus.HistogramOpts{
-				Name:    "privshield_request_duration_seconds",
-				Help:    "Request latency histogram for privacy engine endpoints.",
-				Buckets: prometheus.DefBuckets,
-			},
-			[]string{"protocol", "endpoint"},
-		),
+		REDMetrics: red,
 
 		ClassificationTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
@@ -96,24 +65,46 @@ func NewEngineMetrics() *EngineMetrics {
 			},
 			[]string{"device", "batch_size"},
 		),
+
+		APIAliasRequestsTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name:        "privshield_api_alias_requests_total",
+				Help:        "Total requests processed via legacy/alias identifier mapping.",
+				ConstLabels: prometheus.Labels{"module": "privshield-agent"},
+			},
+			[]string{"alias", "canonical", "target"},
+		),
+
+		DatasourceNormalizeErrorsTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name:        "privshield_datasource_normalize_errors_total",
+				Help:        "Total identifier normalization errors and fail-closed rejections.",
+				ConstLabels: prometheus.Labels{"module": "privshield-agent"},
+			},
+			[]string{"reason"},
+		),
 	}
 
-	reg.MustRegister(
-		m.RequestsTotal,
-		m.RequestDuration,
+	red.MustRegister(
 		m.ClassificationTotal,
 		m.BudgetConsumedTotal,
 		m.NerInferenceSeconds,
+		m.APIAliasRequestsTotal,
+		m.DatasourceNormalizeErrorsTotal,
 	)
 
 	return m
 }
 
-// RecordRequest 记录一次请求指标。
-func (m *EngineMetrics) RecordRequest(protocol, endpoint string, status int, durationSec float64) {
-	statusStr := strconv.Itoa(status)
-	m.RequestsTotal.WithLabelValues(protocol, endpoint, statusStr).Inc()
-	m.RequestDuration.WithLabelValues(protocol, endpoint).Observe(durationSec)
+// RecordNamingAlias 上报一次入站别名解析事件（P2-5）。
+func (m *EngineMetrics) RecordNamingAlias(alias, canonical, target string) {
+	m.APIAliasRequestsTotal.WithLabelValues(alias, canonical, target).Inc()
+}
+
+// RecordNamingError 上报一次标识归一化失败 / fail-closed 拒绝（P2-5）。
+// reason 必须是 pkg/naming 的有界枚举，避免高基数时序。
+func (m *EngineMetrics) RecordNamingError(reason string) {
+	m.DatasourceNormalizeErrorsTotal.WithLabelValues(reason).Inc()
 }
 
 // RecordClassification 记录一次分类命中。
@@ -131,32 +122,18 @@ func (m *EngineMetrics) RecordNerInference(device string, batchSize int, duratio
 	m.NerInferenceSeconds.WithLabelValues(device, strconv.Itoa(batchSize)).Observe(durationSec)
 }
 
-// PrometheusMiddleware 返回自动记录 HTTP 请求指标的 Gin 中间件。
-// 替代原有 TODO 桩，实际写入 Prometheus Counter + Histogram。
-func (m *EngineMetrics) PrometheusMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		start := time.Now()
-
-		c.Next()
-
-		path := c.FullPath()
-		if path == "" {
-			path = c.Request.URL.Path
-		}
-		// 跳过 /metrics 自身避免递归
-		if path == "/metrics" {
-			return
-		}
-
-		duration := time.Since(start).Seconds()
-		m.RecordRequest("http", path, c.Writer.Status(), duration)
-	}
+// Handler 返回暴露 /metrics 端点的 Gin handler。
+// 覆盖嵌入的 pkg/observability.REDMetrics.Handler()（http.Handler），保持原有签名。
+func (m *EngineMetrics) Handler() gin.HandlerFunc {
+	return m.REDMetrics.GinHandler()
 }
 
-// Handler 返回暴露 /metrics 端点的 Gin handler。
-func (m *EngineMetrics) Handler() gin.HandlerFunc {
-	h := promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})
-	return func(c *gin.Context) {
-		h.ServeHTTP(c.Writer, c.Request)
-	}
+// PrometheusMiddleware 返回自动记录 HTTP 请求指标的 Gin 中间件。
+func (m *EngineMetrics) PrometheusMiddleware() gin.HandlerFunc {
+	return m.REDMetrics.PrometheusMiddleware()
+}
+
+// UnaryServerInterceptor 返回 gRPC unary 拦截器。
+func (m *EngineMetrics) UnaryServerInterceptor() grpc.UnaryServerInterceptor {
+	return m.REDMetrics.UnaryServerInterceptor()
 }

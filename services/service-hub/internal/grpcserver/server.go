@@ -33,9 +33,11 @@ import (
 	"github.com/fengzhizi319/PrivShield/pkg/validation"
 
 	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/agent"
+	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/audit"
 	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/config"
 	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/datasource"
 	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/models"
+	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/retry"
 	pb "github.com/fengzhizi319/PrivShield/services/service-hub/proto"
 )
 
@@ -48,6 +50,7 @@ type GRPCServer struct {
 
 	agent      *agent.Client      // 上游 PrivShield Python Agent 客户端
 	datasource *datasource.Client // 下游 datasource-mgr 客户端
+	audit      *audit.Client      // audit-log 存证客户端（P0-6：出域 ↔ 留痕强绑定）
 	cfg        *config.Config     // 模块全局运行配置
 	startTime  time.Time          // 服务启动时间戳
 	tasks      store.TaskStore    // 任务持久化仓库接口
@@ -60,11 +63,15 @@ type GRPCServer struct {
 
 // New creates a new GRPCServer instance.
 // New 构造函数初始化 GRPCServer 实例，配置并发信号量与取消上下文。
+//
+// 存证客户端与 REST 侧同源：一律由 cfg 装配，未配置端点时实例仍保留，
+// 提交必然返回 audit.ErrNotConfigured，由流水线 audit 阶段判定任务失败（fail-closed）。
 func New(ag *agent.Client, ds *datasource.Client, cfg *config.Config, tasks store.TaskStore, logger *slog.Logger) *GRPCServer {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &GRPCServer{
 		agent:      ag,
 		datasource: ds,
+		audit:      audit.New(cfg, nil),
 		cfg:        cfg,
 		startTime:  time.Now(),
 		tasks:      tasks,
@@ -232,19 +239,37 @@ func (s *GRPCServer) HubStatus(ctx context.Context, req *pb.HubStatusRequest) (*
 
 // Dispatch dispatches a new task to the scheduling pipeline.
 // Dispatch 实现显式分发任务 RPC 方法：
-// 1. 校验 source 非空、限长 1024 字符，operation 属于有效操作集合；
-// 2. 持久化任务为 pending 状态；
-// 3. 异步拉起 6 阶段流水线协程处理任务并返回 accepted。
+// 1. 校验 source 非空、限长 1024 字符，并经 naming 归一化为 canonical datasource_id；
+// 2. operation 为可选的调用方「强度请求」，非空时必须属于有效算子词表；
+// 3. 持久化任务为 pending 状态；
+// 4. 异步拉起 6 阶段流水线协程处理任务并返回 accepted。
+//
+// 与 REST 分发路径完全同构（P1-1 双路径一致性）：生效算子一律在 ③ classify 阶段
+// 由引擎定级结果推导，调用方的 operation 只允许上调保护强度，定级缺失即任务失败。
 func (s *GRPCServer) Dispatch(ctx context.Context, req *pb.DispatchRequest) (*pb.DispatchResponse, error) {
 	// 字段合法性校验
-	if strings.TrimSpace(req.Source) == "" {
+	rawSource := strings.TrimSpace(req.Source)
+	if rawSource == "" {
 		return nil, status.Error(codes.InvalidArgument, "source must not be empty")
 	}
-	if len(req.Source) > 1024 {
+	if len(rawSource) > 1024 {
 		return nil, status.Error(codes.InvalidArgument, "source exceeds maximum length of 1024 characters")
 	}
-	if err := validation.AllowedValues("operation", req.Operation, validation.HubOperations); err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+
+	normID, normErr := naming.ResolveInbound(rawSource)
+	if normErr != nil {
+		if naming.IsReserved(normErr) {
+			return nil, status.Errorf(codes.FailedPrecondition, "reserved source: %v", normErr)
+		}
+		return nil, status.Errorf(codes.InvalidArgument, "invalid source: %v", normErr)
+	}
+	normAPICode := naming.APICodeForDataSource(normID)
+
+	operation := strings.TrimSpace(req.Operation)
+	if operation != "" {
+		if err := validation.AllowedValues("operation", operation, validation.HubOperations); err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+		}
 	}
 
 	taskID := validation.GenerateID("task")
@@ -260,15 +285,17 @@ func (s *GRPCServer) Dispatch(ctx context.Context, req *pb.DispatchRequest) (*pb
 	}
 
 	task := &store.Task{
-		ID:          taskID,
-		Status:      initialStatus,
-		Stage:       stage,
-		Source:      req.Source,
-		Operation:   req.Operation,
-		Priority:    int(req.Priority),
-		CreatedAt:   now,
-		StartedAt:   startedAt,
-		PayloadJSON: req.PayloadJson,
+		ID:           taskID,
+		Status:       initialStatus,
+		Stage:        stage,
+		Source:       normID,
+		DatasourceID: normID,
+		APICode:      normAPICode,
+		Operation:    operation,
+		Priority:     int(req.Priority),
+		CreatedAt:    now,
+		StartedAt:    startedAt,
+		PayloadJSON:  req.PayloadJson,
 	}
 
 	if err := s.tasks.Save(task); err != nil {
@@ -332,14 +359,17 @@ func (s *GRPCServer) ClassifyAndDispatch(ctx context.Context, req *pb.ClassifyAn
 	classifyCtx = agent.ContextWithIdempotencyKey(classifyCtx, fmt.Sprintf("hub-classify-%s", normID))
 	defer cancel()
 
-	classifyResult, err := s.agent.Classify(classifyCtx, payloadJSON)
+	classifyResult, err := s.agent.Classify(classifyCtx, agent.ToRecords(payloadJSON))
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "classification failed: %v", err)
 	}
 
-	level := "L2"
-	if lvl, ok := classifyResult["level"].(string); ok {
-		level = lvl
+	// 定级一律由引擎给出；读不到可识别的 L1~L5 级别即拒绝派发。
+	// 历史上这里回退到硬编码 "L2"，等价于「分类失败时自行降低安全等级」（P1-1 消除）。
+	level := audit.MaxSensitivityLevel(classifyResult)
+	if level == "" {
+		return nil, status.Error(codes.FailedPrecondition,
+			"classification returned no recognizable security level (L1~L5); dispatch refused")
 	}
 
 	operation := models.LevelToOperation(level)
@@ -475,6 +505,8 @@ func (s *GRPCServer) PipelineStatus(ctx context.Context, req *pb.PipelineStatusR
 // processTask simulates the scheduling pipeline stages.
 // processTask 内部异步流水线执行器：
 // 顺序流转 ingest ➔ fetch ➔ classify ➔ desensitize ➔ return ➔ audit 6 个阶段。
+// 其中 ⑥ audit 阶段真实向 audit-log 提交含 task_id / api_code / datasource_id /
+// 输入输出指纹的出域存证（P0-6）；提交失败一律按任务 failed 处理，绝不静默推进至 done。
 func (s *GRPCServer) processTask(task *store.Task, operation, payloadJSON string, requestID string) {
 	if requestID == "" {
 		requestID = validation.GenerateID("grpc-task")
@@ -489,6 +521,7 @@ func (s *GRPCServer) processTask(task *store.Task, operation, payloadJSON string
 				"task_id", task.ID, "panic", fmt.Sprintf("%v", r))
 			task.Status = "failed"
 			task.Error = fmt.Sprintf("internal panic: %v", r)
+			task.ErrorClass = retry.ClassInternal
 			now := time.Now()
 			task.CompletedAt = &now
 			task.DurationMs = now.Sub(task.CreatedAt).Milliseconds()
@@ -497,6 +530,14 @@ func (s *GRPCServer) processTask(task *store.Task, operation, payloadJSON string
 	}()
 
 	stages := []string{"ingest", "fetch", "classify", "desensitize", "return", "audit"}
+
+	// 出域事实（供 ⑥ 存证使用）：③ 阶段引擎返回的脱敏结果与其中最高敏感级别。
+	var (
+		egressOutput  any
+		egressLevel   string
+		egressHashIn  string
+		egressHashOut string
+	)
 
 	for _, stage := range stages {
 		task.Stage = stage
@@ -512,6 +553,7 @@ func (s *GRPCServer) processTask(task *store.Task, operation, payloadJSON string
 		case <-s.ctx.Done():
 			task.Status = "failed"
 			task.Error = "server shutting down"
+			task.ErrorClass = retry.ClassShutdown
 			now := time.Now()
 			task.CompletedAt = &now
 			task.DurationMs = now.Sub(task.CreatedAt).Milliseconds()
@@ -538,31 +580,86 @@ func (s *GRPCServer) processTask(task *store.Task, operation, payloadJSON string
 		}
 
 		// Stage 3: classify → 分类+脱敏一体化，一次调用 engine 医疗流水线
-		// 替代原先 classify + desensitize 两步分离调用，减少一次网络往返。
-		if stage == "classify" && isPrivacyOp(operation) {
+		//
+		// P1-1 权限收敛：与 REST 路径同构 —— 是否脱敏与采用哪个算子由引擎定级决定，
+		// 调用方传入的 operation 只能上调保护强度，不能下调；定级缺失即任务失败。
+		if stage == "classify" {
 			ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
 			ctx = agent.ContextWithRequestID(ctx, requestID)
 			idempotencyKey := fmt.Sprintf("hub-%s-%s-%d", task.ID, stage, task.RetryCount)
 			ctx = agent.ContextWithIdempotencyKey(ctx, idempotencyKey)
 			records := agent.ToRecords(payloadJSON)
 			if len(records) > 0 {
-				_, err := s.agent.ProcessMedical(ctx, records)
+				result, err := s.agent.ProcessAgent(ctx, records, task.DatasourceID)
 				cancel()
 				if err != nil {
 					task.Status = "failed"
 					task.Error = fmt.Sprintf("medical pipeline failed at stage %s: %v", stage, err)
+					task.ErrorClass, _ = retry.Classify(err, retry.BiasDownstream)
 					now := time.Now()
 					task.CompletedAt = &now
 					task.DurationMs = now.Sub(task.CreatedAt).Milliseconds()
 					_ = s.persistTask(task, "medical pipeline failure")
 					return
 				}
+				if result == nil {
+					result = &agent.MedicalProcessResult{}
+				}
+
+				level := result.Level
+				if level == "" {
+					level = audit.MaxSensitivityLevel(result.ClassificationReport)
+				}
+				if level == "" {
+					task.Status = "failed"
+					task.Error = fmt.Sprintf("classification failed at stage %s: engine returned no security level", stage)
+					task.ErrorClass = retry.ClassContract
+					now := time.Now()
+					task.CompletedAt = &now
+					task.DurationMs = now.Sub(task.CreatedAt).Milliseconds()
+					_ = s.persistTask(task, "classification level unavailable")
+					return
+				}
+
+				derived := models.LevelToOperation(level)
+				applied := models.EffectiveOperation(operation, derived)
+				if applied != operation {
+					s.logger.Warn("caller-requested operation overridden by classification result (P1-1 fail-closed)",
+						"task_id", task.ID,
+						"requested_operation", operation,
+						"security_level", level,
+						"applied_operation", applied)
+				}
+				operation = applied
+				task.Operation = applied
+				egressLevel = level
+
+				// 记录真实出域事实：脱敏后载荷与引擎侧输入/输出指纹。
+				if len(result.SanitizedData) > 0 {
+					egressOutput = result.SanitizedData
+				}
+				egressHashIn, egressHashOut = audit.EngineFingerprints(result.Summary)
 			} else {
 				cancel()
 			}
 		}
 
 		// Stage 4: desensitize → 已由 ③ 医疗流水线合并完成，快速通过
+
+		// Stage 6: audit → 出域与不可篡改留痕强绑定（P0-6 / G-05）。
+		// 提交失败必然使任务终态 failed：不存在「已出域但无存证仍 done」的路径。
+		if stage == "audit" {
+			if evErr := s.submitEvidence(s.ctx, task, "grpc", payloadJSON, egressOutput, egressLevel, egressHashIn, egressHashOut); evErr != nil {
+				task.Status = "failed"
+				task.Error = fmt.Sprintf("audit evidence submission failed at stage %s: %v", stage, evErr)
+				task.ErrorClass, _ = audit.FailureClass(evErr)
+				now := time.Now()
+				task.CompletedAt = &now
+				task.DurationMs = now.Sub(task.CreatedAt).Milliseconds()
+				_ = s.persistTask(task, "audit evidence failure")
+				return
+			}
+		}
 	}
 
 	task.Status = "completed"
@@ -571,6 +668,40 @@ func (s *GRPCServer) processTask(task *store.Task, operation, payloadJSON string
 	task.CompletedAt = &now
 	task.DurationMs = now.Sub(task.CreatedAt).Milliseconds()
 	_ = s.persistTask(task, "task completed")
+}
+
+// submitEvidence performs the single outbound-flow evidence write of stage ⑥.
+// submitEvidence 执行 ⑥ 审计存证阶段唯一的出域留痕提交（POST /api/audit/logs）。
+//
+// 返回的 error 一旦非空即代表「这次出域没有被证明留痕」，调用方 MUST 让任务失败：
+// gRPC 直连与本地工作器路径写 task.Status=failed 并落盘，租约路径返回 *store.TaskFailure。
+// parent 只用于停机传播；每次提交独立受 SERVICE_HUB_AUDIT_LOG_TIMEOUT 约束。
+func (s *GRPCServer) submitEvidence(parent context.Context, task *store.Task, protocol, payloadJSON string, output any, level, inHash, outHash string) error {
+	timeout := s.cfg.AuditLogTimeoutDuration()
+	evCtx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	evCtx = agent.ContextWithRequestID(evCtx, task.ID)
+	evCtx = agent.ContextWithIdempotencyKey(evCtx, fmt.Sprintf("hub-%s-audit-%d", task.ID, task.RetryCount))
+
+	_, err := audit.RecordOutboundEvidence(evCtx, s.audit, audit.OutboundFlow{
+		Task:          task,
+		Protocol:      protocol,
+		SecurityLevel: level,
+		Input:         payloadJSON,
+		Output:        output,
+		InputHash:     inHash,
+		OutputHash:    outHash,
+	})
+	if err != nil {
+		s.logger.Error("outbound evidence submission failed; task marked failed (P0-6 fail-closed)",
+			"task_id", task.ID,
+			"datasource_id", task.DatasourceID,
+			"api_code", task.APICode,
+			"operation", task.Operation,
+			"protocol", protocol,
+			"error", err.Error())
+	}
+	return err
 }
 
 func (s *GRPCServer) usesLeaseWorker() bool {
@@ -654,16 +785,25 @@ func (s *GRPCServer) runLeasedTask(tasks store.LeasedTaskStore, lease *store.Tas
 func (s *GRPCServer) executeLeasedTask(ctx context.Context, task *store.Task) (failure *store.TaskFailure) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			failure = &store.TaskFailure{Error: fmt.Sprintf("internal panic: %v", recovered)}
+			failure = &store.TaskFailure{Error: fmt.Sprintf("internal panic: %v", recovered), ErrorClass: retry.ClassInternal}
 		}
 	}()
 
 	payloadJSON := task.PayloadJSON
+
+	// 出域事实（供 ⑥ 存证使用）：③ 阶段引擎返回的脱敏结果与其中最高敏感级别。
+	var (
+		egressOutput  any
+		egressLevel   string
+		egressHashIn  string
+		egressHashOut string
+	)
+
 	for _, stage := range []string{"ingest", "fetch", "classify", "desensitize", "return", "audit"} {
 		select {
 		case <-time.After(100 * time.Millisecond):
 		case <-ctx.Done():
-			return &store.TaskFailure{Error: "lease worker shutting down", Retryable: true, ErrorClass: "shutdown"}
+			return &store.TaskFailure{Error: "lease worker shutting down", Retryable: true, ErrorClass: retry.ClassShutdown}
 		}
 
 		if stage == "fetch" && s.datasource != nil && (payloadJSON == "" || payloadJSON == "{}" || payloadJSON == "null") {
@@ -672,7 +812,8 @@ func (s *GRPCServer) executeLeasedTask(ctx context.Context, task *store.Task) (f
 			result, err := s.datasource.FetchDataBySource(fetchCtx, task.Source, 10, 0)
 			cancel()
 			if err != nil {
-				return &store.TaskFailure{Error: fmt.Sprintf("fetch data: %v", err), Retryable: true, ErrorClass: "downstream"}
+				class, canRetry := retry.Classify(err, retry.BiasDownstream)
+				return &store.TaskFailure{Error: fmt.Sprintf("fetch data: %v", err), Retryable: canRetry, ErrorClass: class}
 			}
 			if len(result.Records) > 0 {
 				payload, _ := json.Marshal(result.Records)
@@ -680,7 +821,7 @@ func (s *GRPCServer) executeLeasedTask(ctx context.Context, task *store.Task) (f
 			}
 		}
 
-		if stage == "classify" && isPrivacyOp(task.Operation) {
+		if stage == "classify" {
 			records := agent.ToRecords(payloadJSON)
 			if len(records) == 0 {
 				continue
@@ -689,10 +830,57 @@ func (s *GRPCServer) executeLeasedTask(ctx context.Context, task *store.Task) (f
 			processCtx = agent.ContextWithRequestID(processCtx, task.ID)
 			idempotencyKey := fmt.Sprintf("hub-%s-%s-%d", task.ID, stage, task.RetryCount)
 			processCtx = agent.ContextWithIdempotencyKey(processCtx, idempotencyKey)
-			_, err := s.agent.ProcessMedical(processCtx, records)
+			result, err := s.agent.ProcessAgent(processCtx, records, task.DatasourceID)
 			cancel()
 			if err != nil {
-				return &store.TaskFailure{Error: fmt.Sprintf("medical pipeline failed: %v", err), Retryable: true, ErrorClass: "downstream"}
+				class, canRetry := retry.Classify(err, retry.BiasDownstream)
+				return &store.TaskFailure{Error: fmt.Sprintf("medical pipeline failed: %v", err), Retryable: canRetry, ErrorClass: class}
+			}
+			if result == nil {
+				result = &agent.MedicalProcessResult{}
+			}
+
+			// P1-1：租约工作器同样只认引擎定级，调用方算子仅可上调不可下调。
+			level := result.Level
+			if level == "" {
+				level = audit.MaxSensitivityLevel(result.ClassificationReport)
+			}
+			if level == "" {
+				return &store.TaskFailure{
+					Error:      "classification returned no security level; refusing to egress unclassified data",
+					Retryable:  false,
+					ErrorClass: retry.ClassContract,
+				}
+			}
+			applied := models.EffectiveOperation(task.Operation, models.LevelToOperation(level))
+			if applied != task.Operation {
+				s.logger.Warn("leased task operation overridden by classification result (P1-1 fail-closed)",
+					"task_id", task.ID,
+					"requested_operation", task.Operation,
+					"security_level", level,
+					"applied_operation", applied)
+			}
+			task.Operation = applied
+			egressLevel = level
+
+			if len(result.SanitizedData) > 0 {
+				egressOutput = result.SanitizedData
+			}
+			egressHashIn, egressHashOut = audit.EngineFingerprints(result.Summary)
+		}
+
+		// Stage 6: audit → 出域与不可篡改留痕强绑定（P0-6 / G-05）。
+		// 存证未被受理时绝不返回 nil failure：调用方因此不会执行 CompleteLease。
+		// 契约级拒绝与「未配置存证端点」重试无意义（Retryable=false），
+		// 仅 audit-log 暂时不可用（5xx/网络）才整任务重投。
+		if stage == "audit" {
+			if evErr := s.submitEvidence(ctx, task, "lease", payloadJSON, egressOutput, egressLevel, egressHashIn, egressHashOut); evErr != nil {
+				errorClass, retryable := audit.FailureClass(evErr)
+				return &store.TaskFailure{
+					Error:      fmt.Sprintf("audit evidence submission failed: %v", evErr),
+					Retryable:  retryable,
+					ErrorClass: errorClass,
+				}
 			}
 		}
 	}
@@ -721,32 +909,24 @@ func taskToProto(t *store.Task) *pb.TaskProto {
 	return proto
 }
 
-// levelToPriority maps a sensitivity level (L1~L5) to a priority score.
+// levelToPriority maps a sensitivity level to a scheduling priority score.
+// 入参容忍两套词表（L1~L5 标识与引擎 canonical 名称），归一化统一由 pkg/naming 完成；
+// 无法识别的级别返回 0，由调用方按 fail-closed 处理，不再冒充 L2 的中性优先级。
 func levelToPriority(level string) int {
-	switch level {
-	case "L5":
-		return 100
-	case "L4":
-		return 80
-	case "L3":
-		return 60
-	case "L2":
-		return 40
-	case "L1":
+	switch naming.NormalizeSecurityLevelID(level) {
+	case naming.SecurityLevelL1:
 		return 10
-	default:
+	case naming.SecurityLevelL2:
 		return 40
+	case naming.SecurityLevelL3:
+		return 60
+	case naming.SecurityLevelL4:
+		return 80
+	case naming.SecurityLevelL5:
+		return 100
+	default:
+		return 0
 	}
-}
-
-// isPrivacyOp returns true if the operation requires engine privacy processing.
-// isPrivacyOp 判断算子是否需要调用 engine 医疗流水线（分类+脱敏一体化）。
-func isPrivacyOp(op string) bool {
-	switch op {
-	case "classify", "mask", "k_anon", "dp":
-		return true
-	}
-	return false
 }
 
 // ─────────────────────────────────────────────────────────────

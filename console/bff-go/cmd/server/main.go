@@ -22,6 +22,7 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"net/http"
 	"os/signal"
 	"syscall"
@@ -31,6 +32,7 @@ import (
 
 	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
 	"github.com/fengzhizi319/PrivShield/pkg/metrics"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 	"github.com/fengzhizi319/PrivShield/pkg/tlsutil"
 
 	"github.com/fengzhizi319/PrivShield/console/bff-go/internal/agent"
@@ -59,10 +61,11 @@ func main() {
 	}
 
 	// ── 步骤 1.5：结构化日志 + Prometheus 指标 ─────────────────────
-	logger := pkgconfig.SetupLogger(
+	pkgobs.InitLogger(
 		pkgconfig.EnvString("CONSOLE_LOG_FORMAT", "json"),
 		pkgconfig.EnvString("CONSOLE_LOG_LEVEL", "info"),
 	)
+	logger := slog.Default()
 	mc := metrics.NewCollector("backend-go")
 
 	// ── 步骤 2：创建 gRPC 客户端 ─────────────────────────────────────

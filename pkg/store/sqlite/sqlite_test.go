@@ -1,4 +1,17 @@
-// Package sqlite_test provides tests for the SQLite-backed store implementations.
+// Package sqlite_test provides comprehensive unit and regression tests for SQLite store implementations.
+// Package sqlite_test 为 SQLite 后端的 TaskStore、DataSourceStore 和 AuditStore 提供全量单元与回归测试套件。
+//
+// ==============================================================================
+// 【测试模块与验证目标】
+// 1. 【Open & ValidateIntegrity】：测试空路径、有效路径、静默 Logger、PRAGMA integrity_check 探活与数据库损坏检测；
+// 2. 【TaskStore】：测试基础 CRUD、未找到报错、List 分页与 Status 过滤、Update 覆盖、Counts 状态聚合；
+// 3. 【DataSourceStore】：测试数据源 CRUD、Delete 级联、Tags 序列化、AccessAudit 访问审计记录分页；
+// 4. 【AuditStore】：测试审计日志 CRUD、多维度过滤、Snapshot 外键关联与查询、SaveLogsBatch 批量插入；
+// 5. 【Hash Chain & Verify】：测试创世日志、前序链推进与 VerifyChain 防篡改对账核验；
+// 6. 【LeasedTaskStore 桩实现】：验证 SQLite 模式下所有租约方法均严格返回 ErrLeaseNotSupported；
+// 7. 【Legacy Schema Migration】：验证旧版 15 列旧表结构无缝热迁移、补充 canonical 列（api_code, datasource_id）并自动回填数据。
+// ==============================================================================
+
 package sqlite_test
 
 import (
@@ -13,20 +26,20 @@ import (
 	"github.com/fengzhizi319/PrivShield/pkg/store/sqlite"
 )
 
-// openTestDB creates a temporary SQLite database for testing.
+// openTestDB 在临时目录创建临时 SQLite 数据库文件供单测使用。
 func openTestDB(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	return filepath.Join(dir, "test.db")
 }
 
-// testLogger returns a silent logger for tests.
+// testLogger 返回测试专用的静默 Logger。
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 }
 
 // ─────────────────────────────────────────────────────────────
-// Open
+// 1. Open 数据库连接初始化测试
 // ─────────────────────────────────────────────────────────────
 
 func TestOpen_EmptyPath(t *testing.T) {
@@ -53,7 +66,7 @@ func TestOpen_ValidPath(t *testing.T) {
 
 func TestOpen_NilLogger(t *testing.T) {
 	dbPath := openTestDB(t)
-	db, err := sqlite.Open(dbPath, nil) // nil logger should not panic
+	db, err := sqlite.Open(dbPath, nil) // nil logger 不应 panic
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -61,7 +74,7 @@ func TestOpen_NilLogger(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// TaskStore
+// 2. TaskStore 测试
 // ─────────────────────────────────────────────────────────────
 
 func setupTaskStore(t *testing.T) *sqlite.TaskStore {
@@ -122,7 +135,7 @@ func TestTaskStore_ListAndFilter(t *testing.T) {
 			CreatedAt: now.Add(time.Duration(i) * time.Second),
 		})
 	}
-	// List all
+	// 查询全部
 	all, total, err := ts.List(store.TaskFilter{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -130,7 +143,7 @@ func TestTaskStore_ListAndFilter(t *testing.T) {
 	if total != 3 || len(all) != 3 {
 		t.Fatalf("expected 3 tasks, got %d (total=%d)", len(all), total)
 	}
-	// Filter by status
+	// 状态过滤
 	pending, pTotal, err := ts.List(store.TaskFilter{Status: "pending"})
 	if err != nil {
 		t.Fatalf("list filter: %v", err)
@@ -200,7 +213,7 @@ func TestTaskStore_Counts(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// DataSourceStore
+// 3. DataSourceStore 测试
 // ─────────────────────────────────────────────────────────────
 
 func setupDSStore(t *testing.T) *sqlite.DataSourceStore {
@@ -321,7 +334,7 @@ func TestDataSourceStore_Audit(t *testing.T) {
 	if len(records) != 1 || records[0].RecordsCount != 100 {
 		t.Fatalf("unexpected audit records: %+v", records)
 	}
-	// Filter by different dsID should return empty
+	// 查询其他数据源应返回空
 	empty, _, err := ds.ListAudit("ds-other", 0, 0)
 	if err != nil {
 		t.Fatalf("list audit filter: %v", err)
@@ -332,7 +345,7 @@ func TestDataSourceStore_Audit(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// AuditStore
+// 4. AuditStore 测试
 // ─────────────────────────────────────────────────────────────
 
 func setupAuditStore(t *testing.T) *sqlite.AuditStore {
@@ -392,7 +405,7 @@ func TestAuditStore_ListLogsFilter(t *testing.T) {
 			Status:    "success",
 		})
 	}
-	// Filter by operation
+	// 按操作过滤
 	logs, total, err := as.ListLogs(store.AuditFilter{Operation: "mask"})
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -400,7 +413,7 @@ func TestAuditStore_ListLogsFilter(t *testing.T) {
 	if total != 2 || len(logs) != 2 {
 		t.Fatalf("expected 2 mask logs, got %d (total=%d)", len(logs), total)
 	}
-	// Filter by user
+	// 按用户过滤
 	logs2, total2, err := as.ListLogs(store.AuditFilter{User: "admin"})
 	if err != nil {
 		t.Fatalf("list by user: %v", err)
@@ -408,7 +421,7 @@ func TestAuditStore_ListLogsFilter(t *testing.T) {
 	if total2 != 3 || len(logs2) != 3 {
 		t.Fatalf("expected 3 admin logs, got %d (total=%d)", len(logs2), total2)
 	}
-	// No filter
+	// 无过滤条件
 	all, allTotal, _ := as.ListLogs(store.AuditFilter{})
 	if allTotal != 3 || len(all) != 3 {
 		t.Fatalf("expected 3 total, got %d", len(all))
@@ -441,8 +454,7 @@ func TestAuditStore_Snapshots(t *testing.T) {
 	as := setupAuditStore(t)
 	now := time.Now()
 
-	// P26 fix: create the parent audit log first to satisfy foreign key constraint
-	// 先创建父级审计日志记录以满足外键约束
+	// P26 fix: 先创建父级审计日志记录以满足外键约束
 	parentLog := &store.AuditLog{
 		ID:            "log-1",
 		Timestamp:     now,
@@ -474,7 +486,7 @@ func TestAuditStore_Snapshots(t *testing.T) {
 	if err := as.SaveSnapshot(snap); err != nil {
 		t.Fatalf("save snapshot: %v", err)
 	}
-	// Get by ID
+	// 按 ID 查询
 	got, err := as.GetSnapshot("snap-1")
 	if err != nil {
 		t.Fatalf("get snapshot: %v", err)
@@ -482,7 +494,7 @@ func TestAuditStore_Snapshots(t *testing.T) {
 	if got.Algorithm != "field_mask" || got.IntegrityHash != "sha256:abc" {
 		t.Fatalf("unexpected snapshot: %+v", got)
 	}
-	// List
+	// 列表查询
 	snaps, total, err := as.ListSnapshots(10, 0)
 	if err != nil {
 		t.Fatalf("list snapshots: %v", err)
@@ -503,21 +515,15 @@ func TestAuditStore_GetLogNotFound(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────
-
-// fmt_id is a helper to format an ID string.
 func fmt_id(format string, args ...any) string {
 	return fmt.Sprintf(format, args...)
 }
 
 // ─────────────────────────────────────────────────────────────
-// ValidateIntegrity
+// 5. ValidateIntegrity 完整性探针测试
 // ─────────────────────────────────────────────────────────────
 
 func TestValidateIntegrity_EmptyPath(t *testing.T) {
-	// Empty path should return nil (memory mode, no check needed)
 	err := sqlite.ValidateIntegrity("")
 	if err != nil {
 		t.Fatalf("expected nil error for empty path, got %v", err)
@@ -525,19 +531,16 @@ func TestValidateIntegrity_EmptyPath(t *testing.T) {
 }
 
 func TestValidateIntegrity_ValidDatabase(t *testing.T) {
-	// Create a valid database and check integrity
 	dbPath := openTestDB(t)
 	db, err := sqlite.Open(dbPath, testLogger())
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	// Create tables to make it a real database
 	if err := sqlite.InitTaskTables(db); err != nil {
 		t.Fatalf("init tables: %v", err)
 	}
 	db.Close()
 
-	// Now validate integrity
 	err = sqlite.ValidateIntegrity(dbPath)
 	if err != nil {
 		t.Fatalf("expected nil error for valid database, got %v", err)
@@ -545,7 +548,6 @@ func TestValidateIntegrity_ValidDatabase(t *testing.T) {
 }
 
 func TestValidateIntegrity_NonexistentPath(t *testing.T) {
-	// Non-existent path should return error
 	err := sqlite.ValidateIntegrity("/nonexistent/path/to/database.db")
 	if err == nil {
 		t.Fatal("expected error for nonexistent database path")
@@ -553,7 +555,6 @@ func TestValidateIntegrity_NonexistentPath(t *testing.T) {
 }
 
 func TestValidateIntegrity_CorruptedDatabase(t *testing.T) {
-	// Create a database, then corrupt it by writing garbage
 	dbPath := openTestDB(t)
 	db, err := sqlite.Open(dbPath, testLogger())
 	if err != nil {
@@ -564,16 +565,14 @@ func TestValidateIntegrity_CorruptedDatabase(t *testing.T) {
 	}
 	db.Close()
 
-	// Corrupt the database by overwriting part of the file
+	// 写入乱码人工制造损坏
 	f, err := os.OpenFile(dbPath, os.O_WRONLY, 0644)
 	if err != nil {
 		t.Fatalf("open for corruption: %v", err)
 	}
-	// Write garbage at the beginning of the file (after the first 100 bytes to partially corrupt)
 	_, _ = f.WriteAt([]byte("CORRUPTED_DATA_GARBHERE"), 100)
 	f.Close()
 
-	// ValidateIntegrity should detect corruption
 	err = sqlite.ValidateIntegrity(dbPath)
 	if err == nil {
 		t.Fatal("expected error for corrupted database")
@@ -581,8 +580,7 @@ func TestValidateIntegrity_CorruptedDatabase(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Phase B: LeasedTaskStore rejection tests
-// SQLite 租约拒绝测试：验证所有租约方法返回 ErrLeaseNotSupported
+// 6. Phase B: LeasedTaskStore 租约拒绝测试
 // ─────────────────────────────────────────────────────────────
 
 func TestLeasedTaskStore_ClaimNext_ReturnsNotSupported(t *testing.T) {
@@ -625,15 +623,13 @@ func TestLeasedTaskStore_RequeueExpiredLeases_ReturnsNotSupported(t *testing.T) 
 	}
 }
 
-// TestLeasedTaskStore_InterfaceCompliance verifies compile-time interface assertion.
 func TestLeasedTaskStore_InterfaceCompliance(t *testing.T) {
 	ts := setupTaskStore(t)
-	// This will fail at compile time if sqlite.TaskStore doesn't implement LeasedTaskStore.
 	var _ store.LeasedTaskStore = ts
 }
 
 // ─────────────────────────────────────────────────────────────
-// Legacy Schema Migration Regression Tests (P0-1 & P0-3)
+// 7. Schema 迁移与 Canonical 标识回填回归测试
 // ─────────────────────────────────────────────────────────────
 
 func TestInitAuditTables_LegacyMigration(t *testing.T) {
@@ -644,7 +640,7 @@ func TestInitAuditTables_LegacyMigration(t *testing.T) {
 	}
 	defer db.Close()
 
-	// 1. Manually create the 15-column legacy audit_logs schema (without task_id, api_code, datasource_id)
+	// 1. 人工创建 15 列的旧表
 	_, err = db.Exec(`
 		CREATE TABLE audit_logs (
 			id TEXT PRIMARY KEY,
@@ -679,7 +675,6 @@ func TestInitAuditTables_LegacyMigration(t *testing.T) {
 		t.Fatalf("create legacy audit tables: %v", err)
 	}
 
-	// Insert a legacy row
 	_, err = db.Exec(`
 		INSERT INTO audit_logs (id, timestamp, operation, datasource, user_name, status)
 		VALUES ('legacy-1', '2026-08-20T10:00:00Z', 'mask', 'ds_yibao', 'tester', 'success')
@@ -688,18 +683,17 @@ func TestInitAuditTables_LegacyMigration(t *testing.T) {
 		t.Fatalf("insert legacy row: %v", err)
 	}
 
-	// 2. Call production InitAuditTables — must migrate cleanly without crash or SQL error
+	// 2. 调用生产 InitAuditTables 触发热升级迁移
 	if err := sqlite.InitAuditTables(db); err != nil {
 		t.Fatalf("InitAuditTables failed on legacy db: %v", err)
 	}
 
-	// 3. Verify new columns exist and can be queried
+	// 3. 验证新列正常读写
 	as, err := sqlite.NewAuditStore(db)
 	if err != nil {
 		t.Fatalf("new audit store: %v", err)
 	}
 
-	// Save a new log with canonical fields
 	now := time.Now()
 	newLog := &store.AuditLog{
 		ID:           "migrated-2",
@@ -723,7 +717,6 @@ func TestInitAuditTables_LegacyMigration(t *testing.T) {
 		t.Fatalf("canonical fields not stored: %+v", got)
 	}
 
-	// Filter by task_id and datasource_id
 	filtered, total, err := as.ListLogs(store.AuditFilter{TaskID: "task-123", DatasourceID: "ds_yibao"})
 	if err != nil {
 		t.Fatalf("filter logs: %v", err)
@@ -741,7 +734,7 @@ func TestInitTaskTables_LegacyMigration(t *testing.T) {
 	}
 	defer db.Close()
 
-	// 1. Manually create legacy tasks schema (without api_code, datasource_id)
+	// 1. 人工创建旧版 tasks 表
 	_, err = db.Exec(`
 		CREATE TABLE tasks (
 			id TEXT PRIMARY KEY,
@@ -762,7 +755,6 @@ func TestInitTaskTables_LegacyMigration(t *testing.T) {
 		t.Fatalf("create legacy tasks table: %v", err)
 	}
 
-	// Insert legacy row with source = ds_yibao
 	_, err = db.Exec(`
 		INSERT INTO tasks (id, status, stage, source, operation, created_at)
 		VALUES ('legacy-task-1', 'pending', 'queued', 'ds_yibao', 'mask', '2026-08-20T10:00:00Z')
@@ -771,7 +763,7 @@ func TestInitTaskTables_LegacyMigration(t *testing.T) {
 		t.Fatalf("insert legacy task: %v", err)
 	}
 
-	// 2. Call production InitTaskTables — must migrate and backfill
+	// 2. 调用生产 InitTaskTables 触发迁移与回填
 	if err := sqlite.InitTaskTables(db); err != nil {
 		t.Fatalf("InitTaskTables failed on legacy db: %v", err)
 	}
@@ -781,7 +773,7 @@ func TestInitTaskTables_LegacyMigration(t *testing.T) {
 		t.Fatalf("new task store: %v", err)
 	}
 
-	// Verify backfill: legacy-task-1 should now have datasource_id="ds_yibao" and api_code="api1_yibao"
+	// 验证回填字段
 	task, err := ts.Get("legacy-task-1")
 	if err != nil {
 		t.Fatalf("get legacy task: %v", err)
@@ -793,7 +785,7 @@ func TestInitTaskTables_LegacyMigration(t *testing.T) {
 		t.Fatalf("expected backfilled APICode 'api1_yibao', got %q", task.APICode)
 	}
 
-	// Save new task with canonical fields and get it
+	// 插入带规范字段的新任务
 	now := time.Now()
 	newTask := &store.Task{
 		ID:           "new-task-2",
@@ -817,10 +809,14 @@ func TestInitTaskTables_LegacyMigration(t *testing.T) {
 	}
 }
 
+// ─────────────────────────────────────────────────────────────
+// 8. 哈希链与批量写入测试
+// ─────────────────────────────────────────────────────────────
+
 func TestAuditStore_HashChainAndVerify(t *testing.T) {
 	as := setupAuditStore(t)
 
-	// 1. Genesis log
+	// 1. 创世日志
 	t1 := time.Now().Add(-2 * time.Minute)
 	log1 := &store.AuditLog{
 		ID:            "chain-1",
@@ -848,7 +844,7 @@ func TestAuditStore_HashChainAndVerify(t *testing.T) {
 		t.Fatal("expected non-empty integrity_hash for genesis log")
 	}
 
-	// 2. Second log linked to genesis
+	// 2. 连续第二条日志
 	t2 := time.Now().Add(-1 * time.Minute)
 	log2 := &store.AuditLog{
 		ID:            "chain-2",
@@ -868,7 +864,7 @@ func TestAuditStore_HashChainAndVerify(t *testing.T) {
 		t.Fatalf("save log 2: %v", err)
 	}
 
-	// 3. Verify unbroken chain
+	// 3. 对账核验
 	res, err := as.VerifyChain(10)
 	if err != nil {
 		t.Fatalf("verify chain error: %v", err)
@@ -901,5 +897,62 @@ func TestAuditStore_BatchSave(t *testing.T) {
 	snap, err := as.GetSnapshot("snap-b-1")
 	if err != nil || snap == nil {
 		t.Fatalf("get snapshot snap-b-1: %v", err)
+	}
+}
+
+// TestAuditStore_FetchOldestForArchiveAndDeleteByIDs 验证「先归档后删除」所需的存储能力：
+// 到期日志按链序（旧→新）返回、带齐关联快照，且按 ID 删除会级联清掉快照。
+func TestAuditStore_FetchOldestForArchiveAndDeleteByIDs(t *testing.T) {
+	as := setupAuditStore(t)
+	base := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	for i := 0; i < 4; i++ {
+		id := string(rune('a' + i))
+		l := &store.AuditLog{
+			ID: "log-" + id, Timestamp: base.Add(time.Duration(i) * time.Hour),
+			Operation: "mask", DataSource: "ds_yibao", DatasourceID: "ds_yibao",
+			InputHash: "in-" + id, OutputHash: "out-" + id, Algorithm: "SM4-GCM",
+			ParametersJSON: `{"fields":["phone"]}`, User: "tester", Status: "success", SecurityLevel: "L4",
+		}
+		if err := as.SaveLogWithSnapshot(l, &store.SnapshotRecord{
+			ID: "snap-" + id, AuditLogID: l.ID, Timestamp: l.Timestamp,
+			InputSample: "enc:v2:raw", OutputSample: "enc:v2:masked", Algorithm: "SM4-GCM",
+			ParametersJSON: `{"fields":["phone"]}`,
+		}); err != nil {
+			t.Fatalf("save log %d: %v", i, err)
+		}
+	}
+
+	var reader store.AuditArchiveReader = as
+	logs, snaps, err := reader.FetchOldestForArchive(base.Add(2*time.Hour), 2)
+	if err != nil {
+		t.Fatalf("fetch oldest: %v", err)
+	}
+	if len(logs) != 2 || len(snaps) != 2 {
+		t.Fatalf("expected a page of 2 logs + 2 snapshots, got %d/%d", len(logs), len(snaps))
+	}
+	if logs[0].ID != "log-a" || logs[1].ID != "log-b" {
+		t.Fatalf("expected oldest-first chain order, got %s,%s", logs[0].ID, logs[1].ID)
+	}
+	if logs[0].ParametersJSON == "" {
+		t.Fatal("archived log must carry parameters_json for independent hash re-computation")
+	}
+
+	deleted, err := reader.DeleteLogsByIDs([]string{logs[0].ID, logs[1].ID})
+	if err != nil {
+		t.Fatalf("delete by ids: %v", err)
+	}
+	if deleted != 2 {
+		t.Fatalf("expected 2 logs deleted, got %d", deleted)
+	}
+	remaining, total, err := as.ListLogs(store.AuditFilter{Limit: 100})
+	if err != nil || total != 2 || len(remaining) != 2 {
+		t.Fatalf("expected 2 surviving logs, got %d/%d err=%v", len(remaining), total, err)
+	}
+	if _, sn, err := reader.FetchOldestForArchive(base.Add(100*time.Hour), 100); err != nil || len(sn) != 2 {
+		t.Fatalf("snapshots of deleted logs must be gone, got %d err=%v", len(sn), err)
+	}
+	if got, err := reader.DeleteLogsByIDs(nil); err != nil || got != 0 {
+		t.Fatalf("empty id list must be a no-op, got %d err=%v", got, err)
 	}
 }

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/fengzhizi319/PrivShield/pkg/naming"
 )
 
 // AllowedValues checks if the given value is in the allowed set.
@@ -60,11 +62,11 @@ var (
 	// DataSourceTypes are valid data source types.
 	DataSourceTypes = []string{"database", "api", "file"}
 
-	// SecurityLevels are valid security classification levels.
-	SecurityLevels = []string{"high", "medium", "low"}
-
 	// SensitivityLevels are valid L1-L5 sensitivity levels.
-	SensitivityLevels = []string{"L1", "L2", "L3", "L4", "L5"}
+	// 词表唯一事实源是 rules/taxonomies/default.yaml，Go 侧由 pkg/naming 承载，
+	// 此处只做别名导出，不再维护第二份字面量（P1-5）。
+	// 历史上同文件还有一份 high/medium/low 的 SecurityLevels 白名单，因与本词表冲突且无引用已删除。
+	SensitivityLevels = naming.SecurityLevelIDs()
 
 	// HubOperations are valid service-hub dispatch operations.
 	HubOperations = []string{"mask", "k_anon", "dp", "classify", "none"}

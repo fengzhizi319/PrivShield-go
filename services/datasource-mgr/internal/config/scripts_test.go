@@ -307,7 +307,7 @@ func TestDevRunScript_StartupAndHealth(t *testing.T) {
 
 // 5. prod-run.sh 生产脚本启动与 mTLS 证书加载测试 (TestProdRunScript_StartupAndMTLS)
 // 执行逻辑：
-// 1. 分配随机空闲端口并使用 certs 目录证书链启动 prod-run.sh；
+// 1. 分配随机空闲端口并使用 certs 目录证书链启动 prod-run.sh，并按 P0-1 门禁注入 mTLS CN 白名单文件；
 // 2. 构造携带 client.crt 与受信任 CA 的 HTTPS 客户端，发起 mTLS 请求，验证 200 OK 握手成功；
 // 3. 构造未提供客户端证书的 HTTP 客户端发起请求，验证 mTLS 握手被阻断拦截；
 // 4. TCP Dial 验证 gRPC mTLS 端口已正常监听。
@@ -331,6 +331,10 @@ func TestProdRunScript_StartupAndMTLS(t *testing.T) {
 		"DATASOURCE_MGR_GRPC_HOST=127.0.0.1",
 		fmt.Sprintf("DATASOURCE_MGR_GRPC_PORT=%d", grpcPort),
 		fmt.Sprintf("DATASOURCE_MGR_CERTS_DIR=%s", certsDir),
+		// P0-1 零信任门禁：启用 gRPC TLS 却未注入 CN 白名单文件时启动即失败（白名单拦截器根本不会被注册）。
+		// 生产编排 deploy/helm 本就注入该变量；scripts/prod-run.sh 目前未导出，需由脚本负责人补：
+		//   export PRIVACY_AUTH_MTLS_WHITELIST_FILE="${PRIVACY_AUTH_MTLS_WHITELIST_FILE:-$PROJECT_ROOT/config/mtls-whitelist.yaml}"
+		fmt.Sprintf("PRIVACY_AUTH_MTLS_WHITELIST_FILE=%s", writeMTLSWhitelistFile(t)),
 		"DATASOURCE_MGR_LOG_FORMAT=text",
 		"DATASOURCE_MGR_LOG_LEVEL=info",
 	)
@@ -419,6 +423,18 @@ func TestProdRunScript_StartupAndMTLS(t *testing.T) {
 	_ = conn.Close()
 
 	t.Logf("✅ prod-run.sh 正常启动，HTTPS REST (Port: %d) 与 gRPC mTLS (Port: %d) 均就绪并通过双向认证校验", httpPort, grpcPort)
+}
+
+// writeMTLSWhitelistFile 在临时目录写入最小可用的 mTLS 客户端 CN 白名单（pkg/tlsutil 标准格式），
+// 返回文件路径。生产加固形态（TLS + gRPC）下该文件是启动前置条件，缺失即被 fail-closed 门禁拒绝。
+func writeMTLSWhitelistFile(t *testing.T) string {
+	t.Helper()
+	content := "version: \"1.0\"\nclients:\n  - cn: \"datasource-mgr-client\"\n    allowed_scopes: [\"*\"]\n    role: \"test\"\n    enabled: true\n"
+	path := filepath.Join(t.TempDir(), "mtls-whitelist.yaml")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write mtls whitelist fixture: %v", err)
+	}
+	return path
 }
 
 // getFreePort listens on a random ephemeral port (":0") to find an available port and releases it.

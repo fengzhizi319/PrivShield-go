@@ -1,3 +1,27 @@
+// Package tlsutil provides unit tests for gRPC mTLS interceptors.
+// Package tlsutil 为 gRPC mTLS CN 鉴权拦截器提供全量单元测试与异常模拟测试套件。
+//
+// ==============================================================================
+// 【测试场景与断言依据】
+// 1. 【extractClientCN】：
+//    - 正常携带有效 TLS peer 的 context 成功解析 CN；
+//    - 缺失 peer 上下文时返回 codes.Unauthenticated；
+//    - 缺失 TLSInfo 认证凭据时返回 codes.Unauthenticated；
+// 2. 【authorizeClient】：
+//    - 通配符 `*` 允许任意 RPC 调用；
+//    - 精确方法匹配与前缀模式匹配放行；
+//    - 越权方法调用拦截并返回 codes.PermissionDenied；
+//    - 未登记的未知客户端 CN 拦截并返回 codes.PermissionDenied；
+// 3. 【UnaryServerInterceptor】：
+//    - 授权通过时透明调用下游 handler；
+//    - 未授权 CN 拦截并不调用 handler；
+//    - 越权方法拦截；
+//    - 非 TLS 明文请求拦截；
+// 4. 【NewWhitelistInterceptor】：
+//    - 空路径静默回退；
+//    - 有效路径装配并拦截未授权请求。
+// ==============================================================================
+
 package tlsutil
 
 import (
@@ -14,7 +38,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// tlsPeerContext creates a context with a mock TLS peer containing the given CN.
 // tlsPeerContext 构造一个携带模拟 TLS peer（含指定 CN）的 context。
 func tlsPeerContext(cn string) context.Context {
 	return peer.NewContext(context.Background(), &peer.Peer{
@@ -28,7 +51,10 @@ func tlsPeerContext(cn string) context.Context {
 	})
 }
 
-// TestExtractClientCN_Valid verifies extraction of CN from a valid TLS peer context.
+// ─────────────────────────────────────────────────────────────
+// 1. extractClientCN 证书 CommonName 提取测试
+// ─────────────────────────────────────────────────────────────
+
 func TestExtractClientCN_Valid(t *testing.T) {
 	ctx := tlsPeerContext("test-client.internal")
 	cn, err := extractClientCN(ctx)
@@ -40,7 +66,6 @@ func TestExtractClientCN_Valid(t *testing.T) {
 	}
 }
 
-// TestExtractClientCN_NoPeer verifies Unauthenticated error when no peer exists.
 func TestExtractClientCN_NoPeer(t *testing.T) {
 	_, err := extractClientCN(context.Background())
 	if err == nil {
@@ -52,7 +77,6 @@ func TestExtractClientCN_NoPeer(t *testing.T) {
 	}
 }
 
-// TestExtractClientCN_NoTLS verifies Unauthenticated error when peer has no TLS info.
 func TestExtractClientCN_NoTLS(t *testing.T) {
 	ctx := peer.NewContext(context.Background(), &peer.Peer{})
 	_, err := extractClientCN(ctx)
@@ -65,7 +89,10 @@ func TestExtractClientCN_NoTLS(t *testing.T) {
 	}
 }
 
-// TestAuthorizeClient_WildcardScope verifies wildcard "*" scope allows any method.
+// ─────────────────────────────────────────────────────────────
+// 2. authorizeClient 权限匹配逻辑测试
+// ─────────────────────────────────────────────────────────────
+
 func TestAuthorizeClient_WildcardScope(t *testing.T) {
 	path := createTempWhitelistForInterceptor(t)
 	dw, err := NewDynamicWhitelist(path)
@@ -74,13 +101,12 @@ func TestAuthorizeClient_WildcardScope(t *testing.T) {
 	}
 	defer dw.Close()
 
-	// bff-go has wildcard scope — should allow any method
+	// bff-go 拥有通配符 scope: 允许调用任意方法
 	if err := dw.authorizeClient("bff-go.privshield.internal", "/AnyService/AnyMethod"); err != nil {
 		t.Errorf("expected wildcard scope to allow any method, got: %v", err)
 	}
 }
 
-// TestAuthorizeClient_SpecificScope verifies specific method scope enforcement.
 func TestAuthorizeClient_SpecificScope(t *testing.T) {
 	path := createTempWhitelistForInterceptor(t)
 	dw, err := NewDynamicWhitelist(path)
@@ -89,17 +115,17 @@ func TestAuthorizeClient_SpecificScope(t *testing.T) {
 	}
 	defer dw.Close()
 
-	// service-hub has /PrivacyService/Process — should be allowed
+	// service-hub 拥有 /PrivacyService/Process 权限
 	if err := dw.authorizeClient("service-hub.privshield.internal", "/PrivacyService/Process"); err != nil {
 		t.Errorf("expected allowed for /PrivacyService/Process, got: %v", err)
 	}
 
-	// service-hub has /AuditLog/* — should allow /AuditLog/RecordAudit
+	// service-hub 拥有 /AuditLog/* 权限，匹配 /AuditLog/RecordAudit
 	if err := dw.authorizeClient("service-hub.privshield.internal", "/AuditLog/RecordAudit"); err != nil {
 		t.Errorf("expected allowed for /AuditLog/RecordAudit via wildcard, got: %v", err)
 	}
 
-	// service-hub should NOT have access to /DatasourceMgr/FetchSlice
+	// service-hub 未被授予 /DatasourceMgr/FetchSlice
 	err = dw.authorizeClient("service-hub.privshield.internal", "/DatasourceMgr/FetchSlice")
 	if err == nil {
 		t.Fatal("expected PermissionDenied for unauthorized method")
@@ -110,7 +136,6 @@ func TestAuthorizeClient_SpecificScope(t *testing.T) {
 	}
 }
 
-// TestAuthorizeClient_UnknownCN verifies unknown CN is rejected.
 func TestAuthorizeClient_UnknownCN(t *testing.T) {
 	path := createTempWhitelistForInterceptor(t)
 	dw, err := NewDynamicWhitelist(path)
@@ -129,7 +154,10 @@ func TestAuthorizeClient_UnknownCN(t *testing.T) {
 	}
 }
 
-// TestUnaryServerInterceptor_Authorized verifies the interceptor passes through for authorized CN.
+// ─────────────────────────────────────────────────────────────
+// 3. UnaryServerInterceptor 一元拦截器行为测试
+// ─────────────────────────────────────────────────────────────
+
 func TestUnaryServerInterceptor_Authorized(t *testing.T) {
 	path := createTempWhitelistForInterceptor(t)
 	dw, err := NewDynamicWhitelist(path)
@@ -158,7 +186,6 @@ func TestUnaryServerInterceptor_Authorized(t *testing.T) {
 	}
 }
 
-// TestUnaryServerInterceptor_Unauthorized verifies the interceptor blocks unauthorized CN.
 func TestUnaryServerInterceptor_Unauthorized(t *testing.T) {
 	path := createTempWhitelistForInterceptor(t)
 	dw, err := NewDynamicWhitelist(path)
@@ -184,7 +211,6 @@ func TestUnaryServerInterceptor_Unauthorized(t *testing.T) {
 	}
 }
 
-// TestUnaryServerInterceptor_ScopeViolation verifies method scope is enforced.
 func TestUnaryServerInterceptor_ScopeViolation(t *testing.T) {
 	path := createTempWhitelistForInterceptor(t)
 	dw, err := NewDynamicWhitelist(path)
@@ -194,7 +220,6 @@ func TestUnaryServerInterceptor_ScopeViolation(t *testing.T) {
 	defer dw.Close()
 
 	interceptor := dw.UnaryServerInterceptor()
-	// service-hub is authorized but only for /PrivacyService/Process and /AuditLog/*
 	ctx := tlsPeerContext("service-hub.privshield.internal")
 
 	_, err = interceptor(ctx, "test-request", &grpc.UnaryServerInfo{FullMethod: "/DatasourceMgr/FetchSlice"}, func(ctx context.Context, req any) (any, error) {
@@ -211,7 +236,6 @@ func TestUnaryServerInterceptor_ScopeViolation(t *testing.T) {
 	}
 }
 
-// TestUnaryServerInterceptor_NoTLS verifies the interceptor rejects non-TLS connections.
 func TestUnaryServerInterceptor_NoTLS(t *testing.T) {
 	path := createTempWhitelistForInterceptor(t)
 	dw, err := NewDynamicWhitelist(path)
@@ -221,7 +245,6 @@ func TestUnaryServerInterceptor_NoTLS(t *testing.T) {
 	defer dw.Close()
 
 	interceptor := dw.UnaryServerInterceptor()
-	// Plain context without TLS peer
 	ctx := context.Background()
 
 	_, err = interceptor(ctx, "test-request", &grpc.UnaryServerInfo{FullMethod: "/TestService/TestMethod"}, func(ctx context.Context, req any) (any, error) {
@@ -238,13 +261,15 @@ func TestUnaryServerInterceptor_NoTLS(t *testing.T) {
 	}
 }
 
-// createTempWhitelistForInterceptor creates a temp whitelist for interceptor tests.
 func createTempWhitelistForInterceptor(t *testing.T) string {
 	t.Helper()
 	return createTempWhitelist(t, testWhitelistYAML)
 }
 
-// TestNewWhitelistInterceptor_EmptyPath verifies that an empty path returns nil interceptors.
+// ─────────────────────────────────────────────────────────────
+// 4. NewWhitelistInterceptor 工厂方法测试
+// ─────────────────────────────────────────────────────────────
+
 func TestNewWhitelistInterceptor_EmptyPath(t *testing.T) {
 	unary, stream, dw, err := NewWhitelistInterceptor("")
 	if err != nil {
@@ -261,8 +286,6 @@ func TestNewWhitelistInterceptor_EmptyPath(t *testing.T) {
 	}
 }
 
-// TestNewWhitelistInterceptor_LoadAndAuthorize verifies the helper loads the whitelist
-// and the returned unary interceptor blocks unauthorized CNs.
 func TestNewWhitelistInterceptor_LoadAndAuthorize(t *testing.T) {
 	path := createTempWhitelistForInterceptor(t)
 	unary, stream, dw, err := NewWhitelistInterceptor(path)

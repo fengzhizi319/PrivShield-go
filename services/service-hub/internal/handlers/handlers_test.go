@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,6 +92,8 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 		AgentRESTPort:   19999, // 设置为不可达端口，用于单元测试快速验证错误分支
 		MaxQueueDepth:   100,
 		ScheduleTimeout: 5,
+		// P0-6：⑥ audit 阶段真实提交存证，桩服务在位任务才可能推进至 done。
+		AuditLogBaseURLs: []string{startEvidenceStub(t).server.URL},
 	}
 	d := newTestDeps()
 	ag := agent.New(cfg, d.mc)
@@ -100,15 +103,18 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 }
 
 // newSimpleTestServer creates a standalone test Server with in-memory store and mock config.
-// newSimpleTestServer 快速创建无外部依赖的单测用 Server 实例。
-func newSimpleTestServer() *Server {
+// newSimpleTestServer 快速创建无外部依赖的单测用 Server 实例（附带 audit-log 存证桩服务，
+// 使 6 阶段流水线的 ⑥ 存证阶段可以真实提交成功）。
+func newSimpleTestServer(t *testing.T) *Server {
+	t.Helper()
 	cfg := &config.Config{
-		Host:            "127.0.0.1",
-		Port:            0,
-		AgentRESTHost:   "127.0.0.1",
-		AgentRESTPort:   19999, // 不可达端口，用于孤立单元测试
-		MaxQueueDepth:   100,
-		ScheduleTimeout: 5,
+		Host:             "127.0.0.1",
+		Port:             0,
+		AgentRESTHost:    "127.0.0.1",
+		AgentRESTPort:    19999, // 不可达端口，用于孤立单元测试
+		MaxQueueDepth:    100,
+		ScheduleTimeout:  5,
+		AuditLogBaseURLs: []string{startEvidenceStub(t).server.URL},
 	}
 	d := newTestDeps()
 	ag := agent.New(cfg, d.mc)
@@ -116,11 +122,22 @@ func newSimpleTestServer() *Server {
 	return New(ag, ds, cfg, d.tasks, d.logger, d.mc)
 }
 
-// newMockE2EServer creates a Server connected to a mock agent (httptest.Server).
-// The mock agent simulates classification + masking responses from the real PrivShield Agent.
-// newMockE2EServer 创建一个连接到模拟 Agent 的 Server。
-// 模拟 Agent 会返回分类分级和脱敏结果，用于全流程 E2E 测试。
+// newMockE2EServer creates a Server connected to a mock agent (httptest.Server)
+// that classifies every record as L3.
+// newMockE2EServer 创建对接模拟引擎的全流程测试 Server，模拟引擎恒定定级 L3。
 func newMockE2EServer(t *testing.T) (*Server, *httptest.Server) {
+	t.Helper()
+	return newMockEngineServer(t, "L3", true)
+}
+
+// newMockEngineServer builds a Server whose upstream engine reports the given
+// security level for every processed record.
+//
+// P1-1 之后生效算子完全由引擎定级推导，测试必须能控制「引擎说这条数据是几级」，
+// 否则无法验证 L1→none / L2→mask / L3→k_anon / L4→dp 的映射与只许上调的收敛策略。
+// withEvidence=false 时不配置 audit-log 存证端点，用于验证 P0-6 fail-closed：
+// 引擎健康但存证端点缺失，任务同样必须失败。
+func newMockEngineServer(t *testing.T, level string, withEvidence bool) (*Server, *httptest.Server) {
 	t.Helper()
 
 	// 构造 Mock Upstream Agent：模拟动态分类三层漏斗与隐私脱敏 API
@@ -135,7 +152,8 @@ func newMockE2EServer(t *testing.T) (*Server, *httptest.Server) {
 			var payload map[string]any
 			json.NewDecoder(r.Body).Decode(&payload)
 			json.NewEncoder(w).Encode(map[string]any{
-				"level":      "L3",
+				"level":      level,
+				"level_id":   level,
 				"confidence": 0.92,
 				"fields":     []string{"patient_name", "id_card", "diagnosis"},
 				"categories": map[string]string{
@@ -187,13 +205,19 @@ func newMockE2EServer(t *testing.T) (*Server, *httptest.Server) {
 					sanitized = append(sanitized, s)
 				}
 			}
-			json.NewEncoder(w).Encode(map[string]any{
-				"classification_report": []map[string]any{
-					{"level": "L3", "confidence": 0.92, "engine": "rule"},
-				},
+			resp := map[string]any{
 				"sanitized_data": sanitized,
 				"summary":        map[string]any{"total_records": len(records), "pipeline": "medical"},
-			})
+			}
+			// level == "" 模拟「引擎跑完但没有给出任何定级」的异常契约（P1-1 fail-closed 分支）。
+			if level != "" {
+				resp["level"] = level
+				resp["classification_report"] = []map[string]any{
+					{"level": level, "level_id": level, "confidence": 0.92, "engine": "rule"},
+				}
+				resp["summary"].(map[string]any)["overall_level"] = level
+			}
+			json.NewEncoder(w).Encode(resp)
 
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -214,6 +238,10 @@ func newMockE2EServer(t *testing.T) (*Server, *httptest.Server) {
 		MaxQueueDepth:   100,
 		ScheduleTimeout: 10,
 	}
+	if withEvidence {
+		// P0-6：全流程 E2E 必须打通 ⑥ 存证阶段，否则任务会在 audit 处 fail-closed 失败。
+		cfg.AuditLogBaseURLs = []string{startEvidenceStub(t).server.URL}
+	}
 	d := newTestDeps()
 	ag := agent.New(cfg, d.mc)
 	ds := datasource.New(cfg)
@@ -231,7 +259,7 @@ func newTestRouter(s *Server) *gin.Engine {
 // TestHealth tests the /api/health liveness probe endpoint.
 // TestHealth 验证存活探针端点：进程存活即返回 200。
 func TestHealth(t *testing.T) {
-	s := newSimpleTestServer()
+	s := newSimpleTestServer(t)
 	router := newTestRouter(s)
 
 	w := httptest.NewRecorder()
@@ -257,7 +285,7 @@ func TestHealth(t *testing.T) {
 // TestReadyzAgentUnreachable tests the /readyz readiness probe when the upstream agent is unreachable.
 // TestReadyzAgentUnreachable 验证就绪探针在 Agent 不可达时返回 503。
 func TestReadyzAgentUnreachable(t *testing.T) {
-	s := newSimpleTestServer()
+	s := newSimpleTestServer(t)
 	router := newTestRouter(s)
 
 	w := httptest.NewRecorder()
@@ -283,7 +311,7 @@ func TestReadyzAgentUnreachable(t *testing.T) {
 // TestHubStatus tests the /api/hub/status telemetry overview endpoint.
 // TestHubStatus 测试调度中枢状态概览端点返回指标。
 func TestHubStatus(t *testing.T) {
-	s := newSimpleTestServer()
+	s := newSimpleTestServer(t)
 	router := newTestRouter(s)
 
 	w := httptest.NewRecorder()
@@ -309,7 +337,7 @@ func TestHubStatus(t *testing.T) {
 // TestListTasksEmpty tests querying the task list when the repository is empty.
 // TestListTasksEmpty 测试空仓库时的任务列表查询。
 func TestListTasksEmpty(t *testing.T) {
-	s := newSimpleTestServer()
+	s := newSimpleTestServer(t)
 	router := newTestRouter(s)
 
 	w := httptest.NewRecorder()
@@ -330,7 +358,7 @@ func TestListTasksEmpty(t *testing.T) {
 // TestDispatchInvalidBody tests input validation failure on malformed dispatch payloads.
 // TestDispatchInvalidBody 测试提交空体或缺失必填字段时的 400 Bad Request 校验阻断。
 func TestDispatchInvalidBody(t *testing.T) {
-	s := newSimpleTestServer()
+	s := newSimpleTestServer(t)
 	router := newTestRouter(s)
 
 	w := httptest.NewRecorder()
@@ -346,7 +374,7 @@ func TestDispatchInvalidBody(t *testing.T) {
 // TestDispatchAccepted tests normal dispatch flow returning 202 Accepted.
 // TestDispatchAccepted 测试任务合法提交后正确受理并返回 202 Accepted 与 TaskID。
 func TestDispatchAccepted(t *testing.T) {
-	s := newSimpleTestServer()
+	s := newSimpleTestServer(t)
 	router := newTestRouter(s)
 
 	body := map[string]any{
@@ -390,7 +418,7 @@ func TestDispatchAccepted(t *testing.T) {
 }
 
 func TestProcessTask_StopsWhenStatePersistenceFails(t *testing.T) {
-	s := newSimpleTestServer()
+	s := newSimpleTestServer(t)
 	failingStore := &failingUpdateTaskStore{TaskStore: memory.NewTaskStore()}
 	s.tasks = failingStore
 
@@ -416,7 +444,7 @@ func TestProcessTask_StopsWhenStatePersistenceFails(t *testing.T) {
 // TestPipeline tests the 6-stage pipeline telemetry status endpoint.
 // TestPipeline 测试 /api/hub/pipeline 端点能够准确返回 6 个流水线阶段的实时状态。
 func TestPipeline(t *testing.T) {
-	s := newSimpleTestServer()
+	s := newSimpleTestServer(t)
 	router := newTestRouter(s)
 
 	w := httptest.NewRecorder()
@@ -438,23 +466,20 @@ func TestPipeline(t *testing.T) {
 // TestListTasksWithFilter tests task list querying with status filtering (completed vs pending).
 // TestListTasksWithFilter 测试基于 status 查询参数的任务列表过滤能力。
 func TestListTasksWithFilter(t *testing.T) {
-	s := newSimpleTestServer()
+	// P1-1 之后任何带数据的任务都必须过引擎定级，因此这里使用可达的模拟引擎。
+	s, mockAgent := newMockE2EServer(t)
+	defer mockAgent.Close()
 	router := newTestRouter(s)
 
-	// 分发一个 operation=none 任务（无需上游 agent，可快速跑通全流水线）
-	body := map[string]any{
+	// 分发一个 operation=none 任务（生效算子由定级推导，请求算子只是强度提示）
+	taskID := dispatchTask(t, router, map[string]any{
 		"source":    "ds_yibao",
 		"operation": "none",
 		"payload":   []map[string]any{{"data": "sample"}},
+	})
+	if task := waitForTaskTerminal(t, s, taskID); task.Status != "completed" {
+		t.Fatalf("task must complete, got status=%q stage=%q error=%q", task.Status, task.Stage, task.Error)
 	}
-	b, _ := json.Marshal(body)
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/hub/dispatch", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(w, req)
-
-	// 等待 6 阶段异步流水线执行完成 (6 * 100ms + buffer)
-	time.Sleep(1200 * time.Millisecond)
 
 	// 过滤已完成任务
 	w2 := httptest.NewRecorder()
@@ -496,8 +521,11 @@ func TestListTasksWithFilter(t *testing.T) {
 //  3. 任务成功完成，模拟 Agent 返回脱敏结果
 //  4. 验证任务状态=completed，阶段=done，耗时>0
 func TestE2E_FullPipeline_DispatchMasking(t *testing.T) {
-	srv, mockAgent := newMockE2EServer(t)
+	// 引擎定级 L2（内部数据）⇒ 推导算子恰为 mask，请求算子与生效算子一致。
+	// P1-1 之后生效算子只由定级推导，调用方请求仅在更强时生效（见 TestE2E_CallerCannotDowngradeOperator）。
+	srv, mockAgent := newMockEngineServer(t, "L2", true)
 	defer mockAgent.Close()
+	defer srv.Shutdown()
 	router := newTestRouter(srv)
 
 	// Step 1: 申请数据 — 提交包含医疗 PII 的脱敏请求
@@ -584,92 +612,126 @@ func TestE2E_FullPipeline_DispatchMasking(t *testing.T) {
 	t.Logf("✅ Step 3 passed: 调度中枢状态已更新 completed_total=1")
 }
 
-// TestE2E_FullPipeline_MultiLevelDesensitize tests multiple sensitivity levels
-// and their corresponding desensitization operations:
-//   - L1 → none (no masking)
-//   - L2 → mask (field masking)
-//   - L3 → k_anon (K-anonymity)
-//   - L4 → dp (differential privacy)
-//
-// TestE2E_FullPipeline_MultiLevelDesensitize 测试多级别脱敏全流程：
-//   - L1 → 无脱敏
-//   - L2 → 字段脱敏
-//   - L3 → K匿名
-//   - L4 → 差分隐私
+// TestE2E_FullPipeline_MultiLevelDesensitize proves the P1-1 derivation ladder:
+// the operator a task actually applies is decided by the level the engine reports,
+// never by what the caller asked for.
+// TestE2E_FullPipeline_MultiLevelDesensitize 验证 P1-1 定级推导阶梯：
+// 生效算子由引擎定级结果决定，调用方请求只允许上调，绝不允许下调。
+//   - L1 → none    (公开数据，明文流转)
+//   - L2 → mask    (内部数据，字段掩码)
+//   - L3 → k_anon  (敏感数据，K-匿名泛化)
+//   - L4 → dp      (高敏感数据，差分隐私)
+//   - L5 → dp      (极敏感数据，强差分隐私)
 func TestE2E_FullPipeline_MultiLevelDesensitize(t *testing.T) {
-	srv, mockAgent := newMockE2EServer(t)
-	defer mockAgent.Close()
-	router := newTestRouter(srv)
-
 	testCases := []struct {
 		name      string
-		operation string
+		level     string // 模拟引擎给出的定级结果
+		operation string // 调用方请求算子（一律低于或等于定级推导结果，验证其被采纳）
 		source    string
+		want      string // 期望生效算子
 	}{
-		{"L1-公开数据-无脱敏", "none", "ds_yibao"},
-		{"L2-内部数据-字段脱敏", "mask", "ds_yibao"},
-		{"L3-敏感数据-K匿名", "k_anon", "ds_kangyang"},
-		{"L4-机密数据-差分隐私", "dp", "ds_yibao"},
+		{"L1-公开数据-无脱敏", "L1", "none", "ds_yibao", "none"},
+		{"L2-内部数据-字段脱敏", "L2", "mask", "ds_yibao", "mask"},
+		{"L3-敏感数据-K匿名", "L3", "k_anon", "ds_kangyang", "k_anon"},
+		{"L4-机密数据-差分隐私", "L4", "dp", "ds_yibao", "dp"},
+		{"L5-极敏感数据-差分隐私", "L5", "dp", "ds_kangyang", "dp"},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			srv, mockAgent := newMockEngineServer(t, tc.level, true)
+			defer mockAgent.Close()
+			defer srv.Shutdown()
+			router := newTestRouter(srv)
+
 			// 1. 提交任务
-			body := map[string]any{
+			taskID := dispatchTask(t, router, map[string]any{
 				"source":    tc.source,
 				"operation": tc.operation,
 				"payload": map[string]any{
 					"name":    "测试用户",
 					"id_card": "110101199001011234",
 				},
+			})
+
+			// 2. 等待流水线进入终态并校验生效算子
+			task := waitForTaskTerminal(t, srv, taskID)
+			if task.Status != "completed" {
+				t.Fatalf("expected completed, got status=%q stage=%q error=%q", task.Status, task.Stage, task.Error)
 			}
-			b, _ := json.Marshal(body)
-
-			w := httptest.NewRecorder()
-			req, _ := http.NewRequest("POST", "/api/hub/dispatch", bytes.NewReader(b))
-			req.Header.Set("Content-Type", "application/json")
-			router.ServeHTTP(w, req)
-
-			if w.Code != http.StatusAccepted {
-				t.Fatalf("dispatch: expected 202, got %d", w.Code)
+			if task.Operation != tc.want {
+				t.Errorf("applied operation = %q, want %q (derived from level %s)", task.Operation, tc.want, tc.level)
 			}
+			t.Logf("  ✅ 定级 %s ⇒ 生效算子 %s (请求 %s)", tc.level, task.Operation, tc.operation)
+		})
+	}
+}
 
-			var resp map[string]any
-			_ = json.Unmarshal(w.Body.Bytes(), &resp)
-			taskID := resp["task_id"].(string)
-			t.Logf("  📝 任务已提交: %s (operation=%s)", taskID, tc.operation)
+// TestE2E_CallerCannotDowngradeOperator is the core P1-1 security assertion: a caller
+// asking for "none" (raw egress) against L4 data must still get differential privacy.
+// TestE2E_CallerCannotDowngradeOperator 是 P1-1 的核心断言：调用方以 operation=none
+// 请求「原值直传」时，只要定级为 L4，服务端仍强制走差分隐私，越权降级路径被彻底消除。
+func TestE2E_CallerCannotDowngradeOperator(t *testing.T) {
+	cases := []struct {
+		requested string
+		level     string
+		want      string
+	}{
+		{"none", "L4", "dp"},     // 直传请求被强制升级为差分隐私
+		{"mask", "L3", "k_anon"}, // 弱掩码请求被强制升级为 K-匿名
+		{"classify", "L5", "dp"}, // 仅定级请求被强制升级为差分隐私
+		{"dp", "L2", "dp"},       // 请求更强时允许上调（不降回 mask）
+		{"", "L3", "k_anon"},     // 未请求时完全由定级推导
+	}
+	for _, tc := range cases {
+		name := tc.requested + "@" + tc.level
+		t.Run(name, func(t *testing.T) {
+			srv, mockAgent := newMockEngineServer(t, tc.level, true)
+			defer mockAgent.Close()
+			defer srv.Shutdown()
+			router := newTestRouter(srv)
 
-			// 2. 等待脱敏完成
-			time.Sleep(1000 * time.Millisecond)
+			taskID := dispatchTask(t, router, map[string]any{
+				"source":    "ds_yibao",
+				"operation": tc.requested,
+				"payload":   map[string]any{"id_card": "110101199001011234"},
+			})
 
-			// 3. 拿到脱敏数据 — 验证已完成列表中的任务匹配
-			w2 := httptest.NewRecorder()
-			req2, _ := http.NewRequest("GET", "/api/hub/tasks?status=completed", nil)
-			router.ServeHTTP(w2, req2)
-
-			var listResp map[string]any
-			_ = json.Unmarshal(w2.Body.Bytes(), &listResp)
-			tasks := listResp["tasks"].([]any)
-
-			found := false
-			for _, taskRaw := range tasks {
-				task := taskRaw.(map[string]any)
-				if task["id"] == taskID {
-					found = true
-					if task["status"] != "completed" {
-						t.Errorf("expected completed, got %v (error: %v)", task["status"], task["error"])
-					}
-					if task["operation"] != tc.operation {
-						t.Errorf("expected operation=%s, got %v", tc.operation, task["operation"])
-					}
-					t.Logf("  ✅ 脱敏完成: %s → %s", tc.source, tc.operation)
-					break
-				}
+			task := waitForTaskTerminal(t, srv, taskID)
+			if task.Status != "completed" {
+				t.Fatalf("task must complete, got status=%q stage=%q error=%q", task.Status, task.Stage, task.Error)
 			}
-			if !found {
-				t.Errorf("task %s not found in completed tasks", taskID)
+			if task.Operation != tc.want {
+				t.Errorf("operation = %q, want %q (requested %q, level %s must set the floor)",
+					task.Operation, tc.want, tc.requested, tc.level)
 			}
 		})
+	}
+}
+
+// TestE2E_MissingClassificationLevelFailsTask closes the silent-downgrade branch: an
+// engine answer without any recognizable level must fail the task, not fall back to a
+// default operator.
+// TestE2E_MissingClassificationLevelFailsTask 关闭静默降级分支：引擎未返回可识别定级时
+// 任务必须以 failed 终态收场，绝不能套用默认算子继续出域。
+func TestE2E_MissingClassificationLevelFailsTask(t *testing.T) {
+	srv, mockAgent := newMockEngineServer(t, "", true)
+	defer mockAgent.Close()
+	defer srv.Shutdown()
+	router := newTestRouter(srv)
+
+	taskID := dispatchTask(t, router, map[string]any{
+		"source":    "ds_yibao",
+		"operation": "mask",
+		"payload":   map[string]any{"id_card": "110101199001011234"},
+	})
+
+	task := waitForTaskTerminal(t, srv, taskID)
+	if task.Status != "failed" {
+		t.Fatalf("missing level must fail the task, got status=%q stage=%q", task.Status, task.Stage)
+	}
+	if !strings.Contains(task.Error, "no security level") {
+		t.Errorf("task error must name the missing level, got %q", task.Error)
 	}
 }
 
@@ -756,7 +818,7 @@ func TestE2E_FullPipeline_PipelineStagesWithAgent(t *testing.T) {
 // TestGetTask_SuccessAndNotFound tests single task lookup with existing ID and non-existing ID.
 // TestGetTask_SuccessAndNotFound 测试单任务详情查询（命中返回 200 与未命中返回 404）。
 func TestGetTask_SuccessAndNotFound(t *testing.T) {
-	s := newSimpleTestServer()
+	s := newSimpleTestServer(t)
 	router := newTestRouter(s)
 
 	now := time.Now()
@@ -792,7 +854,7 @@ func TestGetTask_SuccessAndNotFound(t *testing.T) {
 // TestDispatch_OversizedSource tests rejection of oversized source strings.
 // TestDispatch_OversizedSource 测试超长源名称（>1024 字节）被安全拦截。
 func TestDispatch_OversizedSource(t *testing.T) {
-	s := newSimpleTestServer()
+	s := newSimpleTestServer(t)
 	router := newTestRouter(s)
 
 	oversized := map[string]any{
@@ -814,7 +876,7 @@ func TestDispatch_OversizedSource(t *testing.T) {
 // TestListTasks_InvalidStatusFilter tests rejection of illegal status filters.
 // TestListTasks_InvalidStatusFilter 测试非法状态过滤参数被正确拦截。
 func TestListTasks_InvalidStatusFilter(t *testing.T) {
-	s := newSimpleTestServer()
+	s := newSimpleTestServer(t)
 	router := newTestRouter(s)
 
 	w := httptest.NewRecorder()
@@ -879,13 +941,15 @@ func TestAuthMiddleware_Protection(t *testing.T) {
 // TestServer_ShutdownGraceful tests graceful shutdown execution without panic.
 // TestServer_ShutdownGraceful 测试优雅停机方法能平滑执行完毕。
 func TestServer_ShutdownGraceful(t *testing.T) {
-	s := newSimpleTestServer()
+	s := newSimpleTestServer(t)
 	s.Shutdown()
 }
 
 // TestServer_LocalPendingWorker tests that StartLocalWorker picks up and processes pending tasks in SQLite/memory mode.
 func TestServer_LocalPendingWorker(t *testing.T) {
-	s := newSimpleTestServer()
+	// 使用 L1 模拟引擎，让 operation=none 任务能直接收敛为 completed。
+	s, mockAgent := newMockEngineServer(t, "L1", true)
+	defer mockAgent.Close()
 	defer s.Shutdown()
 
 	task := &store.Task{

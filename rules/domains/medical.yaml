@@ -120,6 +120,12 @@ rules:
           use_word_boundaries: false
 
   # --- ICD-10 值规则 ---
+  # ICD-10 定级唯一事实源（P1-4 双源收敛）：privacy-go-sdk/medical/rules.go 的
+  # ClassifyICD10Code 必须与本区间表逐码一致，差异数由
+  # privacy-go-sdk/medical/icd10_yaml_consistency_test.go 在全编码空间断言为 0。
+  # 每个区间显式声明 level（upgrade_level 仅作历史区间未声明时的回退值，
+  # 当前区间均已显式声明）：HIV 与精神障碍属本域最高级 L5，与
+  # RULE_MED_DISEASE_VALUE_002 及 redaction_strategy.purge_categories 的抹平级口径一致。
   - id: "RULE_MED_ICD10"
     name: "ICD-10 医疗编码"
     category: "MEDICAL_TREATMENT"
@@ -132,12 +138,21 @@ rules:
         params:
           default_level: "L3"
           upgrade_level: "L4"
+          # 遗传病（G10）、病毒性肝炎（B15-B19）与重症器官损害（I21-I22 / N18-N19 / J44）
+          # 沿用 MEDICAL_ICD10_GENERAL 类目：分类体系未为这些病种单列 ICD 子类目，
+          # 但其敏感度等级仍逐条显式声明，不得因类目通用而降级。
           intervals:
-            - {start: "B20", end: "B24", category: "MEDICAL_ICD10_HIV"}
-            - {start: "A50", end: "A53", category: "MEDICAL_ICD10_STD"}
-            - {start: "A54", end: "A64", category: "MEDICAL_ICD10_STD"}
-            - {start: "F20", end: "F29", category: "MEDICAL_ICD10_PSYCHIATRIC"}
-            - {start: "C00", end: "C97", category: "MEDICAL_ICD10_CANCER"}
+            - {start: "B20", end: "B24", level: "L5", category: "MEDICAL_ICD10_HIV"}         # 艾滋病 / HIV 感染
+            - {start: "A50", end: "A53", level: "L4", category: "MEDICAL_ICD10_STD"}         # 早期/晚期梅毒等性病
+            - {start: "A54", end: "A64", level: "L4", category: "MEDICAL_ICD10_STD"}         # 淋病、尖锐湿疣等性病
+            - {start: "F20", end: "F29", level: "L5", category: "MEDICAL_ICD10_PSYCHIATRIC"} # 精神分裂症等重性精神障碍
+            - {start: "C00", end: "C97", level: "L4", category: "MEDICAL_ICD10_CANCER"}      # 恶性肿瘤
+            - {start: "D00", end: "D48", level: "L4", category: "MEDICAL_ICD10_CANCER"}      # 原位肿瘤与动态未定性肿瘤
+            - {start: "G10", end: "G10", level: "L5", category: "MEDICAL_ICD10_GENERAL"}     # 亨廷顿舞蹈病（遗传缺陷）
+            - {start: "B15", end: "B19", level: "L4", category: "MEDICAL_ICD10_GENERAL"}     # 病毒性肝炎（乙/丙型肝炎、肝硬化）
+            - {start: "I21", end: "I22", level: "L4", category: "MEDICAL_ICD10_GENERAL"}     # 急性心肌梗死
+            - {start: "J44", end: "J44", level: "L4", category: "MEDICAL_ICD10_GENERAL"}     # 慢性阻塞性肺疾病
+            - {start: "N18", end: "N19", level: "L4", category: "MEDICAL_ICD10_GENERAL"}     # 慢性肾病 / 肾衰竭、尿毒症
 
   # --- 基因组文件内容检测 ---
   - id: "RULE_MED_FILE_BAM"

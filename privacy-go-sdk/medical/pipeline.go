@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fengzhizi319/PrivShield/privacy-go-sdk/masking"
@@ -30,70 +31,22 @@ const (
 	CategoryOther     FieldCategory = "other"     // 其他
 )
 
-// FieldSpec 字段规格
+// FieldSpec 字段规格 —— 逐字段显式登记项（P0-2 默认拒绝的白名单单元）。
 type FieldSpec struct {
 	Name     string
 	Category FieldCategory
-	Level    int // 1=公开, 2=内部, 3=机密, 4=秘密, 5=绝密
-}
-
-// ──────────────────────────────────────────────
-// 医保 18 字段定义
-// ──────────────────────────────────────────────
-
-var YibaoFields = []FieldSpec{
-	{Name: "name", Category: CategoryIdentity, Level: 4},
-	{Name: "id_card_no", Category: CategoryIdentity, Level: 5},
-	{Name: "gender", Category: CategoryIdentity, Level: 2},
-	{Name: "date_of_birth", Category: CategoryIdentity, Level: 3},
-	{Name: "age", Category: CategoryIdentity, Level: 2},
-	{Name: "phone", Category: CategoryContact, Level: 4},
-	{Name: "address", Category: CategoryLocation, Level: 4},
-	{Name: "medical_record_no", Category: CategoryMedical, Level: 4},
-	{Name: "social_security_no", Category: CategoryFinancial, Level: 5},
-	{Name: "insurance_type", Category: CategoryFinancial, Level: 2},
-	{Name: "diagnosis", Category: CategoryMedical, Level: 4},
-	{Name: "icd_code", Category: CategoryMedical, Level: 3},
-	{Name: "admission_date", Category: CategoryMedical, Level: 2},
-	{Name: "discharge_date", Category: CategoryMedical, Level: 2},
-	{Name: "total_cost", Category: CategoryFinancial, Level: 3},
-	{Name: "reimbursement", Category: CategoryFinancial, Level: 3},
-	{Name: "chief_complaint", Category: CategoryMedical, Level: 4},
-	{Name: "doctor_name", Category: CategoryIdentity, Level: 3},
-}
-
-// ──────────────────────────────────────────────
-// 康养 27 字段定义
-// ──────────────────────────────────────────────
-
-var KangyangFields = []FieldSpec{
-	{Name: "name", Category: CategoryIdentity, Level: 4},
-	{Name: "id_card_no", Category: CategoryIdentity, Level: 5},
-	{Name: "gender", Category: CategoryIdentity, Level: 2},
-	{Name: "date_of_birth", Category: CategoryIdentity, Level: 3},
-	{Name: "age", Category: CategoryIdentity, Level: 2},
-	{Name: "phone", Category: CategoryContact, Level: 4},
-	{Name: "emergency_contact", Category: CategoryContact, Level: 4},
-	{Name: "emergency_phone", Category: CategoryContact, Level: 4},
-	{Name: "address", Category: CategoryLocation, Level: 4},
-	{Name: "health_record_no", Category: CategoryMedical, Level: 4},
-	{Name: "blood_type", Category: CategoryMedical, Level: 2},
-	{Name: "allergies", Category: CategoryMedical, Level: 3},
-	{Name: "chronic_diseases", Category: CategoryMedical, Level: 4},
-	{Name: "medication_history", Category: CategoryMedical, Level: 4},
-	{Name: "vital_signs", Category: CategoryMedical, Level: 3},
-	{Name: "assessment_score", Category: CategoryMedical, Level: 3},
-	{Name: "care_level", Category: CategoryMedical, Level: 2},
-	{Name: "admission_date", Category: CategoryMedical, Level: 2},
-	{Name: "bed_no", Category: CategoryLocation, Level: 3},
-	{Name: "room_no", Category: CategoryLocation, Level: 3},
-	{Name: "nurse_name", Category: CategoryIdentity, Level: 3},
-	{Name: "doctor_name", Category: CategoryIdentity, Level: 3},
-	{Name: "family_contact", Category: CategoryContact, Level: 4},
-	{Name: "payment_method", Category: CategoryFinancial, Level: 3},
-	{Name: "monthly_fee", Category: CategoryFinancial, Level: 3},
-	{Name: "dietary_restrictions", Category: CategoryMedical, Level: 3},
-	{Name: "special_notes", Category: CategoryMedical, Level: 4},
+	// Level DB51 五级定级：1=公开数据, 2=内部数据, 3=敏感数据, 4=高敏数据, 5=极致敏数据。
+	// （词表口径统一见设计文档 §5.4 差异 5 / 整改项 P1-5。）
+	Level int
+	// Treatment 处置算子。为空时按 Category 回落到历史分派逻辑（向后兼容自定义规格），
+	// 但任何回落分支都不得原样直传，未识别一律走默认拒绝。
+	Treatment Treatment
+	// ClipLower / ClipUpper 数值处置（TreatmentDPNoise）的截断区间，用于限制噪声越界；
+	// 二者相等（零值）表示不做截断。
+	ClipLower float64
+	ClipUpper float64
+	// Band 区间泛化（TreatmentBounding）的区间宽度。
+	Band float64
 }
 
 // ──────────────────────────────────────────────
@@ -138,30 +91,78 @@ type MedicalPipelineResult struct {
 // Pipeline 医疗数据隐私处理流水线
 type Pipeline struct {
 	fieldMap map[string]*FieldSpec
-	mu       sync.RWMutex
-	cache    map[string]string
+	// specNames 规格矩阵中显式登记的字段名（去重、保持登记顺序），供覆盖率断言与审计使用。
+	specNames []string
+	mu        sync.RWMutex
+	cache     map[string]string
+	// unlisted 未登记字段的默认拒绝策略（atomic.Value 热路径无锁读）。
+	unlisted atomic.Value
 }
 
-// NewPipeline 创建医疗流水线实例
+// NewPipeline 创建医疗流水线实例。
+//
+// 默认策略为 [DefaultUnlistedFieldPolicy]（未列入规格矩阵的字段确定性掩码），
+// 即白名单反转：只有在 fields 中显式登记的字段才可能被原样保留。
 func NewPipeline(fields []FieldSpec) *Pipeline {
 	p := &Pipeline{
-		fieldMap: make(map[string]*FieldSpec, len(fields)),
-		cache:    make(map[string]string),
+		fieldMap:  make(map[string]*FieldSpec, len(fields)),
+		specNames: make([]string, 0, len(fields)),
+		cache:     make(map[string]string),
 	}
+	p.unlisted.Store(DefaultUnlistedFieldPolicy)
+	seen := make(map[string]bool, len(fields))
 	for i := range fields {
-		p.fieldMap[fields[i].Name] = &fields[i]
+		spec := fields[i] // 值拷贝入表，避免与调用方共享底层数组
+		key := normalizeFieldName(spec.Name)
+		p.fieldMap[key] = &spec
+		if !seen[key] {
+			seen[key] = true
+			p.specNames = append(p.specNames, spec.Name)
+		}
+		// 同时按别名规范名建索引（如 "姓名"/"patient_name" → name），
+		// 显式规格优先于启发式猜测。
+		if canon := CanonicalizePIIField(key); canon != key {
+			if _, exists := p.fieldMap[canon]; !exists {
+				p.fieldMap[canon] = &spec
+			}
+		}
 	}
 	return p
 }
 
-// NewYibaoPipeline 创建医保 18 字段流水线
+// normalizeFieldName 规格表键名归一：去空白 + 小写。
+func normalizeFieldName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+// NewYibaoPipeline 创建医保 18 字段流水线（契约 18 字段 ∪ 历史规格名的完整矩阵）。
 func NewYibaoPipeline() *Pipeline {
 	return NewPipeline(YibaoFields)
 }
 
-// NewKangyangPipeline 创建康养 27 字段流水线
+// NewKangyangPipeline 创建康养 27 字段流水线（契约 27 字段 ∪ 历史规格名 ∪ 体征/档案扩展槽位）。
 func NewKangyangPipeline() *Pipeline {
-	return NewPipeline(KangyangFields)
+	specs := make([]FieldSpec, 0, len(KangyangFields)+len(VitalSignFields)+len(GovCareExtraFields))
+	specs = append(specs, KangyangFields...)
+	specs = append(specs, VitalSignFields...)
+	specs = append(specs, GovCareExtraFields...)
+	return NewPipeline(specs)
+}
+
+// SetUnlistedFieldPolicy 设置未登记字段的默认拒绝策略。
+//
+// 只接受限制性策略（mask / drop）；无法识别的取值回落到 [DefaultUnlistedFieldPolicy]，
+// 任何调用都无法把未登记字段重新放开为明文直传。
+func (p *Pipeline) SetUnlistedFieldPolicy(policy UnlistedFieldPolicy) {
+	p.unlisted.Store(ParseUnlistedFieldPolicy(string(policy)))
+}
+
+// UnlistedFieldPolicy 返回当前生效的未登记字段处置策略。
+func (p *Pipeline) UnlistedFieldPolicy() UnlistedFieldPolicy {
+	if v, ok := p.unlisted.Load().(UnlistedFieldPolicy); ok && v != "" {
+		return v
+	}
+	return DefaultUnlistedFieldPolicy
 }
 
 // ProcessRecords 全流程处理医疗数据集，生成双结构报告与脱敏数据集（支持多核并发分块加速）
@@ -231,11 +232,17 @@ func (p *Pipeline) ProcessRecords(records []map[string]string) *MedicalPipelineR
 		SanitizedData:        sanitizedData,
 		RawData:              records,
 		Summary: map[string]interface{}{
-			"total_records":         n,
-			"level_counts":          levelCounts,
-			"duration_seconds":      elapsed,
-			"status":                "success",
+			"total_records":    n,
+			"level_counts":     levelCounts,
+			"duration_seconds": elapsed,
+			"status":           "success",
+			// P0-2 可审计性回显：本批次生效的默认拒绝策略与矩阵登记规模。
 			"compliance_guaranteed": true,
+			"spec_field_count":      p.FieldCount(),
+			"unlisted_field_policy": string(p.UnlistedFieldPolicy()),
+			"unlisted_policy_name":  UnlistedFieldPolicyName,
+			"unlisted_min_level":    UnlistedFieldLevel,
+			"unlisted_default":      "deny",
 		},
 	}
 }
@@ -277,119 +284,309 @@ func (p *Pipeline) ProcessRecord(record map[string]string, index int) (map[strin
 	return sanRec, report
 }
 
-// ClassifyAndSanitizeField 对单个字段执行分类与脱敏
+// ClassifyAndSanitizeField 对单个字段执行分类与脱敏。
+//
+// 定级遵循**就高原则**：取「规格矩阵登记等级」与「值内容实测等级」的较高者，
+// 防止字段名与内容错位（如把诊断文本塞进 gender 字段）绕过矩阵；
+// 未登记字段按 [UnlistedFieldLevel]（L3 敏感数据）+ 默认拒绝处置，绝不落为公开数据。
 func (p *Pipeline) ClassifyAndSanitizeField(fieldName, value string) *FieldClassification {
-	canon := CanonicalizePIIField(fieldName)
+	res := p.resolveField(fieldName)
+	sanVal := p.applyTreatment(res, fieldName, value)
 
-	// 1. ICD-10 编码字段
-	if ICD10FieldNames[canon] || ICD10FieldNames[strings.ToLower(fieldName)] {
-		level, cat, ok := ClassifyICD10Code(value)
-		if ok {
-			sanVal := RedactICD10Code(value)
-			return &FieldClassification{
-				FieldName:          fieldName,
-				Level:              level,
-				SecurityTag:        "ICD10_DIAGNOSIS",
-				Description:        "ICD-10 诊断编码",
-				RuleMatched:        fmt.Sprintf("ICD10_%s", cat),
-				RawValue:           value,
-				SanitizedValue:     sanVal,
-				SanitizedValueRule: sanVal,
-				SanitizedValueNer:  sanVal,
-			}
-		}
-		return &FieldClassification{
-			FieldName:          fieldName,
-			Level:              "L2",
-			SecurityTag:        "ICD10_DIAGNOSIS",
-			Description:        "ICD-10 基础编码",
-			RuleMatched:        "ICD10_STANDARD",
-			RawValue:           value,
-			SanitizedValue:     value,
-			SanitizedValueRule: value,
-			SanitizedValueNer:  value,
-		}
+	level := res.level
+	ruleID := res.ruleID
+	if cl := contentLevel(value); cl > level {
+		level = cl
+		ruleID = "HIGH_RISK_VALUE_ESCALATION:" + ruleID
+	}
+	// 出域前的最后一道值层安全网：任何分支的结果都不得残留 L4/L5 词表命中。
+	if ContainsHighRiskText(sanVal) {
+		sanVal = redactClinicalText(sanVal)
 	}
 
-	// 2. 日期字段
-	if DateGeneralizationFields[canon] || DateGeneralizationFields[strings.ToLower(fieldName)] {
-		sanVal := TruncateDateToMonth(value)
-		return &FieldClassification{
-			FieldName:          fieldName,
-			Level:              "L2",
-			SecurityTag:        "DATE_QI",
-			Description:        "日期准标识符",
-			RuleMatched:        "DATE_GENERALIZATION",
-			RawValue:           value,
-			SanitizedValue:     sanVal,
-			SanitizedValueRule: sanVal,
-			SanitizedValueNer:  sanVal,
-		}
-	}
-
-	// 3. PII 身份与联系字段
-	if rule, isPII := PIIFieldRules[canon]; isPII {
-		sanVal := p.sanitizeIdentity(canon, value)
-		level := "L4"
-		if canon == "id_card_no" || canon == "social_security_no" {
-			level = "L5"
-		}
-		return &FieldClassification{
-			FieldName:          fieldName,
-			Level:              level,
-			SecurityTag:        "PII_IDENTITY",
-			Description:        "个人身份敏感字段",
-			RuleMatched:        rule,
-			RawValue:           value,
-			SanitizedValue:     sanVal,
-			SanitizedValueRule: sanVal,
-			SanitizedValueNer:  sanVal,
-		}
-	}
-
-	// 4. 临床文本 / 病史文本（检测 L4/L5 高敏词）
-	if ContainsHighRiskText(value) {
-		sanVal := RedactMedicalText(value)
-		level := "L4"
-		if strings.Contains(sanVal, "[L5-") {
-			level = "L5"
-		}
-		return &FieldClassification{
-			FieldName:          fieldName,
-			Level:              level,
-			SecurityTag:        "CLINICAL_HIGH_RISK",
-			Description:        "临床高危病史文本",
-			RuleMatched:        "MEDICAL_L4_L5_RULE",
-			RawValue:           value,
-			SanitizedValue:     sanVal,
-			SanitizedValueRule: sanVal,
-			SanitizedValueNer:  sanVal,
-		}
-	}
-
-	// 5. 按照预设规格脱敏
-	sanVal := p.SanitizeField(fieldName, value)
-	spec := p.GetFieldSpec(fieldName)
-	levelStr := "L1"
-	tag := "GENERAL"
-	desc := "常规数据"
-	if spec != nil {
-		levelStr = fmt.Sprintf("L%d", spec.Level)
-		tag = string(spec.Category)
-		desc = string(spec.Category)
-	}
+	levelStr := fmt.Sprintf("L%d", level)
+	desc := res.description()
 
 	return &FieldClassification{
 		FieldName:          fieldName,
 		Level:              levelStr,
-		SecurityTag:        tag,
+		SecurityTag:        res.securityTag(),
 		Description:        desc,
-		RuleMatched:        "SPEC_RULE",
+		RuleMatched:        ruleID,
 		RawValue:           value,
 		SanitizedValue:     sanVal,
 		SanitizedValueRule: sanVal,
 		SanitizedValueNer:  sanVal,
 	}
+}
+
+// contentLevel 实测值内容的 DB51 等级（0 = 未命中高敏词表）。
+func contentLevel(value string) int {
+	if value == "" || !ContainsHighRiskText(value) {
+		return 0
+	}
+	if strings.Contains(RedactMedicalText(value), "[L5-") {
+		return 5
+	}
+	return 4
+}
+
+// ──────────────────────────────────────────────
+// 字段解析：规格矩阵优先，未登记默认拒绝
+// ──────────────────────────────────────────────
+
+// fieldResolution 单字段解析结果（P0-2 白名单判定的产物）。
+type fieldResolution struct {
+	spec      *FieldSpec
+	treatment Treatment
+	level     int
+	category  FieldCategory
+	ruleID    string
+	unlisted  bool
+}
+
+// specName 规格登记名（无规格时为待解析字段名，用作散列盐值）。
+func (res fieldResolution) specName() string {
+	if res.spec != nil {
+		return res.spec.Name
+	}
+	return ""
+}
+
+func (res fieldResolution) securityTag() string {
+	if res.unlisted {
+		return "UNLISTED_DEFAULT_DENY"
+	}
+	switch res.treatment {
+	case TreatmentClinicalText, TreatmentDiseaseGeneralize:
+		return "CLINICAL_TEXT"
+	case TreatmentICD10:
+		return "ICD10_DIAGNOSIS"
+	case TreatmentDateMonth, TreatmentDateYear:
+		return "DATE_QI"
+	case TreatmentDPNoise, TreatmentBounding, TreatmentAgeBand:
+		return "NUMERIC_QI"
+	case TreatmentHashID, TreatmentMaskIdCard, TreatmentMaskCard, TreatmentMaskPartial:
+		return "PSEUDONYM_ID"
+	case TreatmentMaskName, TreatmentMaskPhone, TreatmentMaskEmail, TreatmentMaskAddress:
+		return "PII_DIRECT"
+	case TreatmentEnumGeneralize:
+		return "SENSITIVE_ENUM"
+	case TreatmentDrop:
+		return "DROPPED"
+	default:
+		return strings.ToUpper(string(res.category))
+	}
+}
+
+func (res fieldResolution) description() string {
+	if res.unlisted {
+		return "未列入字段规格矩阵，按默认拒绝策略处置（" + UnlistedFieldPolicyName + "）"
+	}
+	if res.spec != nil {
+		return string(res.spec.Category) + "/" + string(res.spec.Treatment)
+	}
+	return string(res.category) + "/" + string(res.treatment)
+}
+
+// lookupSpec 按归一化字段名查显式规格矩阵。
+func (p *Pipeline) lookupSpec(fieldName string) (*FieldSpec, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	spec, ok := p.fieldMap[normalizeFieldName(fieldName)]
+	return spec, ok
+}
+
+// resolveField 解析字段的处置来源。优先级：
+//
+//  1. 规格矩阵显式登记（[YibaoFields] / [KangyangFields] / 扩展名单，含别名索引）；
+//  2. rules.go 中的**名单级**登记（ICD-10 编码字段 / 日期准标识符字段 / PII 字段），
+//     同样是白名单单元，不是字段名子串猜测；
+//  3. 二者皆未命中 → 默认拒绝（mask 或 drop），定级至少 L3。
+//
+// 整改前存在的「字段名包含 id/phone/name 即猜测处置方式、否则原样直传」启发式分层
+// 已整体删除：启发式既可能漏（陌生命名直传明文）也可能错（width/valid_flag 命中 id），
+// 不具备可审计性，正是 P0-2 的成因。
+func (p *Pipeline) resolveField(fieldName string) fieldResolution {
+	key := normalizeFieldName(fieldName)
+	if spec, ok := p.lookupSpec(key); ok {
+		return specResolution(spec, "SPEC_RULE")
+	}
+	canon := CanonicalizePIIField(key)
+	if canon != key {
+		if spec, ok := p.lookupSpec(canon); ok {
+			return specResolution(spec, "SPEC_RULE_ALIAS")
+		}
+	}
+	if ICD10FieldNames[canon] || ICD10FieldNames[key] {
+		return fieldResolution{
+			treatment: TreatmentICD10, level: 4, category: CategoryMedical,
+			ruleID: "ICD10_STANDARD",
+		}
+	}
+	if DateGeneralizationFields[canon] || DateGeneralizationFields[key] {
+		return fieldResolution{
+			treatment: TreatmentDateMonth, level: 2, category: CategoryMedical,
+			ruleID: "DATE_GENERALIZATION",
+		}
+	}
+	if rule, ok := PIIFieldRules[canon]; ok {
+		treatment, level := piiRegistryTreatment(canon)
+		return fieldResolution{
+			treatment: treatment, level: level, category: CategoryIdentity,
+			ruleID: rule,
+		}
+	}
+	return fieldResolution{
+		treatment: TreatmentUnlisted, level: UnlistedFieldLevel, category: CategoryOther,
+		ruleID: UnlistedFieldPolicyName, unlisted: true,
+	}
+}
+
+func specResolution(spec *FieldSpec, ruleID string) fieldResolution {
+	treatment := spec.Treatment
+	if treatment == "" {
+		// 自定义规格未声明算子：按类别回落到该类别的**限制性**默认算子，
+		// 且绝不回落到直传；无法归类的按默认拒绝处理。
+		treatment = defaultTreatmentForCategory(spec.Category)
+	}
+	return fieldResolution{
+		spec: spec, treatment: treatment, level: spec.Level,
+		category: spec.Category, ruleID: ruleID,
+	}
+}
+
+// defaultTreatmentForCategory 类别级兜底算子（仅在自定义规格缺 Treatment 时使用）。
+func defaultTreatmentForCategory(cat FieldCategory) Treatment {
+	switch cat {
+	case CategoryIdentity, CategoryContact:
+		return TreatmentMaskName
+	case CategoryFinancial:
+		return TreatmentMaskPartial
+	case CategoryMedical:
+		return TreatmentClinicalText
+	case CategoryLocation:
+		return TreatmentMaskAddress
+	default:
+		return TreatmentUnlisted
+	}
+}
+
+// piiRegistryTreatment rules.go PII 名单字段的算子与等级。
+func piiRegistryTreatment(canon string) (Treatment, int) {
+	switch canon {
+	case "id_card_no", "social_security_no":
+		return TreatmentMaskIdCard, 5
+	case "registered_address", "address":
+		return TreatmentMaskAddress, 4
+	case "disability_cert_no":
+		return TreatmentMaskIdCard, 4
+	case "medical_insurance_no":
+		return TreatmentMaskCard, 4
+	case "person_id":
+		return TreatmentHashID, 4
+	case "hospital_code":
+		return TreatmentMaskPartial, 2
+	default: // name 及名单内其余身份字段
+		return TreatmentMaskName, 4
+	}
+}
+
+// ──────────────────────────────────────────────
+// 处置算子分派
+// ──────────────────────────────────────────────
+
+// applyTreatment 执行解析出的处置算子。所有分支都必须满足：
+// 出域值 ≠ 原值，除非该字段在矩阵中被**显式登记为 keep** 且值内容不含任何敏感命中。
+func (p *Pipeline) applyTreatment(res fieldResolution, fieldName, value string) string {
+	if value == "" {
+		return ""
+	}
+	spec := res.spec
+
+	switch res.treatment {
+	case TreatmentKeep:
+		return keepSafetyNet(value)
+	case TreatmentMaskName:
+		return masking.MaskChineseName(value)
+	case TreatmentMaskIdCard:
+		return noPlaintext(masking.MaskIdCard(value), value)
+	case TreatmentMaskCard:
+		return noPlaintext(masking.MaskBankCard(value), value)
+	case TreatmentMaskPhone:
+		return noPlaintext(masking.MaskPhone(value), value)
+	case TreatmentMaskEmail:
+		return noPlaintext(masking.MaskEmail(value), value)
+	case TreatmentMaskAddress:
+		return maskAddressGeneralized(value)
+	case TreatmentMaskPartial:
+		return maskSerialPartial(value)
+	case TreatmentHashID:
+		salt := res.specName()
+		if salt == "" {
+			salt = fieldName
+		}
+		return hashWithPrefix(normalizeFieldName(salt), value)
+	case TreatmentClinicalText:
+		return redactClinicalText(value)
+	case TreatmentDiseaseGeneralize:
+		return generalizeDisease(value)
+	case TreatmentEnumGeneralize:
+		name := normalizeFieldName(res.specName())
+		if name == "" {
+			name = normalizeFieldName(fieldName)
+		}
+		if generalized, ok := generalizeEnum(name, value); ok {
+			return generalized
+		}
+		// 泛化层级表未覆盖该取值：按默认拒绝处置，不猜测。
+		return SanitizeUnlistedField(p.UnlistedFieldPolicy(), value)
+	case TreatmentICD10:
+		return RedactICD10Code(value)
+	case TreatmentDateMonth:
+		return TruncateDateToMonth(value)
+	case TreatmentDateYear:
+		return TruncateDateToYear(value)
+	case TreatmentDPNoise:
+		lower, upper := 0.0, 0.0
+		if spec != nil {
+			lower, upper = spec.ClipLower, spec.ClipUpper
+		}
+		if out, ok := applyDPNoise(value, DefaultDPNoiseEpsilon, DefaultDPSensitivity, lower, upper); ok {
+			return out
+		}
+		return redactClinicalText(value) // 非数值输入不得直传
+	case TreatmentBounding:
+		band := 0.0
+		if spec != nil {
+			band = spec.Band
+		}
+		if out, ok := applyBounding(value, band); ok {
+			return out
+		}
+		return redactClinicalText(value)
+	case TreatmentAgeBand:
+		return ageBandKanon(value)
+	case TreatmentDrop:
+		return ""
+	case TreatmentUnlisted:
+		return SanitizeUnlistedField(p.UnlistedFieldPolicy(), value)
+	default:
+		// 矩阵中写了引擎未实装的算子名：按最严格可用处置，并因此暴露配置缺陷。
+		return SanitizeUnlistedField(DefaultUnlistedFieldPolicy, value)
+	}
+}
+
+// keepSafetyNet 「原样保留」算子的值层安全网。
+//
+// keep 仅允许矩阵中显式登记的 L1/L2 枚举/编码字段使用；但脏数据与字段错位仍可能让
+// 这类字段夹带高敏病种词或直接标识符，因此保留分支同样执行实体剥离与病种范畴抹平，
+// 仅在内容确无命中时才直传。
+func keepSafetyNet(value string) string {
+	if ContainsHighRiskText(value) {
+		return redactClinicalText(value)
+	}
+	return StripTextEntities(value)
 }
 
 // SanitizeRecord 对整条记录执行脱敏
@@ -410,155 +607,15 @@ func (p *Pipeline) SanitizeBatch(records []map[string]string) []map[string]strin
 	return results
 }
 
-// SanitizeField 对单个字段执行脱敏
+// SanitizeField 对单个字段执行脱敏（规格矩阵优先，未登记字段默认拒绝）。
 func (p *Pipeline) SanitizeField(fieldName, value string) string {
 	if value == "" {
 		return ""
 	}
-
-	canon := CanonicalizePIIField(fieldName)
-
-	// 1. ICD-10 编码
-	if ICD10FieldNames[canon] || ICD10FieldNames[strings.ToLower(fieldName)] {
-		return RedactICD10Code(value)
-	}
-
-	// 2. 日期截断
-	if DateGeneralizationFields[canon] || DateGeneralizationFields[strings.ToLower(fieldName)] {
-		return TruncateDateToMonth(value)
-	}
-
-	// 3. 临床高危词汇脱敏
-	if ContainsHighRiskText(value) {
-		return RedactMedicalText(value)
-	}
-
-	spec, ok := p.fieldMap[fieldName]
-	if !ok {
-		spec, ok = p.fieldMap[canon]
-	}
-	if !ok {
-		return p.sanitizeByHeuristic(fieldName, value)
-	}
-
-	return p.sanitizeBySpec(spec, value)
+	return p.applyTreatment(p.resolveField(fieldName), fieldName, value)
 }
 
-func (p *Pipeline) sanitizeBySpec(spec *FieldSpec, value string) string {
-	switch spec.Category {
-	case CategoryIdentity:
-		return p.sanitizeIdentity(spec.Name, value)
-	case CategoryContact:
-		return p.sanitizeContact(spec.Name, value)
-	case CategoryFinancial:
-		return p.sanitizeFinancial(spec.Name, value)
-	case CategoryMedical:
-		return p.sanitizeMedical(spec.Name, value)
-	case CategoryLocation:
-		return p.sanitizeLocation(spec.Name, value)
-	default:
-		return value
-	}
-}
-
-func (p *Pipeline) sanitizeIdentity(name, value string) string {
-	switch name {
-	case "id_card_no", "social_security_no", "disability_cert_no":
-		return masking.MaskIdCard(value)
-	case "name", "doctor_name", "nurse_name":
-		return masking.MaskChineseName(value)
-	case "gender", "age", "blood_type":
-		return value // 低敏感保留
-	case "date_of_birth", "birth_date":
-		return TruncateDateToMonth(value)
-	default:
-		return masking.MaskChineseName(value)
-	}
-}
-
-func (p *Pipeline) sanitizeContact(name, value string) string {
-	switch name {
-	case "phone", "emergency_phone":
-		return masking.MaskPhone(value)
-	case "emergency_contact", "family_contact":
-		return masking.MaskChineseName(value)
-	default:
-		return masking.MaskPhone(value)
-	}
-}
-
-func (p *Pipeline) sanitizeFinancial(name, value string) string {
-	switch name {
-	case "total_cost", "reimbursement", "monthly_fee":
-		return value // 数值保留
-	case "payment_method", "insurance_type":
-		return value // 类别保留
-	default:
-		return "***"
-	}
-}
-
-func (p *Pipeline) sanitizeMedical(name, value string) string {
-	switch name {
-	case "diagnosis", "chief_complaint", "chronic_diseases",
-		"medication_history", "allergies", "special_notes",
-		"dietary_restrictions", "present_illness", "past_history":
-		if ContainsHighRiskText(value) {
-			return RedactMedicalText(value)
-		}
-		return maskClinicalText(value)
-	case "icd_code", "icd10_code":
-		return RedactICD10Code(value)
-	case "admission_date", "discharge_date":
-		return TruncateDateToMonth(value)
-	case "medical_record_no", "health_record_no":
-		if len(value) > 4 {
-			return value[:2] + strings.Repeat("*", len(value)-4) + value[len(value)-2:]
-		}
-		return strings.Repeat("*", len(value))
-	case "vital_signs", "assessment_score", "care_level":
-		return value // 临床指标保留
-	case "bed_no", "room_no":
-		return value // 床位号保留
-	default:
-		if ContainsHighRiskText(value) {
-			return RedactMedicalText(value)
-		}
-		return value
-	}
-}
-
-func (p *Pipeline) sanitizeLocation(name, value string) string {
-	switch name {
-	case "address", "registered_address":
-		return masking.MaskAddress(value)
-	default:
-		return value
-	}
-}
-
-func (p *Pipeline) sanitizeByHeuristic(fieldName, value string) string {
-	lower := strings.ToLower(fieldName)
-	switch {
-	case strings.Contains(lower, "id") || strings.Contains(lower, "card") || strings.Contains(lower, "sfz"):
-		return masking.MaskIdCard(value)
-	case strings.Contains(lower, "phone") || strings.Contains(lower, "mobile") || strings.Contains(lower, "tel"):
-		return masking.MaskPhone(value)
-	case strings.Contains(lower, "name") || strings.Contains(lower, "姓名"):
-		return masking.MaskChineseName(value)
-	case strings.Contains(lower, "email") || strings.Contains(lower, "mail"):
-		return masking.MaskEmail(value)
-	case strings.Contains(lower, "address") || strings.Contains(lower, "地址"):
-		return masking.MaskAddress(value)
-	default:
-		if ContainsHighRiskText(value) {
-			return RedactMedicalText(value)
-		}
-		return value
-	}
-}
-
-// maskClinicalText 对临床文本脱敏：保留首尾字符
+// maskClinicalText 对临床文本脱敏：保留首尾字符（历史算子，保留供自定义流水线复用）
 func maskClinicalText(text string) string {
 	runes := []rune(text)
 	n := len(runes)
@@ -568,7 +625,7 @@ func maskClinicalText(text string) string {
 	kept := 2
 	maskLen := n - kept*2
 	if maskLen <= 0 {
-		return text
+		return strings.Repeat("*", n)
 	}
 	sb := &strings.Builder{}
 	sb.WriteString(string(runes[:kept]))
@@ -577,14 +634,32 @@ func maskClinicalText(text string) string {
 	return sb.String()
 }
 
-// GetFieldSpec 获取字段规格
+// GetFieldSpec 获取字段规格（名称归一 + 别名规范，未登记返回 nil）。
 func (p *Pipeline) GetFieldSpec(fieldName string) *FieldSpec {
-	return p.fieldMap[fieldName]
+	if spec, ok := p.lookupSpec(fieldName); ok {
+		return spec
+	}
+	return nil
 }
 
-// FieldCount 返回已注册字段数
+// SpecFieldNames 返回规格矩阵中显式登记的字段名（保持登记顺序，不含别名索引键）。
+func (p *Pipeline) SpecFieldNames() []string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	out := make([]string, len(p.specNames))
+	copy(out, p.specNames)
+	return out
+}
+
+// FieldCount 返回规格矩阵中**去重后的登记字段名**数量（不含别名索引键）。
+//
+// 注意：整改前该值等于契约字段数（18 / 27）；P0-2 之后矩阵口径为
+// 「契约字段 ∪ 历史规格名 ∪ 标准规范扩展槽位」，故字段数上升。
+// 契约覆盖率断言请使用 [YibaoContractFields] / [KangyangContractFields]。
 func (p *Pipeline) FieldCount() int {
-	return len(p.fieldMap)
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return len(p.specNames)
 }
 
 func compareLevel(a, b string) int {

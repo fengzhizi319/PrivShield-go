@@ -10,9 +10,13 @@
 #
 # 说明：
 #   本文件覆盖 docker-compose.prod.yml 中的 PrivShield 服务定义，
-#   将 Python 引擎替换为 Go 原生引擎（engine-go/Dockerfile 构建）。
+#   将引擎镜像替换为 Go 原生引擎（engine-go/Dockerfile 构建）。
 #   Go 引擎镜像极小（~15MB），启动速度快（<1s），无 Python/ML 依赖。
 #   生产模式下：JSON 日志、安全加固（no-new-privileges）、自动重启。
+#
+# ⚠️ Compose 合并语义提醒：`environment` 按变量名逐条合并，本文件一旦重新声明某个键，
+#   就会**覆盖**父文件 docker-compose.prod.yml 的同名取值。因此本文件必须与生产加固基线
+#   保持一致（TLS / 鉴权 / 限流 / REQUIRE_TLS 全为强制开启），不得在这里回落到「关闭」默认。
 #
 # 环境变量：
 #   PRIVSHIELD_GO_IMAGE: Go 引擎镜像名（默认 privshield-go:1.0.0）
@@ -33,23 +37,39 @@ services:
       - no-new-privileges:true
     environment:
       # Go 引擎基础配置
+      # 注：不设置 PRIVACY_GRPC_HOST —— Go Agent 的 gRPC 监听地址在代码内固定为 0.0.0.0
+      # （engine-go/cmd/privshield-agent/main.go），该变量无读取点（P2-1 幽灵变量）。
       PRIVACY_REST_HOST: "0.0.0.0"
       PRIVACY_REST_PORT: "8079"
-      PRIVACY_GRPC_HOST: "0.0.0.0"
       PRIVACY_GRPC_PORT: "50051"
       PRIVACY_LOG_LEVEL: "${PRIVACY_LOG_LEVEL:-INFO}"
-      PRIVACY_LOG_FORMAT: "json"
       PRIVACY_SERVICE_NAME: "PrivShield-Go"
-      # 生产模式：从 .env 读取安全配置
-      PRIVACY_TLS_ENABLED: "${PRIVACY_TLS_ENABLED:-false}"
-      PRIVACY_AUTH_ENABLED: "${PRIVACY_AUTH_ENABLED:-false}"
-      PRIVACY_RATE_LIMIT_ENABLED: "${PRIVACY_RATE_LIMIT_ENABLED:-false}"
-    # Go 引擎不需要 Python 源码/配置挂载
+      # 分类分级规则与 Profile 路径（Go 引擎读取的真实变量名）
+      PRIVACY_CONFIG_FILE: "${PRIVACY_CONFIG_FILE:-/app/config/privacy.yaml}"
+      PRIVACY_RULES_DIR: "${PRIVACY_RULES_DIR:-/app/rules/domains}"
+      # ── 生产安全基线（与 docker-compose.prod.yml 一致，缺密钥/证书即拒绝启动）──
+      PRIVACY_TLS_ENABLED: "true"
+      PRIVACY_REQUIRE_TLS: "${PRIVACY_REQUIRE_TLS:-true}"
+      PRIVACY_TLS_CERT_FILE: "${PRIVACY_TLS_CERT_FILE:-/certs/agent/tls.crt}"
+      PRIVACY_TLS_KEY_FILE: "${PRIVACY_TLS_KEY_FILE:-/certs/agent/tls.key}"
+      PRIVACY_TLS_CA_FILE: "${PRIVACY_TLS_CA_FILE:-/certs/ca.crt}"
+      PRIVACY_AUTH_INTERNAL_MTLS_ENABLED: "${PRIVACY_AUTH_INTERNAL_MTLS_ENABLED:-true}"
+      PRIVACY_AUTH_MTLS_WHITELIST_FILE: "${PRIVACY_AUTH_MTLS_WHITELIST_FILE:?PRIVACY_AUTH_MTLS_WHITELIST_FILE is required in production (e.g. /etc/PrivShield/secrets/mtls-whitelist.yaml)}"
+      PRIVACY_AUTH_ENABLED: "true"
+      PRIVACY_AUTH_INTERNAL_API_KEYS: "${PRIVACY_AUTH_INTERNAL_API_KEYS:?PRIVACY_AUTH_INTERNAL_API_KEYS is required in production (format token:name:scopes;...)}"
+      PRIVACY_AUTH_EXTERNAL_API_KEYS: "${PRIVACY_AUTH_EXTERNAL_API_KEYS:?PRIVACY_AUTH_EXTERNAL_API_KEYS is required in production}"
+      PRIVACY_RATE_LIMIT_ENABLED: "true"
+      PRIVACY_RATE_LIMIT_DEFAULT_RPS: "${PRIVACY_RATE_LIMIT_DEFAULT_RPS:-50}"
+      PRIVACY_RATE_LIMIT_DEFAULT_BURST: "${PRIVACY_RATE_LIMIT_DEFAULT_BURST:-100}"
+      PRIVACY_RATE_LIMIT_REDIS_URL: "${PRIVACY_RATE_LIMIT_REDIS_URL:-redis://redis:6379/0}"
+    # Go 引擎只需要证书 / 白名单挂载（Python 时代的 profile 与预算库挂载不再需要）
     volumes:
+      - ./certs:/certs:ro
+      - ./secrets:/etc/PrivShield/secrets:ro
       - budget-db:/data/budget
-    # Go 引擎 healthcheck
+    # Go 引擎 healthcheck（TLS 开启后走 https，内部 CA 不在容器信任库内故用 -k）
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8079/readyz || exit 1"]
+      test: ["CMD-SHELL", "wget --no-check-certificate -qO- https://localhost:8079/readyz || wget -qO- http://localhost:8079/readyz || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3

@@ -174,7 +174,9 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 	r.POST("/api/pipeline/process", s.PipelineProcess)
 
 	// Direct Go microservice proxy routes (Phase 2)
-	// 主控制台 BFF 直连 service-hub / datasource-mgr / audit-log 的透明代理入口
+	// 主控制台 BFF 直连 service-hub / datasource-mgr / audit-log 的代理入口。
+	// P0-7（门禁 G-01）：不再是无限制透明代理，转发的每个方法 + 路径都要过
+	// isAllowedMicroserviceProxyPath 默认拒绝白名单，原始记录/样本端点禁止出域。
 	r.Any("/api/hub/*path", s.ProxyHub)
 	r.Any("/api/datasource/*path", s.ProxyDatasource)
 	r.Any("/api/audit/*path", s.ProxyAudit)
@@ -1608,8 +1610,237 @@ func splitHosts(s string) []string {
 	return out
 }
 
+// ── P0-7 / 门禁 G-01：中台透明代理「方法 + 路径」白名单 ──────────────────────
+//
+// /api/hub、/api/datasource、/api/audit 三个透明代理历史上把**任意方法 + 任意
+// 路径**原样转发给中台微服务，浏览器客户端可借此直达 datasource-mgr 的未脱敏
+// 记录端点（/api/datasources/:id/records、/sample）与原始领域 API
+// （/api/v1/yibao、/api/v1/kangyang、/api/v1/mock3、/api/v1/mock4），
+// 既不经 engine 脱敏漏斗、也不产生任何存证 —— 与「原始数据不出域」直接冲突。
+//
+// 下列白名单为**默认拒绝**：仅放行控制台确实需要的只读元数据 / 探查 / 统计与
+// 任务调度端点，其余一律 403 FORBIDDEN_PATH。白名单不提供关闭开关。
+
+// proxyRule 白名单条目。
+//   - method：HTTP 方法，大小写不敏感；
+//   - pattern：上游路径模式，其中 "*" 作为独立路径段时匹配**恰好一个**非空段
+//     （如 /api/datasources/*/metadata）。因此不存在前缀放大效应：
+//     /api/datasources/* 永远不会匹配 /api/datasources/ds_yibao/records。
+type proxyRule struct {
+	method  string
+	pattern string
+}
+
+// proxyHealthRules 三个中台服务共用的存活/就绪探针白名单。
+var proxyHealthRules = []proxyRule{
+	{method: http.MethodGet, pattern: "/health"},
+	{method: http.MethodGet, pattern: "/readyz"},
+	{method: http.MethodGet, pattern: "/api/health"},
+}
+
+// microserviceProxyAllowlist 按代理目标（hub / datasource / audit）列出放行规则。
+// 未列出的路径、方法或目标服务一律拒绝。
+var microserviceProxyAllowlist = map[string][]proxyRule{
+	// service-hub：流水线调度与任务遥测
+	"hub": append(append([]proxyRule{}, proxyHealthRules...),
+		proxyRule{method: http.MethodGet, pattern: "/api/hub/status"},
+		proxyRule{method: http.MethodGet, pattern: "/api/hub/tasks"},
+		proxyRule{method: http.MethodGet, pattern: "/api/hub/tasks/*"},
+		proxyRule{method: http.MethodGet, pattern: "/api/hub/pipeline"},
+		proxyRule{method: http.MethodPost, pattern: "/api/hub/dispatch"},
+		proxyRule{method: http.MethodPost, pattern: "/api/hub/classify"},
+	),
+	// datasource-mgr：仅数据源目录与 Schema 元数据；
+	// /records、/sample、/api/v1/* 原始领域 API 与 seed 写接口**禁止**经 BFF 出域。
+	"datasource": append(append([]proxyRule{}, proxyHealthRules...),
+		proxyRule{method: http.MethodGet, pattern: "/api/datasources"},
+		proxyRule{method: http.MethodGet, pattern: "/api/datasources/*"},
+		proxyRule{method: http.MethodGet, pattern: "/api/datasources/*/metadata"},
+		proxyRule{method: http.MethodGet, pattern: "/api/datasources/*/audit"},
+		proxyRule{method: http.MethodPost, pattern: "/api/datasources/*/test"},
+	),
+	// audit-log：存证查询、统计与哈希链验真（治理巡检必需）
+	"audit": append(append([]proxyRule{}, proxyHealthRules...),
+		proxyRule{method: http.MethodGet, pattern: "/api/audit/logs"},
+		proxyRule{method: http.MethodGet, pattern: "/api/audit/logs/*"},
+		proxyRule{method: http.MethodPost, pattern: "/api/audit/logs"},
+		proxyRule{method: http.MethodGet, pattern: "/api/audit/stats"},
+		proxyRule{method: http.MethodGet, pattern: "/api/audit/snapshots"},
+		proxyRule{method: http.MethodPost, pattern: "/api/audit/snapshots/verify"},
+		proxyRule{method: http.MethodGet, pattern: "/api/audit/chain/verify"},
+		proxyRule{method: http.MethodPost, pattern: "/api/audit/chain/verify"},
+		proxyRule{method: http.MethodPost, pattern: "/api/audit/report"},
+	),
+}
+
+// proxyDenyPathPrefixes 黑名单前缀：/api/v1/* 是 datasource-mgr 的原始领域数据 API，
+// 即使后续白名单被放宽也必须拒绝。
+var proxyDenyPathPrefixes = []string{"/api/v1/", "/debug/", "/internal/", "/metrics"}
+
+// proxyDenyPathSegments 黑名单尾段：原始记录 / 样本导出端点的统一形态，
+// 作为白名单之外的第二道硬拦截（P0-7 验收口径显式点名）。
+var proxyDenyPathSegments = []string{"records", "sample", "raw"}
+
+// proxyEncodedTraversalMarkers 百分号编码混淆特征（%2e=.、%2f=/、%5c=\、%00=NUL、
+// %25=%，用于识别双重编码绕过）。
+var proxyEncodedTraversalMarkers = []string{"%2e", "%2f", "%5c", "%00", "%25"}
+
+// isAllowedMicroserviceProxyPath 校验「代理目标 + HTTP 方法 + 上游路径」是否命中白名单。
+// upstreamPath 必须是已经 path.Clean 规范化、且已剥离 BFF 路由前缀的上游路径。
+// 采用默认拒绝：目标未知、路径为空、命中黑名单或不在白名单内均返回 false。
+func isAllowedMicroserviceProxyPath(service, method, upstreamPath string) bool {
+	if !strings.HasPrefix(upstreamPath, "/") {
+		return false
+	}
+	cleaned := path.Clean(upstreamPath)
+	if cleaned == "/" {
+		return false
+	}
+	for _, denied := range proxyDenyPathPrefixes {
+		if strings.HasPrefix(cleaned, denied) {
+			return false
+		}
+	}
+	if last := cleaned[strings.LastIndex(cleaned, "/")+1:]; last != "" {
+		for _, denied := range proxyDenyPathSegments {
+			if strings.EqualFold(last, denied) {
+				return false
+			}
+		}
+	}
+	rules, ok := microserviceProxyAllowlist[service]
+	if !ok {
+		return false
+	}
+	for _, rule := range rules {
+		if !strings.EqualFold(rule.method, method) {
+			continue
+		}
+		if matchProxyPathPattern(rule.pattern, cleaned) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchProxyPathPattern 按路径段逐个比对，"*" 匹配恰好一个非空段。
+func matchProxyPathPattern(pattern, cleanedPath string) bool {
+	if pattern == cleanedPath {
+		return true
+	}
+	ruleSegs := strings.Split(pattern, "/")
+	pathSegs := strings.Split(cleanedPath, "/")
+	if len(ruleSegs) != len(pathSegs) {
+		return false
+	}
+	for i := range ruleSegs {
+		if ruleSegs[i] == "*" {
+			// "*" 不接受空段，避免 // 或尾斜杠被当作通配命中
+			if pathSegs[i] == "" {
+				return false
+			}
+			continue
+		}
+		if ruleSegs[i] != pathSegs[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// rewriteProxyRequestPath 由入站 URL 还原上游路径，并识别编码穿越。
+// 返回 ok=false 表示路径不可解析、含 %2e%2e 之类编码穿越，或试图用 ".."
+// 逃出自身前缀（如 /api/datasource/../audit/logs）——调用方必须拒绝。
+func rewriteProxyRequestPath(u *url.URL, prefix string) (string, bool) {
+	if u == nil || !strings.HasPrefix(u.Path, "/") {
+		return "", false
+	}
+	if hasEncodedTraversal(u) {
+		return "", false
+	}
+	// 先 Clean 再校验前缀：保证 ".." 无法把请求抬到 /api/{service} 之外
+	cleaned := path.Clean(u.Path)
+	if cleaned != prefix && !strings.HasPrefix(cleaned, prefix+"/") {
+		// 覆盖两类越权：/api/datasource/../audit/...（抬出自身前缀）
+		// 与 /api/datasourceX/...（前缀命中但不是段边界）
+		return "", false
+	}
+	upstream := strings.TrimPrefix(cleaned, prefix)
+	if upstream == "" {
+		// /api/{service} 自身不是合法上游路径（Clean 已消除尾斜杠）
+		return "", false
+	}
+	return path.Clean(upstream), true
+}
+
+// hasEncodedTraversal 检测原始编码形态中的穿越与分隔符混淆（含双重编码）。
+func hasEncodedTraversal(u *url.URL) bool {
+	// EscapedPath() 返回未解码的原始形态；无 RawPath 时与 Path 等价
+	escaped := strings.ToLower(u.EscapedPath())
+	if escaped == "" {
+		escaped = strings.ToLower(u.Path)
+	}
+	for _, marker := range proxyEncodedTraversalMarkers {
+		if strings.Contains(escaped, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// logMicroserviceProxyCall 为每一次代理调用（放行与拒绝皆包括）输出结构化审计日志。
+// P0-7：封堵旁路后，任何经 BFF 出域的中台调用都必须留痕可查。
+func (s *Server) logMicroserviceProxyCall(c *gin.Context, service, method, upstreamPath string, denied bool) {
+	logger := s.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	level := slog.LevelInfo
+	if denied {
+		level = slog.LevelWarn
+	}
+	logger.Log(c.Request.Context(), level, "microservice_proxy_call",
+		"proxy_target", service,
+		"method", method,
+		"upstream_path", upstreamPath,
+		"denied", denied,
+		"caller", proxyCallerIdentity(c),
+		"request_id", middleware.GetTraceID(c),
+	)
+}
+
+// proxyCallerIdentity 复用 BFF 已有的身份线索（控制台 API Key 主体 + 客户端 IP），
+// 不引入新的鉴权机制；未携带 Bearer 凭据时 subject 记为 anonymous。
+func proxyCallerIdentity(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return "subject=unknown;ip=unknown"
+	}
+	subject := "anonymous"
+	if extractBearer(c.GetHeader("Authorization")) != "" {
+		subject = "console-api-key"
+	}
+	ip := c.ClientIP()
+	if ip == "" {
+		ip = "unknown"
+	}
+	return "subject=" + subject + ";ip=" + ip
+}
+
+// displayProxyPath 供拒绝响应展示被拦截的路径：上游路径为空（入站路径本身不可
+// 解析 / 含编码穿越）时回退展示入站请求路径，便于运维定位具体请求。
+func displayProxyPath(c *gin.Context, upstream string) string {
+	if upstream != "" {
+		return upstream
+	}
+	if c != nil && c.Request != nil && c.Request.URL != nil {
+		return c.Request.URL.Path
+	}
+	return ""
+}
+
 // ProxyHub transparently forwards requests to service-hub.
 // The /api/hub prefix is stripped so the upstream sees its own route (e.g. /api/hub/tasks → /tasks).
+// 转发前经过 isAllowedMicroserviceProxyPath 方法 + 路径白名单校验（P0-7）。
 func (s *Server) ProxyHub(c *gin.Context) {
 	s.proxyMicroservice(c, "hub")
 }
@@ -1624,16 +1855,28 @@ func (s *Server) ProxyAudit(c *gin.Context) {
 	s.proxyMicroservice(c, "audit")
 }
 
-// proxyMicroservice performs a transparent HTTP proxy to a named Go microservice.
-// It strips the BFF route prefix, forwards method/query/body, and injects trace
-// and API Key headers using the shared microservices client.
+// proxyMicroservice performs a method+path allowlisted HTTP proxy to a named Go microservice.
+// It strips the BFF route prefix, validates the rewritten upstream path against the
+// deny-by-default allowlist (P0-7 / G-01), logs every call (allowed or denied), then
+// forwards method/query/body using the shared microservices client.
 func (s *Server) proxyMicroservice(c *gin.Context, service string) {
 	// Strip the leading /api/{service} prefix to reconstruct the upstream path.
+	// 规范化 + 前缀剥离 + 编码穿越检测一次完成。
 	prefix := "/api/" + service
-	path := strings.TrimPrefix(c.Request.URL.Path, prefix)
-	if path == "" {
-		path = "/"
+	upstream, ok := rewriteProxyRequestPath(c.Request.URL, prefix)
+
+	// P0-7 门禁 G-01：默认拒绝，仅放行白名单内的只读元数据/探查/统计与调度端点。
+	if ok {
+		ok = isAllowedMicroserviceProxyPath(service, c.Request.Method, upstream)
 	}
+	if !ok {
+		s.logMicroserviceProxyCall(c, service, c.Request.Method, upstream, true)
+		middleware.AbortWithError(c, http.StatusForbidden, "FORBIDDEN_PATH",
+			fmt.Sprintf("%s %s is not allowlisted for the %s proxy", c.Request.Method, displayProxyPath(c, upstream), service),
+			nil)
+		return
+	}
+	s.logMicroserviceProxyCall(c, service, c.Request.Method, upstream, false)
 
 	var body []byte
 	if c.Request.Body != nil {
@@ -1656,7 +1899,7 @@ func (s *Server) proxyMicroservice(c *gin.Context, service string) {
 		ctx,
 		service,
 		c.Request.Method,
-		path,
+		upstream,
 		c.Request.URL.Query(),
 		body,
 		c.Request.Header.Get("Content-Type"),
@@ -1665,7 +1908,7 @@ func (s *Server) proxyMicroservice(c *gin.Context, service string) {
 	if err != nil {
 		s.logger.Warn("microservice proxy failed",
 			"service", service,
-			"path", path,
+			"path", upstream,
 			"error", err.Error(),
 		)
 		middleware.AbortWithError(c, http.StatusBadGateway, "UPSTREAM_ERROR", fmt.Sprintf("%s unreachable", service), err.Error())

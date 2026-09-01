@@ -14,9 +14,10 @@ import (
 	"github.com/fengzhizi319/PrivShield/pkg/metrics"
 )
 
-// TestMicroserviceProxy_Routes verifies that /api/hub, /api/datasource and
-// /api/audit transparently proxy method, path, query and body to the upstream
-// Go microservices and inject X-Request-ID / X-Trace-ID / Authorization headers.
+// TestMicroserviceProxy_Routes verifies that the allowlisted routes under
+// /api/hub, /api/datasource and /api/audit proxy method, path, query and body
+// to the upstream Go microservices and inject X-Request-ID / X-Trace-ID /
+// Authorization headers.
 func TestMicroserviceProxy_Routes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -77,14 +78,14 @@ func TestMicroserviceProxy_Routes(t *testing.T) {
 	server.RegisterRoutes(router)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/hub/tasks?status=pending", nil)
+	req, _ := http.NewRequest("GET", "/api/hub/api/hub/tasks?status=pending", nil)
 	req.Header.Set("X-Request-ID", "req-123")
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("hub proxy status = %d, body = %s", w.Code, w.Body.String())
 	}
-	if gotHubPath != "/tasks" {
-		t.Errorf("hub upstream path = %q, want /tasks", gotHubPath)
+	if gotHubPath != "/api/hub/tasks" {
+		t.Errorf("hub upstream path = %q, want /api/hub/tasks", gotHubPath)
 	}
 	if gotHubHeaders.Get("X-Request-ID") != "req-123" {
 		t.Errorf("hub X-Request-ID = %q, want req-123", gotHubHeaders.Get("X-Request-ID"))
@@ -97,28 +98,28 @@ func TestMicroserviceProxy_Routes(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("GET", "/api/datasource/datasources", nil)
+	req, _ = http.NewRequest("GET", "/api/datasource/api/datasources", nil)
 	req.Header.Set("X-Request-ID", "req-456")
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("datasource proxy status = %d, body = %s", w.Code, w.Body.String())
 	}
-	if gotDSPath != "/datasources" {
-		t.Errorf("datasource upstream path = %q, want /datasources", gotDSPath)
+	if gotDSPath != "/api/datasources" {
+		t.Errorf("datasource upstream path = %q, want /api/datasources", gotDSPath)
 	}
 	if gotDSHeaders.Get("Authorization") != "Bearer ds-key" {
 		t.Errorf("datasource Authorization = %q, want Bearer ds-key", gotDSHeaders.Get("Authorization"))
 	}
 
 	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("POST", "/api/audit/logs", nil)
+	req, _ = http.NewRequest("POST", "/api/audit/api/audit/logs", nil)
 	req.Header.Set("X-Request-ID", "req-789")
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("audit proxy status = %d, body = %s", w.Code, w.Body.String())
 	}
-	if gotAuditPath != "/logs" {
-		t.Errorf("audit upstream path = %q, want /logs", gotAuditPath)
+	if gotAuditPath != "/api/audit/logs" {
+		t.Errorf("audit upstream path = %q, want /api/audit/logs", gotAuditPath)
 	}
 	if gotAuditHeaders.Get("Authorization") != "Bearer audit-key" {
 		t.Errorf("audit Authorization = %q, want Bearer audit-key", gotAuditHeaders.Get("Authorization"))
@@ -152,7 +153,7 @@ func TestMicroserviceProxy_Body(t *testing.T) {
 
 	body := `{"source":"test","operation":"mask"}`
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/hub/dispatch?priority=1", nil)
+	req, _ := http.NewRequest("POST", "/api/hub/api/hub/dispatch?priority=1", nil)
 	req.Body = io.NopCloser(strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)

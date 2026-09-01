@@ -1,8 +1,12 @@
 package config
 
 import (
+	"errors"
 	"os"
+	"strings"
 	"testing"
+
+	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
 )
 
 func TestConfigDefaults(t *testing.T) {
@@ -93,4 +97,119 @@ func TestConfigCustomEnv(t *testing.T) {
 	if len(urls) != 2 || urls[0] != "http://agent1:8079" {
 		t.Errorf("custom AgentBaseURLs() mismatch: %v", urls)
 	}
+}
+
+func TestFailClosedDefaults(t *testing.T) {
+	t.Setenv("AUDIT_LOG_RETENTION_DAYS", "")
+	t.Setenv("AUDIT_LOG_STRICT_STORAGE", "")
+	t.Setenv("STRICT_STORAGE", "")
+
+	cfg := Load()
+	if cfg.RetentionDays != 0 {
+		t.Fatalf("retention must default to 0 (never delete evidence), got %d", cfg.RetentionDays)
+	}
+	if !cfg.StrictStorage {
+		t.Fatal("strict storage must default to true (no silent fallback to memory)")
+	}
+	// 默认监听 127.0.0.1 的本地形态允许无密钥启动。
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("loopback default config must validate, got %v", err)
+	}
+}
+
+func TestFailClosedRejections(t *testing.T) {
+	t.Run("remote bind requires api key", func(t *testing.T) {
+		cfg := Load()
+		cfg.Host, cfg.GRPCHost = "0.0.0.0", "0.0.0.0"
+		cfg.APIKey, cfg.EncryptionKey = "", ""
+		if err := cfg.Validate(); !errors.Is(err, pkgconfig.ErrAPIKeyRequired) {
+			t.Fatalf("expected ErrAPIKeyRequired, got %v", err)
+		}
+	})
+
+	t.Run("remote bind requires encryption key", func(t *testing.T) {
+		cfg := Load()
+		cfg.Host, cfg.GRPCHost = "0.0.0.0", "0.0.0.0"
+		cfg.APIKey, cfg.EncryptionKey = "key", ""
+		if err := cfg.Validate(); !errors.Is(err, pkgconfig.ErrEncryptionKeyRequired) {
+			t.Fatalf("expected ErrEncryptionKeyRequired, got %v", err)
+		}
+	})
+
+	t.Run("grpc tls requires cn whitelist", func(t *testing.T) {
+		cfg := Load()
+		cfg.APIKey, cfg.EncryptionKey = "key", "enc-key"
+		cfg.TLSEnabled = true
+		cfg.TLSCertFile, cfg.TLSKeyFile = writeTempPEM(t), writeTempPEM(t)
+		cfg.MTLSWhitelistFile = ""
+		if err := cfg.Validate(); !errors.Is(err, pkgconfig.ErrMTLSWhitelistRequired) {
+			t.Fatalf("expected ErrMTLSWhitelistRequired, got %v", err)
+		}
+	})
+
+	t.Run("require tls without tls aborts", func(t *testing.T) {
+		cfg := Load()
+		cfg.APIKey, cfg.EncryptionKey = "key", "enc-key"
+		cfg.RequireTLS, cfg.TLSEnabled = true, false
+		if err := cfg.Validate(); !errors.Is(err, pkgconfig.ErrTLSRequired) {
+			t.Fatalf("expected ErrTLSRequired, got %v", err)
+		}
+	})
+
+	t.Run("retention below three-year floor aborts", func(t *testing.T) {
+		cfg := Load()
+		cfg.APIKey, cfg.EncryptionKey = "key", "enc-key"
+		cfg.RetentionDays = 90
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "1095") {
+			t.Fatalf("expected retention floor error, got %v", err)
+		}
+		cfg.RetentionDays = 1095
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("1095-day retention must validate, got %v", err)
+		}
+		cfg.RetentionDays, cfg.ArchiveDir = 1095, ""
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ARCHIVE_DIR") {
+			t.Fatalf("expected archive-dir error when deleting, got %v", err)
+		}
+	})
+}
+
+// TestReaderAPIKeyIsLoaded 只读核验员 Key 的编排变量名必须有对应读取点（P2-1 门禁的正向断言）。
+func TestReaderAPIKeyIsLoaded(t *testing.T) {
+	t.Setenv("AUDIT_LOG_READER_API_KEY", "reader-key")
+	if got := Load().ReaderAPIKey; got != "reader-key" {
+		t.Fatalf("ReaderAPIKey = %q, want %q", got, "reader-key")
+	}
+}
+
+// TestReaderKeyMustDifferFromWriteKey 两把 Key 相同等于没做权责分离（白名单形同虚设），
+// 必须拒绝启动而不是静默降级；为空表示显式不启用该角色，保持存量行为。
+func TestReaderKeyMustDifferFromWriteKey(t *testing.T) {
+	cfg := Load()
+	cfg.Host, cfg.GRPCHost = "127.0.0.1", "127.0.0.1"
+	cfg.APIKey, cfg.ReaderAPIKey = "same-key", "same-key"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "READER_API_KEY") {
+		t.Fatalf("expected reader-key rejection, got %v", err)
+	}
+	cfg.ReaderAPIKey = "reader-key"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("distinct reader key must validate, got %v", err)
+	}
+	cfg.ReaderAPIKey = ""
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("empty reader key (role disabled) must validate, got %v", err)
+	}
+}
+
+func writeTempPEM(t *testing.T) string {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "pem-*.crt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString("placeholder"); err != nil {
+		t.Fatal(err)
+	}
+	return f.Name()
 }

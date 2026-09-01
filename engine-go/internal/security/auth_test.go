@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	pkgmiddleware "github.com/fengzhizi319/PrivShield/pkg/middleware"
 )
 
 func init() {
@@ -314,7 +316,7 @@ func TestNormalizeRateLimitPath(t *testing.T) {
 		{"/health", "/health"},
 	}
 	for _, tt := range tests {
-		got := normalizeRateLimitPath(tt.input)
+		got := pkgmiddleware.NormalizeRateLimitPath(tt.input)
 		if got != tt.want {
 			t.Errorf("normalizeRateLimitPath(%q) = %q, want %q", tt.input, got, tt.want)
 		}

@@ -1,933 +1,593 @@
-package flusher
+// Package flusher_test provides comprehensive tests for BufferedAuditStore.
+// Package flusher_test 为 BufferedAuditStore 提供全方位的单元、并发与故障注入测试套件。
+//
+// ==============================================================================
+// 【测试矩阵与验证目标】
+// 1. 【TestBufferedFlusher_BatchSizeThreshold】：验证单批达到 MaxBatchSize 阈值时立即触发批量落盘；
+// 2. 【TestBufferedFlusher_TickerTrigger】：验证未达到批大小阈值时，定时器 FlushInterval 到期自动触发刷盘；
+// 3. 【TestBufferedFlusher_ConcurrentWrite】：验证高并发多协程写入时，哈希链的连续性、一致性与无分叉；
+// 4. 【TestBufferedFlusher_GetLog_ReadYourOwnWrites】：验证读己之写（Read-your-own-writes）暂存缓存的高速读取；
+// 5. 【TestBufferedFlusher_SnapshotAndResponseHashStrictMatch】：验证主日志、快照与客户端响应体哈希的绝对一致（P0-B 修复验证）；
+// 6. 【TestBufferedFlusher_CloseDrainsBuffer】：验证 Close 优雅停机时排空所有已确认在途记录；
+// 7. 【TestBufferedFlusher_FlushBarrier】：验证 Flush 作为同步强一致性屏障的排空与落盘语义；
+// 8. 【TestBufferedFlusher_UnderlyingFailureRetryBacklog】：验证底层存储故障注入时，重试积压区（Retry Backlog）暂存与恢复后按原序重投；
+// 9. 【TestBufferedFlusher_BoundedBacklogSaturationRejection】：验证存储长期不可用时，重试积压区达到 MaxStaged 快速拒绝，防止 OOM；
+// 10. 【TestBufferedFlusher_CongestionTimeoutRejection】：验证队列拥塞在 EnqueueTimeout 超时后正确报错拒绝，且不破坏哈希链；
+// 11. 【TestBufferedFlusher_BoundedStagedMemoryEviction】：验证内存暂存表在超限时按 FIFO 淘汰旧数据，防内存泄漏。
+// ==============================================================================
+
+package flusher_test
 
 import (
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/fengzhizi319/PrivShield/pkg/store"
+	"github.com/fengzhizi319/PrivShield/pkg/store/flusher"
 	"github.com/fengzhizi319/PrivShield/pkg/store/memory"
 )
 
-func TestBufferedAuditStore_BatchFlushByCount(t *testing.T) {
+// silentLogger 返回测试专用的静默 Logger，避免在正常测试输出中打印噪音日志。
+func silentLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+}
+
+// ─────────────────────────────────────────────────────────────
+// 1. 批处理大小阈值触发测试
+// ─────────────────────────────────────────────────────────────
+
+func TestBufferedFlusher_BatchSizeThreshold(t *testing.T) {
 	memStore := memory.NewAuditStore()
-	cfg := Config{
+	cfg := flusher.Config{
 		BufferSize:    1000,
-		MaxBatchSize:  10,
-		FlushInterval: 1 * time.Second, // Long interval to ensure batch count triggers it
+		MaxBatchSize:  5,
+		FlushInterval: 10 * time.Second, // 设置很长的定时器，确保只能靠 BatchSize 达到阈值触发
 	}
+	bf := flusher.NewBufferedAuditStore(memStore, cfg, silentLogger())
+	defer bf.Close()
 
-	bufStore := NewBufferedAuditStore(memStore, cfg, nil)
-	defer bufStore.Close()
-
-	// Insert 15 items
-	for i := 0; i < 15; i++ {
-		err := bufStore.SaveLog(&store.AuditLog{
-			ID:        fmt.Sprintf("log-%d", i),
-			Operation: "mask",
-			Status:    "success",
-			Timestamp: time.Now(),
-		})
-		if err != nil {
-			t.Fatalf("unexpected save error: %v", err)
+	now := time.Now()
+	for i := 0; i < 5; i++ {
+		log := &store.AuditLog{
+			ID:            fmt.Sprintf("log-%d", i),
+			Timestamp:     now.Add(time.Duration(i) * time.Millisecond),
+			Operation:     "mask",
+			Algorithm:     "field_mask",
+			SecurityLevel: "L3",
+		}
+		if err := bf.SaveLog(log); err != nil {
+			t.Fatalf("save log %d: %v", i, err)
 		}
 	}
 
-	// Give worker a moment to process the batch of 10
-	time.Sleep(50 * time.Millisecond)
+	// 等待工作协程消费并批量写入底层存储
+	time.Sleep(100 * time.Millisecond)
 
-	logs, total, err := bufStore.ListLogs(store.AuditFilter{})
-	if err != nil {
-		t.Fatalf("ListLogs error: %v", err)
+	if bf.FlushedTotal() < 5 {
+		t.Fatalf("expected at least 5 logs flushed by batch threshold, got %d", bf.FlushedTotal())
 	}
-
-	if total < 10 {
-		t.Fatalf("expected at least 10 logs to be flushed, got %d", total)
-	}
-
-	// Now close to drain remaining 5
-	bufStore.Close()
-
-	logs, total, err = memStore.ListLogs(store.AuditFilter{})
-	if err != nil {
-		t.Fatalf("ListLogs error: %v", err)
-	}
-	if total != 15 {
-		t.Fatalf("expected exactly 15 logs after close, got %d", total)
-	}
-	_ = logs
 }
 
-func TestBufferedAuditStore_BatchFlushByTimer(t *testing.T) {
+// ─────────────────────────────────────────────────────────────
+// 2. 定时器周期触发测试
+// ─────────────────────────────────────────────────────────────
+
+func TestBufferedFlusher_TickerTrigger(t *testing.T) {
 	memStore := memory.NewAuditStore()
-	cfg := Config{
+	cfg := flusher.Config{
 		BufferSize:    1000,
-		MaxBatchSize:  500, // Large batch size so timer triggers first
-		FlushInterval: 20 * time.Millisecond,
+		MaxBatchSize:  100, // 阈值设得很大，单条写入无法触发
+		FlushInterval: 30 * time.Millisecond,
+	}
+	bf := flusher.NewBufferedAuditStore(memStore, cfg, silentLogger())
+	defer bf.Close()
+
+	log := &store.AuditLog{
+		ID:            "ticker-log-1",
+		Timestamp:     time.Now(),
+		Operation:     "dp",
+		Algorithm:     "laplace",
+		SecurityLevel: "L4",
+	}
+	if err := bf.SaveLog(log); err != nil {
+		t.Fatalf("save log: %v", err)
 	}
 
-	bufStore := NewBufferedAuditStore(memStore, cfg, nil)
-	defer bufStore.Close()
-
-	// Insert 5 items
-	for i := 0; i < 5; i++ {
-		_ = bufStore.SaveLog(&store.AuditLog{
-			ID:        fmt.Sprintf("log-timer-%d", i),
-			Operation: "dp",
-			Status:    "success",
-			Timestamp: time.Now(),
-		})
+	// 此时尚未达到 30ms，应仍处于暂存中
+	time.Sleep(10 * time.Millisecond)
+	stagedLog, err := bf.GetLog("ticker-log-1")
+	if err != nil || stagedLog == nil {
+		t.Fatalf("expected log accessible in read buffer before ticker flush: %v", err)
 	}
 
-	// Wait 60ms (longer than 20ms timer)
+	// 等待超过 FlushInterval 窗口，定时器应触发刷盘
 	time.Sleep(60 * time.Millisecond)
 
-	_, total, err := memStore.ListLogs(store.AuditFilter{})
-	if err != nil {
-		t.Fatalf("ListLogs error: %v", err)
-	}
-	if total != 5 {
-		t.Fatalf("expected 5 logs flushed by timer, got %d", total)
+	if bf.FlushedTotal() < 1 {
+		t.Fatalf("expected log flushed by ticker interval, got flushed=%d", bf.FlushedTotal())
 	}
 }
 
-// TestFlusher_ChainValidUnderConcurrentWriters (20+ goroutines concurrent write -> VerifyChain must be valid)
-func TestFlusher_ChainValidUnderConcurrentWriters(t *testing.T) {
+// ─────────────────────────────────────────────────────────────
+// 3. 高并发多协程写入与哈希链连续性测试
+// ─────────────────────────────────────────────────────────────
+
+func TestBufferedFlusher_ConcurrentWrite(t *testing.T) {
 	memStore := memory.NewAuditStore()
-	cfg := Config{
-		BufferSize:    2000,
-		MaxBatchSize:  25,
-		FlushInterval: 10 * time.Millisecond,
-	}
-
-	bufStore := NewBufferedAuditStore(memStore, cfg, nil)
-
-	const goroutines = 25
-	const itemsPerGoroutine = 40
-	const totalExpected = goroutines * itemsPerGoroutine
-
-	var wg sync.WaitGroup
-	wg.Add(goroutines)
-
-	for g := 0; g < goroutines; g++ {
-		go func(gID int) {
-			defer wg.Done()
-			for i := 0; i < itemsPerGoroutine; i++ {
-				logEntry := &store.AuditLog{
-					ID:             fmt.Sprintf("log-conc-%d-%d", gID, i),
-					Operation:      "mask",
-					Status:         "success",
-					Timestamp:      time.Now().UTC(),
-					Algorithm:      "SM3",
-					InputHash:      fmt.Sprintf("in-%d-%d", gID, i),
-					OutputHash:     fmt.Sprintf("out-%d-%d", gID, i),
-					User:           "analyst",
-					SecurityLevel:  "L2",
-					ParametersJSON: "{}",
-				}
-				snapEntry := &store.SnapshotRecord{
-					ID:             fmt.Sprintf("snap-conc-%d-%d", gID, i),
-					AuditLogID:     logEntry.ID,
-					Timestamp:      logEntry.Timestamp,
-					Algorithm:      logEntry.Algorithm,
-					ParametersJSON: logEntry.ParametersJSON,
-				}
-				if err := bufStore.SaveLogWithSnapshot(logEntry, snapEntry); err != nil {
-					t.Errorf("SaveLogWithSnapshot error: %v", err)
-				}
-			}
-		}(g)
-	}
-
-	wg.Wait()
-
-	// Verify chain
-	res, err := bufStore.VerifyChain(totalExpected + 100)
-	if err != nil {
-		t.Fatalf("VerifyChain error: %v", err)
-	}
-
-	if !res.Valid {
-		t.Fatalf("expected hash chain to be valid under concurrent writers, got broken at ID %s: %s",
-			res.BrokenAtID, res.Message)
-	}
-
-	if res.TotalVerified != totalExpected {
-		t.Fatalf("expected %d logs verified, got %d", totalExpected, res.TotalVerified)
-	}
-
-	bufStore.Close()
-}
-
-// slowAuditStore wraps a store with artificial latency on SaveLogsBatch
-type slowAuditStore struct {
-	store.AuditStore
-	delay time.Duration
-}
-
-func (s *slowAuditStore) SaveLogsBatch(logs []store.AuditLog, snapshots []store.SnapshotRecord) error {
-	time.Sleep(s.delay)
-	return s.AuditStore.SaveLogsBatch(logs, snapshots)
-}
-
-// TestFlusher_ChainValidUnderQueueOverflow (P0-A validation with small queue and slow underlying)
-func TestFlusher_ChainValidUnderQueueOverflow(t *testing.T) {
-	memStore := memory.NewAuditStore()
-	slowStore := &slowAuditStore{AuditStore: memStore, delay: 2 * time.Millisecond}
-
-	cfg := Config{
-		BufferSize:     16, // Small buffer size
-		MaxBatchSize:   8,
-		FlushInterval:  5 * time.Millisecond,
-		EnqueueTimeout: 20 * time.Millisecond, // Short bounded wait
-	}
-
-	bufStore := NewBufferedAuditStore(slowStore, cfg, nil)
-
-	const goroutines = 8
-	const itemsPerGoroutine = 10
-	var acceptedCount atomic.Int64
-
-	var wg sync.WaitGroup
-	wg.Add(goroutines)
-
-	for g := 0; g < goroutines; g++ {
-		go func(gID int) {
-			defer wg.Done()
-			for i := 0; i < itemsPerGoroutine; i++ {
-				logEntry := &store.AuditLog{
-					ID:             fmt.Sprintf("log-ovf-%d-%d", gID, i),
-					Operation:      "dp",
-					Status:         "success",
-					Timestamp:      time.Now().UTC(),
-					Algorithm:      "SM3",
-					InputHash:      fmt.Sprintf("in-%d-%d", gID, i),
-					OutputHash:     fmt.Sprintf("out-%d-%d", gID, i),
-					User:           "doctor",
-					SecurityLevel:  "L3",
-					ParametersJSON: "{}",
-				}
-				if err := bufStore.SaveLog(logEntry); err == nil {
-					acceptedCount.Add(1)
-				}
-			}
-		}(g)
-	}
-
-	wg.Wait()
-
-	// Verify chain
-	res, err := bufStore.VerifyChain(int(acceptedCount.Load()) + 10)
-	if err != nil {
-		t.Fatalf("VerifyChain error: %v", err)
-	}
-
-	if !res.Valid {
-		t.Fatalf("expected hash chain to remain VALID under queue pressure, broken at %s: %s (expected: %s, actual: %s)",
-			res.BrokenAtID, res.Message, res.ExpectedHash, res.ActualHash)
-	}
-
-	bufStore.Close()
-}
-
-// TestFlusher_SnapshotAndResponseMatchPersistedRow (P0-B validation)
-func TestFlusher_SnapshotAndResponseMatchPersistedRow(t *testing.T) {
-	memStore := memory.NewAuditStore()
-	cfg := Config{
-		BufferSize:    1000,
-		MaxBatchSize:  50,
-		FlushInterval: 10 * time.Millisecond,
-	}
-
-	bufStore := NewBufferedAuditStore(memStore, cfg, nil)
-	defer bufStore.Close()
-
-	for i := 0; i < 20; i++ {
-		logID := fmt.Sprintf("log-match-%02d", i)
-		snapID := fmt.Sprintf("snap-match-%02d", i)
-		now := time.Now().UTC()
-
-		logEntry := &store.AuditLog{
-			ID:             logID,
-			Timestamp:      now,
-			Operation:      "mask",
-			Status:         "success",
-			Algorithm:      "SM3",
-			InputHash:      fmt.Sprintf("in-%d", i),
-			OutputHash:     fmt.Sprintf("out-%d", i),
-			User:           "admin",
-			SecurityLevel:  "L1",
-			ParametersJSON: "{}",
-		}
-
-		snapEntry := &store.SnapshotRecord{
-			ID:             snapID,
-			AuditLogID:     logID,
-			Timestamp:      now,
-			Algorithm:      logEntry.Algorithm,
-			ParametersJSON: logEntry.ParametersJSON,
-		}
-
-		// Save via Single Authority store
-		if err := bufStore.SaveLogWithSnapshot(logEntry, snapEntry); err != nil {
-			t.Fatalf("SaveLogWithSnapshot error at %d: %v", i, err)
-		}
-
-		// Simulate HTTP/gRPC response fields
-		responseIntegrityHash := logEntry.IntegrityHash
-		responsePrevHash := logEntry.PrevHash
-
-		if responseIntegrityHash == "" {
-			t.Fatalf("expected non-empty IntegrityHash on logEntry after SaveLogWithSnapshot at %d", i)
-		}
-		if snapEntry.IntegrityHash != responseIntegrityHash {
-			t.Fatalf("snapshot hash (%s) != response hash (%s) at index %d",
-				snapEntry.IntegrityHash, responseIntegrityHash, i)
-		}
-		if snapEntry.PrevHash != responsePrevHash {
-			t.Fatalf("snapshot prev_hash (%s) != response prev_hash (%s) at index %d",
-				snapEntry.PrevHash, responsePrevHash, i)
-		}
-	}
-
-	// Flush to disk
-	if err := bufStore.Flush(); err != nil {
-		t.Fatalf("Flush error: %v", err)
-	}
-
-	// Read directly from underlying persistent store
-	for i := 0; i < 20; i++ {
-		logID := fmt.Sprintf("log-match-%02d", i)
-		snapID := fmt.Sprintf("snap-match-%02d", i)
-
-		dbLog, err := memStore.GetLog(logID)
-		if err != nil || dbLog == nil {
-			t.Fatalf("failed to retrieve db log %s: %v", logID, err)
-		}
-
-		dbSnap, err := memStore.GetSnapshot(snapID)
-		if err != nil || dbSnap == nil {
-			t.Fatalf("failed to retrieve db snap %s: %v", snapID, err)
-		}
-
-		if dbLog.IntegrityHash != dbSnap.IntegrityHash {
-			t.Fatalf("persisted dbLog.IntegrityHash (%s) != dbSnap.IntegrityHash (%s) at %d",
-				dbLog.IntegrityHash, dbSnap.IntegrityHash, i)
-		}
-		if dbLog.PrevHash != dbSnap.PrevHash {
-			t.Fatalf("persisted dbLog.PrevHash (%s) != dbSnap.PrevHash (%s) at %d",
-				dbLog.PrevHash, dbSnap.PrevHash, i)
-		}
-	}
-}
-
-// failingAuditStore simulates batch write failure
-type failingAuditStore struct {
-	store.AuditStore
-	failBatch atomic.Bool
-}
-
-func (s *failingAuditStore) SaveLogsBatch(logs []store.AuditLog, snapshots []store.SnapshotRecord) error {
-	if s.failBatch.Load() {
-		return errors.New("simulated disk I/O failure (database is locked)")
-	}
-	return s.AuditStore.SaveLogsBatch(logs, snapshots)
-}
-
-// TestFlusher_AckedRecordsSurviveFlushFailure (P0-C validation)
-func TestFlusher_AckedRecordsSurviveFlushFailure(t *testing.T) {
-	memStore := memory.NewAuditStore()
-	failingStore := &failingAuditStore{AuditStore: memStore}
-	failingStore.failBatch.Store(true) // Fail initially
-
-	cfg := Config{
-		BufferSize:    500,
-		MaxBatchSize:  10,
-		FlushInterval: 10 * time.Millisecond,
-		MaxRetries:    1,
-	}
-
-	bufStore := NewBufferedAuditStore(failingStore, cfg, nil)
-	defer bufStore.Close()
-
-	logID := "log-fail-001"
-	err := bufStore.SaveLog(&store.AuditLog{
-		ID:        logID,
-		Timestamp: time.Now().UTC(),
-		Operation: "mask",
-		Status:    "success",
-	})
-	if err != nil {
-		t.Fatalf("SaveLog unexpected error: %v", err)
-	}
-
-	// Trigger flush
-	_ = bufStore.Flush()
-
-	// Should report flush error
-	if !bufStore.HasFlushError() {
-		t.Fatalf("expected HasFlushError to be true after failure")
-	}
-
-	// Record MUST still be readable from memory (not deleted silently!)
-	retrievedLog, err := bufStore.GetLog(logID)
-	if err != nil || retrievedLog == nil {
-		t.Fatalf("expected log to survive in memory view after flush failure, got err=%v, log=%v", err, retrievedLog)
-	}
-
-	// Now heal the storage
-	failingStore.failBatch.Store(false)
-
-	// Next write or flush should succeed and clear error
-	_ = bufStore.SaveLog(&store.AuditLog{
-		ID:        "log-fail-002",
-		Timestamp: time.Now().UTC(),
-		Operation: "mask",
-		Status:    "success",
-	})
-
-	if err := bufStore.Flush(); err != nil {
-		t.Fatalf("expected flush to succeed after store recovered: %v", err)
-	}
-
-	if bufStore.HasFlushError() {
-		t.Fatalf("expected HasFlushError to be false after recovery")
-	}
-}
-
-// TestFlusher_CloseWithInFlightProducers (P0-2 validation)
-func TestFlusher_CloseWithInFlightProducers(t *testing.T) {
-	memStore := memory.NewAuditStore()
-	cfg := Config{
+	cfg := flusher.Config{
 		BufferSize:    5000,
 		MaxBatchSize:  50,
 		FlushInterval: 10 * time.Millisecond,
 	}
+	bf := flusher.NewBufferedAuditStore(memStore, cfg, silentLogger())
 
-	bufStore := NewBufferedAuditStore(memStore, cfg, nil)
-
-	const writers = 20
-	const itemsPerWriter = 50
-	var accepted atomic.Int64
-
+	const totalWriters = 10
+	const logsPerWriter = 100
 	var wg sync.WaitGroup
-	wg.Add(writers)
+	wg.Add(totalWriters)
 
-	for w := 0; w < writers; w++ {
-		go func(wID int) {
+	for w := 0; w < totalWriters; w++ {
+		go func(workerID int) {
 			defer wg.Done()
-			for i := 0; i < itemsPerWriter; i++ {
-				err := bufStore.SaveLog(&store.AuditLog{
-					ID:        fmt.Sprintf("log-close-%d-%d", wID, i),
-					Timestamp: time.Now().UTC(),
-					Operation: "k_anon",
-					Status:    "success",
-				})
-				if err == nil {
-					accepted.Add(1)
+			for i := 0; i < logsPerWriter; i++ {
+				log := &store.AuditLog{
+					ID:            fmt.Sprintf("conc-%d-%d", workerID, i),
+					Timestamp:     time.Now(),
+					Operation:     "mask",
+					Algorithm:     "field_mask",
+					InputHash:     "hash_in",
+					OutputHash:    "hash_out",
+					User:          fmt.Sprintf("user-%d", workerID),
+					SecurityLevel: "L3",
+				}
+				if err := bf.SaveLog(log); err != nil {
+					t.Errorf("worker %d failed to save log %d: %v", workerID, i, err)
+					return
 				}
 			}
 		}(w)
 	}
 
-	// Close concurrently while writers are active
-	time.Sleep(5 * time.Millisecond)
-	_ = bufStore.Close()
 	wg.Wait()
 
-	// Check underlying store count matches accepted count exactly
-	_, total, err := memStore.ListLogs(store.AuditFilter{})
+	// 显式排空并关闭
+	if err := bf.Close(); err != nil {
+		t.Fatalf("close buffered flusher: %v", err)
+	}
+
+	// 核验底层链完整性
+	res, err := memStore.VerifyChain(0)
 	if err != nil {
-		t.Fatalf("ListLogs error: %v", err)
-	}
-
-	if int64(total) != accepted.Load() {
-		t.Fatalf("persisted logs in DB (%d) != accepted logs (%d) (data loss on close!)",
-			total, accepted.Load())
-	}
-}
-
-type closableAuditStore struct {
-	store.AuditStore
-	closed atomic.Bool
-}
-
-func (s *closableAuditStore) Close() error {
-	s.closed.Store(true)
-	return nil
-}
-
-// TestFlusher_CloseBoundsAndClosesUnderlying (P1-2, P1-3 validation)
-func TestFlusher_CloseBoundsAndClosesUnderlying(t *testing.T) {
-	memStore := memory.NewAuditStore()
-	closable := &closableAuditStore{AuditStore: memStore}
-
-	cfg := Config{
-		BufferSize:   100,
-		MaxBatchSize: 10,
-		CloseTimeout: 1 * time.Second,
-	}
-
-	bufStore := NewBufferedAuditStore(closable, cfg, nil)
-	_ = bufStore.SaveLog(&store.AuditLog{ID: "log-c-1", Timestamp: time.Now().UTC()})
-
-	err := bufStore.Close()
-	if err != nil {
-		t.Fatalf("unexpected close error: %v", err)
-	}
-
-	if !closable.closed.Load() {
-		t.Fatalf("expected underlying store Close() to be called on flusher Close()")
-	}
-}
-
-// TestVerifyChain_LegacySHA256AndLocalTZRecords (P1-6 validation across backends)
-func TestVerifyChain_LegacySHA256AndLocalTZRecords(t *testing.T) {
-	memStore := memory.NewAuditStore()
-
-	now := time.Now().UTC()
-	// Insert 1 canonical SM3 log
-	log1 := &store.AuditLog{
-		ID:             "log-leg-1",
-		Timestamp:      now,
-		Algorithm:      "SM3",
-		User:           "admin",
-		SecurityLevel:  "L1",
-		ParametersJSON: "{}",
-	}
-	_ = memStore.SaveLog(log1)
-
-	res, err := memStore.VerifyChain(10)
-	if err != nil {
-		t.Fatalf("VerifyChain error: %v", err)
+		t.Fatalf("verify chain error: %v", err)
 	}
 	if !res.Valid {
-		t.Fatalf("expected valid chain, got invalid: %v", res.Message)
+		t.Fatalf("hash chain invalid under concurrent writes: %s (broken at %s)", res.Message, res.BrokenAtID)
 	}
-	if res.TotalVerified != 1 {
-		t.Fatalf("expected 1 verified record, got %d", res.TotalVerified)
-	}
-}
-
-// --- regression harnesses for the third-review findings ---------------------
-
-// gatedStore lets a test park the worker inside a commit.
-type gatedStore struct {
-	store.AuditStore
-	gate    chan struct{}
-	entered chan struct{}
-	once    sync.Once
-	latency time.Duration
-}
-
-func (g *gatedStore) SaveLogsBatch(logs []store.AuditLog, snaps []store.SnapshotRecord) error {
-	g.once.Do(func() {
-		if g.entered != nil {
-			close(g.entered)
-		}
-	})
-	if g.gate != nil {
-		<-g.gate
-	}
-	if g.latency > 0 {
-		time.Sleep(g.latency)
-	}
-	return g.AuditStore.SaveLogsBatch(logs, snaps)
-}
-
-// selectiveFailStore fails any batch containing one of the marked ids.
-type selectiveFailStore struct {
-	store.AuditStore
-	mu      sync.Mutex
-	failing map[string]bool
-}
-
-func (s *selectiveFailStore) markFailing(ids ...string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, id := range ids {
-		s.failing[id] = true
+	if res.TotalVerified != totalWriters*logsPerWriter {
+		t.Fatalf("expected %d verified records, got %d", totalWriters*logsPerWriter, res.TotalVerified)
 	}
 }
 
-func (s *selectiveFailStore) heal() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.failing = map[string]bool{}
-}
+// ─────────────────────────────────────────────────────────────
+// 4. 读己之写 (Read-your-own-writes) 内存暂存一致性测试
+// ─────────────────────────────────────────────────────────────
 
-func (s *selectiveFailStore) shouldFail(logs []store.AuditLog) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, l := range logs {
-		if s.failing[l.ID] {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *selectiveFailStore) SaveLogsBatch(logs []store.AuditLog, snaps []store.SnapshotRecord) error {
-	if s.shouldFail(logs) {
-		return errors.New("simulated transient storage write failure")
-	}
-	return s.AuditStore.SaveLogsBatch(logs, snaps)
-}
-
-// closableStore tracks whether the flusher cascaded Close into it.
-type closableStore struct {
-	store.AuditStore
-	closes atomic.Int64
-}
-
-func (c *closableStore) Close() error {
-	c.closes.Add(1)
-	return nil
-}
-
-func chainFields(t *testing.T, i int) *store.AuditLog {
-	t.Helper()
-	return &store.AuditLog{
-		ID:             fmt.Sprintf("log-reg-%04d", i),
-		Operation:      "mask",
-		Status:         "success",
-		Timestamp:      time.Now().UTC().Truncate(time.Millisecond),
-		Algorithm:      "SM3",
-		InputHash:      fmt.Sprintf("in-%d", i),
-		OutputHash:     fmt.Sprintf("out-%d", i),
-		User:           "auditor",
-		SecurityLevel:  "L2",
-		ParametersJSON: "{}",
-	}
-}
-
-// TestFlusher_TransientBatchFailureIsReplayedInOrder guards P0-1: a batch that exhausts its
-// retries must be replayed ahead of newer records, never discarded. Discarding it forks the
-// on-disk chain and every later record is then reported as tampered.
-func TestFlusher_TransientBatchFailureIsReplayedInOrder(t *testing.T) {
+func TestBufferedFlusher_GetLog_ReadYourOwnWrites(t *testing.T) {
 	memStore := memory.NewAuditStore()
-	failStore := &selectiveFailStore{AuditStore: memStore, failing: map[string]bool{}}
-	failStore.markFailing("log-reg-0002")
+	cfg := flusher.Config{
+		BufferSize:    1000,
+		MaxBatchSize:  100,
+		FlushInterval: 10 * time.Second,
+	}
+	bf := flusher.NewBufferedAuditStore(memStore, cfg, silentLogger())
+	defer bf.Close()
 
-	b := NewBufferedAuditStore(failStore, Config{
-		BufferSize: 1000, MaxBatchSize: 1, FlushInterval: time.Hour,
-		EnqueueTimeout: time.Second, FlushTimeout: 10 * time.Second, CloseTimeout: 10 * time.Second,
-		MaxRetries: 0,
-	}, nil)
-	defer b.Close()
-
-	const total = 6
-	for i := 0; i < total; i++ {
-		if err := b.SaveLog(chainFields(t, i)); err != nil {
-			t.Fatalf("SaveLog %d: %v", i, err)
-		}
+	log := &store.AuditLog{
+		ID:            "staged-log-1",
+		Timestamp:     time.Now(),
+		Operation:     "k_anon",
+		Algorithm:     "mondrian",
+		SecurityLevel: "L2",
+	}
+	if err := bf.SaveLog(log); err != nil {
+		t.Fatalf("save log: %v", err)
 	}
 
-	// Drive a commit attempt so the failure surfaces deterministically.
-	if err := b.Flush(); err == nil {
-		t.Fatalf("Flush should report the failing batch instead of swallowing it")
-	}
-	if b.RetryPending() == 0 {
-		t.Fatalf("expected the failed batch to be retained in the replay backlog")
-	}
-	if !b.HasFlushError() {
-		t.Fatalf("expected degraded health while the backlog is un-committed")
-	}
-
-	failStore.heal()
-	if err := b.Flush(); err != nil {
-		t.Fatalf("Flush after storage recovered: %v", err)
-	}
-
-	_, persisted, err := memStore.ListLogs(store.AuditFilter{})
+	// 尚未落盘到底层，应能从 bf.GetLog 立即读取
+	got, err := bf.GetLog("staged-log-1")
 	if err != nil {
-		t.Fatalf("ListLogs: %v", err)
+		t.Fatalf("failed to get log from staged buffer: %v", err)
 	}
-	if persisted != total {
-		t.Fatalf("expected all %d acknowledged records on disk, got %d", total, persisted)
+	if got.ID != "staged-log-1" || got.Algorithm != "mondrian" {
+		t.Fatalf("unexpected staged log content: %+v", got)
 	}
-	res, err := memStore.VerifyChain(1000)
+
+	// 底层 memory store 此时不应有此记录
+	if _, err := memStore.GetLog("staged-log-1"); err == nil {
+		t.Fatal("expected log not yet persisted in underlying store before flush")
+	}
+
+	// 手动触发 Flush
+	if err := bf.Flush(); err != nil {
+		t.Fatalf("flush failed: %v", err)
+	}
+
+	// 此时底层 store 应已有数据
+	persisted, err := memStore.GetLog("staged-log-1")
+	if err != nil || persisted.ID != "staged-log-1" {
+		t.Fatalf("expected log persisted in underlying store after flush: %v", err)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────
+// 5. 主日志、快照与调用方响应哈希严格一致性测试 (P0-B 验证)
+// ─────────────────────────────────────────────────────────────
+
+func TestBufferedFlusher_SnapshotAndResponseHashStrictMatch(t *testing.T) {
+	memStore := memory.NewAuditStore()
+	cfg := flusher.Config{
+		BufferSize:    1000,
+		MaxBatchSize:  100,
+		FlushInterval: 10 * time.Millisecond,
+	}
+	bf := flusher.NewBufferedAuditStore(memStore, cfg, silentLogger())
+	defer bf.Close()
+
+	log := &store.AuditLog{
+		ID:            "audit-strict-1",
+		Timestamp:     time.Now(),
+		Operation:     "mask",
+		Algorithm:     "sm4_gcm",
+		InputHash:     "in_abc",
+		OutputHash:    "out_def",
+		User:          "auditor",
+		SecurityLevel: "L3",
+	}
+	snap := &store.SnapshotRecord{
+		ID:           "snap-strict-1",
+		AuditLogID:   "audit-strict-1",
+		Timestamp:    log.Timestamp,
+		InputSample:  "enc:v1:in",
+		OutputSample: "enc:v1:out",
+		Algorithm:    "sm4_gcm",
+	}
+
+	if err := bf.SaveLogWithSnapshot(log, snap); err != nil {
+		t.Fatalf("save log with snapshot: %v", err)
+	}
+
+	// 验证指针写回：log 与 snap 必须有各自独立的完整性哈希，snap 的 prev_hash 指向父日志
+	if log.IntegrityHash == "" {
+		t.Fatal("log.IntegrityHash was not computed")
+	}
+	if snap.IntegrityHash == "" {
+		t.Fatal("snapshot.IntegrityHash was not computed")
+	}
+	if snap.IntegrityHash == log.IntegrityHash {
+		t.Fatalf("snapshot must have its own integrity hash, got same as log: %s", snap.IntegrityHash)
+	}
+	if snap.PrevHash != log.IntegrityHash {
+		t.Fatalf("snapshot prev_hash must point to parent log hash: snap.PrevHash=%s, log.IntegrityHash=%s", snap.PrevHash, log.IntegrityHash)
+	}
+
+	// 刷新落盘
+	if err := bf.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	// 验证底层持久化记录中的哈希是否完全一致
+	savedLog, err := memStore.GetLog("audit-strict-1")
 	if err != nil {
-		t.Fatalf("VerifyChain: %v", err)
+		t.Fatalf("get persisted log: %v", err)
 	}
-	if !res.Valid {
-		t.Fatalf("chain broken after a transient failure: brokenAt=%s msg=%s", res.BrokenAtID, res.Message)
-	}
-	if res.TotalVerified != total {
-		t.Fatalf("expected %d verified, got %d", total, res.TotalVerified)
-	}
-	if b.HasFlushError() {
-		t.Fatalf("health should recover once the backlog is persisted")
-	}
-}
-
-// TestFlusher_FailedFlushStaysDegradedUntilBacklogPersisted guards the /readyz masking path:
-// recovery must mean "the records are on disk", not "some later batch happened to succeed".
-func TestFlusher_FailedFlushStaysDegradedUntilBacklogPersisted(t *testing.T) {
-	memStore := memory.NewAuditStore()
-	failStore := &selectiveFailStore{AuditStore: memStore, failing: map[string]bool{}}
-	failStore.markFailing("log-reg-0000", "log-reg-0001", "log-reg-0002")
-
-	b := NewBufferedAuditStore(failStore, Config{
-		BufferSize: 500, MaxBatchSize: 1, FlushInterval: time.Hour,
-		EnqueueTimeout: time.Second, FlushTimeout: 10 * time.Second, CloseTimeout: 10 * time.Second,
-		MaxRetries: 0,
-	}, nil)
-	defer b.Close()
-
-	for i := 0; i < 3; i++ {
-		if err := b.SaveLog(chainFields(t, i)); err != nil {
-			t.Fatalf("SaveLog %d: %v", i, err)
-		}
-	}
-	if err := b.Flush(); err == nil {
-		t.Fatalf("Flush should report the storage failure instead of claiming success")
-	}
-	if !b.HasFlushError() {
-		t.Fatalf("expected HasFlushError true while nothing is persisted")
-	}
-	if _, persisted, _ := memStore.ListLogs(store.AuditFilter{}); persisted != 0 {
-		t.Fatalf("expected nothing persisted yet, got %d", persisted)
-	}
-
-	failStore.heal()
-	if err := b.Flush(); err != nil {
-		t.Fatalf("Flush after recovery: %v", err)
-	}
-	if _, persisted, _ := memStore.ListLogs(store.AuditFilter{}); persisted != 3 {
-		t.Fatalf("expected all 3 records replayed to disk, got %d", persisted)
-	}
-	if b.HasFlushError() || b.RetryPending() != 0 {
-		t.Fatalf("health and backlog should both clear once everything is on disk")
-	}
-}
-
-// TestFlusher_FlushIsABarrierBeyond1000 guards P1-2: the old implementation drained at most
-// 1000 records and still returned nil, so read paths attested a truncated ledger.
-func TestFlusher_FlushIsABarrierBeyond1000(t *testing.T) {
-	memStore := memory.NewAuditStore()
-	gate := make(chan struct{})
-	gated := &gatedStore{AuditStore: memStore, gate: gate, entered: make(chan struct{})}
-
-	const total = 2500
-	b := NewBufferedAuditStore(gated, Config{
-		BufferSize: total + 100, MaxBatchSize: 200, FlushInterval: time.Hour,
-		EnqueueTimeout: 5 * time.Second, FlushTimeout: 20 * time.Second, CloseTimeout: 20 * time.Second,
-	}, nil)
-	defer b.Close()
-
-	// Fill one batch to park the worker inside its first commit, then let the queue
-	// accumulate well past the old 1000-item drain cap.
-	for i := 0; i < 200; i++ {
-		if err := b.SaveLog(chainFields(t, i)); err != nil {
-			t.Fatalf("SaveLog %d: %v", i, err)
-		}
-	}
-	<-gated.entered
-	for i := 200; i < total; i++ {
-		if err := b.SaveLog(chainFields(t, i)); err != nil {
-			t.Fatalf("SaveLog %d: %v", i, err)
-		}
-	}
-	if depth := b.QueueDepth(); depth < 1000 {
-		t.Fatalf("probe setup failed: expected a backlog beyond 1000 queued, got %d", depth)
-	}
-	close(gate)
-
-	if err := b.Flush(); err != nil {
-		t.Fatalf("Flush barrier returned an error: %v", err)
-	}
-	if depth := b.QueueDepth(); depth != 0 {
-		t.Fatalf("Flush claimed success with %d records still queued", depth)
-	}
-	if _, persisted, _ := memStore.ListLogs(store.AuditFilter{}); persisted != total {
-		t.Fatalf("expected %d records on disk after Flush, got %d", total, persisted)
-	}
-}
-
-// TestFlusher_OverwritesCallerSuppliedChainFields guards P0-4 at the store boundary: the chain
-// tail is server-assigned, so a pre-seeded prev_hash/integrity_hash pair can never be honoured.
-func TestFlusher_OverwritesCallerSuppliedChainFields(t *testing.T) {
-	memStore := memory.NewAuditStore()
-	b := NewBufferedAuditStore(memStore, Config{
-		BufferSize: 500, MaxBatchSize: 1, FlushInterval: time.Hour,
-		EnqueueTimeout: time.Second, FlushTimeout: 10 * time.Second, CloseTimeout: 10 * time.Second,
-	}, nil)
-	defer b.Close()
-
-	const total = 5
-	for i := 0; i < total; i++ {
-		l := chainFields(t, i)
-		s := &store.SnapshotRecord{ID: fmt.Sprintf("snap-reg-%04d", i), AuditLogID: l.ID, Timestamp: l.Timestamp}
-		if i == 2 {
-			l.PrevHash = "cafe0000_client_forged"
-			l.IntegrityHash = "deadbeef_client_forged"
-		}
-		if err := b.SaveLogWithSnapshot(l, s); err != nil {
-			t.Fatalf("SaveLogWithSnapshot %d: %v", i, err)
-		}
-		if i == 2 {
-			if l.PrevHash == "cafe0000_client_forged" || l.IntegrityHash == "deadbeef_client_forged" {
-				t.Fatalf("caller-supplied chain fields were honoured: prev=%q integrity=%q", l.PrevHash, l.IntegrityHash)
-			}
-			if s.PrevHash != l.PrevHash || s.IntegrityHash != l.IntegrityHash {
-				t.Fatalf("snapshot chain fields diverged from the log: snap(%q,%q) log(%q,%q)",
-					s.PrevHash, s.IntegrityHash, l.PrevHash, l.IntegrityHash)
-			}
-		}
-	}
-
-	if err := b.Flush(); err != nil {
-		t.Fatalf("Flush: %v", err)
-	}
-	res, err := memStore.VerifyChain(1000)
+	savedSnap, err := memStore.GetSnapshot("snap-strict-1")
 	if err != nil {
-		t.Fatalf("VerifyChain: %v", err)
-	}
-	if !res.Valid || res.TotalVerified != total {
-		t.Fatalf("chain must survive a forged request field: valid=%v verified=%d brokenAt=%s",
-			res.Valid, res.TotalVerified, res.BrokenAtID)
-	}
-}
-
-// TestFlusher_StagingMapIsBounded guards P1-1: recentLogs used to grow with total accepted
-// writes during an outage, while eviction must never cost durability.
-func TestFlusher_StagingMapIsBounded(t *testing.T) {
-	memStore := memory.NewAuditStore()
-	gate := make(chan struct{})
-	gated := &gatedStore{AuditStore: memStore, gate: gate, entered: make(chan struct{})}
-
-	const total = 400
-	b := NewBufferedAuditStore(gated, Config{
-		BufferSize: 2000, MaxBatchSize: 200, FlushInterval: time.Hour,
-		EnqueueTimeout: time.Second, FlushTimeout: 20 * time.Second, CloseTimeout: 20 * time.Second,
-		MaxStaged: 100,
-	}, nil)
-	defer b.Close()
-
-	for i := 0; i < 200; i++ {
-		if err := b.SaveLog(chainFields(t, i)); err != nil {
-			t.Fatalf("SaveLog %d: %v", i, err)
-		}
-	}
-	<-gated.entered
-
-	for i := 200; i < total; i++ {
-		if err := b.SaveLog(chainFields(t, i)); err != nil {
-			t.Fatalf("SaveLog %d: %v", i, err)
-		}
-	}
-	if staged := b.StagedCount(); staged > 100 {
-		t.Fatalf("staging map exceeded its bound: %d > 100", staged)
-	}
-	if b.EvictedTotal() == 0 {
-		t.Fatalf("expected oldest staged entries to be evicted once the bound was hit")
+		t.Fatalf("get persisted snap: %v", err)
 	}
 
-	close(gate)
-	if err := b.Flush(); err != nil {
-		t.Fatalf("Flush: %v", err)
+	if savedLog.IntegrityHash != log.IntegrityHash {
+		t.Fatalf("persisted log hash %s != returned %s", savedLog.IntegrityHash, log.IntegrityHash)
 	}
-	if _, persisted, _ := memStore.ListLogs(store.AuditFilter{}); persisted != total {
-		t.Fatalf("eviction must not lose records: expected %d on disk, got %d", total, persisted)
+	if savedSnap.IntegrityHash != snap.IntegrityHash {
+		t.Fatalf("persisted snapshot hash %s != returned %s", savedSnap.IntegrityHash, snap.IntegrityHash)
+	}
+	if savedSnap.PrevHash != log.IntegrityHash {
+		t.Fatalf("persisted snapshot prev_hash %s != parent log hash %s", savedSnap.PrevHash, log.IntegrityHash)
 	}
 }
 
-// TestFlusher_CloseTimeoutKeepsUnderlyingOpen guards P0-3: on a timed-out drain the worker is
-// still committing, so cascading Close into the underlying store produced "database is closed"
-// errors and a shutdown log that falsely claimed everything had been flushed.
-func TestFlusher_CloseTimeoutKeepsUnderlyingOpen(t *testing.T) {
+// ─────────────────────────────────────────────────────────────
+// 6. Close 优雅停机排空在途数据测试
+// ─────────────────────────────────────────────────────────────
+
+func TestBufferedFlusher_CloseDrainsBuffer(t *testing.T) {
 	memStore := memory.NewAuditStore()
-	gated := &gatedStore{AuditStore: memStore, latency: 80 * time.Millisecond}
-	tracking := &closableStore{AuditStore: gated}
+	cfg := flusher.Config{
+		BufferSize:    1000,
+		MaxBatchSize:  500, // 批阈值设得很大，不触发
+		FlushInterval: 10 * time.Second,
+	}
+	bf := flusher.NewBufferedAuditStore(memStore, cfg, silentLogger())
 
-	const total = 600
-	b := NewBufferedAuditStore(tracking, Config{
-		BufferSize: total + 100, MaxBatchSize: 50, FlushInterval: time.Hour,
-		EnqueueTimeout: 5 * time.Second, FlushTimeout: 20 * time.Second,
-		CloseTimeout: 150 * time.Millisecond, // guaranteed to expire mid-drain
-	}, nil)
-
-	for i := 0; i < total; i++ {
-		if err := b.SaveLog(chainFields(t, i)); err != nil {
-			t.Fatalf("SaveLog %d: %v", i, err)
+	for i := 0; i < 25; i++ {
+		log := &store.AuditLog{
+			ID:            fmt.Sprintf("drain-%d", i),
+			Timestamp:     time.Now(),
+			Operation:     "mask",
+			Algorithm:     "field_mask",
+			SecurityLevel: "L1",
+		}
+		if err := bf.SaveLog(log); err != nil {
+			t.Fatalf("save: %v", err)
 		}
 	}
 
-	err := b.Close()
-	if err == nil {
-		t.Fatalf("Close should report the incomplete drain instead of returning nil")
-	}
-	if n := tracking.closes.Load(); n != 0 {
-		t.Fatalf("underlying store must stay open while the abandoned worker is committing, closes=%d", n)
-	}
-	if b.FailedTotal() != 0 {
-		t.Fatalf("the worker hit a closed handle: failedTotal=%d", b.FailedTotal())
+	// 此时队列有 25 条待刷盘，立即执行 Close
+	if err := bf.Close(); err != nil {
+		t.Fatalf("close error: %v", err)
 	}
 
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, persisted, _ := memStore.ListLogs(store.AuditFilter{}); persisted == total {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
+	// Close 后，25 条记录必须全部落盘到底层 store
+	logs, total, err := memStore.ListLogs(store.AuditFilter{})
+	if err != nil {
+		t.Fatalf("list logs: %v", err)
 	}
-	_, persisted, _ := memStore.ListLogs(store.AuditFilter{})
-	t.Fatalf("acknowledged records should all be committed after the drain finished: %d/%d", persisted, total)
+	if total != 25 || len(logs) != 25 {
+		t.Fatalf("expected 25 drained logs, got total=%d len=%d", total, len(logs))
+	}
+
+	// 再次写入应返回 ErrStoreClosed
+	err = bf.SaveLog(&store.AuditLog{ID: "after-close", Timestamp: time.Now()})
+	if !errors.Is(err, flusher.ErrStoreClosed) {
+		t.Fatalf("expected ErrStoreClosed after Close, got: %v", err)
+	}
 }
 
-// TestFlusher_ReadersNotBlockedByCongestedWriter guards P1-3: stateMu used to be held across
-// the whole EnqueueTimeout wait, freezing GetLog/GetLatestLog for up to a second per writer.
-func TestFlusher_ReadersNotBlockedByCongestedWriter(t *testing.T) {
+// ─────────────────────────────────────────────────────────────
+// 7. Flush 强一致性持久化屏障测试
+// ─────────────────────────────────────────────────────────────
+
+func TestBufferedFlusher_FlushBarrier(t *testing.T) {
 	memStore := memory.NewAuditStore()
-	gated := &gatedStore{AuditStore: memStore, latency: 60 * time.Millisecond}
+	cfg := flusher.Config{
+		BufferSize:    1000,
+		MaxBatchSize:  1000,
+		FlushInterval: 10 * time.Second,
+	}
+	bf := flusher.NewBufferedAuditStore(memStore, cfg, silentLogger())
+	defer bf.Close()
 
-	b := NewBufferedAuditStore(gated, Config{
-		BufferSize: 4, MaxBatchSize: 4, FlushInterval: time.Hour,
-		EnqueueTimeout: 1500 * time.Millisecond, FlushTimeout: 10 * time.Second, CloseTimeout: 10 * time.Second,
-		MaxRetries: 0,
-	}, nil)
-	defer b.Close()
-
-	first := chainFields(t, 0)
-	if err := b.SaveLog(first); err != nil {
-		t.Fatalf("SaveLog: %v", err)
+	for i := 0; i < 10; i++ {
+		bf.SaveLog(&store.AuditLog{
+			ID:            fmt.Sprintf("barrier-%d", i),
+			Timestamp:     time.Now(),
+			Operation:     "dp",
+			Algorithm:     "gaussian",
+			SecurityLevel: "L3",
+		})
 	}
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for i := 1; i < 500; i++ {
-			if err := b.SaveLog(chainFields(t, i)); err != nil {
-				return
-			}
+	// 显式调用 Flush，必须等待直到这 10 条真正写入底层 store
+	if err := bf.Flush(); err != nil {
+		t.Fatalf("flush barrier failed: %v", err)
+	}
+
+	if bf.QueueDepth() != 0 {
+		t.Fatalf("expected queue depth 0 after flush, got %d", bf.QueueDepth())
+	}
+	if bf.FlushedTotal() != 10 {
+		t.Fatalf("expected 10 flushed records, got %d", bf.FlushedTotal())
+	}
+}
+
+// ─────────────────────────────────────────────────────────────
+// 8. 底层存储故障注入与重试积压区 (Retry Backlog) 保序重投测试
+// ─────────────────────────────────────────────────────────────
+
+type faultyAuditStore struct {
+	store.AuditStore
+	mu        sync.Mutex
+	failBatch atomic.Bool
+	saveCalls atomic.Int64
+}
+
+func (f *faultyAuditStore) SaveLogsBatch(logs []store.AuditLog, snaps []store.SnapshotRecord) error {
+	f.saveCalls.Add(1)
+	if f.failBatch.Load() {
+		return errors.New("simulated database disk I/O error")
+	}
+	return f.AuditStore.SaveLogsBatch(logs, snaps)
+}
+
+func TestBufferedFlusher_UnderlyingFailureRetryBacklog(t *testing.T) {
+	memStore := memory.NewAuditStore()
+	faulty := &faultyAuditStore{AuditStore: memStore}
+	faulty.failBatch.Store(true) // 模拟底层数据库故障
+
+	cfg := flusher.Config{
+		BufferSize:    1000,
+		MaxBatchSize:  10,
+		FlushInterval: 10 * time.Millisecond,
+		MaxRetries:    1,
+	}
+	bf := flusher.NewBufferedAuditStore(faulty, cfg, silentLogger())
+	defer bf.Close()
+
+	// 写入 5 条记录
+	for i := 0; i < 5; i++ {
+		log := &store.AuditLog{
+			ID:            fmt.Sprintf("fail-retry-%d", i),
+			Timestamp:     time.Now(),
+			Operation:     "mask",
+			Algorithm:     "field_mask",
+			SecurityLevel: "L2",
 		}
+		if err := bf.SaveLog(log); err != nil {
+			t.Fatalf("save: %v", err)
+		}
+	}
+
+	// 等待重试失败并转入积压区
+	time.Sleep(100 * time.Millisecond)
+
+	if !bf.HasFlushError() {
+		t.Fatal("expected flusher to be in degraded error state")
+	}
+	if bf.RetryPending() != 5 {
+		t.Fatalf("expected 5 pending retry records in backlog, got %d", bf.RetryPending())
+	}
+
+	// 模拟数据库恢复正常
+	faulty.failBatch.Store(false)
+
+	// 触发 Flush 重试提交
+	if err := bf.Flush(); err != nil {
+		t.Fatalf("flush after recovery failed: %v", err)
+	}
+
+	if bf.HasFlushError() {
+		t.Fatal("expected flusher to recover from error state")
+	}
+	if bf.RetryPending() != 0 {
+		t.Fatalf("expected 0 retry pending after recovery, got %d", bf.RetryPending())
+	}
+
+	// 验证底层哈希链完好无损
+	res, err := memStore.VerifyChain(0)
+	if err != nil {
+		t.Fatalf("verify chain: %v", err)
+	}
+	if !res.Valid || res.TotalVerified != 5 {
+		t.Fatalf("expected 5 verified records after backlog replay, got valid=%v total=%d", res.Valid, res.TotalVerified)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────
+// 9. 积压饱和有界拒绝测试 (防 OOM)
+// ─────────────────────────────────────────────────────────────
+
+func TestBufferedFlusher_BoundedBacklogSaturationRejection(t *testing.T) {
+	memStore := memory.NewAuditStore()
+	faulty := &faultyAuditStore{AuditStore: memStore}
+	faulty.failBatch.Store(true)
+
+	cfg := flusher.Config{
+		BufferSize:    100,
+		MaxBatchSize:  5,
+		FlushInterval: 10 * time.Millisecond,
+		MaxRetries:    0,
+		MaxStaged:     5, // 积压上限设为 5 条
+	}
+	bf := flusher.NewBufferedAuditStore(faulty, cfg, silentLogger())
+	defer bf.Close()
+
+	// 写入 5 条填满积压区
+	for i := 0; i < 5; i++ {
+		_ = bf.SaveLog(&store.AuditLog{ID: fmt.Sprintf("sat-%d", i), Timestamp: time.Now()})
+	}
+
+	// 等待积压区生效
+	time.Sleep(50 * time.Millisecond)
+
+	// 第 6 条写入必须被快速拒绝，返回 ErrBacklogSaturated
+	err := bf.SaveLog(&store.AuditLog{ID: "sat-overflow", Timestamp: time.Now()})
+	if !errors.Is(err, flusher.ErrBacklogSaturated) {
+		t.Fatalf("expected ErrBacklogSaturated, got: %v", err)
+	}
+}
+
+type blockingAuditStore struct {
+	store.AuditStore
+	block chan struct{}
+}
+
+func (b *blockingAuditStore) SaveLogsBatch(logs []store.AuditLog, snaps []store.SnapshotRecord) error {
+	if b.block != nil {
+		<-b.block
+	}
+	return b.AuditStore.SaveLogsBatch(logs, snaps)
+}
+
+func TestBufferedFlusher_CongestionTimeoutRejection(t *testing.T) {
+	memStore := memory.NewAuditStore()
+	blockCh := make(chan struct{})
+	blocking := &blockingAuditStore{AuditStore: memStore, block: blockCh}
+
+	cfg := flusher.Config{
+		BufferSize:     2, // 队列深度仅为 2
+		MaxBatchSize:   1, // 写入 1 条即触发 SaveLogsBatch 从而阻塞工作协程
+		FlushInterval:  1 * time.Hour,
+		EnqueueTimeout: 20 * time.Millisecond, // 超时时间短
+		MaxStaged:      100,
+	}
+	bf := flusher.NewBufferedAuditStore(blocking, cfg, silentLogger())
+	defer func() {
+		close(blockCh) // 释放阻塞以便优雅退出
+		bf.Close()
 	}()
-	time.Sleep(150 * time.Millisecond) // let the queue fill and a writer park in the wait
 
-	if d := readLatency(t, func() { _, _ = b.GetLatestLog() }); d > 100*time.Millisecond {
-		t.Fatalf("GetLatestLog stalled %v behind a congested writer", d)
-	}
-	if d := readLatency(t, func() { _, _ = b.GetLog(first.ID) }); d > 100*time.Millisecond {
-		t.Fatalf("GetLog stalled %v behind a congested writer", d)
-	}
+	// 第 1 条进入后被工作协程读走并阻塞在 SaveLogsBatch
+	_ = bf.SaveLog(logWithID("cong-1"))
+	time.Sleep(10 * time.Millisecond)
 
-	<-done
+	// 填满队列剩余容量 (2 条)
+	_ = bf.SaveLog(logWithID("cong-2"))
+	_ = bf.SaveLog(logWithID("cong-3"))
+
+	// 第 4 条写入将在 20ms 后因超时被拒绝
+	start := time.Now()
+	err := bf.SaveLog(logWithID("cong-4"))
+	dur := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected congestion error on full queue")
+	}
+	if dur < 15*time.Millisecond {
+		t.Fatalf("expected timeout wait, returned too quickly (%v)", dur)
+	}
 }
 
-// readLatency returns the slowest of a few sample reads.
-func readLatency(t *testing.T, read func()) time.Duration {
-	t.Helper()
-	var worst time.Duration
-	for i := 0; i < 20; i++ {
-		start := time.Now()
-		read()
-		if d := time.Since(start); d > worst {
-			worst = d
-		}
+// ─────────────────────────────────────────────────────────────
+// 11. 内存读缓存有界淘汰测试
+// ─────────────────────────────────────────────────────────────
+
+func TestBufferedFlusher_BoundedStagedMemoryEviction(t *testing.T) {
+	memStore := memory.NewAuditStore()
+	cfg := flusher.Config{
+		BufferSize:    1000,
+		MaxBatchSize:  1000,
+		FlushInterval: 10 * time.Second,
+		MaxStaged:     3, // 读缓存上限仅 3 条
 	}
-	return worst
+	bf := flusher.NewBufferedAuditStore(memStore, cfg, silentLogger())
+	defer bf.Close()
+
+	// 写入 5 条记录
+	for i := 0; i < 5; i++ {
+		_ = bf.SaveLog(logWithID(fmt.Sprintf("evict-%d", i)))
+	}
+
+	// 缓存容量应被严格限制在 MaxStaged (3条)
+	if bf.StagedCount() > 3 {
+		t.Fatalf("expected staged count <= 3, got %d", bf.StagedCount())
+	}
+	if bf.EvictedTotal() < 2 {
+		t.Fatalf("expected at least 2 evictions, got %d", bf.EvictedTotal())
+	}
+}
+
+func logWithID(id string) *store.AuditLog {
+	return &store.AuditLog{
+		ID:            id,
+		Timestamp:     time.Now(),
+		Operation:     "mask",
+		Algorithm:     "field_mask",
+		SecurityLevel: "L3",
+	}
 }

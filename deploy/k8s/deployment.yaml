@@ -54,21 +54,30 @@ spec:
               value: "INFO"
             - name: PRIVACY_LOG_FORMAT
               value: "text"
-            # 如需启用 TLS，取消下面注释并确保证书 Secret 已创建
+            # 如需启用 TLS，取消下面注释并确保证书 Secret 已创建。
+            # ⚠️ P0-1 红线：TLS 开启且引擎监听 gRPC 时，还必须同时提供客户端证书 CN 白名单文件
+            #（PRIVACY_AUTH_MTLS_WHITELIST_FILE，指向含 mtls-whitelist.yaml 键的 ConfigMap），
+            # 否则白名单拦截器根本不注册，启动门禁会拒绝启动。
             # - name: PRIVACY_TLS_ENABLED
             #   value: "true"
             # - name: PRIVACY_TLS_CERT_FILE
             #   value: "/certs/tls.crt"
             # - name: PRIVACY_TLS_KEY_FILE
             #   value: "/certs/tls.key"
-            # 如需启用认证，取消下面注释并确保 API Key Secret 已创建
-            # - name: PRIVACY_AUTH_ENABLED
-            #   value: "true"
-            # - name: PRIVACY_AUTH_EXTERNAL_KEYS_JSON
-            #   valueFrom:
-            #     secretKeyRef:
-            #       name: PrivShield-apikeys
-            #       key: api-keys.json
+            # ── 认证：P0-1 零信任默认态，**默认开启**（不再可选）──
+            # 本容器绑定 0.0.0.0 属「非环回暴露」，无入站 Key 时 Go 引擎直接拒绝启动，
+            # 因此部署前必须先创建 Secret（不存在「漏配即静默无鉴权」的中间态）：
+            #   kubectl create secret generic privshield-apikeys \
+            #     --from-literal=api-keys='<随机token>:console:mask,dp,classify'
+            # 变量名用 PRIVACY_AUTH_INTERNAL_API_KEYS（格式 token:name:scope1,scope2;…）；
+            # 旧写法 PRIVACY_AUTH_EXTERNAL_KEYS_JSON 在 Go 侧从不被读取，已停用。
+            - name: PRIVACY_AUTH_ENABLED
+              value: "true"
+            - name: PRIVACY_AUTH_INTERNAL_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: privshield-apikeys
+                  key: api-keys
             # 如需启用 Layer-3 LLM 独立推理服务（运行时解耦），取消下面注释并部署
             # llm-deployment.yaml / llm-service.yaml（LLM 挂掉时 core 自动降级 Layer-1+2）：
             # - name: PRIVACY_LLM_PROVIDER

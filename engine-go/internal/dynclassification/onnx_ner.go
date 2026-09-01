@@ -51,6 +51,28 @@ type NerEngine interface {
 	Name() string
 }
 
+// ModelBackedNerEngine 是「真实模型驱动」NER 引擎的可选能力接口（整改项 P1-3）。
+//
+// 存在理由：RuleBasedNerEngine 是正则降级桩，其 IsAvailable() 恒为 true，
+// 因此「NER 能力是否可用」绝不能用 IsAvailable() 表述，否则运维诊断会把正则桩
+// 谎报为已交付的模型推理能力。只有真正加载了推理模型（ONNX / CUDA）且当前可执行
+// 模型前向的引擎才实现本接口并返回 true。
+//
+// 该口径对新增引擎是 fail-closed 的：未显式实现本接口的引擎一律按「非模型驱动」
+// 上报，因此 rule-based-ner / 任何尚未交付模型的骨架实现都不会被宣称为可用 AI NER。
+type ModelBackedNerEngine interface {
+	NerEngine
+
+	// ModelBacked 报告该引擎是否由真实推理模型驱动且当前可执行模型推理。
+	ModelBacked() bool
+}
+
+// NerEngineModelBacked 判定给定 NER 引擎是否具备真实模型推理能力（P1-3 诚实口径）。
+func NerEngineModelBacked(engine NerEngine) bool {
+	mb, ok := engine.(ModelBackedNerEngine)
+	return ok && mb.ModelBacked()
+}
+
 // ──────────────────────────────────────────────
 // 基于规则的 NER 引擎（CPU 降级实现）
 // ──────────────────────────────────────────────
@@ -124,7 +146,10 @@ func (e *RuleBasedNerEngine) Extract(_ context.Context, text string) ([]NerEntit
 	return entities, nil
 }
 
-// IsAvailable 规则引擎始终可用
+// IsAvailable 规则引擎始终可用。
+//
+// ⚠️ 这只是「降级桩可服务」，不是「NER 模型能力可用」：本引擎刻意不实现
+// ModelBackedNerEngine，因此 NerEngineModelBacked 对它恒返回 false（P1-3）。
 func (e *RuleBasedNerEngine) IsAvailable() bool { return true }
 
 // Name 返回引擎名称
@@ -285,6 +310,14 @@ func (e *OnnxNerEngine) inferBatch(ctx context.Context, items []BatchItem) []Bat
 
 // IsAvailable 检查引擎是否可用
 func (e *OnnxNerEngine) IsAvailable() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.available
+}
+
+// ModelBacked 实现 ModelBackedNerEngine：报告 ONNX 模型是否真正已加载并可推理。
+// 当前骨架实现从不加载模型，故交付构建中恒为 false（P1-3）。
+func (e *OnnxNerEngine) ModelBacked() bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.available

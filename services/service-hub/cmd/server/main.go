@@ -70,6 +70,7 @@ import (
 	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/datasource"
 	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/grpcserver"
 	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/handlers"
+	"github.com/fengzhizi319/PrivShield/services/service-hub/internal/retry"
 	pb "github.com/fengzhizi319/PrivShield/services/service-hub/proto"
 )
 
@@ -111,6 +112,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to initialize task store: %v", err)
 	}
+	logger.Info("service-hub storage posture",
+		"strict_storage", cfg.StrictStorage,
+		"pg_configured", cfg.PGDSN != "",
+		"lease_capable", cfg.PGDSN != "")
 
 	// =========================================================================
 	// 4. Prometheus Metrics Collector / Prometheus 监控指标收集器
@@ -164,6 +169,20 @@ func main() {
 	// 2) DatasourceClient: 负责与 datasource-mgr 模拟数据源服务（:8083/:50053）交互，采样抽取数据。
 	agentClient := agent.New(cfg, mc)
 	dsClient := datasource.New(cfg)
+
+	// 3) EvidenceClient（⑥ 审计存证出站）装配自检（P0-6 / Gate G-05）：
+	//    每一次出域必须由 audit-log 落一条不可篡改存证，存证不可写 = 任务必然失败。
+	//    Config.Validate() 已对「回环绑定 + 未配置端点」直接拒绝启动；这里覆盖远程绑定的情形，
+	//    显式告警而非静默放行，避免运维误以为服务正常而实际所有出域任务在 ⑥ 阶段失败。
+	if urls := cfg.AuditLogURLs(); len(urls) == 0 {
+		logger.Error("outbound evidence endpoint is not configured: every data-egress task will FAIL at pipeline stage audit (P0-6 fail-closed)",
+			"remedy", "set SERVICE_HUB_AUDIT_LOG_URLS (or SERVICE_HUB_AUDIT_HTTP) to the audit-log service, e.g. http://audit-log:8084")
+	} else {
+		logger.Info("outbound evidence client enabled",
+			"endpoints", strings.Join(urls, ","),
+			"auth_configured", cfg.AuditLogAPIKey != "",
+			"tls_enabled", cfg.AuditLogTLSEnabled)
+	}
 	// Start in a non-ready state until both HTTP and gRPC listeners are confirmed launched.
 	mc.SetReady(false)
 
@@ -466,6 +485,10 @@ func initTaskStore(dbPath string, logger *slog.Logger) (store.TaskStore, error) 
 //  1. PG_DSN 非空 → PostgreSQL LeasedTaskStore（支持多副本 Hub）
 //  2. DBPath 非空 → SQLite TaskStore（租约方法返回 ErrLeaseNotSupported）
 //  3. 均为空 → 内存 TaskStore（租约方法返回 ErrLeaseNotSupported）
+//
+// P0-4 禁静音降级：PG_DSN 已配置而探测失败时，StrictStorage（默认 true）直接上抛错误，
+// 由 main() log.Fatalf 终止进程——回退到 2/3 档会让多副本 Hub 无声丢失租约语义。
+// 仅当显式 SERVICE_HUB_STRICT_STORAGE=false 时才允许回退（保留原 Warn 路径）。
 func initLeasedTaskStore(cfg *config.Config, logger *slog.Logger) (store.LeasedTaskStore, error) {
 	if cfg.PGDSN != "" {
 		logger.Info("probing PostgreSQL leased task store (Phase B multi-replica Hub)")
@@ -487,6 +510,9 @@ func initLeasedTaskStore(cfg *config.Config, logger *slog.Logger) (store.LeasedT
 				"lease_ttl", cfg.LeaseTTL,
 			)
 			return pgStore, nil
+		}
+		if cfg.StrictStorage {
+			return nil, fmt.Errorf("strict storage mode (SERVICE_HUB_STRICT_STORAGE=true): PostgreSQL leased task store probe failed, refusing to fall back to a store without lease semantics: %w", err)
 		}
 		logger.Warn("PostgreSQL connection probe failed, falling back to SQLite / in-memory store", "error", err.Error())
 	}
@@ -546,6 +572,7 @@ func recoverOrphanedTasks(taskStore store.TaskStore, mc *metrics.Collector, logg
 	for i := range runningTasks {
 		runningTasks[i].Status = "failed"
 		runningTasks[i].Error = "server crashed or restarted (recovered on startup)"
+		runningTasks[i].ErrorClass = retry.ClassRecovered
 		now := time.Now()
 		runningTasks[i].CompletedAt = &now
 		runningTasks[i].DurationMs = now.Sub(runningTasks[i].CreatedAt).Milliseconds()
@@ -585,11 +612,14 @@ func recoverOrphanedTasks(taskStore store.TaskStore, mc *metrics.Collector, logg
 // maxRetryCount is the maximum number of retry attempts for a failed task.
 const maxRetryCount = 3
 
-// retryFailedTasks automatically retries failed tasks that are marked as retryable.
-// 自动重试机制：扫描所有因临时错误而失败的任务，重新提交执行。
+// retryFailedTasks automatically retries failed tasks whose persisted failure class
+// is marked retryable.
+// 自动重试机制：扫描所有因瞬时故障而失败的任务，重新提交执行。
 //
-// 改进点（#3）：使用结构化 RetryCount 字段替代脆弱的字符串匹配；
-// 改进点（#10）：重试采用指数退避延迟（5s → 10s → 20s），避免下游仍不可用时立即再次失败。
+// 改进点（#3）：使用结构化 RetryCount 字段替代脆弱的 strings.Count；
+// 改进点（#10）：重试采用指数退避延迟（5s → 10s → 20s），避免下游仍不可用时立即再次失败；
+// 改进点（P2-7）：是否重试改判为读取失败点落库的 error_class 枚举，
+// 不再对 task.Error 这段自由文案做子串匹配（文案改写即会静默丧失重试能力）。
 func retryFailedTasks(taskStore store.TaskStore, mc *metrics.Collector, logger *slog.Logger) {
 	// 扫描所有 "failed" 状态的任务
 	failedTasks, _, err := taskStore.List(store.TaskFilter{Status: "failed", Limit: 100})
@@ -600,8 +630,8 @@ func retryFailedTasks(taskStore store.TaskStore, mc *metrics.Collector, logger *
 
 	retryCount := 0
 	for i := range failedTasks {
-		// 只重试特定类型的失败（如网络超时、临时错误）
-		if !isRetryableError(failedTasks[i].Error) {
+		// 只重试失败点已判定为瞬时的分类（如 timeout / downstream / shutdown / recovered）
+		if !retry.IsRetryableClass(failedTasks[i].ErrorClass) {
 			continue
 		}
 
@@ -631,6 +661,7 @@ func retryFailedTasks(taskStore store.TaskStore, mc *metrics.Collector, logger *
 		failedTasks[i].Status = "pending"
 		failedTasks[i].Stage = "queued"
 		failedTasks[i].Error = fmt.Sprintf("retrying (attempt %d/%d)", newRetryCount, maxRetryCount)
+		failedTasks[i].ErrorClass = ""
 		failedTasks[i].StartedAt = nil
 		failedTasks[i].CompletedAt = nil
 		failedTasks[i].DurationMs = 0
@@ -677,35 +708,6 @@ func periodicRetryLoop(ctx context.Context, taskStore store.TaskStore, mc *metri
 			retryFailedTasks(taskStore, mc, logger)
 		}
 	}
-}
-
-// isRetryableError checks if an error is retryable (network timeout, temporary failure, etc.)
-// isRetryableError 检查错误是否可重试（网络超时、临时故障等）。
-//
-// 可重试的错误类型：
-// - timeout（超时）
-// - connection refused（连接拒绝）
-// - temporary failure（临时故障）
-// - network unreachable（网络不可达）
-// - context deadline exceeded（上下文超时）
-// - server crashed or restarted（服务崩溃或重启）
-func isRetryableError(errMsg string) bool {
-	retryablePatterns := []string{
-		"timeout",
-		"connection refused",
-		"temporary failure",
-		"network unreachable",
-		"context deadline exceeded",
-		"server crashed or restarted",
-	}
-
-	errMsgLower := strings.ToLower(errMsg)
-	for _, pattern := range retryablePatterns {
-		if strings.Contains(errMsgLower, pattern) {
-			return true
-		}
-	}
-	return false
 }
 
 // dataRetentionLoop periodically deletes terminal tasks older than retentionDays.

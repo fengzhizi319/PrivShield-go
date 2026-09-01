@@ -33,11 +33,18 @@ type Config struct {
 	TLSPinnedPubKeyFile string // 固定客户端公钥 PEM 文件路径，用于应用层公钥指纹比对（防 CA 劫持与伪造）
 
 	// mTLS CN 白名单配置（gRPC 服务端 method-scope 鉴权）
-	MTLSWhitelistFile string // 客户端证书 CN 白名单 YAML 文件路径（为空则关闭 gRPC 层鉴权）
+	MTLSWhitelistFile string // 客户端证书 CN 白名单 YAML 文件路径（启用 gRPC TLS 时必填，缺失即启动失败）
 
 	// 安全鉴权与跨域配置
-	APIKey      string   // 入站 HTTP/gRPC 请求 API Key 鉴权密钥（为空则不校验）
+	APIKey      string   // 入站 HTTP/gRPC 请求 API Key 鉴权密钥（非环回监听时为必填项，缺失即启动失败）
 	CORSOrigins []string // 允许的跨域来源列表（CORS 白名单）
+
+	// RequireTLS 由生产编排显式置真：TLS 未启用即拒绝启动，防止漏配证书仍照常服务。
+	RequireTLS bool
+
+	// StrictStorage 严格存储模式（P0-4 禁静音降级）：为真时禁止任何「写入失败/数据损坏 → 降级为内存态」的
+	// 静默回退，异常一律上抛为启动或请求失败。默认 true，可用 DATASOURCE_MGR_STRICT_STORAGE=false 显式放宽。
+	StrictStorage bool
 
 	// 可观测性与日志配置
 	LogFormat string // 日志输出格式："json"（生产推荐）或 "text"（本地开发可读）
@@ -81,6 +88,12 @@ func Load() *Config {
 		APIKey:      pkgconfig.EnvString("DATASOURCE_MGR_API_KEY", ""),
 		CORSOrigins: pkgconfig.EnvStringSlice("DATASOURCE_MGR_CORS_ORIGINS"),
 
+		// Fail-closed 生产门禁 / zero-trust production gate
+		RequireTLS: pkgconfig.EnvBool("DATASOURCE_MGR_REQUIRE_TLS", false),
+
+		// Strict storage mode / 严格存储模式：默认禁止降级回退，存储或数据异常即启动/请求失败。
+		StrictStorage: pkgconfig.EnvBool("DATASOURCE_MGR_STRICT_STORAGE", pkgconfig.EnvBool("STRICT_STORAGE", true)),
+
 		// 结构化日志参数解析（默认 json 格式，info 级别）
 		LogFormat: pkgconfig.EnvString("DATASOURCE_MGR_LOG_FORMAT", "json"),
 		LogLevel:  pkgconfig.EnvString("DATASOURCE_MGR_LOG_LEVEL", "info"),
@@ -95,7 +108,7 @@ func Load() *Config {
 }
 
 // Validate checks that the configuration is consistent and all required files exist.
-// Validate 校验配置一致性：当 TLS 启用时确认证书/私钥文件存在。
+// Validate 校验配置一致性：TLS 文件存在性与 fail-closed 零信任安全不变式（P0-1）。
 func (c *Config) Validate() error {
 	if c.TLSEnabled {
 		if c.TLSCertFile == "" {
@@ -111,7 +124,19 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("TLS key file not accessible: %s: %w", c.TLSKeyFile, err)
 		}
 	}
-	return nil
+
+	// P0-1 零信任默认态：非环回监听必须有入站 API Key；声明需要 TLS 则必须启用；
+	// 启用 gRPC TLS 时必须注入 CN 白名单文件（否则白名单拦截器根本不注册，形同未做身份鉴别）。
+	// 本进程始终同时监听 REST 与 gRPC，故 GRPCEnabled 恒为 true。
+	return pkgconfig.ValidateFailClosed(pkgconfig.SecurityRequirements{
+		ServiceName:       "datasource-mgr",
+		Hosts:             []string{c.Host, c.GRPCHost},
+		APIKey:            c.APIKey,
+		TLSEnabled:        c.TLSEnabled,
+		RequireTLS:        c.RequireTLS,
+		GRPCEnabled:       true,
+		MTLSWhitelistFile: c.MTLSWhitelistFile,
+	})
 }
 
 // Address returns the full HTTP listen address formatted as "host:port".

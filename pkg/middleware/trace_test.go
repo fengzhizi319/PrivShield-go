@@ -1,3 +1,14 @@
+// Package middleware 单元测试套件
+//
+// ==============================================================================
+// 【测试套件设计目标与覆盖范围】
+// 本测试文件验证 Package middleware 中分布式链路追踪中间件的核心特性：
+//  1. 【双响应头注入】：验证 TraceMiddleware 同时向客户端注入一致的 X-Request-ID 与 X-Trace-ID；
+//  2. 【自动生成唯一 ID】：验证未携带追踪头时自动生成合法 ID；
+//  3. 【向后兼容性】：验证 TraceMiddleware 与旧版 RequestID() 中间件串联时能够精准复用同一 ID；
+//  4. 【多级降级查找】：验证 GetTraceID 按照专属键 -> 旧版键 -> 请求头 -> 动态生成的 4 级优先级回退逻辑。
+// ==============================================================================
+
 package middleware
 
 import (
@@ -8,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// TestTraceMiddleware_SetsBothHeaders 验证 TraceMiddleware 能够从入站头捕获并向出站响应同时设置 X-Request-ID 与 X-Trace-ID。
 func TestTraceMiddleware_SetsBothHeaders(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -29,6 +41,7 @@ func TestTraceMiddleware_SetsBothHeaders(t *testing.T) {
 	}
 }
 
+// TestTraceMiddleware_GeneratesID 验证入站未提供追踪头时自动生成一致的唯一追踪 ID。
 func TestTraceMiddleware_GeneratesID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -39,7 +52,7 @@ func TestTraceMiddleware_GeneratesID(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/test", nil)
-	// No X-Request-ID header
+	// No X-Request-ID header / 未携带请求头
 	router.ServeHTTP(w, req)
 
 	if got := w.Header().Get("X-Request-ID"); got == "" {
@@ -48,12 +61,13 @@ func TestTraceMiddleware_GeneratesID(t *testing.T) {
 	if got := w.Header().Get("X-Trace-ID"); got == "" {
 		t.Error("expected auto-generated X-Trace-ID, got empty")
 	}
-	// Both headers should be the same
+	// Both headers should be the same / 双头必须完全一致
 	if w.Header().Get("X-Request-ID") != w.Header().Get("X-Trace-ID") {
 		t.Error("X-Request-ID and X-Trace-ID should be identical")
 	}
 }
 
+// TestTraceMiddleware_BackwardCompatWithRequestID 验证与旧版 RequestID 中间件混合使用时的向后兼容性与状态一致性。
 func TestTraceMiddleware_BackwardCompatWithRequestID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -87,10 +101,11 @@ func TestTraceMiddleware_BackwardCompatWithRequestID(t *testing.T) {
 	}
 }
 
+// TestGetTraceID_FallbackOrder 验证 GetTraceID 的 4 级优先级回退与安全兜底查找算法。
 func TestGetTraceID_FallbackOrder(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	// Case 1: TraceIDContextKey set
+	// Case 1: TraceIDContextKey set / 优先专用键
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest("GET", "/", nil)
 	c.Set(TraceIDContextKey, "trace-key-val")
@@ -99,7 +114,7 @@ func TestGetTraceID_FallbackOrder(t *testing.T) {
 		t.Errorf("expected trace-key-val, got %s", got)
 	}
 
-	// Case 2: Only request_id set
+	// Case 2: Only request_id set / 其次旧版键
 	c2, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c2.Request = httptest.NewRequest("GET", "/", nil)
 	c2.Set("request_id", "request-id-val")
@@ -107,7 +122,7 @@ func TestGetTraceID_FallbackOrder(t *testing.T) {
 		t.Errorf("expected request-id-val, got %s", got)
 	}
 
-	// Case 3: Only header
+	// Case 3: Only header / 再次 HTTP 请求头
 	c3, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c3.Request = httptest.NewRequest("GET", "/", nil)
 	c3.Request.Header.Set("X-Request-ID", "header-val")
@@ -115,7 +130,7 @@ func TestGetTraceID_FallbackOrder(t *testing.T) {
 		t.Errorf("expected header-val, got %s", got)
 	}
 
-	// Case 4: Nothing set → generates new
+	// Case 4: Nothing set → generates new / 最后自动生成兜底
 	c4, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c4.Request = httptest.NewRequest("GET", "/", nil)
 	if got := GetTraceID(c4); got == "" {

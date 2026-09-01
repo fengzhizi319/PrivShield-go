@@ -1,9 +1,15 @@
 // Package middleware provides shared Gin middleware for console Go modules.
-// Package middleware 为控制台各 Go 模块提供共享的 Gin 中间件。
+// Package middleware 为控制台与各 Go 微服务提供标准化的 Gin 中间件套件。
 //
-// 包含：可配置 CORS、API Key 鉴权、请求 ID 注入、结构化访问日志。
-// 三个模块（service-hub / datasource-mgr / audit-log）原先各自维护近乎相同的
-// corsMiddleware 实现，现统一抽取至本包。
+// ==============================================================================
+// 【包含组件与架构职责】
+// 1. 【CORS 跨域资源共享】：支持配置精确来源白名单与预检请求（Preflight OPTIONS 204）处理；
+// 2. 【RequestID 追踪注入】：提取或基于安全随机源生成唯一请求标识，注入 Context 与响应头；
+// 3. 【StructuredLogger 结构化日志】：基于 log/slog 记录每笔 HTTP 请求的耗时、状态码、客户端 IP 与模块标签；
+// 4. 【Recovery 全局异常恢复】：拦截 panic，打印内部堆栈日志，并向外部输出安全标准的 500 错误信封（防代码泄露）；
+// 5. 【SecurityHeaders 纵深安全头】：设置 HSTS、X-Frame-Options、nosniff、CSP 等标准安全响应头。
+// ==============================================================================
+
 package middleware
 
 import (
@@ -21,15 +27,14 @@ import (
 )
 
 // CORS returns a CORS middleware that allows requests from the specified origins.
-// CORS 返回可配置来源的 CORS 中间件。
 //
-// Security / 安全说明：
-//   - origins 为空或仅含 "*" → 允许任意来源（开发模式兼容）
-//   - origins 非空 → 精确匹配 Origin 头，不匹配则不设置 CORS 头
-//   - 生产部署时应显式配置允许的来源列表，避免使用 "*"
+// CORS 返回可配置白名单来源的跨域资源共享中间件。
 //
-// 本控制台为内部工具，不依赖 cookie/凭证，故 Allow-Origin: * 不携带
-// Allow-Credentials，避免"任意来源 + 凭证"组合的跨域凭证泄露风险。
+// 安全说明与执行逻辑：
+// 1. 若 origins 为空或仅含 "*"：允许任意来源（开发模式），设置 Access-Control-Allow-Origin: *；
+// 2. 若 origins 为明确白名单列表：精确匹配客户端的 Origin 请求头，匹配成功设置对应的 Allow-Origin 并添加 Vary: Origin 响应头；
+// 3. 预检请求（Method == "OPTIONS"）：直接响应 204 No Content 并中断后续 handler，提升跨域协商效率；
+// 4. 配置标准 Allow-Methods、Allow-Headers 及 86400 秒缓存有效期。
 func CORS(origins []string) gin.HandlerFunc {
 	allowAll := len(origins) == 0 || (len(origins) == 1 && origins[0] == "*")
 	originSet := make(map[string]struct{}, len(origins))
@@ -63,13 +68,15 @@ func CORS(origins []string) gin.HandlerFunc {
 }
 
 // RequestID returns a middleware that extracts or generates a unique request ID.
-// RequestID 返回一个中间件，提取或生成唯一请求 ID。
 //
-// 逻辑：
-//  1. 读取入站 X-Request-ID 头（上游网关/负载均衡器可能已注入）
-//  2. 不存在则生成 req-<timestamp>-<random> 格式 ID
-//  3. 写入 gin.Context（Key: "request_id"）供后续 handler/日志使用
-//  4. 写入响应头 X-Request-ID 供客户端关联
+// RequestID 返回一个提取或自动生成唯一请求 ID 的 Gin 中间件。
+//
+// 执行逻辑：
+// 1. 读取入站 X-Request-ID 请求头（上游 API 网关或负载均衡器可能已生成）；
+// 2. 若不存在则调用 generateRequestID() 生成安全随机 ID；
+// 3. 写入 gin.Context（键名: "request_id"）供后续日志与 Handler 使用；
+// 4. 写入 HTTP 响应头 X-Request-ID 供客户端跟踪；
+// 5. 将该 ID 封装进 request.Context()，以便下游 HTTP 客户端（如 pkg/agent）能够自动向下游微服务透传追踪头。
 func RequestID() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		rid := c.GetHeader("X-Request-ID")
@@ -89,10 +96,14 @@ func RequestID() gin.HandlerFunc {
 }
 
 // StructuredLogger returns a Gin middleware that logs each request in structured JSON.
-// StructuredLogger 返回以结构化 JSON 格式记录每个请求的 Gin 中间件。
 //
-// 输出字段：time / level / msg / request_id / method / path / status / latency_ms / module
-// 使用 Go 标准 log/slog 包，零额外依赖。
+// StructuredLogger 返回以结构化 JSON 格式输出请求访问日志的 Gin 中间件。
+//
+// 执行逻辑：
+// 1. 记录请求到达时间戳 start；
+// 2. 执行后续中间件与业务 Handler（c.Next()）；
+// 3. 计算耗时 latency_ms，提取状态码、TraceID、客户端 IP 与请求方法/路径；
+// 4. 使用 slog.Logger.Info 输出标准结构化日志行。
 func StructuredLogger(logger *slog.Logger, module string) gin.HandlerFunc {
 	if logger == nil {
 		logger = slog.Default()
@@ -125,8 +136,13 @@ func StructuredLogger(logger *slog.Logger, module string) gin.HandlerFunc {
 }
 
 // Recovery returns a Gin middleware that recovers from panics and logs structured errors.
-// Recovery 返回一个 Gin 中间件，捕获 panic 并记录结构化日志与返回 500 JSON。
-// 安全设计：Panic 详情仅写入内部结构化日志，HTTP 响应只返回通用错误，防止堆栈与敏感信息泄露。
+//
+// Recovery 返回一个捕获未处理 Panic 的异常恢复中间件。
+//
+// 安全设计：
+// 1. 通过 defer recover() 拦截所有运行时 panic，防止单个请求崩溃导致整个服务进程退出；
+// 2. 将详细 panic 堆栈仅输出到内部日志系统（logger.Error），防止敏感源码与系统信息泄漏；
+// 3. 调用 AbortWithError 向客户端返回标准的 500 INTERNAL_ERROR 统一错误信封。
 func Recovery(logger *slog.Logger, module string) gin.HandlerFunc {
 	if logger == nil {
 		logger = slog.Default()
@@ -153,30 +169,37 @@ func Recovery(logger *slog.Logger, module string) gin.HandlerFunc {
 }
 
 // SecurityHeaders returns a middleware that sets recommended HTTP security response headers.
-// SecurityHeaders 返回一个设置推荐 HTTP 安全响应头的中间件。
 //
-// Headers set (aligned with Python Agent SecurityHeadersMiddleware):
-//   - X-Content-Type-Options: nosniff — 禁止浏览器 MIME 类型嗅探
-//   - X-Frame-Options: SAMEORIGIN — 防止点击劫持
-//   - X-XSS-Protection: 1; mode=block — 旧版浏览器 XSS 过滤
-//   - Strict-Transport-Security (HSTS) — 强制 HTTPS，防协议降级攻击
-//   - Referrer-Policy: strict-origin-when-cross-origin — 控制 Referrer 信息量
-//   - Permissions-Policy — 限制浏览器敏感特性访问
+// SecurityHeaders 返回设置企业级 HTTP 安全响应头的中间件。
+//
+// 设置的安全响应头：
+//   - X-Content-Type-Options: nosniff — 禁止浏览器对响应 MIME 类型进行猜测嗅探；
+//   - X-Frame-Options: SAMEORIGIN — 禁止外部站点通过 iframe 嵌入本页面，防点击劫持（Clickjacking）；
+//   - X-XSS-Protection: 1; mode=block — 启用浏览器内置 XSS 过滤器并在检测到攻击时停止渲染；
+//   - Strict-Transport-Security (HSTS) — 强制客户端在 1 年内仅使用 HTTPS 访问；
+//   - Referrer-Policy: strict-origin-when-cross-origin — 跨域请求时仅发送协议与域名，保护路径隐私；
+//   - Permissions-Policy — 严格禁用摄像头、麦克风与地理定位等敏感硬件权限。
 func SecurityHeaders() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.Writer.Header().Set("X-Content-Type-Options", "nosniff")
-		c.Writer.Header().Set("X-Frame-Options", "SAMEORIGIN")
-		c.Writer.Header().Set("X-XSS-Protection", "1; mode=block")
-		c.Writer.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-		c.Writer.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		c.Writer.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		SecurityHeadersTo(c.Writer)
 		c.Next()
 	}
 }
 
-// generateRequestID generates a unique request ID using crypto/rand.
-// P25 fix: replaces predictable timestamp-based ID with cryptographic random suffix.
-// Format: req-<unix_seconds>-<8_random_hex_chars>
+// SecurityHeadersTo writes the standard security response headers to w.
+// It is exposed so callers can apply the same headers and override specific
+// values (e.g. X-Frame-Options) before the response is sent.
+func SecurityHeadersTo(w http.ResponseWriter) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+	w.Header().Set("X-XSS-Protection", "1; mode=block")
+	w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+	w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+}
+
+// generateRequestID 生成包含高精度时间戳与 4 字节加密级安全随机数的唯一追踪 ID。
+// 格式规范：req-<YYYYMMDDHHMMSS-纳秒>-<8位十六进制随机数>
 func generateRequestID() string {
 	var buf [4]byte
 	_, _ = rand.Read(buf[:])

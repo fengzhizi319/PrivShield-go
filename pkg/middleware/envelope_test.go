@@ -1,3 +1,14 @@
+// Package middleware 单元测试套件
+//
+// ==============================================================================
+// 【测试套件设计目标与覆盖范围】
+// 本测试文件验证 Package middleware 中统一 API 响应信封的核心逻辑：
+//  1. 【错误信封格式】：验证 AbortWithError 正确输出 5 字段 JSON 结构（code, message, detail, trace_id, timestamp）与双头注入；
+//  2. 【成功信封格式】：验证 RespondWithSuccess 正确输出 OK 状态与 trace_id；
+//  3. 【状态码映射】：验证 ErrorCodeFromStatus 将 400、401、403、404、409、429、500、503 等状态码正确转换为标准字串；
+//  4. 【自动生成 TraceID】：验证未设置 X-Request-ID 时，信封会自动生成非空 trace_id 并设置到响应头。
+// ==============================================================================
+
 package middleware
 
 import (
@@ -9,6 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// TestAbortWithError_Format 验证 AbortWithError 输出的 5 字段信封结构完整性与 X-Request-ID / X-Trace-ID 双头注入。
 func TestAbortWithError_Format(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
@@ -40,7 +52,7 @@ func TestAbortWithError_Format(t *testing.T) {
 		t.Error("expected non-empty timestamp")
 	}
 
-	// Verify headers
+	// Verify headers / 验证双响应头
 	if got := w.Header().Get("X-Request-ID"); got != "req-test-envelope-001" {
 		t.Errorf("expected X-Request-ID header 'req-test-envelope-001', got %s", got)
 	}
@@ -49,6 +61,7 @@ func TestAbortWithError_Format(t *testing.T) {
 	}
 }
 
+// TestRespondWithSuccess_Format 验证 RespondWithSuccess 输出的成功信封格式与 TraceID 关联。
 func TestRespondWithSuccess_Format(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
@@ -75,6 +88,7 @@ func TestRespondWithSuccess_Format(t *testing.T) {
 	}
 }
 
+// TestErrorCodeFromStatus 验证 HTTP 状态码到标准机器可读错误码的映射矩阵。
 func TestErrorCodeFromStatus(t *testing.T) {
 	tests := []struct {
 		status   int
@@ -99,11 +113,12 @@ func TestErrorCodeFromStatus(t *testing.T) {
 	}
 }
 
+// TestAbortWithError_GeneratesTraceID 验证在入站请求未携带追踪头时，信封自动生成 TraceID 并注入响应头。
 func TestAbortWithError_GeneratesTraceID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	// No X-Request-ID header set
+	// No X-Request-ID header set / 不携带请求头
 	c.Request = httptest.NewRequest("GET", "/api/test", nil)
 
 	AbortWithError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "服务器内部错误", nil)

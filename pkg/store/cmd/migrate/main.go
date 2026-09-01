@@ -1,16 +1,30 @@
 // Command migrate copies PrivShield Phase A (SQLite) data into Phase B (PostgreSQL).
+// Command migrate 将 PrivShield Phase A (SQLite) 历史数据平滑迁移至 Phase B (PostgreSQL)。
 //
-// Usage:
+// ==============================================================================
+// 【命令行工具使用指南】
 //
 //	go run ./pkg/store/cmd/migrate \
 //	  -hub-db ./data/service-hub.db \
 //	  -audit-db ./data/audit-log.db \
 //	  -pg-dsn "postgres://user:pass@localhost:5432/privshield?sslmode=disable" \
 //	  -batch 500 \
-//	  -dry-run
+//	  -verify \
+//	  -snapshot-verify-mode after-migrate \
+//	  -audit-encryption-key "your-encryption-key"
 //
-// The tool is idempotent: rows are inserted with ON CONFLICT DO NOTHING, so
-// re-running against a partially migrated database is safe.
+// 【核心特性与可靠性保证】
+// 1. 【幂等性 (Idempotency)】：
+//    所有 INSERT 语句均携带 `ON CONFLICT (id) DO NOTHING`，支持在网络中断或中断后安全重复执行；
+// 2. 【哈希链落盘序严格保序】：
+//    audit_logs 与 snapshots 严格按照 SQLite 的 `ORDER BY rowid ASC` 流式拉取并在同一事务内插入，
+//    确保物理落盘顺序与链式 hash 递进顺序 100% 吻合；
+// 3. 【密文快照 SM4 解密验真 (-snapshot-verify-mode)】：
+//    支持对 snapshots 表中的 `enc:v1:` 密文样本调用 SM4-GCM 解密验真，防止迁移破损密文；
+// 4. 【哈希链自动对账 (-verify)】：
+//    迁移完成后自动调用 PostgreSQL AuditStore 的 VerifyChain 对全量链进行防篡改核验。
+// ==============================================================================
+
 package main
 
 import (
@@ -88,6 +102,7 @@ type runConfig struct {
 	auditEncryptionKey string
 }
 
+// run 编排完整的迁移执行流水线。
 func run(ctx context.Context, logger *slog.Logger, cfg runConfig) error {
 	var pgPool *pgxpool.Pool
 	if !cfg.dryRun {
@@ -113,25 +128,29 @@ func run(ctx context.Context, logger *slog.Logger, cfg runConfig) error {
 		logger.Info("snapshot verification completed")
 		return nil
 	case "skip", "after-migrate":
-		// proceed with migration
+		// 继续正常迁移
 	default:
 		return fmt.Errorf("invalid snapshot-verify-mode %q (expected skip, after-migrate, or only)", cfg.snapshotVerifyMode)
 	}
 
+	// 1. 迁移调度任务 tasks
 	if err := migrateTasks(ctx, logger, cfg.hubDBPath, pgPool, cfg.batchSize, cfg.dryRun); err != nil {
 		return fmt.Errorf("migrate tasks: %w", err)
 	}
 
+	// 2. 迁移不可篡改审计日志与快照
 	if err := migrateAudit(ctx, logger, cfg.auditDBPath, pgPool, cfg.dryRun); err != nil {
 		return fmt.Errorf("migrate audit: %w", err)
 	}
 
+	// 3. 可选：哈希链对账核验
 	if cfg.verify && !cfg.dryRun {
 		if err := verifyChain(ctx, logger, cfg.pgDSN); err != nil {
 			return fmt.Errorf("verify chain: %w", err)
 		}
 	}
 
+	// 4. 可选：快照密文解密核验
 	if cfg.snapshotVerifyMode == "after-migrate" && !cfg.dryRun {
 		if err := verifySnapshots(ctx, logger, pgPool, cfg.auditEncryptionKey); err != nil {
 			return fmt.Errorf("verify snapshots: %w", err)
@@ -142,6 +161,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg runConfig) error {
 	return nil
 }
 
+// migrateTasks 从 SQLite 读取 tasks 表并以 batchSize 大小微批幂等写入 PostgreSQL。
 func migrateTasks(ctx context.Context, logger *slog.Logger, sqlitePath string, pgPool *pgxpool.Pool, batchSize int, dryRun bool) error {
 	db, err := sql.Open("sqlite", sqlitePath)
 	if err != nil {
@@ -240,6 +260,7 @@ func migrateTasks(ctx context.Context, logger *slog.Logger, sqlitePath string, p
 	return nil
 }
 
+// migrateAudit 从 SQLite 读取 audit_logs 与 snapshots 表，并严格按照 rowid 落盘顺序在单个 PostgreSQL 事务中提交。
 func migrateAudit(ctx context.Context, logger *slog.Logger, sqlitePath string, pgPool *pgxpool.Pool, dryRun bool) error {
 	db, err := sql.Open("sqlite", sqlitePath)
 	if err != nil {
@@ -263,7 +284,7 @@ func migrateAudit(ctx context.Context, logger *slog.Logger, sqlitePath string, p
 		id string
 		ts time.Time
 	}
-	// Preserve original insertion order to keep the hash-chain sequence intact.
+	// 严格维护落盘顺序
 	logOrder := []auditKey{}
 	logByID := make(map[string][]any)
 
@@ -291,7 +312,7 @@ func migrateAudit(ctx context.Context, logger *slog.Logger, sqlitePath string, p
 		return fmt.Errorf("iterate audit_logs: %w", err)
 	}
 
-	// Load snapshots keyed by audit_log_id.
+	// 读取 snapshots
 	snapRows, err := db.QueryContext(ctx, `
 		SELECT id, audit_log_id, timestamp, input_sample, output_sample, algorithm, parameters_json, integrity_hash, prev_hash
 		FROM snapshots
@@ -323,7 +344,6 @@ func migrateAudit(ctx context.Context, logger *slog.Logger, sqlitePath string, p
 		return nil
 	}
 
-	// Insert logs in original rowid order, followed by their snapshots, in a single transaction.
 	tx, err := pgPool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin audit tx: %w", err)
@@ -364,6 +384,7 @@ func migrateAudit(ctx context.Context, logger *slog.Logger, sqlitePath string, p
 	return nil
 }
 
+// verifyChain 对迁移至 PostgreSQL 的全量哈希链执行防篡改核验。
 func verifyChain(ctx context.Context, logger *slog.Logger, pgDSN string) error {
 	cfg := postgres.Config{DSN: pgDSN}
 	store, err := postgres.NewAuditStore(ctx, cfg, logger)
@@ -383,6 +404,7 @@ func verifyChain(ctx context.Context, logger *slog.Logger, pgDSN string) error {
 	return nil
 }
 
+// verifySnapshots 扫描 snapshots 表中的密文样本，通过 SM4-GCM 解密验真。
 func verifySnapshots(ctx context.Context, logger *slog.Logger, pgPool *pgxpool.Pool, key string) error {
 	if key == "" {
 		return fmt.Errorf("audit encryption key is required for snapshot verification (set AUDIT_LOG_ENCRYPTION_KEY or PRIVACY_AUDIT_KEY)")

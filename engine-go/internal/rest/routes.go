@@ -23,9 +23,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/fengzhizi319/PrivShield/engine-go/internal/dynclassification"
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/security"
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/service"
 	"github.com/fengzhizi319/PrivShield/pkg/middleware"
+	"github.com/fengzhizi319/PrivShield/pkg/naming"
 	"github.com/fengzhizi319/PrivShield/privacy-go-sdk/kano"
 )
 
@@ -1065,19 +1067,45 @@ func evalRecordHandler(svc *service.PrivacyService) gin.HandlerFunc {
 				converted[i] = cm
 			}
 			results := svc.ClassifyBatch(converted)
-			c.JSON(http.StatusOK, gin.H{"classifications": results})
+			overall := overallSecurityLevel(results...)
+			c.JSON(http.StatusOK, gin.H{
+				"classifications": results,
+				"level":           overall,
+				"overall_level":   overall,
+			})
 			return
 		}
 		if len(req.Record) > 0 {
 			results := make(map[string]any, len(req.Record))
+			classified := make([]*dynclassification.ClassificationResult, 0, len(req.Record))
 			for k, v := range req.Record {
-				results[k] = svc.Classify(k, fmt.Sprintf("%v", v))
+				res := svc.Classify(k, fmt.Sprintf("%v", v))
+				results[k] = res
+				classified = append(classified, res)
 			}
-			c.JSON(http.StatusOK, gin.H{"result": results, "classifications": results})
+			overall := overallSecurityLevel(classified...)
+			c.JSON(http.StatusOK, gin.H{
+				"result":          results,
+				"classifications": results,
+				"level":           overall,
+				"overall_level":   overall,
+			})
 			return
 		}
 		middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "record or records is required", nil)
 	}
+}
+
+// overallSecurityLevel 取多条字段分类结果中最高的敏感级别，返回规则库 L1~L5 标识。
+// 无任何可识别级别时返回空串——调用方必须按 fail-closed 处理，不得替换为默认等级。
+func overallSecurityLevel(results ...*dynclassification.ClassificationResult) string {
+	ids := make([]string, 0, len(results))
+	for _, res := range results {
+		if res != nil {
+			ids = append(ids, res.LevelID)
+		}
+	}
+	return naming.MaxSecurityLevelID(ids...)
 }
 
 // ──────────────────────────────────────────────

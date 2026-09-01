@@ -11,12 +11,14 @@ package handlers
 
 import (
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
 	"github.com/fengzhizi319/PrivShield/services/datasource-mgr/internal/models"
@@ -164,6 +166,19 @@ func findCSVFile(filename string) (string, error) {
 	return "", fmt.Errorf("csv file not found: %s", baseName)
 }
 
+// strictDataIntegrity 是 P0-4「禁静音降级」开关：由 main() 依据 cfg.StrictStorage 在启动阶段置位。
+// 为真时，样本 CSV 中的损坏行不再被静默丢弃（原实现 `continue` 会让调用方拿到一个比文件实际内容
+// 更小的数据集却返回 200），而是上抛为查询失败。
+// 默认即为 true（fail-closed）：即使某个入口忘记调用 SetStrictDataIntegrity，也不会退回静音降级；
+// 只有显式 DATASOURCE_MGR_STRICT_STORAGE=false 才会关闭。
+var strictDataIntegrity atomic.Bool
+
+func init() { strictDataIntegrity.Store(true) }
+
+// SetStrictDataIntegrity 设置样本数据集完整性严格模式（进程启动时调用一次）。
+// SetStrictDataIntegrity enables or disables strict sample-data integrity for the whole process.
+func SetStrictDataIntegrity(strict bool) { strictDataIntegrity.Store(strict) }
+
 // LoadCSVRecords loads CSV records from disk with dynamic type inference and pagination.
 // LoadCSVRecords 加载并解析指定的 CSV 数据文件，执行动态类型推断与分页切片，执行逻辑如下：
 // 1. 定位文件：调用 findCSVFile(filename) 获取文件物理路径；
@@ -174,6 +189,7 @@ func findCSVFile(filename string) (string, error) {
 //   - 将每个字段值映射到表头列名；
 //   - 智能类型转换：优先尝试转为 int64 整数；若包含小数点则尝试转为 float64 浮点数；否则保留为 string；
 //   - 将解析后的 map[string]any 追加至 allRows；
+//   - 严格存储模式（DATASOURCE_MGR_STRICT_STORAGE=true，默认）下损坏行直接报错，不静默丢弃；
 //
 // 5. 分页窗口截取：
 //   - 纠正非法 offset（小于 0 时重置为 0）；
@@ -211,6 +227,15 @@ func LoadCSVRecords(filename string, limit, offset int) ([]map[string]any, int, 
 			break
 		}
 		if err != nil {
+			if strictDataIntegrity.Load() {
+				// 禁止静音降级：损坏行会让返回记录数小于文件实际行数，必须让调用方观测到失败。
+				line := -1
+				var pe *csv.ParseError
+				if errors.As(err, &pe) {
+					line = pe.StartLine
+				}
+				return nil, 0, fmt.Errorf("read csv %s: malformed record at line %d: %w", filePath, line, err)
+			}
 			continue // 忽略损坏或空行
 		}
 

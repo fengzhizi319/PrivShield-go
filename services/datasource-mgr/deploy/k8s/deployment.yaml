@@ -49,12 +49,17 @@ spec:
               value: "0.0.0.0"
             - name: DATASOURCE_MGR_GRPC_PORT
               value: "50053"
-            - name: PRIVACY_AGENT_REST_HOST
-              value: "privshield"
-            - name: PRIVACY_REST_PORT
-              value: "8079"
-            - name: DATASOURCE_MGR_DB_PATH
-              value: "/app/data/datasource-mgr.db"
+            # 注：本服务不读取 PRIVACY_AGENT_REST_HOST / PRIVACY_REST_PORT（示范数据源为
+            # samples/*.csv 真实同构模拟库，不调用引擎），也**没有**任何数据库变量
+            #（原 DATASOURCE_MGR_DB_PATH 属 P2-1 幽灵变量，已删除）。
+            # P0-1：0.0.0.0 监听 ⇒ 入站 Key 必填，缺失即启动门禁拒绝启动。
+            # 部署前创建：kubectl create secret generic datasource-mgr-apikeys \
+            #   --from-literal=api-key='<openssl rand -hex 16>'
+            - name: DATASOURCE_MGR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: datasource-mgr-apikeys
+                  key: api-key
             - name: DATASOURCE_MGR_LOG_FORMAT
               value: "json"
             - name: DATASOURCE_MGR_LOG_LEVEL

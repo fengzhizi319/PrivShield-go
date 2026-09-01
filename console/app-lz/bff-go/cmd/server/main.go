@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os/signal"
 	"syscall"
@@ -29,9 +30,9 @@ import (
 	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/config"
 	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/handlers"
 	"github.com/fengzhizi319/PrivShield/console/app-lz/bff-go/internal/runner"
-	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
 	"github.com/fengzhizi319/PrivShield/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield/pkg/naming"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 )
 
 func main() {
@@ -47,8 +48,9 @@ func main() {
 	}
 
 	// ── 第 2.5 步：初始化结构化日志记录器 ──────────────────────────────
-	// 使用共享库 pkgconfig.SetupLogger 初始化基于 slog 的全局日志记录器（支持 json/text 格式）。
-	logger := pkgconfig.SetupLogger(cfg.LogFormat, cfg.LogLevel)
+	// 使用共享库 pkg/observability.InitLogger 初始化基于 slog 的全局日志记录器（支持 json/text 格式）。
+	pkgobs.InitLogger(cfg.LogFormat, cfg.LogLevel)
+	logger := slog.Default()
 
 	// ── 第 3 步：初始化核心组件 ────────────────────────────────────────
 	// Collector: Prometheus 指标收集器；注册为 naming 的观测器后，

@@ -2,15 +2,22 @@
 // identifiers: the canonical `api_code` / `datasource_id` registry and the
 // inbound alias normalization rules.
 //
-// Package naming 是跨服务业务标识的唯一事实源：canonical `api_code` /
-// `datasource_id` 注册表，以及入站别名的归一化规则。
+// ==============================================================================
+// 【架构设计背景与设计约束】
+// Package naming 是 PrivShield 跨服务业务标识的唯一事实源 (Single Source of Truth, SSOT)：
+// 权威管理 canonical `api_code` / `datasource_id` 注册表，以及入站别名的归一化规则。
 //
-// 设计约束（见 console/app-lz/docs/api_rename_design.md §5、§6）：
-//  1. 一个数据源只有一个 datasource_id；slug（yibao）、文件名（yibao.csv）、
-//     中文名（医保）、api_code（api1_yibao）都只是它的表现形式，只允许在
-//     服务边界被归一化一次，内部各层只传 canonical 值。
-//  2. 归一化未知值必须 fail-closed（写侧拒绝），禁止静默回落到默认数据源。
-//  3. 业务模块不得再出现裸数据源字面量，一律引用本包常量或查注册表。
+// 设计约束（详细规范见 console/app-lz/docs/api_rename_design.md §5、§6）：
+//  1. 【唯一标识原则】：一个数据源实体有且仅有一个 canonical datasource_id（如 ds_yibao）。
+//     其简写 slug（yibao）、数据文件名（yibao.csv）、中文名称（医保/医保结算）、
+//     业务 API 编码（api1_yibao）均为外部表现形式，只允许在系统服务边界（REST/gRPC/BFF 入口）
+//     被归一化一次，内部各微服务与模块间流转一律强制使用 canonical 标识。
+//  2. 【Fail-Closed 零逃逸原则】：归一化未登记的非法或未知入站值时，必须直接报错拒绝（写侧 400），
+//     严禁静默回退或降级到任何默认数据源，彻底杜绝数据源错配与安全逃逸风险。
+//  3. 【代码防腐原则】：全仓库业务代码中严禁出现任何裸数据源字符串字面量（如 "yibao"），
+//     必须统一引用本包导出的命名常量（如 naming.DSYibao）或通过注册表方法动态查询。
+// ==============================================================================
+
 package naming
 
 import (
@@ -20,61 +27,67 @@ import (
 	"strings"
 )
 
-// canonical api_code —— 业务 API 稳定标识
+// canonical api_code —— 业务 API 稳定唯一标识（面向外部业务方调用与协议契约）
 const (
-	API1Yibao    = "api1_yibao"
+	// API1Yibao 医保结算数据接口契约标识
+	API1Yibao = "api1_yibao"
+	// API2Kangyang 康养健康档案接口契约标识
 	API2Kangyang = "api2_kangyang"
 )
 
-// canonical datasource_id —— 数据源实体标识
+// canonical datasource_id —— 数据源物理/逻辑实体唯一标识（面向内部存储、脱敏引擎与审计存证）
 const (
-	DSYibao    = "ds_yibao"
+	// DSYibao 柳州医保结算数据集（18 字段，对标 DB51/T 2989-2023）
+	DSYibao = "ds_yibao"
+	// DSKangyang 柳州康养体检与慢病数据集（27 字段）
 	DSKangyang = "ds_kangyang"
-	DSMock3    = "ds_mock3" // 预留政务数据源 3
-	DSMock4    = "ds_mock4" // 预留企业/金融数据源 4
+	// DSMock3 预留政务数据源 3（占位已登记，写侧拒绝 409）
+	DSMock3 = "ds_mock3"
+	// DSMock4 预留企业/金融数据源 4（占位已登记，写侧拒绝 409）
+	DSMock4 = "ds_mock4"
 )
 
-// Registry entry status values.
-// 注册表条目状态。
+// Registry entry status values / 注册表条目生命周期状态。
 const (
-	StatusActive   = "active"   // 已实现，可派发
-	StatusReserved = "reserved" // 占位，写侧必须拒绝（409）
+	// StatusActive 已正式上线实现，允许进行读写、派发与隐私脱敏调度
+	StatusActive = "active"
+	// StatusReserved 预留占位条目（尚未开放），读侧可查元数据，写侧派发时必须强制拒绝（HTTP 409 / Conflict）
+	StatusReserved = "reserved"
 )
 
 // ID literal formats (api_rename_design.md §1.3).
-// ID 字面格式校验正则。
+// 正则表达式：严格限制标识符命名空间与字面格式，防止特殊字符注入与格式混淆。
 var (
+	// datasourceIDRe 规范：以 ds_ 开头，后接小写字母，总长度 5~34 字符（^ds_[a-z][a-z0-9_]{1,30}$）
 	datasourceIDRe = regexp.MustCompile(`^ds_[a-z][a-z0-9_]{1,30}$`)
-	apiCodeRe      = regexp.MustCompile(`^api[1-9]_[a-z][a-z0-9_]{1,30}$`)
+	// apiCodeRe 规范：以 api[1-9]_ 开头，后接小写字母，总长度 6~35 字符（^api[1-9]_[a-z][a-z0-9_]{1,30}$）
+	apiCodeRe = regexp.MustCompile(`^api[1-9]_[a-z][a-z0-9_]{1,30}$`)
 )
 
-// ErrUnknownDataSource is returned when an inbound value cannot be mapped to a
-// canonical datasource_id. Callers should translate it into
-// 400 INVALID_DATASOURCE_ID (REST) or codes.InvalidArgument (gRPC).
-// ErrUnknownDataSource 表示入站值无法映射到 canonical datasource_id。
+// ErrUnknownDataSource 表示入站标识无法映射到任何已登记的 canonical datasource_id。
+// 语义说明：调用方传入了未知的数据源名称或别名。
+// HTTP REST 应转换为 400 INVALID_DATASOURCE_ID；gRPC 应转换为 codes.InvalidArgument。
 var ErrUnknownDataSource = errors.New("unknown datasource id")
 
-// ErrReservedDataSource is returned for a registered but not-yet-implemented
-// entry; callers should translate it into 409 RESERVED_DATASOURCE.
-// ErrReservedDataSource 表示条目已登记但未实现，写侧需拒绝。
+// ErrReservedDataSource 表示条目虽已在注册表中登记，但属于未实现或暂未开放的预留位。
+// 语义说明：写侧调度或任务创建时命中预留位应拒绝执行。
+// HTTP REST 应转换为 409 RESERVED_DATASOURCE；gRPC 应转换为 codes.FailedPrecondition。
 var ErrReservedDataSource = errors.New("reserved datasource")
 
-// Entry is one row of the canonical registry.
-// Entry 是 canonical 注册表的一行。
+// Entry 定义了 canonical 注册表中单个数据源的权威元数据结构。
 type Entry struct {
-	APICode      string            // "api1_yibao"；预留位为空
-	DataSourceID string            // canonical 数据源 ID
-	Seq          int               // 展示序号（仅用于 UI，不参与语义）
-	DisplayName  map[string]string // 语言标签 → 展示名（"zh-CN" / "en-US"）
-	Category     string            // "medical" | "healthcare" | "reserved"
-	FileName     string            // 源数据文件名（仅展示/排查用途）
-	FieldCount   int               // schema 字段数
-	Aliases      []string          // 入站可接受的别名（slug/文件名/中文名/类别）
-	Status       string            // StatusActive | StatusReserved
+	APICode      string            // 绑定的业务 API 契约编码（如 "api1_yibao"；预留位无绑定时为空串）
+	DataSourceID string            // 权威唯一的数据源实体标识（如 "ds_yibao"）
+	Seq          int               // 前端展示排序序号（仅用于 UI 列表展现，不参与底层路由判定）
+	DisplayName  map[string]string // 国际化多语言展示名称（键为语言标签，如 "zh-CN" / "en-US"）
+	Category     string            // 领域分类（"medical" 医疗 | "healthcare" 康养 | "reserved" 预留）
+	FileName     string            // 样本/物理数据源文件名（仅作为展示、排查与日志辅助参考）
+	FieldCount   int               // Schema 物理字段总数（如医保 18 字段，康养 27 字段）
+	Aliases      []string          // 允许在系统边界自动归一化的入站别名池（支持 slug、文件名、中文名、分类名）
+	Status       string            // 生命周期状态（StatusActive 正常服务 | StatusReserved 预留未开放）
 }
 
-// Registry is the authoritative list of business data sources.
-// Registry 是业务数据源的权威清单，顺序即展示顺序。
+// Registry 是全系统权威的数据源静态注册表切片，切片顺序即为默认展示顺序。
 var Registry = []Entry{
 	{
 		APICode:      API1Yibao,
@@ -118,15 +131,15 @@ var Registry = []Entry{
 	},
 }
 
-// Lookup tables built once at init: canonical id / api_code / alias → Entry.
-// init 时构建一次索引：canonical id / api_code / 别名 → Entry。
+// 内部索引表（在包 init() 时单次全量构建，提供 O(1) 复杂度的并发只读高速查找）
 var (
-	byDataSourceID map[string]*Entry
-	byAPICode      map[string]*Entry
-	aliasIndex     map[string]*Entry
-	aliasConflicts []string
+	byDataSourceID map[string]*Entry // canonical datasource_id -> *Entry 映射索引
+	byAPICode      map[string]*Entry // canonical api_code -> *Entry 映射索引
+	aliasIndex     map[string]*Entry // 别名（大小写敏感及小写规范化）-> *Entry 映射索引
+	aliasConflicts []string          // 记录别名冲突冲突项（初始化时检测，正常必须为空）
 )
 
+// init 在包加载时完成双向索引构建与别名冲突防御性检测。
 func init() {
 	byDataSourceID = make(map[string]*Entry, len(Registry))
 	byAPICode = make(map[string]*Entry, len(Registry))
@@ -138,8 +151,7 @@ func init() {
 		if e.APICode != "" {
 			byAPICode[e.APICode] = e
 		}
-		// The canonical id itself and its api_code are also valid inbound
-		// aliases, but they are resolved with higher priority below.
+		// 别名池注册：同时检测不同数据源之间是否意外声明了同名别名，防止歧义路由
 		for _, a := range e.Aliases {
 			if prev, ok := aliasIndex[a]; ok && prev.DataSourceID != e.DataSourceID {
 				aliasConflicts = append(aliasConflicts, fmt.Sprintf("%q→%s|%s", a, prev.DataSourceID, e.DataSourceID))
@@ -149,14 +161,13 @@ func init() {
 	}
 }
 
-// AliasConflicts returns aliases registered by more than one entry. It must
-// always be empty; it is exposed so unit tests can fail loudly on registry
-// pollution (api_rename_design.md §6.1 AMBIGUOUS_SOURCE defence).
-// AliasConflicts 返回被多个条目占用的别名，正常必须为空。
+// AliasConflicts 返回被多个不同数据源条目重复占用的冲突别名列表。
+// 架构保障：正常情况下切片长度必须恒等于 0；CI 单测中会严格断言此函数，防止注册表被污染。
 func AliasConflicts() []string { return aliasConflicts }
 
-// EntryByDataSourceID returns the entry whose canonical id equals id (exact match).
-// EntryByDataSourceID 按 canonical ID 精确查找条目。
+// EntryByDataSourceID 按 canonical datasource_id 执行 O(1) 精确查找。
+// 使用方法：当已知入参为标准 canonical ID 时调用。
+// 返回值：找到则返回 Entry 拷贝与 true；未找到返回空结构体与 false。
 func EntryByDataSourceID(id string) (Entry, bool) {
 	if e, ok := byDataSourceID[id]; ok {
 		return *e, true
@@ -164,8 +175,9 @@ func EntryByDataSourceID(id string) (Entry, bool) {
 	return Entry{}, false
 }
 
-// EntryByAPICode returns the entry for a canonical api_code (exact match).
-// EntryByAPICode 按 canonical api_code 精确查找条目。
+// EntryByAPICode 按 canonical api_code 执行 O(1) 精确查找。
+// 使用方法：根据契约接口编码（如 api1_yibao）获取对应的数据源定义。
+// 返回值：找到则返回 Entry 拷贝与 true；未找到返回空结构体与 false。
 func EntryByAPICode(code string) (Entry, bool) {
 	if e, ok := byAPICode[code]; ok {
 		return *e, true
@@ -173,16 +185,16 @@ func EntryByAPICode(code string) (Entry, bool) {
 	return Entry{}, false
 }
 
-// Entries returns a copy of the full registry in display order.
-// Entries 按展示顺序返回完整注册表副本。
+// Entries 返回全量注册表条目的深拷贝切片（保持展示顺序）。
+// 使用方法：供管理看板、元数据探查及控制台获取完整数据源清单使用。
 func Entries() []Entry {
 	out := make([]Entry, len(Registry))
 	copy(out, Registry)
 	return out
 }
 
-// ActiveEntries returns only implemented (status=active) entries.
-// ActiveEntries 只返回已实现（status=active）的条目，供 UI 选项使用。
+// ActiveEntries 仅返回处于已上线激活状态（status == StatusActive）的数据源条目切片。
+// 使用方法：供前端 UI 下拉菜单、数据流通选择器展示可用服务列表。
 func ActiveEntries() []Entry {
 	out := make([]Entry, 0, len(Registry))
 	for _, e := range Registry {
@@ -193,8 +205,8 @@ func ActiveEntries() []Entry {
 	return out
 }
 
-// ActiveDataSourceIDs returns canonical ids that may be dispatched.
-// ActiveDataSourceIDs 返回允许派发的 canonical 数据源 ID。
+// ActiveDataSourceIDs 返回所有处于激活状态的 canonical 数据源 ID 列表。
+// 使用方法：用于接口校验错误信息中拼接 allowed 列表，指导客户端纠错。
 func ActiveDataSourceIDs() []string {
 	out := make([]string, 0, len(Registry))
 	for _, e := range Registry {
@@ -205,8 +217,7 @@ func ActiveDataSourceIDs() []string {
 	return out
 }
 
-// AllDataSourceIDs returns every registered canonical id, reserved included.
-// AllDataSourceIDs 返回全部已登记 canonical ID（含预留位）。
+// AllDataSourceIDs 返回所有已在册的 canonical 数据源 ID 列表（包含预留位）。
 func AllDataSourceIDs() []string {
 	out := make([]string, 0, len(Registry))
 	for _, e := range Registry {
@@ -215,12 +226,14 @@ func AllDataSourceIDs() []string {
 	return out
 }
 
-// NormalizeDataSourceID maps any accepted inbound representation (canonical id,
-// api_code, URL slug, source file name, Chinese display keyword) to the
-// canonical datasource_id.
+// NormalizeDataSourceID 将任意合法的入站表现形式映射归一化为标准的 canonical datasource_id。
 //
-// 归一化优先级固定为：canonical id > api_code > alias，未知/空值返回包装
-// ErrUnknownDataSource 的错误，调用方必须 fail-closed（禁止回落默认源）。
+// 使用方法：
+// 适用于所有接收外部请求的入口 Handler（如 URL Path、Query Param、JSON Body）。
+//
+// 执行逻辑：
+// 1. 调用 Normalize(raw) 解析条目；
+// 2. 若解析成功返回 e.DataSourceID；若失败返回包装了 ErrUnknownDataSource 的错误。
 func NormalizeDataSourceID(raw string) (string, error) {
 	e, err := Normalize(raw)
 	if err != nil {
@@ -229,11 +242,18 @@ func NormalizeDataSourceID(raw string) (string, error) {
 	return e.DataSourceID, nil
 }
 
-// Normalize is the Entry-returning form of NormalizeDataSourceID.
-// Normalize 返回条目本体，便于调用方同时取到 api_code / 展示名。
+// Normalize 是 NormalizeDataSourceID 的完整条目返回形式。
 //
-// 同时向已注册的 Observer 上报别名使用与归一化失败（§7.2）；未注册时为空操作。
-// 预留位命中由 ResolveInbound/checkWritableEntry 上报，本函数不重复计数。
+// 使用方法：
+// 当调用方在归一化的同时，还需要获取该数据源关联的 api_code、多语言展示名或 Schema 字段数时使用。
+//
+// 执行逻辑与优先级规则：
+// 1. 去除入站字符串首尾空白字符；若为空串，触发 recordNormalizeError(ReasonEmpty) 并报错；
+// 2. 【第一优先级：Canonical ID 精确匹配】：若命中 canonical ID（如 "ds_yibao"），直接返回，不触发别名指标上报；
+// 3. 【第二优先级：API Code 契约匹配】：若命中 api_code（如 "api1_yibao"），触发 recordAlias(..., TargetAPICode) 并返回；
+// 4. 【第三优先级：别名池不区分大小写匹配】：尝试转全小写匹配别名索引（如 "YIBAO.CSV" -> "ds_yibao"），触发 recordAlias(..., TargetDataSourceID)；
+// 5. 【第四优先级：别名池精确匹配】：尝试原样匹配（支持中文别名如 "医保"、"康养"），触发 recordAlias(..., TargetDataSourceID)；
+// 6. 【Fail-Closed 拦截】：若以上全部未命中，触发 recordNormalizeError(ReasonUnknown)，返回带有可用列表指引的未知错误。
 func Normalize(raw string) (*Entry, error) {
 	v := strings.TrimSpace(raw)
 	if v == "" {
@@ -261,33 +281,33 @@ func Normalize(raw string) (*Entry, error) {
 	return nil, unknownError(raw)
 }
 
-// unknownError builds an error that wraps ErrUnknownDataSource and carries the
-// received value plus the allowed canonical ids, so handlers can render the
-// {"code":"INVALID_DATASOURCE_ID","details":{...}} body without extra lookup.
+// unknownError 构建携带可用列表的标准化错误，便于外层渲染 400 错误信封详情。
 func unknownError(received string) error {
 	return fmt.Errorf("%w: %q (allowed: %s)", ErrUnknownDataSource, received,
 		strings.Join(ActiveDataSourceIDs(), ", "))
 }
 
-// IsUnknownDataSource reports whether err came from an unmappable inbound id.
-// IsUnknownDataSource 判断错误是否为「未知数据源标识」。
+// IsUnknownDataSource 判断给定 error 是否由「未登记的未知数据源」引起。
+// 使用方法：在 HTTP 中间件或错误信封转换中判断是否应输出 400 INVALID_DATASOURCE_ID。
 func IsUnknownDataSource(err error) bool {
 	return errors.Is(err, ErrUnknownDataSource)
 }
 
-// IsReserved reports whether err was caused by a reserved (not implemented) entry.
-// IsReserved 判断错误是否由「已登记未实现」条目引起。
+// IsReserved 判断给定 error 是否由「命中已登记但未开放的预留数据源」引起。
+// 使用方法：在任务创建或调度执行前判断是否应输出 409 RESERVED_DATASOURCE。
 func IsReserved(err error) bool {
 	return errors.Is(err, ErrReservedDataSource)
 }
 
-// CheckWritable validates an already-canonical datasource_id for write-side use:
-// it must be registered and must not be reserved.
+// CheckWritable 校验写侧（如任务落库、隐私调度、流水线派发）所使用的 canonical 数据源 ID。
 //
-// CheckWritable 校验写侧使用的 canonical datasource_id：必须已登记且非预留位。
-// 失败原因同步上报 Observer（它是唯一收口，无需调用方各自埋点）；
-// 与 ResolveInbound 的分工是：后者先调 Normalize（上报 empty/unknown/alias），
-// 再调 checkWritableEntry（仅上报 reserved），因此同一次调用不会重复计数。
+// 使用方法：
+// 在底层核心服务（如 service-hub、audit-log）内部执行写操作前进行防御性校验，入参要求必须已经是 canonical ID。
+//
+// 执行逻辑：
+// 1. 查找 byDataSourceID 索引；
+// 2. 若未查到：若字面格式不符合 ds_* 则上报 ReasonFormatInvalid（提示调用方缺少边界归一化）；否则上报 ReasonUnknown；
+// 3. 若查到条目：调用 checkWritableEntry 校验状态是否为 StatusActive（若为预留位则上报 ReasonReserved 并返回错误）。
 func CheckWritable(datasourceID string) error {
 	e, ok := byDataSourceID[datasourceID]
 	if !ok {
@@ -303,8 +323,7 @@ func CheckWritable(datasourceID string) error {
 	return checkWritableEntry(e)
 }
 
-// checkWritableEntry enforces the write-side status rule on a looked-up entry.
-// checkWritableEntry 对已查到的条目施加写侧状态校验。
+// checkWritableEntry 校验已查到的数据源条目是否允许写操作。
 func checkWritableEntry(e *Entry) error {
 	if e.Status != StatusActive {
 		recordNormalizeError(ReasonReserved)
@@ -313,11 +332,15 @@ func checkWritableEntry(e *Entry) error {
 	return nil
 }
 
-// ResolveInbound normalizes any accepted representation and enforces the
-// write-side rules in one call. It is the single entry point handlers should
-// use before persisting or dispatching a task.
+// ResolveInbound 一步到位完成「入站归一化 + 写侧合法性校验」。
 //
-// ResolveInbound 一次性完成「归一化 + 写侧校验」，是 handler 落库/派发前的唯一入口。
+// 使用方法：
+// 推荐作为所有接收外部请求并准备落库/派发任务的 Handler 统一入口（Best Practice）。
+//
+// 执行逻辑：
+// 1. 调用 Normalize(raw) 将任意入站形式（别名、文件名、中文、api_code）归一化为标准 Entry；
+// 2. 调用 checkWritableEntry(e) 校验该数据源是否为可写活跃状态；
+// 3. 校验通过返回 canonical datasource_id，否则返回对应错误。此组合调用确保预留位指标仅被精准统计一次。
 func ResolveInbound(raw string) (string, error) {
 	e, err := Normalize(raw)
 	if err != nil {
@@ -329,17 +352,14 @@ func ResolveInbound(raw string) (string, error) {
 	return e.DataSourceID, nil
 }
 
-// ValidDataSourceIDFormat reports whether s matches ^ds_[a-z][a-z0-9_]{1,30}$.
-// ValidDataSourceIDFormat 判断字符串是否符合 datasource_id 字面格式。
+// ValidDataSourceIDFormat 校验字符串是否完全符合 datasource_id 命名格式（^ds_[a-z][a-z0-9_]{1,30}$）。
 func ValidDataSourceIDFormat(s string) bool { return datasourceIDRe.MatchString(s) }
 
-// ValidAPICodeFormat reports whether s matches ^api[1-9]_[a-z][a-z0-9_]{1,30}$.
-// ValidAPICodeFormat 判断字符串是否符合 api_code 字面格式。
+// ValidAPICodeFormat 校验字符串是否完全符合 api_code 契约命名格式（^api[1-9]_[a-z][a-z0-9_]{1,30}$）。
 func ValidAPICodeFormat(s string) bool { return apiCodeRe.MatchString(s) }
 
-// APICodeForDataSource returns the canonical api_code of a datasource_id, or ""
-// when the entry has no business API code bound yet (reserved placeholders).
-// APICodeForDataSource 返回数据源对应的 api_code，预留位返回空串。
+// APICodeForDataSource 查询指定 canonical 数据源绑定的 api_code。
+// 若数据源不存在或属于预留位未绑定 API 则返回空字符串 ""。
 func APICodeForDataSource(datasourceID string) string {
 	if e, ok := byDataSourceID[datasourceID]; ok {
 		return e.APICode
@@ -347,8 +367,8 @@ func APICodeForDataSource(datasourceID string) string {
 	return ""
 }
 
-// DataSourceForAPICode returns the canonical datasource_id of an api_code.
-// DataSourceForAPICode 返回 api_code 对应的 canonical 数据源 ID。
+// DataSourceForAPICode 查询指定 api_code 对应的 canonical 数据源 ID。
+// 若匹配成功返回 (datasource_id, true)；若未登记返回 ("", false)。
 func DataSourceForAPICode(apiCode string) (string, bool) {
 	if e, ok := byAPICode[apiCode]; ok {
 		return e.DataSourceID, true
@@ -356,8 +376,7 @@ func DataSourceForAPICode(apiCode string) (string, bool) {
 	return "", false
 }
 
-// APICodes returns all registered api_codes in display order.
-// APICodes 按展示顺序返回全部已登记 api_code。
+// APICodes 按注册表展示顺序返回所有已登记的业务 api_code 切片。
 func APICodes() []string {
 	out := make([]string, 0, len(Registry))
 	for _, e := range Registry {

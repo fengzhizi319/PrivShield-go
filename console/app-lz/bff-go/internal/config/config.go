@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+
+	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
 )
 
 // Config 保存 App-LZ BFF 的全部运行时配置项。
@@ -47,6 +49,7 @@ type Config struct {
 
 	// ── TLS 配置 ──
 	TLSEnabled   bool   // 是否启用 TLS（默认 false）
+	RequireTLS   bool   // 部署方声明必须以加密面暴露（APP_LZ_REQUIRE_TLS）：TLS 关闭即拒绝启动
 	CertFile     string // TLS 证书文件路径
 	KeyFile      string // TLS 私钥文件路径
 	ClientCAFile string // 客户端 CA 证书路径（用于 mTLS）
@@ -65,41 +68,42 @@ type Config struct {
 // 例如 HubURL 的读取顺序：APP_LZ_HUB_URL → HUB_URL → http://127.0.0.1:8082
 func Load() *Config {
 	// ── Server 监听地址 ──
-	host := getEnv("APP_LZ_HOST", "0.0.0.0")
-	port := getEnv("APP_LZ_PORT", "8085")
+	host := pkgconfig.EnvString("APP_LZ_HOST", "0.0.0.0")
+	port := pkgconfig.EnvString("APP_LZ_PORT", "8085")
 
 	// ── 上游微服务双协议地址（HTTP + gRPC）──
-	// 每个服务先用 getEnv 读 APP_LZ_* 前缀变量，若未设置则 fallback 到无前缀旧变量，
+	// 每个服务先用 EnvString 读 APP_LZ_* 前缀变量，若未设置则 fallback 到无前缀旧变量，
 	// 最终 fallback 到硬编码默认值（本地开发环境地址）。
-	hubURL := getEnv("APP_LZ_HUB_URL", getEnv("HUB_URL", "http://127.0.0.1:8082"))
-	hubGRPC := getEnv("APP_LZ_HUB_GRPC", getEnv("HUB_GRPC", "127.0.0.1:50052"))
-	datasourceURL := getEnv("APP_LZ_DATASOURCE_URL", getEnv("DATASOURCE_URL", "http://127.0.0.1:8083"))
-	datasourceGRPC := getEnv("APP_LZ_DATASOURCE_GRPC", getEnv("DATASOURCE_GRPC", "127.0.0.1:50053"))
-	auditURL := getEnv("APP_LZ_AUDIT_URL", getEnv("AUDIT_URL", "http://127.0.0.1:8084"))
-	auditGRPC := getEnv("APP_LZ_AUDIT_GRPC", getEnv("AUDIT_GRPC", "127.0.0.1:50054"))
-	agentURL := getEnv("APP_LZ_AGENT_URL", getEnv("AGENT_URL", "http://127.0.0.1:8079"))
-	agentGRPC := getEnv("APP_LZ_AGENT_GRPC", getEnv("AGENT_GRPC", "127.0.0.1:50051"))
+	hubURL := pkgconfig.EnvString("APP_LZ_HUB_URL", pkgconfig.EnvString("HUB_URL", "http://127.0.0.1:8082"))
+	hubGRPC := pkgconfig.EnvString("APP_LZ_HUB_GRPC", pkgconfig.EnvString("HUB_GRPC", "127.0.0.1:50052"))
+	datasourceURL := pkgconfig.EnvString("APP_LZ_DATASOURCE_URL", pkgconfig.EnvString("DATASOURCE_URL", "http://127.0.0.1:8083"))
+	datasourceGRPC := pkgconfig.EnvString("APP_LZ_DATASOURCE_GRPC", pkgconfig.EnvString("DATASOURCE_GRPC", "127.0.0.1:50053"))
+	auditURL := pkgconfig.EnvString("APP_LZ_AUDIT_URL", pkgconfig.EnvString("AUDIT_URL", "http://127.0.0.1:8084"))
+	auditGRPC := pkgconfig.EnvString("APP_LZ_AUDIT_GRPC", pkgconfig.EnvString("AUDIT_GRPC", "127.0.0.1:50054"))
+	agentURL := pkgconfig.EnvString("APP_LZ_AGENT_URL", pkgconfig.EnvString("AGENT_URL", "http://127.0.0.1:8079"))
+	agentGRPC := pkgconfig.EnvString("APP_LZ_AGENT_GRPC", pkgconfig.EnvString("AGENT_GRPC", "127.0.0.1:50051"))
 
 	// ── 上游微服务出站 API Key（可选，用于服务间认证）──
-	hubAPIKey := getEnv("APP_LZ_HUB_API_KEY", getEnv("HUB_API_KEY", ""))
-	datasourceAPIKey := getEnv("APP_LZ_DATASOURCE_API_KEY", getEnv("DATASOURCE_API_KEY", ""))
-	auditAPIKey := getEnv("APP_LZ_AUDIT_API_KEY", getEnv("AUDIT_API_KEY", ""))
-	agentAPIKey := getEnv("APP_LZ_AGENT_API_KEY", getEnv("AGENT_API_KEY", ""))
+	hubAPIKey := pkgconfig.EnvString("APP_LZ_HUB_API_KEY", pkgconfig.EnvString("HUB_API_KEY", ""))
+	datasourceAPIKey := pkgconfig.EnvString("APP_LZ_DATASOURCE_API_KEY", pkgconfig.EnvString("DATASOURCE_API_KEY", ""))
+	auditAPIKey := pkgconfig.EnvString("APP_LZ_AUDIT_API_KEY", pkgconfig.EnvString("AUDIT_API_KEY", ""))
+	agentAPIKey := pkgconfig.EnvString("APP_LZ_AGENT_API_KEY", pkgconfig.EnvString("AGENT_API_KEY", ""))
 
 	// ── 静态文件 & 日志 ──
-	staticDir := getEnv("APP_LZ_STATIC_DIR", "./web/dist")
-	logFormat := getEnv("APP_LZ_LOG_FORMAT", "json")
-	logLevel := getEnv("APP_LZ_LOG_LEVEL", "info")
+	staticDir := pkgconfig.EnvString("APP_LZ_STATIC_DIR", "./web/dist")
+	logFormat := pkgconfig.EnvString("APP_LZ_LOG_FORMAT", "json")
+	logLevel := pkgconfig.EnvString("APP_LZ_LOG_LEVEL", "info")
 
 	// ── TLS 配置 ──
 	// ParseBool 失败时静默回退到 false（不启用 TLS），避免因格式错误导致启动失败。
-	tlsEnabled, _ := strconv.ParseBool(getEnv("APP_LZ_TLS_ENABLED", "false"))
-	certFile := getEnv("APP_LZ_CERT_FILE", "")
-	keyFile := getEnv("APP_LZ_KEY_FILE", "")
-	clientCAFile := getEnv("APP_LZ_CLIENT_CA_FILE", "")
+	tlsEnabled, _ := strconv.ParseBool(pkgconfig.EnvString("APP_LZ_TLS_ENABLED", "false"))
+	requireTLS, _ := strconv.ParseBool(pkgconfig.EnvString("APP_LZ_REQUIRE_TLS", "false"))
+	certFile := pkgconfig.EnvString("APP_LZ_CERT_FILE", "")
+	keyFile := pkgconfig.EnvString("APP_LZ_KEY_FILE", "")
+	clientCAFile := pkgconfig.EnvString("APP_LZ_CLIENT_CA_FILE", "")
 
 	// ── 认证 ──
-	apiKey := getEnv("APP_LZ_API_KEY", "")
+	apiKey := pkgconfig.EnvString("APP_LZ_API_KEY", "")
 
 	return &Config{
 		Host:             host,
@@ -120,37 +124,16 @@ func Load() *Config {
 		LogFormat:        logFormat,
 		LogLevel:         logLevel,
 		TLSEnabled:       tlsEnabled,
+		RequireTLS:       requireTLS,
 		CertFile:         certFile,
 		KeyFile:          keyFile,
 		ClientCAFile:     clientCAFile,
 		APIKey:           apiKey,
 
 		// ── 限流 ──
-		RateLimitRPS:   getEnvInt("APP_LZ_RATE_LIMIT_RPS", 100),
-		RateLimitBurst: getEnvInt("APP_LZ_RATE_LIMIT_BURST", 200),
+		RateLimitRPS:   pkgconfig.EnvInt("APP_LZ_RATE_LIMIT_RPS", 100),
+		RateLimitBurst: pkgconfig.EnvInt("APP_LZ_RATE_LIMIT_BURST", 200),
 	}
-}
-
-// getEnv 读取单个环境变量，若未设置或为空则返回默认值。
-// 这是配置加载的最小原子单元，被 Load() 多次调用来构建完整配置。
-func getEnv(key, defaultVal string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
-	}
-	return defaultVal
-}
-
-// getEnvInt 读取环境变量并解析为 int，解析失败时回退到默认值。
-func getEnvInt(key string, defaultVal int) int {
-	val := os.Getenv(key)
-	if val == "" {
-		return defaultVal
-	}
-	n, err := strconv.Atoi(val)
-	if err != nil {
-		return defaultVal
-	}
-	return n
 }
 
 // Validate 校验配置的一致性，在启动早期（fail-fast）发现致命配置错误。
@@ -174,5 +157,15 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("TLS key file not accessible: %w", err)
 		}
 	}
-	return nil
+
+	// P0-1 零信任默认态：Auth 中间件在 Key 为空时整体放行，而本 BFF 默认 0.0.0.0 监听
+	// 且聚合了中枢/数据源/存证三类上游，故非环回监听必须配置 APP_LZ_API_KEY。
+	return pkgconfig.ValidateFailClosed(pkgconfig.SecurityRequirements{
+		ServiceName: "app-lz-bff",
+		Hosts:       []string{c.Host},
+		APIKey:      c.APIKey,
+		TLSEnabled:  c.TLSEnabled,
+		RequireTLS:  c.RequireTLS,
+		GRPCEnabled: false, // 本 BFF 只有 HTTP 服务端（其 gRPC 端口映射属 P2-1 配置漂移，已删除）
+	})
 }

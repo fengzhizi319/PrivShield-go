@@ -1,3 +1,13 @@
+// Package memory_test provides unit tests for the in-memory store implementations.
+// Package memory_test 为 TaskStore、DataSourceStore 和 AuditStore 的内存实现提供完整的单元测试套件。
+//
+// ==============================================================================
+// 【测试覆盖范围】
+// 1. TaskStore：Save/Get 基础读写、未找到报错、List 状态过滤与分页、Update 更新覆盖、Counts 状态聚合统计；
+// 2. DataSourceStore：CRUD 增删改查、未找到校验、SaveAudit/ListAudit 访问审计记录及数据源隔离；
+// 3. AuditStore：Log CRUD、ListLogs 多维度过滤、Snapshot 记录存储与根据 ID 查询、分页边界与越界保护。
+// ==============================================================================
+
 package memory
 
 import (
@@ -9,7 +19,7 @@ import (
 )
 
 // ─────────────────────────────────────────────────────────────
-// TaskStore tests
+// 1. TaskStore 单元测试
 // ─────────────────────────────────────────────────────────────
 
 func TestTaskStore_SaveAndGet(t *testing.T) {
@@ -53,7 +63,7 @@ func TestTaskStore_List(t *testing.T) {
 		})
 	}
 
-	// List all
+	// 1. 查询全部任务
 	tasks, total, err := s.List(store.TaskFilter{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -65,7 +75,7 @@ func TestTaskStore_List(t *testing.T) {
 		t.Errorf("expected 3 tasks, got %d", len(tasks))
 	}
 
-	// Filter by status
+	// 2. 按状态过滤 running 任务
 	filtered, count, _ := s.List(store.TaskFilter{Status: "running"})
 	if count != 1 {
 		t.Errorf("expected 1 running, got %d", count)
@@ -115,8 +125,40 @@ func TestTaskStore_Counts(t *testing.T) {
 	}
 }
 
+func TestTaskStore_Pagination(t *testing.T) {
+	s := NewTaskStore()
+	for i := 0; i < 10; i++ {
+		s.Save(&store.Task{
+			ID:        fmt.Sprintf("t-%02d", i),
+			Status:    "pending",
+			CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
+		})
+	}
+
+	// 1. 正常分页：Offset 3, Limit 4
+	tasks, total, err := s.List(store.TaskFilter{Limit: 4, Offset: 3})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if total != 10 {
+		t.Errorf("expected total 10, got %d", total)
+	}
+	if len(tasks) != 4 {
+		t.Errorf("expected 4 tasks, got %d", len(tasks))
+	}
+
+	// 2. 越界分页：Offset 20（超出总记录数 10）
+	tasksOOB, totalOOB, err := s.List(store.TaskFilter{Limit: 4, Offset: 20})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if totalOOB != 10 || len(tasksOOB) != 0 {
+		t.Errorf("expected 0 tasks, got %d", len(tasksOOB))
+	}
+}
+
 // ─────────────────────────────────────────────────────────────
-// DataSourceStore tests
+// 2. DataSourceStore 单元测试
 // ─────────────────────────────────────────────────────────────
 
 func TestDataSourceStore_CRUD(t *testing.T) {
@@ -130,12 +172,12 @@ func TestDataSourceStore_CRUD(t *testing.T) {
 		Port: 5432,
 	}
 
-	// Save
+	// 1. 新增
 	if err := s.SaveDS(ds); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 
-	// Get
+	// 2. 查询单个
 	got, err := s.GetDS("ds1")
 	if err != nil {
 		t.Fatalf("get: %v", err)
@@ -144,7 +186,7 @@ func TestDataSourceStore_CRUD(t *testing.T) {
 		t.Errorf("expected test-db, got %s", got.Name)
 	}
 
-	// List
+	// 3. 列表查询
 	list, _, err := s.ListDS(store.DataSourceFilter{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -153,7 +195,7 @@ func TestDataSourceStore_CRUD(t *testing.T) {
 		t.Errorf("expected 1, got %d", len(list))
 	}
 
-	// Update
+	// 4. 更新
 	got.Name = "updated-db"
 	if err := s.UpdateDS(got); err != nil {
 		t.Fatalf("update: %v", err)
@@ -163,7 +205,7 @@ func TestDataSourceStore_CRUD(t *testing.T) {
 		t.Errorf("expected updated-db, got %s", updated.Name)
 	}
 
-	// Delete
+	// 5. 删除
 	if err := s.DeleteDS("ds1"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -196,7 +238,7 @@ func TestDataSourceStore_Audit(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// AuditStore tests
+// 3. AuditStore 单元测试
 // ─────────────────────────────────────────────────────────────
 
 func TestAuditStore_LogCRUD(t *testing.T) {
@@ -286,38 +328,6 @@ func TestAuditStore_Snapshots(t *testing.T) {
 	}
 }
 
-func TestTaskStore_Pagination(t *testing.T) {
-	s := NewTaskStore()
-	for i := 0; i < 10; i++ {
-		s.Save(&store.Task{
-			ID:        fmt.Sprintf("t-%02d", i),
-			Status:    "pending",
-			CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
-		})
-	}
-
-	// Offset 3, Limit 4
-	tasks, total, err := s.List(store.TaskFilter{Limit: 4, Offset: 3})
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if total != 10 {
-		t.Errorf("expected total 10, got %d", total)
-	}
-	if len(tasks) != 4 {
-		t.Errorf("expected 4 tasks, got %d", len(tasks))
-	}
-
-	// Offset out of bounds
-	tasksOOB, totalOOB, err := s.List(store.TaskFilter{Limit: 4, Offset: 20})
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if totalOOB != 10 || len(tasksOOB) != 0 {
-		t.Errorf("expected 0 tasks, got %d", len(tasksOOB))
-	}
-}
-
 func TestAuditStore_LogPagination(t *testing.T) {
 	s := NewAuditStore()
 	for i := 0; i < 10; i++ {
@@ -329,7 +339,7 @@ func TestAuditStore_LogPagination(t *testing.T) {
 		})
 	}
 
-	// Offset 4, Limit 3
+	// 分页测试：Offset 4, Limit 3
 	logs, total, err := s.ListLogs(store.AuditFilter{Limit: 3, Offset: 4})
 	if err != nil {
 		t.Fatalf("list: %v", err)

@@ -8,7 +8,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
@@ -52,7 +51,30 @@ type PrivacyService struct {
 	namespace    string
 	rulesDir     string // 领域规则目录
 	privacyYAML  string // 隐私策略配置文件
-	mu           sync.RWMutex
+
+	// ── P2-2 配置绑定 + P0-2 默认拒绝（绑定态快照，供仲裁与诊断读取）──
+	// safetyFloorConfig 当前生效的安全底线配置（可能来自 config/privacy.yaml）。
+	safetyFloorConfig dynclassification.SafetyFloorConfig
+	// unlistedFloor 具名默认拒绝策略（分类侧下限 + 脱敏侧处置）。
+	unlistedFloor unlistedFieldFloor
+	// policyBound 标记 config/privacy.yaml 是否被成功读取并绑定。
+	policyBound bool
+	// baseRules 调用方提供的基线规则（热更新时与领域规则目录重新合并，不丢失自定义规则）。
+	baseRules []dynclassification.RuleDef
+
+	// LLM 运行态快照（供诊断接口读取）。
+	llmEndpoint       string
+	llmMaxConcurrency int
+	enableLLM         bool
+
+	mu sync.RWMutex
+}
+
+// policyLoaded 返回 config/privacy.yaml 是否已成功绑定（诊断与测试用）。
+func (s *PrivacyService) policyLoaded() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.policyBound
 }
 
 // Config 服务配置
@@ -96,9 +118,19 @@ func DefaultConfig() Config {
 	}
 }
 
-// NewPrivacyService 创建隐私服务实例
+// NewPrivacyService 创建隐私服务实例。
+//
+// 配置绑定（P2-2）：safety_floor.* 与 classification.* 从 cfg.PrivacyYAML 读取；
+// 默认拒绝（P0-2）：safety_floor.unlisted_field_policy / unlisted_min_level 解析为
+// 具名策略，同时下发给两条医疗流水线与分类仲裁链路。
+// 配置文件缺失或解析失败时回落到**代码级限制性默认值**（fail-closed，不中断启动）。
 func NewPrivacyService(cfg Config) (*PrivacyService, error) {
-	engine, err := dynclassification.NewRuleEngine(cfg.Rules)
+	// ── 1. 读取策略配置（P2-2）──
+	policy, policyErr := loadPrivacyPolicy(cfg.PrivacyYAML)
+
+	// ── 2. 规则集：内置规则优先 + 领域规则目录（含字段规格矩阵）──
+	rules := mergeDomainRules(cfg.Rules, cfg.RulesDir)
+	engine, err := dynclassification.NewRuleEngine(rules)
 	if err != nil {
 		return nil, fmt.Errorf("init rule engine: %w", err)
 	}
@@ -115,40 +147,121 @@ func NewPrivacyService(cfg Config) (*PrivacyService, error) {
 		ns = getEnv("PRIVACY_NAMESPACE", "default")
 	}
 
+	// ── 3. 安全底线（含 P0-2 默认拒绝下限）──
+	sfCfg := dynclassification.DefaultSafetyFloorConfig()
+	floor := defaultUnlistedFloor()
+	if policy != nil {
+		sfCfg = policy.SafetyFloor.applyToSafetyFloorConfig(sfCfg)
+		floor = policy.SafetyFloor.resolveUnlistedFloor()
+	}
+
+	// ── 4. LLM 客户端（classification.llm_endpoint / llm_max_concurrency）──
+	llmEndpoint := cfg.LLMEndpoint
+	if policy != nil && os.Getenv("PRIVACY_LLM_ENDPOINT") == "" {
+		if fromFile := strings.TrimSpace(policy.Classification.LLMEndpoint); fromFile != "" {
+			llmEndpoint = fromFile
+		}
+	}
+	llmMaxConcurrency := getEnvInt("PRIVACY_LLM_MAX_CONCURRENCY", 4)
+	if policy != nil && policy.Classification.LLMMaxConcurrency != nil &&
+		*policy.Classification.LLMMaxConcurrency > 0 &&
+		*policy.Classification.LLMMaxConcurrency < llmMaxConcurrency {
+		// 配置文件只能收紧并发上限（不放大外送面）。
+		llmMaxConcurrency = *policy.Classification.LLMMaxConcurrency
+	}
+
 	var llmClient *dynclassification.LLMClient
-	if cfg.EnableLLM || cfg.LLMEndpoint != "" {
+	if cfg.EnableLLM || llmEndpoint != "" {
 		llmClient = dynclassification.NewLLMClient(dynclassification.LLMClientConfig{
-			Endpoint:       cfg.LLMEndpoint,
+			Endpoint:       llmEndpoint,
 			ModelName:      getEnv("PRIVACY_LLM_MODEL", "qwen3.5"),
-			MaxConcurrency: getEnvInt("PRIVACY_LLM_MAX_CONCURRENCY", 4),
+			MaxConcurrency: llmMaxConcurrency,
 			Timeout:        30 * time.Second,
 			MaxRetries:     2,
 			APIKey:         os.Getenv("PRIVACY_LLM_API_KEY"),
 		})
 	}
 
+	// ── 5. 漏斗配置（classification.confidence_threshold / enable_llm；enable_ner 有意不绑定）──
 	funnelCfg := dynclassification.DefaultFunnelConfig()
 	funnelCfg.EnableNER = cfg.EnableNER
-	funnelCfg.EnableLLM = cfg.EnableLLM && llmClient != nil
+	if policy != nil {
+		funnelCfg = policy.Classification.applyToFunnelConfig(funnelCfg)
+		policy.Classification.warnUnboundKeys(cfg.PrivacyYAML)
+	}
+	// Layer 3 只有在调用方与配置文件双方都允许时才开启（配置可关不可开）。
+	funnelCfg.EnableLLM = funnelCfg.EnableLLM && cfg.EnableLLM && llmClient != nil
 
-	funnel, err := dynclassification.NewClassificationFunnel(cfg.Rules, dynclassification.NewRuleBasedNerEngine(), llmClient, funnelCfg)
+	funnel, err := dynclassification.NewClassificationFunnel(rules, dynclassification.NewRuleBasedNerEngine(), llmClient, funnelCfg)
 	if err != nil {
 		return nil, fmt.Errorf("init classification funnel: %w", err)
 	}
 
+	// ── 6. 医疗流水线：下发具名默认拒绝策略（P0-2 白名单反转）──
+	medicalYibao := medical.NewYibaoPipeline()
+	medicalYibao.SetUnlistedFieldPolicy(floor.Policy)
+	medicalKang := medical.NewKangyangPipeline()
+	medicalKang.SetUnlistedFieldPolicy(floor.Policy)
+
 	svc := &PrivacyService{
-		funnel:       funnel,
-		safetyFloor:  dynclassification.NewSafetyFloor(dynclassification.DefaultSafetyFloorConfig()),
-		budget:       budget.NewBudgetAccountant(cfg.TotalEpsilon, cfg.TotalDelta, cfg.BudgetWindowSec),
-		medicalYibao: medical.NewYibaoPipeline(),
-		medicalKang:  medical.NewKangyangPipeline(),
-		resolver:     res,
-		namespace:    ns,
-		rulesDir:     cfg.RulesDir,
-		privacyYAML:  cfg.PrivacyYAML,
+		llmEndpoint:       llmEndpoint,
+		llmMaxConcurrency: llmMaxConcurrency,
+		enableLLM:         funnelCfg.EnableLLM,
+		funnel:            funnel,
+		safetyFloor:       dynclassification.NewSafetyFloor(sfCfg),
+		safetyFloorConfig: sfCfg,
+		unlistedFloor:     floor,
+		budget:            budget.NewBudgetAccountant(cfg.TotalEpsilon, cfg.TotalDelta, cfg.BudgetWindowSec),
+		medicalYibao:      medicalYibao,
+		medicalKang:       medicalKang,
+		resolver:          res,
+		namespace:         ns,
+		rulesDir:          cfg.RulesDir,
+		privacyYAML:       cfg.PrivacyYAML,
+		baseRules:         cfg.Rules,
 	}
 	svc.classifier.Store(engine)
+
+	if policyErr != nil {
+		slog.Warn("privacy policy not bound, falling back to restrictive code defaults",
+			"path", cfg.PrivacyYAML, "error", policyErr,
+			"min_level", string(sfCfg.MinLevel),
+			"unlisted_field_policy", floor.Name,
+			"unlisted_min_level", floor.levelLabel(),
+		)
+	} else {
+		svc.policyBound = true
+		slog.Info("privacy policy bound",
+			"path", cfg.PrivacyYAML,
+			"min_level", string(sfCfg.MinLevel),
+			"confidence_threshold", sfCfg.ConfidenceThreshold,
+			"ner_confidence_threshold", funnelCfg.NERConfidenceThreshold,
+			"llm_enabled", funnelCfg.EnableLLM,
+			"rules", len(rules),
+			"unlisted_field_policy", floor.Name,
+			"unlisted_disposition", string(floor.Policy),
+			"unlisted_min_level", floor.levelLabel(),
+		)
+	}
 	return svc, nil
+}
+
+// mergeDomainRules 把 rulesDir 下的领域规则（含 P0-2 字段规格矩阵）追加到基线规则之后。
+//
+// 顺序即优先级：dynclassification.RuleEngine Layer 1 为「首个字段名正则命中即返回」，
+// 基线 canonical 规则保持在前的话，既有分类口径不受新增矩阵影响。
+func mergeDomainRules(base []dynclassification.RuleDef, rulesDir string) []dynclassification.RuleDef {
+	if strings.TrimSpace(rulesDir) == "" {
+		return base
+	}
+	domainRules, err := dynclassification.LoadRulesFromDir(rulesDir)
+	if err != nil || len(domainRules) == 0 {
+		return base
+	}
+	merged := make([]dynclassification.RuleDef, 0, len(base)+len(domainRules))
+	merged = append(merged, base...)
+	merged = append(merged, domainRules...)
+	return merged
 }
 
 // ──────────────────────────────────────────────
@@ -413,28 +526,27 @@ func (s *PrivacyService) ObfuscateQueryBatch(queries []string, numDecoys int, do
 // 动态分类 API
 // ──────────────────────────────────────────────
 
-// Classify 动态分类（通过 3 层漏斗：Rule → Small-NER → External LLM Arbitration）
+// Classify 动态分类（通过 3 层漏斗：Rule → Small-NER → External LLM Arbitration）。
+//
+// 漏斗返回后仍必须过服务层安全底线：漏斗内置 SafetyFloor 用的是代码默认值，
+// 只有这里才会应用 config/privacy.yaml 绑定后的 min_level / confidence_threshold
+// 以及 P0-2 的具名默认拒绝下限（P2-2 修复点）。
 func (s *PrivacyService) Classify(field, value string) *dynclassification.ClassificationResult {
 	s.mu.RLock()
 	funnel := s.funnel
-	sf := s.safetyFloor
 	s.mu.RUnlock()
 	if funnel != nil {
 		res, err := funnel.Classify(context.Background(), field, value)
 		if err == nil && res != nil {
-			return res
+			return s.arbitrate(res)
 		}
 	}
 	if engine := s.classifier.Load(); engine != nil {
-		result := engine.Classify(field, value)
-		if sf != nil {
-			return sf.Arbitrate(result)
-		}
-		return result
+		return s.arbitrate(engine.Classify(field, value))
 	}
-	return &dynclassification.ClassificationResult{
+	return s.arbitrate(&dynclassification.ClassificationResult{
 		Field: field, Level: dynclassification.LevelPublic, Category: "unknown", Confidence: 0.5, MatchedBy: "default",
-	}
+	})
 }
 
 // ClassifyBatch 批量分类（多核并发分块加速）
@@ -498,24 +610,19 @@ func (s *PrivacyService) ClassifyBatch(records []map[string]string) []*dynclassi
 func (s *PrivacyService) classifyInternal(field, value string) *dynclassification.ClassificationResult {
 	s.mu.RLock()
 	funnel := s.funnel
-	sf := s.safetyFloor
 	s.mu.RUnlock()
 	if funnel != nil {
 		res, err := funnel.Classify(context.Background(), field, value)
 		if err == nil && res != nil {
-			return res
+			return s.arbitrate(res)
 		}
 	}
 	if engine := s.classifier.Load(); engine != nil {
-		result := engine.Classify(field, value)
-		if sf != nil {
-			return sf.Arbitrate(result)
-		}
-		return result
+		return s.arbitrate(engine.Classify(field, value))
 	}
-	return &dynclassification.ClassificationResult{
+	return s.arbitrate(&dynclassification.ClassificationResult{
 		Field: field, Level: dynclassification.LevelPublic, Category: "unknown", Confidence: 0.5, MatchedBy: "default",
-	}
+	})
 }
 
 // ──────────────────────────────────────────────
@@ -614,6 +721,9 @@ type AgentProcessResult struct {
 	ClassificationReport []map[string]interface{} `json:"classification_report"`
 	SanitizedData        []map[string]string      `json:"sanitized_data"`
 	Summary              map[string]interface{}   `json:"summary"`
+	// Level 是本次分类结果中的最高敏感级别，使用规则库 L1~L5 词表（供下游定级→算子映射与存证）。
+	// 空串表示分类报告中不存在任何可识别级别——调用方 MUST 按 fail-closed 处理，不得静默定级。
+	Level string `json:"level"`
 }
 
 // ProcessAgentData 对提交的数据集执行 3-Layer 分类分级与隐私脱敏治理。
@@ -629,6 +739,8 @@ func (s *PrivacyService) ProcessAgentData(records []map[string]interface{}, apiC
 				"api_code":      apiCode,
 				"datasource_id": datasourceID,
 				"engine":        "go",
+				// 无记录即无定级：级别为空，下游不得据此推断任何默认等级。
+				"overall_level": "",
 			},
 		}, nil
 	}
@@ -658,6 +770,7 @@ func (s *PrivacyService) ProcessAgentData(records []map[string]interface{}, apiC
 			localReport = append(localReport, map[string]interface{}{
 				"field":      k,
 				"level":      cRes.Level,
+				"level_id":   cRes.Level.LevelID(),
 				"category":   cRes.Category,
 				"confidence": cRes.Confidence,
 				"matched_by": cRes.MatchedBy,
@@ -702,14 +815,22 @@ func (s *PrivacyService) ProcessAgentData(records []map[string]interface{}, apiC
 		report = append(report, r...)
 	}
 
-	// 3. 计算 SHA-256 存证哈希
+	// 定级结果显式外发：取报告中最高的 level_id（L1~L5 词表）。
+	// 下游若拿不到该级别必须 fail-closed，绝不允许回退到某个默认算子（P1-1）。
+	levelIDs := make([]string, 0, len(report))
+	for _, entry := range report {
+		if id, ok := entry["level_id"].(string); ok {
+			levelIDs = append(levelIDs, id)
+		}
+	}
+	overallLevel := naming.MaxSecurityLevelID(levelIDs...)
+
+	// 3. 计算国密 SM3 存证指纹（与全链路存证哈希口径一致，P2-3）
 	rawBytes, _ := json.Marshal(records)
-	hIn := sha256.Sum256(rawBytes)
-	inputHash := hex.EncodeToString(hIn[:])
+	inputHash := crypto.SumSM3Hex(rawBytes)
 
 	sanitizedBytes, _ := json.Marshal(sanitized)
-	hOut := sha256.Sum256(sanitizedBytes)
-	outputHash := hex.EncodeToString(hOut[:])
+	outputHash := crypto.SumSM3Hex(sanitizedBytes)
 
 	summary := map[string]interface{}{
 		"total_records":        len(records),
@@ -719,18 +840,20 @@ func (s *PrivacyService) ProcessAgentData(records []map[string]interface{}, apiC
 		"api_code":             apiCode,
 		"datasource_id":        datasourceID,
 		"engine":               "go",
+		"overall_level":        overallLevel,
 	}
 
 	return &AgentProcessResult{
 		ClassificationReport: report,
 		SanitizedData:        sanitized,
 		Summary:              summary,
+		Level:                overallLevel,
 	}, nil
 }
 
 // ProcessMedicalData 医疗数据流水线处理（兼容别名）。
 func (s *PrivacyService) ProcessMedicalData(records []map[string]interface{}) (*AgentProcessResult, error) {
-	return s.ProcessAgentData(records, "api1_yibao", "ds_yibao")
+	return s.ProcessAgentData(records, naming.API1Yibao, naming.DSYibao)
 }
 
 // ──────────────────────────────────────────────
@@ -1136,13 +1259,27 @@ func forEachChunked(n int, fn func(start, end int)) {
 // ──────────────────────────────────────────────
 
 // Diagnostics 返回 Go 原生引擎的运维诊断与降级链路状态。
+//
+// P1-3：NER 能力口径必须来自实际装配的引擎，不得宣称未交付的模型能力。
 func (s *PrivacyService) Diagnostics(refresh bool) map[string]interface{} {
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 
+	// 真实代码状态：Layer 2 当前装配的是哪个 NerEngine、是否为模型驱动。
+	// 默认装配 NewRuleBasedNerEngine()（正则桩），故交付构建中 ner_available=false。
+	nerBackend, nerAvailable := "none", false
+	if s.funnel != nil {
+		nerBackend, nerAvailable = s.funnel.NerStatus()
+	}
+
 	return map[string]interface{}{
 		"status":    "ok",
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		// P1-3：AI/模型级分类能力是否真实可用的显式口径。
+		"ner_available": nerAvailable,
+		"ner_backend":   nerBackend,
+		// P0-2 / P2-2：安全底线与字段级默认拒绝策略的生效快照（可审计）。
+		"safety_floor": s.safetyFloorDiagnostics(),
 		"service": map[string]interface{}{
 			"name":       getEnv("PRIVACY_SERVICE_NAME", "PrivShield"),
 			"engine":     "go",
@@ -1154,24 +1291,20 @@ func (s *PrivacyService) Diagnostics(refresh bool) map[string]interface{} {
 		},
 		"engines": map[string]interface{}{
 			"ner": map[string]interface{}{
-				"active_engine": "onnx",
-				"available":     true,
-				"determined_by": "probe",
+				"active_engine": nerBackend,
+				"available":     nerAvailable,
+				"determined_by": "funnel.NerStatus",
+				"note":          "ONNX/CUDA NER 模型未交付（无 CGO 绑定），Layer 2 实际运行正则降级桩 rule-based-ner",
 				"degradation_chain": []map[string]interface{}{
-					{"engine": "cuda_onnx", "available": false, "reason": "CUDA driver or GPU not attached", "note": "Go+CUDA 异步批推理引擎"},
-					{"engine": "onnx", "available": true, "reason": nil, "note": "纯 Go / ONNX 规则降级引擎"},
-					{"engine": "ac_automaton", "available": true, "reason": nil, "note": "Aho-Corasick 多模式规则匹配"},
+					{"engine": "cuda_onnx", "available": false, "reason": "CUDA driver / GPU 未挂载，且 ONNX Runtime CGO 绑定未引入", "note": "Go+CUDA 异步批推理引擎（骨架）"},
+					{"engine": "onnx", "available": false, "reason": "ONNX 模型未交付，骨架实现从不加载模型", "note": "纯 Go / ONNX 推理引擎（骨架）"},
+					{"engine": "rule-based-ner", "available": true, "reason": nil, "note": "正则实体桩：当前实际装配的 Layer 2 实现，不具备模型语义泛化能力"},
 				},
 			},
-			"llm": map[string]interface{}{
-				"backend":       "vllm_grpc_remote",
-				"available":     true,
-				"determined_by": "probe",
-				"note":          "Qwen3.5 / vLLM 独立推理服务（解耦架构）",
-			},
+			"llm": s.llmDiagnostics(),
 		},
 		"dependencies": []map[string]interface{}{
-			{"name": "onnxruntime_go", "installed": true, "purpose": "NER ONNX/CUDA 推理引擎", "install": "go get github.com/yalue/onnxruntime_go"},
+			{"name": "onnxruntime_go", "installed": false, "purpose": "NER ONNX/CUDA 推理引擎", "install": "go get github.com/yalue/onnxruntime_go"},
 			{"name": "gin", "installed": true, "purpose": "高性能 REST API 框架", "install": "go get github.com/gin-gonic/gin"},
 			{"name": "grpc", "installed": true, "purpose": "高性能 RPC 框架", "install": "go get google.golang.org/grpc"},
 			{"name": "prometheus", "installed": true, "purpose": "生产级指标监控", "install": "go get github.com/prometheus/client_golang"},
@@ -1263,8 +1396,20 @@ func (s *PrivacyService) DeepHealthCheck() map[string]interface{} {
 	// 4. llm_cluster — LLM 集群就绪状态
 	components["llm_cluster"] = ComponentHealth{Status: "ok", Message: "not_configured"}
 
-	// 5. ner_engine — NER 引擎状态
-	components["ner_engine"] = ComponentHealth{Status: "ok", Message: "rule_based"}
+	// 5. ner_engine — NER 引擎状态（P1-3：按实际装配引擎上报，正则桩不等同于模型能力）
+	if s.funnel != nil {
+		backend, modelBacked := s.funnel.NerStatus()
+		if modelBacked {
+			components["ner_engine"] = ComponentHealth{Status: "ok", Message: backend}
+		} else {
+			components["ner_engine"] = ComponentHealth{
+				Status:  "ok",
+				Message: backend + " (regex stand-in, ONNX model not delivered)",
+			}
+		}
+	} else {
+		components["ner_engine"] = ComponentHealth{Status: "ok", Message: "not_wired"}
+	}
 
 	// 6. safety_floor — 安全底线
 	if s.safetyFloor != nil {
@@ -1327,7 +1472,16 @@ func (s *PrivacyService) KAnonymizeDataFrame(records []map[string]interface{}, q
 // ──────────────────────────────────────────────
 
 func (s *PrivacyService) autoMaskField(fieldName, value string) string {
-	return masking.MaskValue(fieldName, value)
+	masked := masking.MaskValue(fieldName, value)
+	if masked != value || value == "" {
+		return masked
+	}
+	// P0-2 默认拒绝：通用掩码路径未能遮蔽任何字符（masking.MaskDefault 对
+	// ≤6 字节的短值原样返回）。未列入字段规格矩阵的字段不得明文出域。
+	s.mu.RLock()
+	policy := s.unlistedFloor.Policy
+	s.mu.RUnlock()
+	return medical.SanitizeUnlistedField(policy, value)
 }
 
 // defaultRules 默认分类规则
@@ -1446,15 +1600,52 @@ func (s *PrivacyService) ReloadDynamicProfiles() error {
 	if s.resolver != nil {
 		_ = s.resolver.LoadFromYAML(s.privacyYAML)
 	}
-	if domainRules, err := dynclassification.LoadRulesFromDir(s.rulesDir); err == nil && len(domainRules) > 0 {
-		if newEngine, err := dynclassification.NewRuleEngine(domainRules); err == nil {
-			s.classifier.Store(newEngine)
-		}
+	// 规则热更新：基线规则 + 领域规则目录（含字段规格矩阵）整体重排，
+	// 避免旧实现「只用目录规则」把调用方传入的自定义规则丢掉。
+	if newEngine, err := dynclassification.NewRuleEngine(mergeDomainRules(s.baseRules, s.rulesDir)); err == nil {
+		s.classifier.Store(newEngine)
 	}
+	// P2-2 + P0-2：安全底线与默认拒绝策略随配置热更新。
+	s.rebindPolicyLocked()
 	if s.funnel != nil {
 		s.funnel.ClearCache()
 	}
 	return nil
+}
+
+// rebindPolicyLocked 重新读取 config/privacy.yaml 并把 safety_floor.* /
+// unlisted_field_policy 应用到仲裁器与医疗流水线。**调用方必须持有 s.mu 写锁**。
+//
+// 注意：漏斗 Layer 2/3 的阈值（classification.confidence_threshold / enable_llm）
+// 在 dynclassification 中无导出setter，只能在新建服务实例时生效；
+// 服务层底线仲裁对每条结果即时生效，因此 min_level 与默认拒绝下限是热更新可用的。
+func (s *PrivacyService) rebindPolicyLocked() {
+	policy, err := loadPrivacyPolicy(s.privacyYAML)
+	if err != nil {
+		slog.Warn("privacy policy reload failed, keeping previous binding", "path", s.privacyYAML, "error", err)
+		return
+	}
+	sfCfg := policy.SafetyFloor.applyToSafetyFloorConfig(s.safetyFloorConfig)
+	floor := policy.SafetyFloor.resolveUnlistedFloor()
+	s.safetyFloorConfig = sfCfg
+	s.unlistedFloor = floor
+	s.policyBound = true
+	if s.safetyFloor != nil {
+		s.safetyFloor.UpdateConfig(sfCfg)
+	}
+	if s.medicalYibao != nil {
+		s.medicalYibao.SetUnlistedFieldPolicy(floor.Policy)
+	}
+	if s.medicalKang != nil {
+		s.medicalKang.SetUnlistedFieldPolicy(floor.Policy)
+	}
+	slog.Info("privacy policy rebound",
+		"path", s.privacyYAML,
+		"min_level", string(sfCfg.MinLevel),
+		"unlisted_field_policy", floor.Name,
+		"unlisted_disposition", string(floor.Policy),
+		"unlisted_min_level", floor.levelLabel(),
+	)
 }
 
 // ──────────────────────────────────────────────

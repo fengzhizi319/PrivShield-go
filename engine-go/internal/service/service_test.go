@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -377,5 +378,82 @@ func TestNewPrivacyService_ClassifierInitialized(t *testing.T) {
 	}
 	if res.Level == "" {
 		t.Fatal("Classify returned empty level")
+	}
+}
+
+// ──────────────────────────────────────────────
+// P2-3：主链路存证指纹必须是国密 SM3
+// ──────────────────────────────────────────────
+
+func TestProcessAgentData_FingerprintIsSM3(t *testing.T) {
+	svc := newTestService(t)
+	records := []map[string]interface{}{{"phone": "13800138000"}}
+
+	// 已知答案测试的前提：入站载荷字节序列稳定（encoding/json 对 map 键排序）。
+	rawBytes, err := json.Marshal(records)
+	if err != nil {
+		t.Fatalf("marshal records: %v", err)
+	}
+	if got := string(rawBytes); got != `[{"phone":"13800138000"}]` {
+		t.Fatalf("fingerprint input drifted: %s", got)
+	}
+
+	res, err := svc.ProcessAgentData(records, naming.API1Yibao, naming.DSYibao)
+	if err != nil {
+		t.Fatalf("ProcessAgentData: %v", err)
+	}
+
+	// 期望值由 `openssl dgst -sm3` 独立算出，不用本仓库 SM3 实现自证。
+	const wantInputSM3 = "63c6de8dcddf2b4820996557038af539d0e2be7fa990882f54257a157ca89ae0"
+	const wantOutputSM3 = "e62847036194e5d2663aecce05453084b78d0c7e07cca66dec5b47bc07d91683"
+	// 同一载荷的 SHA-256，用于证明算法确实换掉了（P2-3 回归护栏）。
+	const legacyInputSHA256 = "9a4517471a51654bbef369299af1f6949fb36fc6784f2143d58a398b24500237"
+
+	inputHash, _ := res.Summary["input_hash"].(string)
+	if inputHash != wantInputSM3 {
+		t.Errorf("input_hash = %q, want SM3 %q", inputHash, wantInputSM3)
+	}
+	if inputHash == legacyInputSHA256 {
+		t.Error("input_hash is still the SHA-256 digest")
+	}
+
+	outputHash, _ := res.Summary["output_hash"].(string)
+	if outputHash != wantOutputSM3 {
+		t.Errorf("output_hash = %q, want SM3 %q", outputHash, wantOutputSM3)
+	}
+	// 下游存证列宽/前缀比对依赖 64 位小写十六进制口径不变。
+	if len(outputHash) != 64 || strings.ToLower(outputHash) != outputHash {
+		t.Errorf("output_hash = %q, want 64-char lowercase hex", outputHash)
+	}
+}
+
+// ──────────────────────────────────────────────
+// P2-6：兼容别名不得携带裸字面量标识，等级取自词表常量
+// ──────────────────────────────────────────────
+
+func TestProcessMedicalData_UsesNamingSSOT(t *testing.T) {
+	svc := newTestService(t)
+
+	res, err := svc.ProcessMedicalData([]map[string]interface{}{{"phone": "13800138000"}})
+	if err != nil {
+		t.Fatalf("ProcessMedicalData: %v", err)
+	}
+	if got := res.Summary["api_code"]; got != naming.API1Yibao {
+		t.Errorf("api_code = %v, want naming.API1Yibao %q", got, naming.API1Yibao)
+	}
+	if got := res.Summary["datasource_id"]; got != naming.DSYibao {
+		t.Errorf("datasource_id = %v, want naming.DSYibao %q", got, naming.DSYibao)
+	}
+	// 常量契约字面量在此钉死：改引用常量的同时不得改变运行期字符串。
+	if naming.API1Yibao != "api1_yibao" || naming.DSYibao != "ds_yibao" {
+		t.Fatalf("naming contract values changed: %q / %q", naming.API1Yibao, naming.DSYibao)
+	}
+
+	// 定级结果必须是 rules/taxonomies/default.yaml 的 L1~L5 标识（由 naming 常量给出）。
+	if res.Level != naming.SecurityLevelL3 {
+		t.Errorf("level = %q, want taxonomy constant %q", res.Level, naming.SecurityLevelL3)
+	}
+	if got := res.Summary["overall_level"]; got != naming.SecurityLevelL3 {
+		t.Errorf("summary.overall_level = %v, want %q", got, naming.SecurityLevelL3)
 	}
 }

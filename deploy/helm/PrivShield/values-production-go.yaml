@@ -40,8 +40,12 @@ security:
     enabled: true
     existingSecret: ""  # 必填：部署时通过 --set security.tls.existingSecret=... 指定
   auth:
+    # P0-1：0.0.0.0 监听 ⇒ 入站 Key 必填（缺失时 helm 渲染即失败，不会留下 CrashLoopBackOff 的半配置态）
     enabled: true
-    apiKeysSecret: ""   # 必填：部署时通过 --set security.auth.apiKeysSecret=... 指定
+    apiKeysSecret: ""   # 必填：Secret 数据键 api-keys，值格式 token:name:scopes（→ PRIVACY_AUTH_INTERNAL_API_KEYS）
+    internalMtls:
+      # P0-1 红线：TLS 开启 + 引擎监听 gRPC ⇒ 必须挂 CN 白名单 ConfigMap，否则白名单拦截器不注册、启动门禁拒绝
+      whitelistConfigMap: ""  # 必填：部署时通过 --set security.auth.internalMtls.whitelistConfigMap=... 指定
   rateLimit:
     enabled: true
 

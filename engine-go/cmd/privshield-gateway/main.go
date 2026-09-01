@@ -7,14 +7,19 @@
 // 环境变量：
 //   - GATEWAY_BACKENDS：后端 Agent 地址（逗号分隔）
 //   - GATEWAY_STRATEGY：调度策略（p2c/round_robin/least_conn）
-//   - GATEWAY_HOST / GATEWAY_PORT：HTTP 监听地址
-//   - GATEWAY_GRPC_PORT：gRPC 监听端口
+//   - GATEWAY_HOST / GATEWAY_PORT：HTTP 监听地址（默认 127.0.0.1）
+//   - GATEWAY_GRPC_HOST / GATEWAY_GRPC_PORT：gRPC 代理监听地址（默认 127.0.0.1）
+//   - GATEWAY_REQUIRE_TLS：声明「必须加密」；网关不终止入站 TLS，置真即拒绝启动
 //   - PRIVACY_LOG_LEVEL：日志级别
+//
+// 启动门禁（P0-1 零信任默认态，见 internal/config.Validate）：网关自身不校验入站凭据，
+// 鉴权由被代理的 Agent 端 PRIVACY_AUTH_* 强制；因此非环回监听要求部署方已配置这些凭据，
+// 否则启动即失败。入站 TLS 需由 mTLS 回源或前置入口（Ingress/Mesh）承担。
 package main
 
 import (
 	"context"
-	"fmt"
+	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -25,6 +30,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	engineconfig "github.com/fengzhizi319/PrivShield/engine-go/internal/config"
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/gateway"
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/observability"
 )
@@ -35,6 +41,12 @@ var (
 )
 
 func main() {
+	// P0-1 零信任默认态：网关不终止 TLS、也不校验入站凭据，非环回监听必须先声明凭据已配置。
+	cfg := engineconfig.LoadGateway()
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("invalid configuration: %v", err)
+	}
+
 	observability.InitLogger(getEnv("PRIVACY_LOG_LEVEL", "INFO"))
 
 	slog.Info("Starting PrivShield L7 Adaptive Gateway",
@@ -77,7 +89,7 @@ func main() {
 	r.NoRoute(gateway.NewHTTPProxyHandler(lb, gwMetrics))
 
 	// 启动 HTTP 服务器
-	httpAddr := fmt.Sprintf("%s:%s", getEnv("GATEWAY_HOST", "0.0.0.0"), getEnv("GATEWAY_PORT", "8000"))
+	httpAddr := cfg.RESTAddress()
 	httpServer := &http.Server{
 		Addr:         httpAddr,
 		Handler:      r,
@@ -95,8 +107,7 @@ func main() {
 	}()
 
 	// ── gRPC 透明流代理 ──
-	grpcPort := getEnv("GATEWAY_GRPC_PORT", "50000")
-	grpcAddr := fmt.Sprintf("0.0.0.0:%s", grpcPort)
+	grpcAddr := cfg.GRPCAddress()
 
 	grpcProxyServer, grpcLis, err := gateway.NewGrpcProxyListener(lb, grpcAddr, gwMetrics)
 	if err != nil {
@@ -117,6 +128,8 @@ func main() {
 		"grpc_addr", grpcAddr,
 		"strategy", strategy,
 		"backends", addresses,
+		"require_tls", cfg.RequireTLS,
+		"inbound_credentials_configured", cfg.AuthEffectivelyEnabled(),
 	)
 
 	// 优雅停机

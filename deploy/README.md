@@ -189,7 +189,7 @@ bash ./scripts/prod/stop-k8s.sh
   
   启用 `--profile monitoring` 时经 provisioning 自动加载；也可在 Grafana 中手动 Import。
 - **健康检查**：`bash ./scripts/prod/prod_health_check.sh`（REST `/health`、`/readyz`、gRPC 探活）。
-- **日志**：生产编排使用 JSON 结构化日志（`PRIVACY_LOG_FORMAT=json`），便于 ELK / Loki 收集。
+- **日志**：Go 引擎与 Go 微服务固定输出 JSON 结构化日志，便于 ELK / Loki 收集（Go 微服务用 `*_LOG_LEVEL` 调级别，`*_LOG_FORMAT` 仅 Python 引擎读取）。
 - 深度文档：[`docs/production_observability/`](../docs/production_observability/)。
 
 ---

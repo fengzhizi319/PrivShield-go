@@ -1,7 +1,10 @@
 package validation
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/fengzhizi319/PrivShield/pkg/naming"
 )
 
 func TestAllowedValues(t *testing.T) {
@@ -74,10 +77,11 @@ func TestWhitelists(t *testing.T) {
 	if len(DataSourceTypes) == 0 {
 		t.Error("DataSourceTypes should not be empty")
 	}
-	if len(SecurityLevels) == 0 {
-		t.Error("SecurityLevels should not be empty")
-	}
 	if len(SensitivityLevels) == 0 {
 		t.Error("SensitivityLevels should not be empty")
+	}
+	// P1-5：等级词表只有 pkg/naming 一个 Go 侧实现，validation 只能是其别名。
+	if got, want := strings.Join(SensitivityLevels, ","), strings.Join(naming.SecurityLevelIDs(), ","); got != want {
+		t.Errorf("SensitivityLevels = %q, want the pkg/naming vocabulary %q", got, want)
 	}
 }

@@ -6,9 +6,14 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
 )
+
+// minEvidenceRetentionDays 是存证物理删除允许的最短留存天数（三年），
+// 对应数安法二十一条与政务信息资源共享留存要求；短于此值一律拒绝启动。
+const minEvidenceRetentionDays = 1095
 
 // Config holds all runtime configuration for the audit-log server.
 // Config 保存审计存证服务器运行时的所有配置项。
@@ -38,6 +43,7 @@ type Config struct {
 
 	// Production hardening / 生产加固
 	APIKey        string   // Inbound API key for this module / 本模块入站 API Key
+	ReaderAPIKey  string   // Read-only verification key (P1-6 只读核验员) / 只读核验员 Key，空=不启用
 	CORSOrigins   []string // Allowed CORS origins / 允许的 CORS 来源
 	DBPath        string   // SQLite database path (empty = in-memory) / SQLite 数据库路径
 	PGDSN         string   // PostgreSQL connection DSN (Phase B / high-concurrency multi-replica)
@@ -45,6 +51,30 @@ type Config struct {
 	ArchiveDir    string   // Archive destination directory for old audit records
 	LogFormat     string   // "json" or "text" / 日志格式
 	LogLevel      string   // "debug", "info", "warn", "error" / 日志级别
+
+	// RequireTLS 由生产编排显式置真：TLS 未启用即拒绝启动，防止漏配证书仍照常服务。
+	RequireTLS bool
+
+	// HashKey 是链式完整性哈希的 HMAC-SM3 密钥（局方托管）。为空时沿用无密钥 SM3 口径（仅存量兼容）。
+	HashKey string
+
+	// DBWriteOnly 启用时在启动阶段自检数据库账号是否缺少 UPDATE/DELETE 权限（只写存证账号）。
+	DBWriteOnly bool
+
+	// ArchivePageSize 是归档段单批存证日志条数（0 = 默认 500）。
+	ArchivePageSize int
+
+	// PostgreSQL 连接池覆盖（0 = 沿用自适应区间）
+	PGMaxConn int // AUDIT_LOG_PG_MAX_CONNS
+	PGMinConn int // AUDIT_LOG_PG_MIN_CONNS
+
+	// 微批刷盘器参数（0 = 沿用 flusher.DefaultConfig 对应默认值）
+	FlushBatchSize        int // AUDIT_LOG_FLUSH_BATCH_SIZE
+	FlushIntervalMs       int // AUDIT_LOG_FLUSH_INTERVAL_MS
+	FlushQueueSize        int // AUDIT_LOG_FLUSH_QUEUE_SIZE
+	FlushEnqueueTimeoutMs int // AUDIT_LOG_FLUSH_ENQUEUE_TIMEOUT_MS
+	FlushMaxStaged        int // AUDIT_LOG_FLUSH_MAX_STAGED
+	FlushCloseTimeoutMs   int // AUDIT_LOG_FLUSH_CLOSE_TIMEOUT_MS
 
 	// Data retention / 数据保留策略
 	RetentionDays int // 审计日志保留天数，超期自动清理（0 = 不清理）
@@ -99,6 +129,7 @@ func Load() *Config {
 
 		// Production hardening / 生产加固
 		APIKey:        pkgconfig.EnvString("AUDIT_LOG_API_KEY", ""),
+		ReaderAPIKey:  pkgconfig.EnvString("AUDIT_LOG_READER_API_KEY", ""),
 		CORSOrigins:   pkgconfig.EnvStringSlice("AUDIT_LOG_CORS_ORIGINS"),
 		DBPath:        pkgconfig.EnvString("AUDIT_LOG_DB_PATH", ""),
 		PGDSN:         pgDSN,
@@ -107,8 +138,27 @@ func Load() *Config {
 		LogFormat:     pkgconfig.EnvString("AUDIT_LOG_LOG_FORMAT", "json"),
 		LogLevel:      pkgconfig.EnvString("AUDIT_LOG_LOG_LEVEL", "info"),
 
-		// Data retention / 数据保留策略（默认 90 天，审计日志保留期较长）
-		RetentionDays: pkgconfig.EnvInt("AUDIT_LOG_RETENTION_DAYS", 90),
+		// Fail-closed 生产门禁与密钥化存证 / production gate, keyed chain, write-only self-check
+		RequireTLS:  pkgconfig.EnvBool("AUDIT_LOG_REQUIRE_TLS", false),
+		HashKey:     pkgconfig.EnvString("AUDIT_LOG_HASH_KEY", ""),
+		DBWriteOnly: pkgconfig.EnvBool("AUDIT_LOG_DB_WRITE_ONLY", false),
+		PGMaxConn:   pkgconfig.EnvInt("AUDIT_LOG_PG_MAX_CONNS", 0),
+		PGMinConn:   pkgconfig.EnvInt("AUDIT_LOG_PG_MIN_CONNS", 0),
+
+		// 归档段单批日志条数 / records per archive segment (0 = 500)
+		ArchivePageSize: pkgconfig.EnvInt("AUDIT_LOG_ARCHIVE_PAGE_SIZE", 0),
+
+		// 微批刷盘参数 / micro-batch flusher tunables
+		FlushBatchSize:        pkgconfig.EnvInt("AUDIT_LOG_FLUSH_BATCH_SIZE", 0),
+		FlushIntervalMs:       pkgconfig.EnvInt("AUDIT_LOG_FLUSH_INTERVAL_MS", 0),
+		FlushQueueSize:        pkgconfig.EnvInt("AUDIT_LOG_FLUSH_QUEUE_SIZE", 0),
+		FlushEnqueueTimeoutMs: pkgconfig.EnvInt("AUDIT_LOG_FLUSH_ENQUEUE_TIMEOUT_MS", 0),
+		FlushMaxStaged:        pkgconfig.EnvInt("AUDIT_LOG_FLUSH_MAX_STAGED", 0),
+		FlushCloseTimeoutMs:   pkgconfig.EnvInt("AUDIT_LOG_FLUSH_CLOSE_TIMEOUT_MS", 0),
+
+		// Data retention / 数据保留策略：默认 0 = 永不物理删除（等保三级与数安法留存要求）。
+		// >0 时清理前必须先完成归档落盘，见 main.go 的归档前置校验与 internal/archive 包。
+		RetentionDays: pkgconfig.EnvInt("AUDIT_LOG_RETENTION_DAYS", 0),
 
 		// Graceful shutdown / 优雅关闭超时（默认 5 秒）
 		ShutdownTimeout: pkgconfig.EnvInt("AUDIT_LOG_SHUTDOWN_TIMEOUT", 5),
@@ -117,13 +167,13 @@ func Load() *Config {
 		RateLimitRPS:   pkgconfig.EnvInt("AUDIT_LOG_RATE_LIMIT_RPS", 100),
 		RateLimitBurst: pkgconfig.EnvInt("AUDIT_LOG_RATE_LIMIT_BURST", 200),
 
-		// Strict storage mode / 严格存储模式（禁止降级回退）
-		StrictStorage: pkgconfig.EnvBool("AUDIT_LOG_STRICT_STORAGE", pkgconfig.EnvBool("STRICT_STORAGE", false)),
+		// Strict storage mode / 严格存储模式：默认禁止降级回退，存储不可用即启动失败。
+		StrictStorage: pkgconfig.EnvBool("AUDIT_LOG_STRICT_STORAGE", pkgconfig.EnvBool("STRICT_STORAGE", true)),
 	}
 }
 
 // Validate checks that the configuration is consistent and all required files exist.
-// Validate 校验配置一致性：当 TLS 启用时确认证书/私钥文件存在。
+// Validate 校验配置一致性：TLS 文件存在性、fail-closed 安全不变式与存证留存红线。
 func (c *Config) Validate() error {
 	if c.TLSEnabled {
 		if c.TLSCertFile == "" {
@@ -138,6 +188,43 @@ func (c *Config) Validate() error {
 		if _, err := os.Stat(c.TLSKeyFile); err != nil {
 			return fmt.Errorf("TLS key file not accessible: %s: %w", c.TLSKeyFile, err)
 		}
+	}
+
+	if err := pkgconfig.ValidateFailClosed(pkgconfig.SecurityRequirements{
+		ServiceName:          "audit-log",
+		Hosts:                []string{c.Host, c.GRPCHost},
+		APIKey:               c.APIKey,
+		TLSEnabled:           c.TLSEnabled,
+		RequireTLS:           c.RequireTLS,
+		GRPCEnabled:          true,
+		MTLSWhitelistFile:    c.MTLSWhitelistFile,
+		EncryptionKey:        c.EncryptionKey,
+		RequireEncryptionKey: true,
+		HashKey:              c.HashKey,
+		RequireHashKey:       true,
+	}); err != nil {
+		return err
+	}
+
+	// P1-6 权责分离：只读核验员 Key 与写入 Key 相同等于没做隔离（白名单形同虚设），
+	// 反而给运维「核验专区已独立」的错觉，因此直接拒绝启动而不是静默降级。
+	if c.ReaderAPIKey != "" && c.ReaderAPIKey == c.APIKey {
+		return fmt.Errorf("AUDIT_LOG_READER_API_KEY must differ from AUDIT_LOG_API_KEY (identical keys defeat the P1-6 read-only separation)")
+	}
+
+	// P0-8 存证留存红线：0 = 永不删除；开启删除则不得低于三年留存要求，且必须先归档。
+	if c.RetentionDays < 0 {
+		return fmt.Errorf("AUDIT_LOG_RETENTION_DAYS must be >= 0, got %d", c.RetentionDays)
+	}
+	if c.RetentionDays > 0 && c.RetentionDays < minEvidenceRetentionDays {
+		return fmt.Errorf("AUDIT_LOG_RETENTION_DAYS=%d destroys evidence below the %d-day (3-year) retention floor; use 0 to disable deletion",
+			c.RetentionDays, minEvidenceRetentionDays)
+	}
+	if c.RetentionDays > 0 && strings.TrimSpace(c.ArchiveDir) == "" {
+		return fmt.Errorf("AUDIT_LOG_RETENTION_DAYS>0 requires AUDIT_LOG_ARCHIVE_DIR so overdue records are archived before deletion")
+	}
+	if c.RetentionDays > 0 && strings.TrimSpace(c.EncryptionKey) == "" {
+		return fmt.Errorf("AUDIT_LOG_RETENTION_DAYS>0 requires AUDIT_LOG_ENCRYPTION_KEY so archived evidence is written encrypted")
 	}
 	return nil
 }

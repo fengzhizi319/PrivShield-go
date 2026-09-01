@@ -5,7 +5,12 @@
 // 敏感级别（L1~L5）至脱敏算子（none/mask/k_anon/dp）的映射规则。
 package models
 
-import "time"
+import (
+	"strings"
+	"time"
+
+	"github.com/fengzhizi319/PrivShield/pkg/naming"
+)
 
 // HubStatus represents the scheduling hub's current status and queue telemetry.
 // HubStatus 结构体表示调度中枢运行时的全局概览状态与指标快照。
@@ -93,26 +98,81 @@ type ProxyResponse struct {
 }
 
 // LevelToOperation maps a data security classification level (L1~L5) to the corresponding privacy operation.
-// LevelToOperation 根据「三层四柱五御六类」数据安全分级标准，将数据的敏感级别映射为对应的隐私增强保护算子：
-// - L1 (公开数据): "none" (无需脱敏，明文流转)
-// - L2 (内部数据): "mask" (敏感字段级掩码脱敏，如手机号/身份证掩码)
-// - L3 (敏感数据): "k_anon" (K-匿名泛化抑制，防御重标识风险)
-// - L4 (机密数据): "dp" (差分隐私机制，注入拉普拉斯/高斯受控噪声)
-// - L5 (绝密数据): "dp" (强差分隐私 + 严格隐私预算控制)
-// - 其他/默认值: "mask" (采用通用字段掩码兜底)
+// LevelToOperation 根据「三层四柱五御六类」数据安全分级标准，将数据的敏感级别映射为对应的隐私增强保护算子。
+//
+// 入参容忍两套词表：规则库/存证使用的 L1~L5 标识，以及 engine 三层漏斗内部的 canonical
+// 名称（public/internal/confidential/secret/top_secret）；归一化统一由 pkg/naming 完成，
+// 本函数不再各自维护副本（P1-5 词表一致性）。
+//
+// - L1 (公开数据):   "none"   (无需脱敏，明文流转)
+// - L2 (内部数据):   "mask"   (敏感字段级掩码脱敏，如手机号/身份证掩码)
+// - L3 (敏感数据):   "k_anon" (K-匿名泛化抑制，防御重标识风险)
+// - L4 (高敏感数据): "dp"     (差分隐私机制，注入拉普拉斯/高斯受控噪声)
+// - L5 (极敏感数据): "dp"     (强差分隐私 + 严格隐私预算控制)
+// - 词表外/空值:     "mask"   (兜底掩码；调用方应在拿到空级别时直接失败，而非依赖本兜底)
 func LevelToOperation(level string) string {
-	switch level {
-	case "L1":
-		return "none" // L1 公开数据：无需脱敏
-	case "L2":
-		return "mask" // L2 内部数据：字段级掩码脱敏
-	case "L3":
-		return "k_anon" // L3 敏感数据：K-匿名泛化
-	case "L4":
-		return "dp" // L4 机密数据：差分隐私加噪
-	case "L5":
-		return "dp" // L5 绝密数据：强差分隐私加噪
+	switch naming.NormalizeSecurityLevelID(level) {
+	case naming.SecurityLevelL1:
+		return OperationNone // L1 公开数据：无需脱敏
+	case naming.SecurityLevelL2:
+		return OperationMask // L2 内部数据：字段级掩码脱敏
+	case naming.SecurityLevelL3:
+		return OperationKAnon // L3 敏感数据：K-匿名泛化
+	case naming.SecurityLevelL4, naming.SecurityLevelL5:
+		return OperationDP // L4/L5 高敏感与极敏感数据：差分隐私加噪
 	default:
-		return "mask" // 未知级别：安全兜底为字段级掩码
+		return OperationMask // 未知级别：安全兜底为字段级掩码
 	}
+}
+
+// 隐私算子标识（与 pkg/validation.HubOperations 保持一致）。
+const (
+	OperationNone  = "none"
+	OperationMask  = "mask"
+	OperationKAnon = "k_anon"
+	OperationDP    = "dp"
+	OperationQOL   = "qol"
+	OperationClass = "classify"
+)
+
+// operationStrength 是算子的保护强度序：数值越大脱敏力度越强。
+// classify 只做定级不做变换，因此与 none 同级；qol 为查询置乱，按掩码同级处理。
+// 词表外算子不在表中，OperationStrength 对其返回 -1。
+var operationStrength = map[string]int{
+	OperationNone:  0,
+	OperationClass: 0,
+	OperationMask:  1,
+	OperationQOL:   1,
+	OperationKAnon: 2,
+	OperationDP:    3,
+}
+
+// OperationStrength 返回算子的保护强度；词表外算子返回 -1。
+func OperationStrength(operation string) int {
+	if s, ok := operationStrength[strings.TrimSpace(operation)]; ok {
+		return s
+	}
+	return -1
+}
+
+// EffectiveOperation resolves the operator a task actually applies.
+// EffectiveOperation 计算任务最终执行的隐私算子（P1-1 核心约束）：
+//
+//	以「定级结果推导出的算子」为下限，调用方请求的算子只允许把保护强度**上调**，
+//	绝不允许下调。这样即便上游传入 operation=none，L4 数据依然会走差分隐私加噪，
+//	彻底消除「调用方自选弱算子绕过脱敏」的越权路径。
+//
+// 请求算子不在词表内（含空串）时直接采用定级推导结果。
+func EffectiveOperation(requested, derived string) string {
+	derivedStrength := OperationStrength(derived)
+	if derivedStrength < 0 {
+		// 定级推导结果不可识别：保留兜底 mask，宁可多脱敏也不能漏。
+		derived = OperationMask
+		derivedStrength = OperationStrength(derived)
+	}
+	requestedStrength := OperationStrength(requested)
+	if requestedStrength > derivedStrength {
+		return strings.TrimSpace(requested)
+	}
+	return derived
 }

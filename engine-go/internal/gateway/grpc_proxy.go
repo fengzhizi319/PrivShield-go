@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/fengzhizi319/PrivShield/engine-go/internal/observability"
+	pgateway "github.com/fengzhizi319/PrivShield/pkg/gateway"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -264,7 +265,7 @@ func (g *GrpcProxyServer) TransparentStreamDirector(srv interface{}, serverStrea
 
 	// 上报熔断器状态 + 转发计数
 	if g.metrics != nil {
-		g.metrics.SetCircuitBreakerState(node.Address, cbStateString(node.CB.State()))
+		g.metrics.SetCircuitBreakerState(node.Address, pgateway.CBStateString(node.CB.State()))
 		if err == nil {
 			g.metrics.RecordForwarded(node.Address, 200)
 		} else {

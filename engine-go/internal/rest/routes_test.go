@@ -316,6 +316,45 @@ func TestDiagnostics_Basic(t *testing.T) {
 	}
 }
 
+// TestDiagnostics_NerCapability 断言 P1-3 的诚实能力口径：默认构建装配的是正则
+// NER 桩（ONNX 模型未交付），因此 ner_available 必须存在且为 false。
+func TestDiagnostics_NerCapability(t *testing.T) {
+	r, _ := setupRouter(t)
+	w := doJSON(r, "GET", "/v1/ops/diagnostics", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	raw, ok := resp["ner_available"]
+	if !ok {
+		t.Fatal("missing ner_available field in /ops/diagnostics payload")
+	}
+	avail, isBool := raw.(bool)
+	if !isBool {
+		t.Fatalf("ner_available = %T (%v), want bool", raw, raw)
+	}
+	if avail {
+		t.Error("ner_available must be false: Layer 2 是正则桩，ONNX NER 模型未交付")
+	}
+
+	backend, _ := resp["ner_backend"].(string)
+	if backend != "rule-based-ner" {
+		t.Errorf("ner_backend = %q, want %q", backend, "rule-based-ner")
+	}
+
+	if engines, ok := resp["engines"].(map[string]any); ok {
+		if ner, ok := engines["ner"].(map[string]any); ok {
+			if ner["available"] == true {
+				t.Error("engines.ner.available must not claim true while the regex stand-in is wired")
+			}
+		}
+	}
+}
+
 // ──────────────────────────────────────────────
 // 查询混淆端点
 // ──────────────────────────────────────────────

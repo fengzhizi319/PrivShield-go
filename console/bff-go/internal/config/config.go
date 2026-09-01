@@ -32,6 +32,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	pkgconfig "github.com/fengzhizi319/PrivShield/pkg/config"
 )
 
 // Config holds all runtime configuration for the Go gRPC proxy server.
@@ -137,6 +139,10 @@ type Config struct {
 	// 对应环境变量 PRIVACY_CONSOLE_TLS_ENABLED，默认 false。
 	ConsoleTLSEnabled bool
 
+	// ConsoleRequireTLS：部署方声明本 BFF 必须以加密面暴露（PRIVACY_CONSOLE_REQUIRE_TLS，默认 false）。
+	// 置真而 ConsoleTLSEnabled 为假时启动门禁直接拒绝，消除「以为已加密、实际明文直传」。
+	ConsoleRequireTLS bool
+
 	// ConsoleTLSCertFile：BFF 服务端 X.509 证书路径（PEM）。
 	// 对应环境变量 PRIVACY_CONSOLE_TLS_CERT_FILE。
 	ConsoleTLSCertFile string
@@ -219,19 +225,19 @@ type Config struct {
 func Load() *Config {
 	return &Config{
 		// 上游 agent gRPC 主机地址，默认 127.0.0.1（本地开发场景）
-		AgentGRPCHost: getEnv("PRIVACY_AGENT_GRPC_HOST", "127.0.0.1"),
+		AgentGRPCHost: pkgconfig.EnvString("PRIVACY_AGENT_GRPC_HOST", "127.0.0.1"),
 		// 上游 agent gRPC 端口，默认 50051（与 PrivShield 默认 gRPC 端口一致）
-		AgentGRPCPort: getEnvInt("PRIVACY_AGENT_GRPC_PORT", 50051),
+		AgentGRPCPort: pkgconfig.EnvInt("PRIVACY_AGENT_GRPC_PORT", 50051),
 		// 认证 API Key，默认为空（不启用认证）
-		AgentAPIKey: getEnv("PRIVACY_AGENT_API_KEY", ""),
+		AgentAPIKey: pkgconfig.EnvString("PRIVACY_AGENT_API_KEY", ""),
 		// 本代理 HTTP 监听地址，默认 127.0.0.1
-		ConsoleHost: getEnv("PRIVACY_CONSOLE_HOST", "127.0.0.1"),
+		ConsoleHost: pkgconfig.EnvString("PRIVACY_CONSOLE_HOST", "127.0.0.1"),
 		// 本代理 HTTP 监听端口，默认 8081
-		ConsolePort: getEnvInt("PRIVACY_CONSOLE_PORT", 8081),
+		ConsolePort: pkgconfig.EnvInt("PRIVACY_CONSOLE_PORT", 8081),
 		// 前端静态文件目录，使用 getEnvOptional 以支持"设为空即禁用"语义
 		StaticDistDir: getEnvOptional("PRIVACY_CONSOLE_STATIC_DIR", "../web/dist"),
 		// 是否启用上游 gRPC 连接的 TLS/mTLS，默认关闭（非安全传输）
-		AgentTLSEnabled: getEnvBool("PRIVACY_AGENT_TLS_ENABLED", false) || getEnvBool("PRIVACY_AGENT_MTLS_ENABLED", false),
+		AgentTLSEnabled: pkgconfig.EnvBool("PRIVACY_AGENT_TLS_ENABLED", false) || pkgconfig.EnvBool("PRIVACY_AGENT_MTLS_ENABLED", false),
 		// 客户端证书文件（mTLS 双向认证），默认空
 		AgentTLSCertFile: getEnvWithFallback("PRIVACY_AGENT_TLS_CERT_FILE", "PRIVACY_AGENT_CLIENT_CERT"),
 		// 客户端私钥文件（mTLS 双向认证），默认空
@@ -241,39 +247,40 @@ func Load() *Config {
 		// 服务端证书主机名覆盖值，默认空（使用连接目标地址）
 		AgentTLSServerName: getEnvWithFallback("PRIVACY_AGENT_TLS_SERVER_NAME", "PRIVACY_AGENT_SERVER_NAME"),
 		// 是否跳过服务端证书校验（仅测试用），默认关闭
-		AgentTLSInsecureSkipVerify: getEnvBool("PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY", false),
+		AgentTLSInsecureSkipVerify: pkgconfig.EnvBool("PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY", false),
 		// 可选控制台 API Key，默认空（不鉴权）
-		ConsoleAPIKey: getEnv("CONSOLE_API_KEY", ""),
+		ConsoleAPIKey: pkgconfig.EnvString("CONSOLE_API_KEY", ""),
 		// 限流：每分钟每 IP 最大请求数，默认 600（0 关闭）
-		ConsoleRateLimit: getEnvInt("CONSOLE_RATE_LIMIT", 600),
+		ConsoleRateLimit: pkgconfig.EnvInt("CONSOLE_RATE_LIMIT", 600),
 		// 上传文件大小上限，默认 10MB
-		MaxUploadBytes: int64(getEnvInt("CONSOLE_MAX_UPLOAD_BYTES", 10*1024*1024)),
+		MaxUploadBytes: int64(pkgconfig.EnvInt("CONSOLE_MAX_UPLOAD_BYTES", 10*1024*1024)),
 		// 负载均衡探测 host 白名单，默认空（不限制）
-		LBAllowedHosts: getEnv("LB_ALLOWED_HOSTS", ""),
+		LBAllowedHosts: pkgconfig.EnvString("LB_ALLOWED_HOSTS", ""),
 		// gRPC 重试策略（#12）：最大重试次数、初始/最大退避秒数
-		AgentRetryMaxAttempts:    getEnvInt("PRIVACY_AGENT_RETRY_MAX_ATTEMPTS", 6),
-		AgentRetryInitialBackoff: getEnvInt("PRIVACY_AGENT_RETRY_INITIAL_BACKOFF", 1),
-		AgentRetryMaxBackoff:     getEnvInt("PRIVACY_AGENT_RETRY_MAX_BACKOFF", 8),
+		AgentRetryMaxAttempts:    pkgconfig.EnvInt("PRIVACY_AGENT_RETRY_MAX_ATTEMPTS", 6),
+		AgentRetryInitialBackoff: pkgconfig.EnvInt("PRIVACY_AGENT_RETRY_INITIAL_BACKOFF", 1),
+		AgentRetryMaxBackoff:     pkgconfig.EnvInt("PRIVACY_AGENT_RETRY_MAX_BACKOFF", 8),
 		// BFF 入站 HTTPS/TLS 配置
-		ConsoleTLSEnabled:          getEnvBool("PRIVACY_CONSOLE_TLS_ENABLED", false),
-		ConsoleTLSCertFile:         getEnv("PRIVACY_CONSOLE_TLS_CERT_FILE", ""),
-		ConsoleTLSKeyFile:          getEnv("PRIVACY_CONSOLE_TLS_KEY_FILE", ""),
-		ConsoleTLSCAFile:           getEnv("PRIVACY_CONSOLE_TLS_CA_FILE", ""),
-		ConsoleTLSClientAuth:       getEnv("PRIVACY_CONSOLE_TLS_CLIENT_AUTH", ""),
-		ConsoleTLSPinnedPubKeyFile: getEnv("PRIVACY_CONSOLE_TLS_PINNED_PUBKEY_FILE", ""),
-		ConsoleMTLSWhitelistFile:   getEnv("PRIVACY_AUTH_MTLS_WHITELIST_FILE", ""),
+		ConsoleTLSEnabled:          pkgconfig.EnvBool("PRIVACY_CONSOLE_TLS_ENABLED", false),
+		ConsoleRequireTLS:          pkgconfig.EnvBool("PRIVACY_CONSOLE_REQUIRE_TLS", false),
+		ConsoleTLSCertFile:         pkgconfig.EnvString("PRIVACY_CONSOLE_TLS_CERT_FILE", ""),
+		ConsoleTLSKeyFile:          pkgconfig.EnvString("PRIVACY_CONSOLE_TLS_KEY_FILE", ""),
+		ConsoleTLSCAFile:           pkgconfig.EnvString("PRIVACY_CONSOLE_TLS_CA_FILE", ""),
+		ConsoleTLSClientAuth:       pkgconfig.EnvString("PRIVACY_CONSOLE_TLS_CLIENT_AUTH", ""),
+		ConsoleTLSPinnedPubKeyFile: pkgconfig.EnvString("PRIVACY_CONSOLE_TLS_PINNED_PUBKEY_FILE", ""),
+		ConsoleMTLSWhitelistFile:   pkgconfig.EnvString("PRIVACY_AUTH_MTLS_WHITELIST_FILE", ""),
 		// BFF 入站 gRPC 服务端配置
-		ConsoleGRPCEnabled: getEnvBool("PRIVACY_CONSOLE_GRPC_ENABLED", false),
-		ConsoleGRPCHost:    getEnv("PRIVACY_CONSOLE_GRPC_HOST", "127.0.0.1"),
-		ConsoleGRPCPort:    getEnvInt("PRIVACY_CONSOLE_GRPC_PORT", 50055),
+		ConsoleGRPCEnabled: pkgconfig.EnvBool("PRIVACY_CONSOLE_GRPC_ENABLED", false),
+		ConsoleGRPCHost:    pkgconfig.EnvString("PRIVACY_CONSOLE_GRPC_HOST", "127.0.0.1"),
+		ConsoleGRPCPort:    pkgconfig.EnvInt("PRIVACY_CONSOLE_GRPC_PORT", 50055),
 
 		// 直连 Go 微服务配置
-		HubURL:           getEnv("BFF_HUB_URL", "http://127.0.0.1:8082"),
-		DatasourceURL:    getEnv("BFF_DATASOURCE_URL", "http://127.0.0.1:8083"),
-		AuditURL:         getEnv("BFF_AUDIT_URL", "http://127.0.0.1:8084"),
-		HubAPIKey:        getEnv("BFF_HUB_API_KEY", ""),
-		DatasourceAPIKey: getEnv("BFF_DATASOURCE_API_KEY", ""),
-		AuditAPIKey:      getEnv("BFF_AUDIT_API_KEY", ""),
+		HubURL:           pkgconfig.EnvString("BFF_HUB_URL", "http://127.0.0.1:8082"),
+		DatasourceURL:    pkgconfig.EnvString("BFF_DATASOURCE_URL", "http://127.0.0.1:8083"),
+		AuditURL:         pkgconfig.EnvString("BFF_AUDIT_URL", "http://127.0.0.1:8084"),
+		HubAPIKey:        pkgconfig.EnvString("BFF_HUB_API_KEY", ""),
+		DatasourceAPIKey: pkgconfig.EnvString("BFF_DATASOURCE_API_KEY", ""),
+		AuditAPIKey:      pkgconfig.EnvString("BFF_AUDIT_API_KEY", ""),
 	}
 }
 
@@ -343,25 +350,22 @@ func (c *Config) Validate() error {
 	if c.AgentRetryMaxBackoff < 0 {
 		return fmt.Errorf("PRIVACY_AGENT_RETRY_MAX_BACKOFF must be >= 0, got %d", c.AgentRetryMaxBackoff)
 	}
-	return nil
-}
 
-// getEnv reads a string env var; returns defaultValue if unset or empty.
-// getEnv 读取指定环境变量的字符串值，不存在或为空时返回默认值。
-//
-// Logic / 执行逻辑：
-//  1. Call os.Getenv to read the value
-//  2. Return directly if non-empty
-//  3. Return defaultValue if empty or unset
-//
-// Use case: string config fields (hostname, API Key, etc.).
-// 适用场景：字符串类型配置项（主机名、API Key 等）。
-func getEnv(name, defaultValue string) string {
-	// os.Getenv 在变量未设置时返回空字符串，无法区分"未设置"与"显式设为空"
-	if v := os.Getenv(name); v != "" {
-		return v // 环境变量存在且非空，直接使用
+	// P0-1 零信任默认态：鉴权中间件在 Key 为空时整体放行（pkg/middleware/auth.go），
+	// 而本 BFF 代理面可达原始样本记录（P0-7），故非环回监听必须配置 CONSOLE_API_KEY。
+	hosts := []string{c.ConsoleHost}
+	if c.ConsoleGRPCEnabled {
+		hosts = append(hosts, c.ConsoleGRPCHost)
 	}
-	return defaultValue // 环境变量不存在或为空，回退到默认值
+	return pkgconfig.ValidateFailClosed(pkgconfig.SecurityRequirements{
+		ServiceName:       "console-bff",
+		Hosts:             hosts,
+		APIKey:            c.ConsoleAPIKey,
+		TLSEnabled:        c.ConsoleTLSEnabled,
+		RequireTLS:        c.ConsoleRequireTLS,
+		GRPCEnabled:       c.ConsoleGRPCEnabled,
+		MTLSWhitelistFile: c.ConsoleMTLSWhitelistFile,
+	})
 }
 
 // getEnvWithFallback 尝试依次读取给定的环境变量列表，返回第一个非空值；全为空时返回空字符串。
@@ -377,9 +381,9 @@ func getEnvWithFallback(names ...string) string {
 // getEnvOptional reads an env var, distinguishing "unset" from "explicitly set to empty".
 // getEnvOptional 读取环境变量，区分"未设置"与"显式设为空字符串"。
 //
-// Key difference from getEnv / 与 getEnv 的核心区别：
-//   - getEnv: empty string equals unset, falls back to default
-//     getEnv：空字符串等同于未设置，回退到默认值
+// Key difference from pkgconfig.EnvString / 与 pkgconfig.EnvString 的核心区别：
+//   - EnvString: empty string equals unset, falls back to default
+//     EnvString：空字符串等同于未设置，回退到默认值
 //   - getEnvOptional: empty string is a valid value; only uses default when completely unset
 //     getEnvOptional：空字符串是合法值，仅在变量完全未设置时才使用默认值
 //
@@ -394,61 +398,6 @@ func getEnvOptional(name, defaultValue string) string {
 		return v // 环境变量存在（即使是空字符串也返回）
 	}
 	return defaultValue // 环境变量完全未设置，使用默认值
-}
-
-// getEnvInt reads an env var and parses it as int; returns default on failure or unset.
-// getEnvInt 读取环境变量并解析为 int 类型，解析失败或不存在时返回默认值。
-//
-// Logic / 执行逻辑：
-//  1. Read the env var string value
-//  2. Return default if empty (fast path)
-//  3. Attempt strconv.Atoi to parse as integer
-//  4. On parse failure (e.g. non-numeric), silently fallback to default
-//
-// Use case: integer config fields like port numbers.
-// 适用场景：端口号等整数类型配置项。
-func getEnvInt(name string, defaultValue int) int {
-	// 读取环境变量原始值
-	v := os.Getenv(name)
-	// 未设置或为空字符串时直接返回默认值，避免无效解析
-	if v == "" {
-		return defaultValue
-	}
-	// 尝试将字符串解析为十进制整数
-	i, err := strconv.Atoi(v)
-	if err != nil {
-		// 解析失败（如用户误输入 "abc"）时静默回退到默认值，
-		// 不中断程序启动，降低配置错误导致的启动失败风险
-		return defaultValue
-	}
-	// 解析成功，返回整数值
-	return i
-}
-
-// getEnvBool reads an env var and parses it as bool; returns default if unset or unrecognized.
-// getEnvBool 读取环境变量并解析为 bool 类型，不存在或无法识别时返回默认值。
-//
-// Logic / 执行逻辑：
-//  1. Read env var and lowercase it
-//  2. Return default if empty
-//  3. Return true for "true"/"1"/"yes"/"on"; false for everything else
-//
-// Use case: boolean config fields like TLS switches.
-// 适用场景：TLS 开关等布尔类型配置项。
-func getEnvBool(name string, defaultValue bool) bool {
-	// 读取环境变量原始值
-	v := os.Getenv(name)
-	// 未设置或为空字符串时直接返回默认值
-	if v == "" {
-		return defaultValue
-	}
-	// 统一转小写后匹配常见真值字面量，其余值（含 "false"/"0"）视为 false
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "true", "1", "yes", "on":
-		return true
-	default:
-		return false
-	}
 }
 
 // AgentAddress returns the full gRPC target address for the upstream agent.

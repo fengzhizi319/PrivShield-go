@@ -1,3 +1,17 @@
+// Package middleware 单元测试套件
+//
+// ==============================================================================
+// 【测试套件设计目标与覆盖范围】
+// 本测试文件验证 Package middleware 中通用 Gin 中间件套件的正确性与边界防御：
+//  1. 【CORS 跨域测试】：通配符放行、白名单精确过滤、非白名单拦截、Preflight OPTIONS 204 快速响应；
+//  2. 【Auth 鉴权测试】：空 Key 开发放行、健康检查豁免、Bearer Token 校验正确/错误、非 /api/ 路径豁免；
+//  3. 【RequestID 追踪测试】：入站头透传、缺失时基于安全随机数自动生成、Downstream Context 绑定；
+//  4. 【StructuredLogger 日志测试】：结构化日志字段输出与 nil Logger 兜底；
+//  5. 【Recovery 异常恢复测试】：Panic 拦截、日志记录与 500 统一信封输出；
+//  6. 【SecurityHeaders 安全头测试】：6 项标准安全响应头完整性校验；
+//  7. 【DDoS 纵深防御测试】：MaxBodySize（413）、MaxConcurrent（503）与 RateLimit 令牌桶（429）。
+// ==============================================================================
+
 package middleware
 
 import (
@@ -20,9 +34,10 @@ func init() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// CORS / 跨域中间件测试
+// 1. CORS / 跨域中间件测试
 // ─────────────────────────────────────────────────────────────
 
+// TestCORS_AllowAll 验证 origins 为 nil 时允许任意来源并设置 Access-Control-Allow-Origin: *。
 func TestCORS_AllowAll(t *testing.T) {
 	r := gin.New()
 	r.Use(CORS(nil))
@@ -38,6 +53,7 @@ func TestCORS_AllowAll(t *testing.T) {
 	}
 }
 
+// TestCORS_AllowAllWildcard 验证显式配置 ["*"] 同样允许任意来源。
 func TestCORS_AllowAllWildcard(t *testing.T) {
 	r := gin.New()
 	r.Use(CORS([]string{"*"}))
@@ -53,13 +69,14 @@ func TestCORS_AllowAllWildcard(t *testing.T) {
 	}
 }
 
+// TestCORS_SpecificOrigins 验证配置明确白名单时，仅放行列表中的 Origin，非白名单请求不设置 Allow-Origin 头。
 func TestCORS_SpecificOrigins(t *testing.T) {
 	allowed := []string{"http://localhost:5173", "http://localhost:3000"}
 	r := gin.New()
 	r.Use(CORS(allowed))
 	r.GET("/test", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
 
-	// Matching origin
+	// Matching origin / 匹配白名单的 Origin
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/test", nil)
 	req.Header.Set("Origin", "http://localhost:5173")
@@ -72,7 +89,7 @@ func TestCORS_SpecificOrigins(t *testing.T) {
 		t.Errorf("Vary = %q, want Origin", got)
 	}
 
-	// Non-matching origin
+	// Non-matching origin / 未匹配白名单的 Origin
 	w2 := httptest.NewRecorder()
 	req2, _ := http.NewRequest("GET", "/test", nil)
 	req2.Header.Set("Origin", "http://evil.com")
@@ -83,6 +100,7 @@ func TestCORS_SpecificOrigins(t *testing.T) {
 	}
 }
 
+// TestCORS_PreflightOptions 验证预检请求（OPTIONS）直接返回 204 No Content 并携带合法的 Allow-Methods / Allow-Headers。
 func TestCORS_PreflightOptions(t *testing.T) {
 	r := gin.New()
 	r.Use(CORS(nil))
@@ -104,9 +122,10 @@ func TestCORS_PreflightOptions(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Auth / 鉴权中间件测试
+// 2. Auth / 鉴权中间件测试
 // ─────────────────────────────────────────────────────────────
 
+// TestAuth_EmptyKey_SkipsAuth 验证 apiKey 为空时自动跳过鉴权（开发模式兼容）。
 func TestAuth_EmptyKey_SkipsAuth(t *testing.T) {
 	r := gin.New()
 	r.Use(Auth(""))
@@ -121,6 +140,7 @@ func TestAuth_EmptyKey_SkipsAuth(t *testing.T) {
 	}
 }
 
+// TestAuth_HealthExempt 验证 /health 与 /api/health 路径即使配置了 API Key 也能免鉴权访问。
 func TestAuth_HealthExempt(t *testing.T) {
 	r := gin.New()
 	r.Use(Auth("secret-key"))
@@ -137,6 +157,7 @@ func TestAuth_HealthExempt(t *testing.T) {
 	}
 }
 
+// TestAuth_ValidKey 验证携带正确 Bearer Token 时请求顺利通过鉴权。
 func TestAuth_ValidKey(t *testing.T) {
 	r := gin.New()
 	r.Use(Auth("my-secret"))
@@ -152,6 +173,7 @@ func TestAuth_ValidKey(t *testing.T) {
 	}
 }
 
+// TestAuth_InvalidKey 验证携带错误 Token 时返回 401 UNAUTHORIZED 统一错误信封。
 func TestAuth_InvalidKey(t *testing.T) {
 	r := gin.New()
 	r.Use(Auth("my-secret"))
@@ -176,6 +198,7 @@ func TestAuth_InvalidKey(t *testing.T) {
 	}
 }
 
+// TestAuth_MissingToken 验证未携带 Authorization 请求头时返回 401。
 func TestAuth_MissingToken(t *testing.T) {
 	r := gin.New()
 	r.Use(Auth("my-secret"))
@@ -190,6 +213,7 @@ func TestAuth_MissingToken(t *testing.T) {
 	}
 }
 
+// TestAuth_NonApiPath_Exempt 验证非 /api/* 路径（如 /metrics）免鉴权。
 func TestAuth_NonApiPath_Exempt(t *testing.T) {
 	r := gin.New()
 	r.Use(Auth("my-secret"))
@@ -204,6 +228,7 @@ func TestAuth_NonApiPath_Exempt(t *testing.T) {
 	}
 }
 
+// TestExtractBearer 验证从各种 Authorization 格式中提取 Token 的健壮性。
 func TestExtractBearer(t *testing.T) {
 	tests := []struct {
 		header string
@@ -225,9 +250,10 @@ func TestExtractBearer(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// RequestID / 请求 ID 中间件测试
+// 3. RequestID / 请求 ID 中间件测试
 // ─────────────────────────────────────────────────────────────
 
+// TestRequestID_Passthrough 验证入站已包含 X-Request-ID 时原样透传。
 func TestRequestID_Passthrough(t *testing.T) {
 	r := gin.New()
 	r.Use(RequestID())
@@ -247,6 +273,7 @@ func TestRequestID_Passthrough(t *testing.T) {
 	}
 }
 
+// TestRequestID_Generated 验证入站未携带 X-Request-ID 时自动生成符合 req- 格式的随机 ID。
 func TestRequestID_Generated(t *testing.T) {
 	r := gin.New()
 	r.Use(RequestID())
@@ -270,9 +297,10 @@ func TestRequestID_Generated(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// StructuredLogger / 结构化日志中间件测试
+// 4. StructuredLogger / 结构化日志中间件测试
 // ─────────────────────────────────────────────────────────────
 
+// TestStructuredLogger_NoPanic 验证在正常配置 Logger 下，结构化日志中间件正常执行无 panic。
 func TestStructuredLogger_NoPanic(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	r := gin.New()
@@ -288,6 +316,7 @@ func TestStructuredLogger_NoPanic(t *testing.T) {
 	}
 }
 
+// TestStructuredLogger_NilLogger 验证 Logger 传入 nil 时自动使用 slog.Default() 兜底不崩溃。
 func TestStructuredLogger_NilLogger(t *testing.T) {
 	r := gin.New()
 	r.Use(StructuredLogger(nil, "test-module"))
@@ -303,9 +332,10 @@ func TestStructuredLogger_NilLogger(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Recovery / 异常恢复中间件测试
+// 5. Recovery / 异常恢复中间件测试
 // ─────────────────────────────────────────────────────────────
 
+// TestRecovery_CatchesPanic 验证 Handler 抛出 panic 时被成功捕获并输出 500 INTERNAL_ERROR 统一信封。
 func TestRecovery_CatchesPanic(t *testing.T) {
 	r := gin.New()
 	r.Use(RequestID())
@@ -337,9 +367,10 @@ func TestRecovery_CatchesPanic(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// SecurityHeaders / 安全头中间件测试
+// 6. SecurityHeaders / 安全头中间件测试
 // ─────────────────────────────────────────────────────────────
 
+// TestSecurityHeaders 验证 6 项企业级安全响应头（nosniff, SAMEORIGIN, XSS block, HSTS, strict-origin, Permissions-Policy）全部注入。
 func TestSecurityHeaders(t *testing.T) {
 	r := gin.New()
 	r.Use(SecurityHeaders())
@@ -370,9 +401,10 @@ func TestSecurityHeaders(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// DDoS Protection Middlewares (MaxBodySize / MaxConcurrent / RateLimit)
+// 7. DDoS Protection Middlewares (MaxBodySize / MaxConcurrent / RateLimit)
 // ─────────────────────────────────────────────────────────────
 
+// TestMaxBodySize 验证请求体大小超出限制时触发 413 Payload Too Large 拦截。
 func TestMaxBodySize(t *testing.T) {
 	r := gin.New()
 	r.Use(MaxBodySize(10)) // Max 10 bytes
@@ -385,7 +417,7 @@ func TestMaxBodySize(t *testing.T) {
 		c.JSON(http.StatusOK, gin.H{"len": len(body)})
 	})
 
-	// 1. Small payload (within limit)
+	// 1. Small payload (within limit) / 小包放行
 	w1 := httptest.NewRecorder()
 	req1, _ := http.NewRequest("POST", "/upload", bytes.NewReader([]byte("12345")))
 	r.ServeHTTP(w1, req1)
@@ -393,7 +425,7 @@ func TestMaxBodySize(t *testing.T) {
 		t.Errorf("expected 200 for 5 bytes, got %d", w1.Code)
 	}
 
-	// 2. Large payload (exceeds limit)
+	// 2. Large payload (exceeds limit) / 超大包 413 拦截
 	w2 := httptest.NewRecorder()
 	req2, _ := http.NewRequest("POST", "/upload", bytes.NewReader([]byte("12345678901234567890")))
 	r.ServeHTTP(w2, req2)
@@ -402,6 +434,7 @@ func TestMaxBodySize(t *testing.T) {
 	}
 }
 
+// TestMaxConcurrent 验证在途并发请求数超出上限时立即返回 503 Service Unavailable。
 func TestMaxConcurrent(t *testing.T) {
 	r := gin.New()
 	r.Use(MaxConcurrent(1)) // Max 1 concurrent request
@@ -411,14 +444,14 @@ func TestMaxConcurrent(t *testing.T) {
 		c.JSON(200, gin.H{"ok": true})
 	})
 
-	// First request starts and blocks
+	// First request starts and blocks / 首个请求进入并阻塞
 	w1 := httptest.NewRecorder()
 	req1, _ := http.NewRequest("GET", "/slow", nil)
 	go r.ServeHTTP(w1, req1)
 
 	time.Sleep(20 * time.Millisecond)
 
-	// Second request should immediately get 503 Service Unavailable
+	// Second request should immediately get 503 Service Unavailable / 第二个并发请求被 503 快速拦截
 	w2 := httptest.NewRecorder()
 	req2, _ := http.NewRequest("GET", "/slow", nil)
 	r.ServeHTTP(w2, req2)
@@ -427,10 +460,11 @@ func TestMaxConcurrent(t *testing.T) {
 		t.Errorf("expected 503 for concurrent overflow, got %d", w2.Code)
 	}
 
-	// Unblock first request
+	// Unblock first request / 释放阻塞
 	close(blockCh)
 }
 
+// TestRateLimit_AllowsUnderBurstAndRejectsOver 验证单 IP 令牌桶限流器在突发容量内正常放行，超限后返回 429。
 func TestRateLimit_AllowsUnderBurstAndRejectsOver(t *testing.T) {
 	r := gin.New()
 	r.Use(RateLimit(2, 2)) // 2 RPS, burst 2
@@ -438,7 +472,7 @@ func TestRateLimit_AllowsUnderBurstAndRejectsOver(t *testing.T) {
 		c.JSON(200, gin.H{"data": "ok"})
 	})
 
-	// 2 requests allowed immediately
+	// 2 requests allowed immediately / 突发配额 2 次放行
 	for i := 0; i < 2; i++ {
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest("GET", "/api/data", nil)
@@ -449,7 +483,7 @@ func TestRateLimit_AllowsUnderBurstAndRejectsOver(t *testing.T) {
 		}
 	}
 
-	// 3rd request immediately should be rate limited (429)
+	// 3rd request immediately should be rate limited (429) / 第 3 次请求立即被 429 限流
 	w3 := httptest.NewRecorder()
 	req3, _ := http.NewRequest("GET", "/api/data", nil)
 	req3.RemoteAddr = "192.168.1.100:1234"

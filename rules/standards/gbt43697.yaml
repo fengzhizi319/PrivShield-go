@@ -1,0 +1,54 @@
+# GB/T 43697-2024《数据安全技术 数据分类分级规则》→ 本仓 L1~L5 词表映射
+# 纯映射/声明文件：不定义规则算子、不定义端点、不改变任何运行时行为。
+# 唯一事实源仍是 rules/taxonomies/default.yaml（等级 id / 中文名 / rank 由其定义，
+# 一致性由 scripts/check_taxonomy_consistency.sh 门禁校验）。
+standard_id: gbt43697
+description: GB/T 43697-2024《数据安全技术 数据分类分级规则》1~5 级分级指引到内置 L1~L5 词表的对齐映射
+taxonomy: default  # 使用 L1~L5 体系
+domains:
+- general-pii
+global_params:
+  default_level: "L3"  # 国标「一般数据」未细分时的本仓落地档位，与 taxonomies/default.yaml 的 default_level 一致
+
+# 国标分级类别 → L1~L5 等级
+# 依据：GB/T 43697-2024 将数据按精度、规模、应用场景分为核心数据、重要数据、一般数据三级，
+#       并规定一般数据可结合行业与领域实际进一步细分档位；个人信息按该标准及 GB/T 35273
+#       的敏感个人信息/一般个人信息口径落位。本表是「国标 ↔ 本仓词表」的对齐表述，
+#       供合规对照与人工复核使用。
+levels:
+  CORE:
+    national_category: "核心数据"
+    level: "L5"
+    rank: 5
+    note: "关系国家安全、国民经济运行、重大公共利益的数据；本仓对应最高档极敏感数据"
+  IMPORTANT:
+    national_category: "重要数据"
+    level: "L4"
+    rank: 4
+    note: "一旦泄露可能直接影响国家安全、经济安全、社会稳定、公共利益的数据"
+  GENERAL_SENSITIVE_PII:
+    national_category: "一般数据（含敏感个人信息）"
+    level: "L4"
+    rank: 4
+    note: "一旦泄露或非法使用可能导致自然人人格尊严受侵害或人身财产安全受危害的个人信息"
+  GENERAL_PII:
+    national_category: "一般数据（含一般个人信息）"
+    level: "L3"
+    rank: 3
+    note: "可识别特定自然人但敏感度较低的个人信息，本仓按个人基本信息口径定级"
+  GENERAL_INTERNAL:
+    national_category: "一般数据（内部公开受限）"
+    level: "L2"
+    rank: 2
+    note: "仅内部使用、泄露影响有限的运营与管理类数据"
+  GENERAL_PUBLIC:
+    national_category: "一般数据（可公开）"
+    level: "L1"
+    rank: 1
+    note: "经依法公开或公开后无隐私与安全风险的数据"
+
+overrides: {}
+rule_overrides: {}
+extra_rules: []
+extra_downgrade_rules: []
+extra_composite_rules: []
