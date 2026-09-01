@@ -309,7 +309,7 @@ echo "编译 App-LZ Go BFF..."
 
 echo "启动 App-LZ Go BFF..."
 if [[ "$MTLS_MODE" == "true" ]]; then
-    APP_LZ_PORT="$BFF_PORT" \
+    APP_LZ_HOST=127.0.0.1 APP_LZ_PORT="$BFF_PORT" \
     APP_LZ_AGENT_URL="https://127.0.0.1:8079" \
     APP_LZ_AGENT_GRPC="127.0.0.1:50051" \
     PRIVACY_AGENT_TLS_ENABLED=true \
@@ -319,7 +319,7 @@ if [[ "$MTLS_MODE" == "true" ]]; then
     PRIVACY_AGENT_TLS_SERVER_NAME="localhost" \
     "$APP_LZ_DIR/bff-go/bin/server" > "$LOGS_DIR/app-lz-bff.log" 2>&1 &
 else
-    APP_LZ_PORT="$BFF_PORT" "$APP_LZ_DIR/bff-go/bin/server" > "$LOGS_DIR/app-lz-bff.log" 2>&1 &
+    APP_LZ_HOST=127.0.0.1 APP_LZ_PORT="$BFF_PORT" "$APP_LZ_DIR/bff-go/bin/server" > "$LOGS_DIR/app-lz-bff.log" 2>&1 &
 fi
 BFF_PID=$!
 echo "$BFF_PID" > "$PIDS_DIR/app-lz-bff.pid"
