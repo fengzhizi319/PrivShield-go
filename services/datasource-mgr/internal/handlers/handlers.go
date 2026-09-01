@@ -19,6 +19,7 @@ import (
 	"github.com/fengzhizi319/PrivShield/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield/pkg/middleware"
 	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 	"github.com/fengzhizi319/PrivShield/services/datasource-mgr/internal/config"
 	"github.com/fengzhizi319/PrivShield/services/datasource-mgr/internal/models"
 )
@@ -81,7 +82,7 @@ func New(cfg *config.Config, logger *slog.Logger, mc *metrics.Collector) *Server
 func (s *Server) RegisterRoutes(r *gin.Engine) {
 	// 装配中间件栈
 	r.Use(middleware.TraceMiddleware())
-	r.Use(middleware.StructuredLogger(s.logger, "datasource-mgr"))
+	r.Use(pkgobs.RequestLoggerWithModule("datasource-mgr"))
 	r.Use(middleware.Recovery(s.logger, "datasource-mgr"))
 	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.MaxBodySize(32 << 20)) // 32 MiB max payload protection

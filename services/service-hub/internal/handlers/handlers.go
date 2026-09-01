@@ -39,6 +39,7 @@ import (
 	"github.com/fengzhizi319/PrivShield/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield/pkg/middleware"
 	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 	"github.com/fengzhizi319/PrivShield/pkg/store"
 	"github.com/fengzhizi319/PrivShield/pkg/validation"
 
@@ -204,7 +205,7 @@ func (s *Server) persistTask(task *store.Task, transition string) error {
 // 8. Auth: 基于 Authorization Bearer 的 API Key 鉴权校验
 func (s *Server) RegisterRoutes(r *gin.Engine) {
 	r.Use(middleware.TraceMiddleware())
-	r.Use(middleware.StructuredLogger(s.logger, "service-hub"))
+	r.Use(pkgobs.RequestLoggerWithModule("service-hub"))
 	r.Use(middleware.Recovery(s.logger, "service-hub"))
 	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.MaxBodySize(32 << 20)) // 32 MiB 请求体最大保护

@@ -215,9 +215,15 @@ func (m *REDMetrics) UnaryServerInterceptor() grpc.UnaryServerInterceptor
 - `privshield_requests_total{protocol, endpoint, status}`
 - `privshield_request_duration_seconds{protocol, endpoint}`
 
-#### 5.3.4 迁移 `engine-go/internal/observability/tracing.go` 到 `pkg/observability/tracing.go`
+#### 5.3.4 迁移 Tracing 与 TraceID 提取到 `pkg/observability`
 
-- 保留 `Tracer` 接口、`NoOpTracer`、`OTelTracer`、`InitTracing`、`GetTracer`、`StartSpan`、`TracingEnabled`。
+- `pkg/observability/tracing.go` 保留 `Tracer` 接口、`NoOpTracer`、`OTelTracer`、`InitTracing`、`GetTracer`、`StartSpan`、`TracingEnabled`。
+- 新增 `pkg/observability/trace.go`，从 `pkg/middleware` 下沉：
+  - `TraceIDContextKey`、`TraceHeader`、`TraceIDHeader` 常量；
+  - `GenerateRequestID()` 请求 ID 生成器；
+  - `GetTraceID(c *gin.Context) string` 追踪 ID 提取；
+  - `TraceMiddleware()` 分布式追踪上下文中间件。
+- `pkg/middleware/trace.go` 改为委托 `pkg/observability` 的兼容别名，保持历史调用方零改动。
 - `engine-go/internal/observability/tracing.go` 改为类型别名委托。
 
 #### 5.3.5 改造 `engine-go/internal/observability/metrics.go`
@@ -607,6 +613,25 @@ logger := slog.Default()
 - `services/audit-log/cmd/server/main.go`
 - `services/datasource-mgr/cmd/server/main.go`
 
+#### 10.2.3 HTTP 请求日志中间件收敛
+
+原 `pkg/middleware.StructuredLogger(logger, module)` 被下沉为 `pkg/observability.RequestLoggerWithModule(module)`；
+`pkg/middleware.StructuredLogger` 保留为 deprecated 兼容别名。
+
+| 模块 | 文件 | 变更 |
+|---|---|---|
+| `console/bff-go` | `internal/handlers/handlers.go:153` | `middleware.StructuredLogger(s.logger, "backend-go")` → `pkgobs.RequestLoggerWithModule("backend-go")` |
+| `console/app-lz/bff-go` | `internal/handlers/handlers.go:86` | `middleware.StructuredLogger(h.logger, "app-lz")` → `pkgobs.RequestLoggerWithModule("app-lz")` |
+| `services/service-hub` | `internal/handlers/handlers.go:207` | `middleware.StructuredLogger(s.logger, "service-hub")` → `pkgobs.RequestLoggerWithModule("service-hub")` |
+| `services/audit-log` | `internal/handlers/handlers.go:65` | `middleware.StructuredLogger(s.logger, "audit-log")` → `pkgobs.RequestLoggerWithModule("audit-log")` |
+| `services/datasource-mgr` | `internal/handlers/handlers.go:84` | `middleware.StructuredLogger(s.logger, "datasource-mgr")` → `pkgobs.RequestLoggerWithModule("datasource-mgr")` |
+
+新增 `pkg/observability/trace.go`：
+
+- 把 `pkg/middleware` 中的 `GetTraceID`、`TraceMiddleware`、`GenerateRequestID` 及常量下沉到这里。
+- `pkg/middleware/trace.go` 改为委托 `pkg/observability` 的兼容别名。
+- 避免 `pkg/observability` 与 `pkg/middleware` 之间的循环依赖。
+
 #### 10.2.3 gRPC server 收敛
 
 `services/audit-log` 与 `services/datasource-mgr` 的 `cmd/server/main.go` 中 gRPC server 构建统一改为：
@@ -711,10 +736,9 @@ make check
 
 以下项在本次重构中未强制迁移，后续若出现第二处复用可按相同模式下沉：
 
-1. **`pkg/observability.RequestLogger` 全仓库统一**：当前 `services/*` 和 `console/*` 仍有自定义 StructuredLogger，统一字段后可能造成日志解析器变更。
-2. **console BFF 上游客户端改用 `pkg/gateway`**：`console/bff-go/internal/microservices/client.go` 使用自定义连接池，未来可评估是否复用 `pkg/gateway` 的负载均衡能力。
-3. **`pkg/grpcserver` 流式拦截器增强**：当前仅提供 unary 拦截器，流式服务增长后可补充 stream interceptor builder。
-4. **`pkg/metrics.Collector` 与 `pkg/observability.REDMetrics` 语义统一**：两者目前独立存在，Collector 面向 services，REDMetrics 面向 engine-go，未来可考虑统一接口。
+1. **console BFF 上游客户端改用 `pkg/gateway`**：`console/bff-go/internal/microservices/client.go` 使用自定义连接池，未来可评估是否复用 `pkg/gateway` 的负载均衡能力。
+2. **`pkg/grpcserver` 流式拦截器增强**：当前仅提供 unary 拦截器，流式服务增长后可补充 stream interceptor builder。
+3. **`pkg/metrics.Collector` 与 `pkg/observability.REDMetrics` 语义统一**：两者目前独立存在，Collector 面向 services，REDMetrics 面向 engine-go，未来可考虑统一接口。
 
 ---
 
@@ -736,10 +760,12 @@ make check
 |---|---|---|
 | env helper | `engine-go/internal/config/config.go:205`（私有函数） | `pkg/config/env.go:17` |
 | Logger 初始化 | `engine-go/internal/observability/logger.go:14` | `pkg/observability/logger.go:17` |
-| RequestLogger | `engine-go/internal/observability/logger.go:55` | `pkg/observability/request_logger.go:18` |
+| RequestLogger | `engine-go/internal/observability/logger.go:22` | `pkg/observability/request_logger.go:22` |
+| RequestLoggerWithModule | `pkg/middleware/middleware.go:107` | `pkg/observability/request_logger.go:30` |
 | RED metrics builder | `engine-go/internal/observability/metrics.go:30` | `pkg/observability/metrics.go:30` |
 | Engine 业务指标 | `engine-go/internal/observability/metrics.go`（原混合） | `engine-go/internal/observability/metrics.go:17`（嵌入 RED） |
 | Tracer 抽象 | `engine-go/internal/observability/tracing.go:14` | `pkg/observability/tracing.go:11` |
+| TraceMiddleware / GetTraceID | `pkg/middleware/trace.go:49` | `pkg/observability/trace.go:56` |
 | Scope identity | `engine-go/internal/security/identity.go:8` | `pkg/auth/identity.go:7` |
 | Auth middleware | `engine-go/internal/security/auth.go:48` | `pkg/auth/middleware.go:64` |
 | 32-shard rate limiter | `engine-go/internal/security/auth.go:271` | `pkg/middleware/ratelimit.go:81` |

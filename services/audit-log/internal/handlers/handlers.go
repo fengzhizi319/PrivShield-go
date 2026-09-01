@@ -17,6 +17,7 @@ import (
 	"github.com/fengzhizi319/PrivShield/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield/pkg/middleware"
 	naming "github.com/fengzhizi319/PrivShield/pkg/naming"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 	"github.com/fengzhizi319/PrivShield/pkg/store"
 	"github.com/fengzhizi319/PrivShield/pkg/store/flusher"
 	"github.com/fengzhizi319/PrivShield/pkg/validation"
@@ -62,7 +63,7 @@ func New(ag *agent.Client, cfg *config.Config, audit store.AuditStore, logger *s
 // RegisterRoutes registers all HTTP routes on the Gin engine.
 func (s *Server) RegisterRoutes(r *gin.Engine) {
 	r.Use(middleware.TraceMiddleware())
-	r.Use(middleware.StructuredLogger(s.logger, "audit-log"))
+	r.Use(pkgobs.RequestLoggerWithModule("audit-log"))
 	r.Use(middleware.Recovery(s.logger, "audit-log"))
 	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.MaxBodySize(32 << 20)) // 32 MiB max payload protection

@@ -13,17 +13,15 @@
 package middleware
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
 	pkgagent "github.com/fengzhizi319/PrivShield/pkg/agent"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 )
 
 // CORS returns a CORS middleware that allows requests from the specified origins.
@@ -81,7 +79,7 @@ func RequestID() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		rid := c.GetHeader("X-Request-ID")
 		if rid == "" {
-			rid = generateRequestID()
+			rid = pkgobs.GenerateRequestID()
 		}
 		c.Set("request_id", rid)
 		c.Writer.Header().Set("X-Request-ID", rid)
@@ -97,42 +95,11 @@ func RequestID() gin.HandlerFunc {
 
 // StructuredLogger returns a Gin middleware that logs each request in structured JSON.
 //
-// StructuredLogger 返回以结构化 JSON 格式输出请求访问日志的 Gin 中间件。
-//
-// 执行逻辑：
-// 1. 记录请求到达时间戳 start；
-// 2. 执行后续中间件与业务 Handler（c.Next()）；
-// 3. 计算耗时 latency_ms，提取状态码、TraceID、客户端 IP 与请求方法/路径；
-// 4. 使用 slog.Logger.Info 输出标准结构化日志行。
-func StructuredLogger(logger *slog.Logger, module string) gin.HandlerFunc {
-	if logger == nil {
-		logger = slog.Default()
-	}
-
-	return func(c *gin.Context) {
-		start := time.Now()
-		path := c.Request.URL.Path
-		if c.Request.URL.RawQuery != "" {
-			path = path + "?" + c.Request.URL.RawQuery
-		}
-
-		c.Next()
-
-		latency := time.Since(start)
-		status := c.Writer.Status()
-		rid, _ := c.Get("request_id")
-		requestID, _ := rid.(string)
-
-		logger.Info("request completed",
-			"request_id", requestID,
-			"method", c.Request.Method,
-			"path", path,
-			"status", status,
-			"latency_ms", latency.Milliseconds(),
-			"client_ip", c.ClientIP(),
-			"module", module,
-		)
-	}
+// Deprecated: 已下沉至 pkg/observability.RequestLoggerWithModule。
+// 新代码请直接使用 pkg/observability.RequestLoggerWithModule(module)。
+// 本函数保留为兼容别名，字段与行为与历史实现保持一致。
+func StructuredLogger(_ *slog.Logger, module string) gin.HandlerFunc {
+	return pkgobs.RequestLoggerWithModule(module)
 }
 
 // Recovery returns a Gin middleware that recovers from panics and logs structured errors.
@@ -196,15 +163,4 @@ func SecurityHeadersTo(w http.ResponseWriter) {
 	w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 	w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-}
-
-// generateRequestID 生成包含高精度时间戳与 4 字节加密级安全随机数的唯一追踪 ID。
-// 格式规范：req-<YYYYMMDDHHMMSS-纳秒>-<8位十六进制随机数>
-func generateRequestID() string {
-	var buf [4]byte
-	_, _ = rand.Read(buf[:])
-	return "req-" + strings.Replace(
-		time.Unix(0, time.Now().UnixNano()).Format("20060102150405.000000000"),
-		".", "-", 1,
-	) + "-" + hex.EncodeToString(buf[:])
 }

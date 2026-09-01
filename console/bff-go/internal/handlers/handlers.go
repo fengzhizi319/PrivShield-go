@@ -67,6 +67,7 @@ import (
 	pkgagent "github.com/fengzhizi319/PrivShield/pkg/agent"
 	"github.com/fengzhizi319/PrivShield/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield/pkg/middleware"
+	pkgobs "github.com/fengzhizi319/PrivShield/pkg/observability"
 )
 
 // 本控制台后端的身份标识常量，随每个响应下发给前端。
@@ -150,7 +151,7 @@ func (s *Server) Shutdown() {
 func (s *Server) RegisterRoutes(r *gin.Engine) {
 	// Shared middleware chain / 共享中间件链
 	r.Use(middleware.TraceMiddleware())
-	r.Use(middleware.StructuredLogger(s.logger, "backend-go"))
+	r.Use(pkgobs.RequestLoggerWithModule("backend-go"))
 	r.Use(middleware.Recovery(s.logger, "backend-go"))
 	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.MaxBodySize(64 << 20)) // 64 MiB max payload protection (supports larger CSV uploads)
