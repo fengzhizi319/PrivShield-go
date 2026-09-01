@@ -751,48 +751,23 @@ func dpGroupByHandler(svc *service.PrivacyService) gin.HandlerFunc {
 			TargetCol string              `json:"target_col" binding:"required"`
 			Agg       string              `json:"agg" binding:"required"`
 			Epsilon   float64             `json:"epsilon" binding:"required"`
+			Delta     float64             `json:"delta"`
+			ClipLower float64             `json:"clip_lower"`
+			ClipUpper float64             `json:"clip_upper"`
+			Mechanism string              `json:"mechanism"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", err.Error())
 			return
 		}
-		groups := make(map[string][]float64)
-		for _, row := range req.Rows {
-			groupVal := row[req.GroupCol]
-			var targetVal float64
-			fmt.Sscanf(row[req.TargetCol], "%f", &targetVal)
-			groups[groupVal] = append(groups[groupVal], targetVal)
-		}
-		result := make(map[string]float64)
-		ctx := c.Request.Context()
-		for k, vals := range groups {
-			switch req.Agg {
-			case "count":
-				noisy, err := svc.NoisyCount(ctx, len(vals), req.Epsilon)
-				if err != nil {
-					middleware.AbortWithError(c, http.StatusTooManyRequests, "BUDGET_EXHAUSTED", "隐私预算已耗尽", err.Error())
-					return
-				}
-				result[k] = noisy
-			case "sum":
-				s := 0.0
-				for _, v := range vals {
-					s += v
-				}
-				noisy, err := svc.NoisySum(ctx, []float64{s}, req.Epsilon, 1.0)
-				if err != nil {
-					middleware.AbortWithError(c, http.StatusTooManyRequests, "BUDGET_EXHAUSTED", "隐私预算已耗尽", err.Error())
-					return
-				}
-				result[k] = noisy
-			default:
-				noisy, err := svc.NoisyCount(ctx, len(vals), req.Epsilon)
-				if err != nil {
-					middleware.AbortWithError(c, http.StatusTooManyRequests, "BUDGET_EXHAUSTED", "隐私预算已耗尽", err.Error())
-					return
-				}
-				result[k] = noisy
-			}
+		// 委托给 service 层的 DPGroupBy，该路径调用 SDK 的 dp.GroupBy，
+		// 内置值截断（ClipValue → clipUpper）保障敏感度有界，确保 DP 保证成立。
+		// 旧实现内联分组聚合但缺失截断步骤，sum/mean 的敏感度无界，隐私保证失效。
+		result, err := svc.DPGroupBy(req.Rows, req.GroupCol, req.TargetCol, req.Agg,
+			req.Epsilon, req.Delta, req.ClipLower, req.ClipUpper, req.Mechanism)
+		if err != nil {
+			middleware.AbortWithError(c, http.StatusTooManyRequests, "BUDGET_EXHAUSTED", "隐私预算已耗尽", err.Error())
+			return
 		}
 		c.JSON(http.StatusOK, gin.H{"result": result})
 	}

@@ -1492,8 +1492,8 @@ func (s *PrivacyService) autoMaskField(fieldName, value string) string {
 	if masked != value || value == "" {
 		return masked
 	}
-	// P0-2 默认拒绝：通用掩码路径未能遮蔽任何字符（masking.MaskDefault 对
-	// ≤6 字节的短值原样返回）。未列入字段规格矩阵的字段不得明文出域。
+	// P0-2 默认拒绝：通用掩码路径未能遮蔽任何字符时（如空值或掩码返回原值），
+	// 未列入字段规格矩阵的字段不得明文出域。
 	s.mu.RLock()
 	policy := s.unlistedFloor.Policy
 	s.mu.RUnlock()
