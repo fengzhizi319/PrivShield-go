@@ -470,6 +470,11 @@ func (s *GRPCServer) VerifyIntegrity(ctx context.Context, req *pb.VerifyIntegrit
 		msg = "integrity violation: hash mismatch, potential data tampering detected"
 	}
 
+	reason := store.ChainReasonOK
+	if !valid {
+		reason = store.ChainReasonHashMismatch
+	}
+
 	return &pb.VerifyIntegrityResponse{
 		SnapshotId:   snap.ID,
 		Valid:        valid,
@@ -477,7 +482,8 @@ func (s *GRPCServer) VerifyIntegrity(ctx context.Context, req *pb.VerifyIntegrit
 		ExpectedHash: expected,
 		Message:      msg,
 		Via:          moduleVia,
-		// hash_label is not present in the proto; include it in the message for now.
+		Reason:       reason,
+		HashLabel:    snap.Algorithm,
 	}, nil
 }
 
@@ -500,8 +506,11 @@ func (s *GRPCServer) VerifyChain(ctx context.Context, req *pb.VerifyChainRequest
 		BrokenAtId:    res.BrokenAtID,
 		ExpectedHash:  res.ExpectedHash,
 		ActualHash:    res.ActualHash,
-		Message:       fmt.Sprintf("%s (total_records=%d)", res.Message, res.TotalRecords),
+		Message:       res.Message,
 		Via:           moduleVia,
+		Reason:        res.Reason,
+		LegacyHashed:  int32(res.LegacyHashed),
+		TotalRecords:  int32(res.TotalRecords),
 	}, nil
 }
 

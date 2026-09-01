@@ -214,8 +214,8 @@ func TestAuth_MissingToken(t *testing.T) {
 	}
 }
 
-// TestAuth_NonApiPath_Exempt 验证非 /api/* 路径（如 /metrics）免鉴权。
-func TestAuth_NonApiPath_Exempt(t *testing.T) {
+// TestAuth_MetricsRequiresAuth 验证 /metrics 端点需要鉴权（P1-6 暴露面收敛）。
+func TestAuth_MetricsRequiresAuth(t *testing.T) {
 	r := gin.New()
 	r.Use(Auth("my-secret"))
 	r.GET("/metrics", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
@@ -224,8 +224,23 @@ func TestAuth_NonApiPath_Exempt(t *testing.T) {
 	req, _ := http.NewRequest("GET", "/metrics", nil)
 	r.ServeHTTP(w, req)
 
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 (/metrics requires auth per P1-6)", w.Code)
+	}
+}
+
+// TestAuth_NonCorePath_Exempt 验证非核心路径（非 /api/* 且非 /metrics）仍免鉴权。
+func TestAuth_NonCorePath_Exempt(t *testing.T) {
+	r := gin.New()
+	r.Use(Auth("my-secret"))
+	r.GET("/debug/info", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/debug/info", nil)
+	r.ServeHTTP(w, req)
+
 	if w.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200 (non-api path exempt)", w.Code)
+		t.Errorf("status = %d, want 200 (non-core path exempt)", w.Code)
 	}
 }
 

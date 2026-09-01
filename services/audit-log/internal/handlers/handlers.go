@@ -38,6 +38,7 @@ var auditReadOnlyEndpoints = []middleware.ReadOnlyEndpoint{
 	{Method: http.MethodPost, Path: "/api/audit/snapshots/verify"},
 	{Method: http.MethodGet, Path: "/api/audit/chain/verify"},
 	{Method: http.MethodPost, Path: "/api/audit/chain/verify"},
+	{Method: http.MethodGet, Path: "/metrics"},
 }
 
 // Server aggregates HTTP handler dependencies.

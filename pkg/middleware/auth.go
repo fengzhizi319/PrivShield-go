@@ -9,7 +9,7 @@
 // 3. 【灵活放行机制】：
 //    - apiKey 为空串时：视为开发/本地调试模式，自动放行所有请求；
 //    - 健康探针白名单：/health 与 /api/health 绝对豁免鉴权，确保 K8s 与云负载均衡探活畅通；
-//    - 作用域边界：仅对 /api/* 业务路径执行强制鉴权，静态资源与 /metrics 豁免；
+//    - 作用域边界：/api/* 业务路径与 /metrics 强制鉴权（P1-6），仅 /health、/readyz 豁免；
 // 4. 【统一错误信封】：未携带 Token 或 Key 错误时，统一调用 AbortWithError 输出 HTTP 401 信封。
 // 5. 【权责分离 (AuthWithRoles)】：存证核验专区只需读、写入方只需写；只读核验员 Key 的可访问端点
 //    由「方法 + 路径」白名单显式列出，越权直接 403（不静默降级为可读）。
@@ -39,8 +39,8 @@ import (
 // 执行逻辑：
 // 1. 若 apiKey 为空：跳过鉴权直接调用 c.Next()（开发模式兼容）；
 // 2. 检查请求路径 path：
-//   - 若为 "/health" 或 "/api/health"：直接 c.Next() 放行（探活豁免）；
-//   - 若不以 "/api/" 开头：直接 c.Next() 放行（非核心 API 豁免）；
+//   - 若为 "/health"、"/readyz" 或 "/api/health"：直接 c.Next() 放行（探活豁免）；
+//   - 若不以 "/api/" 开头且不是 "/metrics"：直接 c.Next() 放行（非核心路径豁免）；
 //
 // 3. 从 Authorization 请求头解析 Bearer 令牌；若未提供或格式非法，立即响应 401 UNAUTHORIZED；
 // 4. 使用 subtle.ConstantTimeCompare 校验传入的 Token 与服务端 apiKey 是否完全一致；
@@ -57,13 +57,13 @@ func Auth(apiKey string) gin.HandlerFunc {
 		path := c.Request.URL.Path
 
 		// 健康检查端点豁免
-		if path == "/health" || path == "/api/health" {
+		if path == "/health" || path == "/readyz" || path == "/api/health" {
 			c.Next()
 			return
 		}
 
-		// 仅对 /api/* 路径生效
-		if !strings.HasPrefix(path, "/api/") {
+		// 非核心路径豁免（/metrics 不在此列 —— P1-6 纳入鉴权）
+		if !strings.HasPrefix(path, "/api/") && path != "/metrics" {
 			c.Next()
 			return
 		}
@@ -118,7 +118,12 @@ func AuthWithRoles(apiKey, readerKey string, readOnly []ReadOnlyEndpoint) gin.Ha
 		}
 
 		path := c.Request.URL.Path
-		if path == "/health" || path == "/api/health" || !strings.HasPrefix(path, "/api/") {
+		if path == "/health" || path == "/readyz" || path == "/api/health" {
+			c.Next()
+			return
+		}
+		// /metrics 纳入鉴权（P1-6）：非 /api/ 且非 /metrics 的路径才豁免
+		if !strings.HasPrefix(path, "/api/") && path != "/metrics" {
 			c.Next()
 			return
 		}

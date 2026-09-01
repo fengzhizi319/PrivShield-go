@@ -47,6 +47,7 @@ type ClassificationFunnel struct {
 	safetyFloor *SafetyFloor
 	cfg         FunnelConfig
 	cache       *classificationCache
+	standards   []StandardDef // P1-3: 已加载的标准映射文件（供诊断上报）
 }
 
 // NewClassificationFunnel 创建三层分类分级漏斗实例
@@ -73,6 +74,17 @@ func NewClassificationFunnel(
 		cfg:         cfg,
 		cache:       newClassificationCache(10000),
 	}, nil
+}
+
+// SetStandards 注入已加载的标准映射文件（P1-3）。
+// 标准文件不参与分类决策，仅供诊断上报与合规对照。
+func (f *ClassificationFunnel) SetStandards(standards []StandardDef) {
+	f.standards = standards
+}
+
+// Standards 返回已加载的标准映射文件列表。
+func (f *ClassificationFunnel) Standards() []StandardDef {
+	return f.standards
 }
 
 // Classify 执行 3 层漏斗分级仲裁（优先查询 LRU 高速缓存）

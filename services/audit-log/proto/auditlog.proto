@@ -191,6 +191,9 @@ message VerifyIntegrityResponse {
   string expected_hash = 4;
   string message = 5;
   string via = 6;
+  string reason = 7;
+  bool   legacy_hashed = 8;
+  string hash_label = 9;
 }
 
 message VerifyChainRequest {
@@ -205,6 +208,9 @@ message VerifyChainResponse {
   string actual_hash = 5;
   string message = 6;
   string via = 7;
+  string reason = 8;
+  int32 legacy_hashed = 9;
+  int32 total_records = 10;
 }
 
 // ─────────────────────────────────────────────────────────────

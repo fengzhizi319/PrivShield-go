@@ -85,6 +85,7 @@ type Config struct {
 	Namespace       string
 	ProfilePath     string
 	RulesDir        string // 领域规则目录（默认 rules/domains）
+	StandardsDir    string // 标准映射文件目录（默认 rules/standards，P1-3）
 	PrivacyYAML     string // 隐私策略配置文件（默认 config/privacy.yaml）
 	LLMEndpoint     string
 	EnableLLM       bool
@@ -101,6 +102,7 @@ func DefaultConfig() Config {
 	}
 
 	rulesDir := pkgconfig.EnvString("PRIVACY_RULES_DIR", "rules/domains")
+	standardsDir := pkgconfig.EnvString("PRIVACY_STANDARDS_DIR", "rules/standards")
 	privacyYAML := pkgconfig.EnvString("PRIVACY_CONFIG_FILE", "config/privacy.yaml")
 
 	return Config{
@@ -110,6 +112,7 @@ func DefaultConfig() Config {
 		Namespace:       "default",
 		ProfilePath:     "",
 		RulesDir:        rulesDir,
+		StandardsDir:    standardsDir,
 		PrivacyYAML:     privacyYAML,
 		LLMEndpoint:     llmEndpoint,
 		EnableLLM:       enableLLM,
@@ -195,6 +198,18 @@ func NewPrivacyService(cfg Config) (*PrivacyService, error) {
 	funnel, err := dynclassification.NewClassificationFunnel(rules, dynclassification.NewRuleBasedNerEngine(), llmClient, funnelCfg)
 	if err != nil {
 		return nil, fmt.Errorf("init classification funnel: %w", err)
+	}
+
+	// P1-3: 加载标准映射文件并注入漏斗（供诊断上报与合规对照）。
+	if cfg.StandardsDir != "" {
+		standards, stdErrs := dynclassification.LoadStandardsFromDir(cfg.StandardsDir)
+		for _, e := range stdErrs {
+			slog.Warn("standards load error", "error", e)
+		}
+		funnel.SetStandards(standards)
+		if len(standards) > 0 {
+			slog.Info("standards loaded", "dir", cfg.StandardsDir, "count", len(standards))
+		}
 	}
 
 	// ── 6. 医疗流水线：下发具名默认拒绝策略（P0-2 白名单反转）──
@@ -1303,6 +1318,7 @@ func (s *PrivacyService) Diagnostics(refresh bool) map[string]interface{} {
 			},
 			"llm": s.llmDiagnostics(),
 		},
+		"standards": s.standardsDiagnostics(),
 		"dependencies": []map[string]interface{}{
 			{"name": "onnxruntime_go", "installed": false, "purpose": "NER ONNX/CUDA 推理引擎", "install": "go get github.com/yalue/onnxruntime_go"},
 			{"name": "gin", "installed": true, "purpose": "高性能 REST API 框架", "install": "go get github.com/gin-gonic/gin"},

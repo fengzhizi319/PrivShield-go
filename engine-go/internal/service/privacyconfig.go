@@ -411,3 +411,23 @@ func (s *PrivacyService) safetyFloorDiagnostics() map[string]interface{} {
 		},
 	}
 }
+
+// standardsDiagnostics 返回已加载的标准映射文件摘要（P1-3 合规对照与规则库覆盖度证明）。
+func (s *PrivacyService) standardsDiagnostics() map[string]interface{} {
+	s.mu.RLock()
+	funnel := s.funnel
+	s.mu.RUnlock()
+
+	out := map[string]interface{}{
+		"loaded":        0,
+		"determined_by": "funnel.Standards",
+		"note":          "标准映射文件为纯声明（不定义规则算子），供合规对照与诊断上报",
+	}
+	if funnel == nil {
+		return out
+	}
+	stds := funnel.Standards()
+	out["loaded"] = len(stds)
+	out["standards"] = dynclassification.StandardsSummary(stds)
+	return out
+}

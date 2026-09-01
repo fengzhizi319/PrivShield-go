@@ -118,17 +118,28 @@ func TestAuthWithRoles_EmptyReaderKeyDegradesToSingleKey(t *testing.T) {
 	}
 }
 
-// TestAuthWithRoles_HealthAndNonApiExempt 探活与非 /api/* 路径豁免语义与 Auth 保持一致。
-func TestAuthWithRoles_HealthAndNonApiExempt(t *testing.T) {
+// TestAuthWithRoles_HealthExempt 探活路径豁免语义与 Auth 保持一致。
+func TestAuthWithRoles_HealthExempt(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(AuthWithRoles("write-key", "reader-key", readerEndpoints))
 	r.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
+	if code := doWithKey(r, http.MethodGet, "/health", ""); code != http.StatusOK {
+		t.Errorf("/health: status = %d, want 200 (exempt)", code)
+	}
+}
+
+// TestAuthWithRoles_MetricsRequiresAuth /metrics 纳入鉴权（P1-6）：无 Key 返回 401。
+func TestAuthWithRoles_MetricsRequiresAuth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(AuthWithRoles("write-key", "reader-key", readerEndpoints))
 	r.GET("/metrics", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
-	for _, path := range []string{"/health", "/metrics"} {
-		if code := doWithKey(r, http.MethodGet, path, ""); code != http.StatusOK {
-			t.Errorf("%s: status = %d, want 200 (exempt)", path, code)
-		}
+	if code := doWithKey(r, http.MethodGet, "/metrics", ""); code != http.StatusUnauthorized {
+		t.Errorf("/metrics without key: status = %d, want 401", code)
+	}
+	if code := doWithKey(r, http.MethodGet, "/metrics", "write-key"); code != http.StatusOK {
+		t.Errorf("/metrics with write key: status = %d, want 200", code)
 	}
 }
 
