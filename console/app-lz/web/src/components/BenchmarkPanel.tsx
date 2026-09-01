@@ -167,6 +167,18 @@ export const BenchmarkPanel: React.FC<BenchmarkPanelProps> = ({ apis }) => {
     // 动态并发 Worker 任务队列
     let currentIndex = 0;
 
+    // UI 状态节流：每 200ms 批量刷新一次，避免每个请求都触发 React 重渲染阻塞主线程
+    let uiDirty = false;
+    const uiFlush = () => {
+      if (!uiDirty) return;
+      uiDirty = false;
+      setLiveLogs([...samples]);
+      const elapsedSec = (performance.now() - startTime) / 1000;
+      setLiveQps(elapsedSec > 0 ? Math.round((completedCount / elapsedSec) * 10) / 10 : 0);
+      setProgress({ completed: completedCount, total: totalRequests });
+    };
+    const uiTimer = setInterval(uiFlush, 200);
+
     const executeWorker = async () => {
       while (currentIndex < totalRequests && !abortControllerRef.current) {
         const reqIndex = ++currentIndex;
@@ -208,7 +220,7 @@ export const BenchmarkPanel: React.FC<BenchmarkPanelProps> = ({ apis }) => {
 
           samples.unshift(sample);
           if (samples.length > 50) samples.pop();
-          setLiveLogs([...samples]);
+          uiDirty = true;
 
         } catch (err: any) {
           const reqDuration = performance.now() - reqStart;
@@ -233,14 +245,8 @@ export const BenchmarkPanel: React.FC<BenchmarkPanelProps> = ({ apis }) => {
 
           samples.unshift(sample);
           if (samples.length > 50) samples.pop();
-          setLiveLogs([...samples]);
+          uiDirty = true;
         }
-
-        // 实时刷新进度与 QPS
-        const elapsedSec = (performance.now() - startTime) / 1000;
-        const currentQps = elapsedSec > 0 ? completedCount / elapsedSec : 0;
-        setLiveQps(Math.round(currentQps * 10) / 10);
-        setProgress({ completed: completedCount, total: totalRequests });
       }
     };
 
@@ -252,6 +258,8 @@ export const BenchmarkPanel: React.FC<BenchmarkPanelProps> = ({ apis }) => {
     }
 
     await Promise.all(workerPromises);
+    clearInterval(uiTimer);
+    uiFlush();
 
     const totalDurationSec = (performance.now() - startTime) / 1000;
     const finalQps = totalDurationSec > 0 ? completedCount / totalDurationSec : 0;
