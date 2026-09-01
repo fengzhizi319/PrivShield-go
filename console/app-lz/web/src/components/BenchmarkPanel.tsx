@@ -312,6 +312,9 @@ export const BenchmarkPanel: React.FC<BenchmarkPanelProps> = ({ apis }) => {
 - 阶段 3 [classify_desensitize]: ${run.stageAvgMs.classify_desensitize} ms
 - 阶段 4 [return]: ${run.stageAvgMs.return} ms
 - 阶段 5 [audit]: ${run.stageAvgMs.audit} ms
+- **服务端处理合计**: ${Math.round((run.stageAvgMs.ingest + run.stageAvgMs.fetch + run.stageAvgMs.classify_desensitize + run.stageAvgMs.return + run.stageAvgMs.audit) * 10) / 10} ms
+- **网络传输 + JSON 序列化开销**: ${Math.round((run.meanMs - run.stageAvgMs.ingest - run.stageAvgMs.fetch - run.stageAvgMs.classify_desensitize - run.stageAvgMs.return - run.stageAvgMs.audit) * 10) / 10} ms
+- **端到端均值 (client wall-clock)**: ${run.meanMs} ms
 `;
   };
 
@@ -628,36 +631,44 @@ export const BenchmarkPanel: React.FC<BenchmarkPanelProps> = ({ apis }) => {
                 {t('bench.waterfallTitle')}
               </h3>
               <span className="text-xs font-mono text-slate-400">
-                端到端均值: <strong className="text-indigo-300">{currentRun.meanMs} ms</strong>
+                服务端: <strong className="text-slate-300">{(() => { const s = currentRun.stageAvgMs; return Math.round((s.ingest + s.fetch + s.classify_desensitize + s.return + s.audit) * 10) / 10; })()} ms</strong>
+                {' / '}
+                端到端: <strong className="text-indigo-300">{currentRun.meanMs} ms</strong>
               </span>
             </div>
 
-            {/* 各阶段条形图 */}
+            {/* 各阶段条形图 (含传输开销) */}
             <div className="space-y-3 pt-1">
-              {[
-                { name: t('bench.stageIngest'), ms: currentRun.stageAvgMs.ingest, color: 'bg-sky-500' },
-                { name: t('bench.stageFetch'), ms: currentRun.stageAvgMs.fetch, color: 'bg-indigo-500' },
-                { name: t('bench.stageClassify'), ms: currentRun.stageAvgMs.classify_desensitize, color: 'bg-amber-500' },
-                { name: t('bench.stageReturn'), ms: currentRun.stageAvgMs.return, color: 'bg-emerald-500' },
-                { name: t('bench.stageAudit'), ms: currentRun.stageAvgMs.audit, color: 'bg-purple-500' },
-              ].map((stage, idx) => {
-                const totalMs = currentRun.stageAvgMs.ingest + currentRun.stageAvgMs.fetch + currentRun.stageAvgMs.classify_desensitize + currentRun.stageAvgMs.return + currentRun.stageAvgMs.audit;
-                const pct = totalMs > 0 ? Math.round((stage.ms / totalMs) * 100) : 20;
-
-                return (
-                  <div key={idx} className="space-y-1">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-slate-300 font-medium">{stage.name}</span>
-                      <span className="font-mono text-slate-200">
-                        {stage.ms} ms <span className="text-slate-500">({pct}%)</span>
-                      </span>
+              {(() => {
+                const s = currentRun.stageAvgMs;
+                const stageTotal = s.ingest + s.fetch + s.classify_desensitize + s.return + s.audit;
+                const overheadMs = Math.max(0, Math.round((currentRun.meanMs - stageTotal) * 10) / 10);
+                const base = currentRun.meanMs > 0 ? currentRun.meanMs : stageTotal;
+                const stages = [
+                  { name: t('bench.stageIngest'), ms: s.ingest, color: 'bg-sky-500' },
+                  { name: t('bench.stageFetch'), ms: s.fetch, color: 'bg-indigo-500' },
+                  { name: t('bench.stageClassify'), ms: s.classify_desensitize, color: 'bg-amber-500' },
+                  { name: t('bench.stageReturn'), ms: s.return, color: 'bg-emerald-500' },
+                  { name: t('bench.stageAudit'), ms: s.audit, color: 'bg-purple-500' },
+                  { name: t('bench.stageOverhead'), ms: overheadMs, color: 'bg-rose-500/70' },
+                ];
+                return stages.map((stage, idx) => {
+                  const pct = base > 0 ? Math.round((stage.ms / base) * 100) : 0;
+                  return (
+                    <div key={idx} className="space-y-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className={`font-medium ${idx === 5 ? 'text-rose-400' : 'text-slate-300'}`}>{stage.name}</span>
+                        <span className="font-mono text-slate-200">
+                          {stage.ms} ms <span className="text-slate-500">({pct}%)</span>
+                        </span>
+                      </div>
+                      <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
+                        <div className={`${stage.color} h-full rounded-full`} style={{ width: `${Math.max(stage.ms > 0 ? 3 : 0, pct)}%` }} />
+                      </div>
                     </div>
-                    <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
-                      <div className={`${stage.color} h-full rounded-full`} style={{ width: `${Math.max(3, pct)}%` }} />
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                });
+              })()}
             </div>
           </div>
 
