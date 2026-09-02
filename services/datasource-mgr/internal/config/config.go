@@ -39,7 +39,8 @@ type Config struct {
 	// 安全鉴权与跨域配置
 	APIKey      string                        // 入站 HTTP/gRPC 请求 API Key 鉴权密钥（非环回监听时为必填项，缺失即启动失败）
 	ScopeKeys   map[string]*pkgauth.KeyConfig // Scope-based API Key 映射（DATASOURCE_MGR_API_KEYS），优先于 APIKey
-	CORSOrigins []string // 允许的跨域来源列表（CORS 白名单）
+	KeysFile    string                        // API Key 文件路径（DATASOURCE_MGR_API_KEYS_FILE），启用热轮转
+	CORSOrigins []string                      // 允许的跨域来源列表（CORS 白名单）
 
 	// RequireTLS 由生产编排显式置真：TLS 未启用即拒绝启动，防止漏配证书仍照常服务。
 	RequireTLS bool
@@ -89,6 +90,7 @@ func Load() *Config {
 		// API 鉴权与跨域策略解析
 		APIKey:      pkgconfig.EnvString("DATASOURCE_MGR_API_KEY", ""),
 		ScopeKeys:   pkgauth.LoadAPIKeysFromEnv("DATASOURCE_MGR_API_KEYS"),
+		KeysFile:    pkgconfig.EnvString("DATASOURCE_MGR_API_KEYS_FILE", ""),
 		CORSOrigins: pkgconfig.EnvStringSlice("DATASOURCE_MGR_CORS_ORIGINS"),
 
 		// Fail-closed 生产门禁 / zero-trust production gate
@@ -135,11 +137,12 @@ func (c *Config) Validate() error {
 		ServiceName:       "datasource-mgr",
 		Hosts:             []string{c.Host, c.GRPCHost},
 		APIKey:            c.APIKey,
-		AuthEnabled:       c.APIKey != "",
+		AuthEnabled:       c.APIKey != "" || len(c.ScopeKeys) > 0 || c.KeysFile != "",
 		TLSEnabled:        c.TLSEnabled,
 		RequireTLS:        c.RequireTLS,
 		GRPCEnabled:       true,
 		MTLSWhitelistFile: c.MTLSWhitelistFile,
+		AllowedCIDRs:      pkgconfig.EnvStringSlice("PRIVACY_ALLOWED_CIDRS"),
 	})
 }
 

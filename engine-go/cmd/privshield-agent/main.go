@@ -154,7 +154,24 @@ func main() {
 	}
 
 	go func() {
-		if cfg.TLSEnabled {
+		if tlsutil.IsTLCPEnabled() {
+			tlcpCfg := tlsutil.TLCPConfigFromEnv()
+			gmtlsConfig, tlcpErr := tlsutil.BuildTLCPConfig(tlcpCfg)
+			if tlcpErr != nil {
+				slog.Error("failed to build TLCP config", "err", tlcpErr)
+				os.Exit(1)
+			}
+			tlcpLis, tlcpErr := tlsutil.NewTLCPListener("tcp", restAddr, gmtlsConfig)
+			if tlcpErr != nil {
+				slog.Error("failed to create TLCP listener", "err", tlcpErr)
+				os.Exit(1)
+			}
+			slog.Info("REST TLCP (国密) server starting", "addr", restAddr, "sign_cert", tlcpCfg.SignCertFile)
+			if err := restServer.Serve(tlcpLis); err != nil && err != http.ErrServerClosed {
+				slog.Error("REST TLCP server error", "err", err)
+				os.Exit(1)
+			}
+		} else if cfg.TLSEnabled {
 			slog.Info("REST HTTPS server starting", "addr", restAddr, "cert", cfg.TLSCertFile)
 			if err := restServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && err != http.ErrServerClosed {
 				slog.Error("REST HTTPS server error", "err", err)

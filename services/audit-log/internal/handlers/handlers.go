@@ -3,16 +3,19 @@ package handlers
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	"github.com/fengzhizi319/PrivShield-go/pkg/crypto"
 	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
@@ -43,21 +46,167 @@ var auditReadOnlyEndpoints = []middleware.ReadOnlyEndpoint{
 
 // Server aggregates HTTP handler dependencies.
 type Server struct {
-	agent  *agent.Client
-	cfg    *config.Config
-	audit  store.AuditStore
-	logger *slog.Logger
-	mc     *metrics.Collector
+	agent    *agent.Client
+	cfg      *config.Config
+	keyStore *pkgauth.KeyStore
+	audit    store.AuditStore
+	logger   *slog.Logger
+	mc       *metrics.Collector
 }
 
 // New creates a new Server instance.
-func New(ag *agent.Client, cfg *config.Config, audit store.AuditStore, logger *slog.Logger, mc *metrics.Collector) *Server {
+func New(ag *agent.Client, cfg *config.Config, keyStore *pkgauth.KeyStore, audit store.AuditStore, logger *slog.Logger, mc *metrics.Collector) *Server {
 	return &Server{
-		agent:  ag,
-		cfg:    cfg,
-		audit:  audit,
-		logger: logger,
-		mc:     mc,
+		agent:    ag,
+		cfg:      cfg,
+		keyStore: keyStore,
+		audit:    audit,
+		logger:   logger,
+		mc:       mc,
+	}
+}
+
+// currentAuthKeys 合并静态 AUDIT_LOG_API_KEYS 与 KeyStore 热轮转 key；
+// 同名 token 以 KeyStore 为准。
+func (s *Server) currentAuthKeys() map[string]*pkgauth.KeyConfig {
+	static := s.cfg.ScopeKeys
+	if s.keyStore == nil {
+		return static
+	}
+	merged := make(map[string]*pkgauth.KeyConfig, len(static))
+	for k, v := range static {
+		merged[k] = v
+	}
+	for k, v := range s.keyStore.Keys() {
+		merged[k] = v
+	}
+	return merged
+}
+
+// AuditLogPermissionForPath 将 audit-log REST 路径映射为所需 scope。
+func AuditLogPermissionForPath(method, path string) string {
+	if len(path) > 1 && path[len(path)-1] == '/' {
+		path = path[:len(path)-1]
+	}
+	switch {
+	case path == "/health" || path == "/readyz" || path == "/api/health", path == "/metrics":
+		return ""
+	case path == "/api/audit/logs" && method == http.MethodPost,
+		path == "/api/audit/report" && method == http.MethodPost:
+		return "audit:write"
+	case path == "/api/audit/logs" && method == http.MethodGet,
+		strings.HasPrefix(path, "/api/audit/logs/") && method == http.MethodGet,
+		path == "/api/audit/stats" && method == http.MethodGet,
+		path == "/api/audit/snapshots" && method == http.MethodGet:
+		return "audit:read"
+	case path == "/api/audit/snapshots/verify" && method == http.MethodPost,
+		path == "/api/audit/chain/verify":
+		return "audit:verify"
+	}
+	return ""
+}
+
+// constantTimeLookupKeys 在排序后的 key 集合上执行常量时间 token 查找，防止时序攻击。
+func constantTimeLookupKeys(keys map[string]*pkgauth.KeyConfig, token string) *pkgauth.Identity {
+	if len(keys) == 0 {
+		return nil
+	}
+	sortedKeys := make([]string, 0, len(keys))
+	for k := range keys {
+		sortedKeys = append(sortedKeys, k)
+	}
+	sort.Strings(sortedKeys)
+	tokenBytes := []byte(token)
+	var matched *pkgauth.KeyConfig
+	for _, key := range sortedKeys {
+		if subtle.ConstantTimeCompare([]byte(key), tokenBytes) == 1 {
+			matched = keys[key]
+		}
+	}
+	if matched == nil {
+		return nil
+	}
+	if matched.IsExpired() {
+		return nil
+	}
+	return &pkgauth.Identity{ServiceType: "external", Name: matched.Name, Scopes: matched.Scopes}
+}
+
+// authMiddleware 返回统一的 API Key 鉴权中间件，优先级如下：
+//  1. Scope-based key（AUDIT_LOG_API_KEYS / KeyStore）按路径 scope 校验；
+//  2. 主 APIKey 授予全部权限（运维 / 业务写入身份）；
+//  3. ReaderAPIKey 仅允许访问 auditReadOnlyEndpoints 白名单端点；
+//  4. 都不匹配返回 401。
+//
+// apiKey 与 readerKey 均未配置且没有 scope key 时，保持开发模式放行。
+func (s *Server) authMiddleware() gin.HandlerFunc {
+	apiKey := s.cfg.APIKey
+	readerKey := s.cfg.ReaderAPIKey
+	scopeKeys := s.currentAuthKeys()
+
+	return func(c *gin.Context) {
+		path := c.Request.URL.Path
+		method := c.Request.Method
+
+		// 健康探针豁免
+		if path == "/health" || path == "/readyz" || path == "/api/health" {
+			c.Next()
+			return
+		}
+		// 非核心路径豁免（/metrics 纳入鉴权，P1-6）
+		if !strings.HasPrefix(path, "/api/") && path != "/metrics" {
+			c.Next()
+			return
+		}
+
+		// 无认证配置：开发模式放行
+		if apiKey == "" && readerKey == "" && len(scopeKeys) == 0 {
+			c.Next()
+			return
+		}
+
+		token := pkgauth.ExtractBearerToken(c.GetHeader("Authorization"))
+		if token == "" {
+			pkgauth.AuthFailuresTotal.WithLabelValues("missing_token").Inc()
+			middleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: missing credentials", nil)
+			return
+		}
+
+		// 1. Scope-based key（支持 KeyStore 热轮转）
+		if len(scopeKeys) > 0 {
+			identity := constantTimeLookupKeys(scopeKeys, token)
+			if identity != nil {
+				requiredPerm := AuditLogPermissionForPath(method, path)
+				if requiredPerm != "" && !identity.HasPermission(requiredPerm) {
+					pkgauth.AuthForbiddenTotal.Inc()
+					middleware.AbortWithError(c, http.StatusForbidden, "FORBIDDEN", "Forbidden: insufficient scope", nil)
+					return
+				}
+				c.Set(pkgauth.IdentityContextKey, identity)
+				c.Next()
+				return
+			}
+		}
+
+		// 2. 主写入 Key
+		if apiKey != "" && subtle.ConstantTimeCompare([]byte(token), []byte(apiKey)) == 1 {
+			c.Next()
+			return
+		}
+
+		// 3. 只读核验员 Key
+		if readerKey != "" && subtle.ConstantTimeCompare([]byte(token), []byte(readerKey)) == 1 {
+			if !middleware.IsReadOnlyEndpoint(method, path, auditReadOnlyEndpoints) {
+				pkgauth.AuthForbiddenTotal.Inc()
+				middleware.AbortWithError(c, http.StatusForbidden, "FORBIDDEN", "Forbidden: reader key is limited to verification endpoints", nil)
+				return
+			}
+			c.Next()
+			return
+		}
+
+		pkgauth.AuthFailuresTotal.WithLabelValues("invalid_token").Inc()
+		middleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: invalid credentials", nil)
 	}
 }
 
@@ -77,7 +226,8 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 	// P1-6 权责分离：数据局核验专区持「只读核验员 Key」，只能命中 auditReadOnlyEndpoints
 	// 这张 方法+路径 白名单；写入端点（POST /api/audit/logs）与报表导出（POST /api/audit/report）
 	// 不在表内，越权直接 403。ReaderAPIKey 为空则退化为原单 Key 语义。
-	r.Use(middleware.AuthWithRoles(s.cfg.APIKey, s.cfg.ReaderAPIKey, auditReadOnlyEndpoints))
+	// 同时支持 AUDIT_LOG_API_KEYS / KeyStore 的 scope-based 热轮转鉴权。
+	r.Use(s.authMiddleware())
 	if s.cfg.ReaderAPIKey == "" {
 		s.logger.Warn("audit reader role disabled: verification endpoints share the write API key (P1-6)",
 			"component", "audit-log", "module", moduleVia)

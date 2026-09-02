@@ -234,7 +234,7 @@ func main() {
     dsClient := datasource.New(cfg)
 
     // 7. 初始化 Gin REST 路由器与 Slowloris 超时加固 HTTP Server (支持可选 mTLS)
-    server := handlers.New(agentClient, dsClient, cfg, taskStore, logger, mc)
+    server := handlers.New(agentClient, dsClient, cfg, keyStore, taskStore, logger, mc)
     router := gin.New()
     server.RegisterRoutes(router)
 

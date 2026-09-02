@@ -219,7 +219,7 @@ func main() {
     logger := pkgconfig.SetupLogger(cfg.LogFormat, cfg.LogLevel)
 
     // 1. 初始化 Gin 路由器并注入中间件
-    server := handlers.New(cfg, logger)
+    server := handlers.New(cfg, nil, logger)
     router := gin.New()
     server.RegisterRoutes(router)
 

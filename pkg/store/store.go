@@ -251,9 +251,9 @@ type AuditLog struct {
 	Status         string    `json:"status"`                   // 脱敏处理状态（"success" | "failed"）
 	ErrorMessage   string    `json:"error,omitempty"`          // 失败时的错误信息
 	SecurityLevel  string    `json:"security_level"`           // 数据安全分级（"L1" ~ "L5"）
-	PrevHash       string    `json:"prev_hash,omitempty"`       // 前序存证哈希（串联形成不可篡改哈希链）
-	IntegrityHash  string    `json:"integrity_hash,omitempty"`  // 本条记录在服务端裁定的国密 SM3 综合完整性哈希
-	SM2Signature   string    `json:"sm2_signature,omitempty"`   // SM2 数字签名值（G-10 审计不可否认性），hex 编码
+	PrevHash       string    `json:"prev_hash,omitempty"`      // 前序存证哈希（串联形成不可篡改哈希链）
+	IntegrityHash  string    `json:"integrity_hash,omitempty"` // 本条记录在服务端裁定的国密 SM3 综合完整性哈希
+	SM2Signature   string    `json:"sm2_signature,omitempty"`  // SM2 数字签名值（G-10 审计不可否认性），hex 编码
 }
 
 // AuditFilter specifies filtering criteria for listing audit logs.
@@ -274,16 +274,16 @@ type AuditFilter struct {
 // SnapshotRecord represents a desensitization snapshot for evidence.
 // SnapshotRecord 记录脱敏前后数据样例快照（出域留痕凭证，样本字段经过信封加密）。
 type SnapshotRecord struct {
-	ID             string    `json:"id"`                  // 快照记录唯一 ID
-	AuditLogID     string    `json:"audit_log_id"`        // 关联的主审计日志 ID（外键级联）
-	Timestamp      time.Time `json:"timestamp"`           // 快照创建时间戳
-	InputSample    string    `json:"input_sample"`        // 脱敏前输入样本（信封加密密文或脱敏文本）
-	OutputSample   string    `json:"output_sample"`       // 脱敏后输出样本（信封加密密文或脱敏文本）
-	Algorithm      string    `json:"algorithm"`           // 使用的算法标识
-	ParametersJSON string    `json:"-"`                   // 参数 JSON 字符串
-	Parameters     any       `json:"parameters"`          // 解析后的参数对象
-	IntegrityHash  string    `json:"integrity_hash"`        // 继承自主日志的完整性哈希
-	PrevHash       string    `json:"prev_hash,omitempty"`   // 继承自主日志的前序哈希
+	ID             string    `json:"id"`                      // 快照记录唯一 ID
+	AuditLogID     string    `json:"audit_log_id"`            // 关联的主审计日志 ID（外键级联）
+	Timestamp      time.Time `json:"timestamp"`               // 快照创建时间戳
+	InputSample    string    `json:"input_sample"`            // 脱敏前输入样本（信封加密密文或脱敏文本）
+	OutputSample   string    `json:"output_sample"`           // 脱敏后输出样本（信封加密密文或脱敏文本）
+	Algorithm      string    `json:"algorithm"`               // 使用的算法标识
+	ParametersJSON string    `json:"-"`                       // 参数 JSON 字符串
+	Parameters     any       `json:"parameters"`              // 解析后的参数对象
+	IntegrityHash  string    `json:"integrity_hash"`          // 继承自主日志的完整性哈希
+	PrevHash       string    `json:"prev_hash,omitempty"`     // 继承自主日志的前序哈希
 	SM2Signature   string    `json:"sm2_signature,omitempty"` // 快照自身完整性哈希的 SM2 签名（G-10）
 }
 

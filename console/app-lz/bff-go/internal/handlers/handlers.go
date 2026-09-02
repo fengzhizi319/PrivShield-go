@@ -127,7 +127,7 @@ func SetupRouter(h *Handler) *gin.Engine {
 			fallback := fmt.Sprintf("%d-", time.Now().UnixNano())
 			copy(randSecret, fallback)
 		}
-		dummyMgr, _ := auth.NewJWTManager(base64.RawURLEncoding.EncodeToString(randSecret), 24)
+		dummyMgr, _ := auth.NewJWTManager(base64.RawURLEncoding.EncodeToString(randSecret), 1)
 		r.Use(auth.JWTAuthMiddleware(dummyMgr, false))
 	}
 

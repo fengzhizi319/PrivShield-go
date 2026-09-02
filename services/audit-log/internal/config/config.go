@@ -46,13 +46,14 @@ type Config struct {
 	APIKey        string                        // Inbound API key for this module / 本模块入站 API Key
 	ReaderAPIKey  string                        // Read-only verification key (P1-6 只读核验员) / 只读核验员 Key，空=不启用
 	ScopeKeys     map[string]*pkgauth.KeyConfig // Scope-based API Key 映射（AUDIT_LOG_API_KEYS），优先于 APIKey
-	CORSOrigins   []string // Allowed CORS origins / 允许的 CORS 来源
-	DBPath        string   // SQLite database path (empty = in-memory) / SQLite 数据库路径
-	PGDSN         string   // PostgreSQL connection DSN (Phase B / high-concurrency multi-replica)
-	EncryptionKey string   // Master key for envelope encryption of sensitive snapshot samples
-	ArchiveDir    string   // Archive destination directory for old audit records
-	LogFormat     string   // "json" or "text" / 日志格式
-	LogLevel      string   // "debug", "info", "warn", "error" / 日志级别
+	KeysFile      string                        // API Key 文件路径（AUDIT_LOG_API_KEYS_FILE），启用热轮转
+	CORSOrigins   []string                      // Allowed CORS origins / 允许的 CORS 来源
+	DBPath        string                        // SQLite database path (empty = in-memory) / SQLite 数据库路径
+	PGDSN         string                        // PostgreSQL connection DSN (Phase B / high-concurrency multi-replica)
+	EncryptionKey string                        // Master key for envelope encryption of sensitive snapshot samples
+	ArchiveDir    string                        // Archive destination directory for old audit records
+	LogFormat     string                        // "json" or "text" / 日志格式
+	LogLevel      string                        // "debug", "info", "warn", "error" / 日志级别
 
 	// RequireTLS 由生产编排显式置真：TLS 未启用即拒绝启动，防止漏配证书仍照常服务。
 	RequireTLS bool
@@ -138,6 +139,7 @@ func Load() *Config {
 		APIKey:        pkgconfig.EnvString("AUDIT_LOG_API_KEY", ""),
 		ReaderAPIKey:  pkgconfig.EnvString("AUDIT_LOG_READER_API_KEY", ""),
 		ScopeKeys:     pkgauth.LoadAPIKeysFromEnv("AUDIT_LOG_API_KEYS"),
+		KeysFile:      pkgconfig.EnvString("AUDIT_LOG_API_KEYS_FILE", ""),
 		CORSOrigins:   pkgconfig.EnvStringSlice("AUDIT_LOG_CORS_ORIGINS"),
 		DBPath:        pkgconfig.EnvString("AUDIT_LOG_DB_PATH", ""),
 		PGDSN:         pgDSN,
@@ -147,13 +149,13 @@ func Load() *Config {
 		LogLevel:      pkgconfig.EnvString("AUDIT_LOG_LOG_LEVEL", "info"),
 
 		// Fail-closed 生产门禁与密钥化存证 / production gate, keyed chain, write-only self-check
-		RequireTLS:  pkgconfig.EnvBool("AUDIT_LOG_REQUIRE_TLS", false),
-		HashKey:     pkgconfig.EnvString("AUDIT_LOG_HASH_KEY", ""),
+		RequireTLS:    pkgconfig.EnvBool("AUDIT_LOG_REQUIRE_TLS", false),
+		HashKey:       pkgconfig.EnvString("AUDIT_LOG_HASH_KEY", ""),
 		SM2PrivateKey: pkgconfig.EnvString("AUDIT_LOG_SM2_PRIVATE_KEY", ""),
 		SM2PublicKey:  pkgconfig.EnvString("AUDIT_LOG_SM2_PUBLIC_KEY", ""),
-		DBWriteOnly: pkgconfig.EnvBool("AUDIT_LOG_DB_WRITE_ONLY", false),
-		PGMaxConn:   pkgconfig.EnvInt("AUDIT_LOG_PG_MAX_CONNS", 0),
-		PGMinConn:   pkgconfig.EnvInt("AUDIT_LOG_PG_MIN_CONNS", 0),
+		DBWriteOnly:   pkgconfig.EnvBool("AUDIT_LOG_DB_WRITE_ONLY", false),
+		PGMaxConn:     pkgconfig.EnvInt("AUDIT_LOG_PG_MAX_CONNS", 0),
+		PGMinConn:     pkgconfig.EnvInt("AUDIT_LOG_PG_MIN_CONNS", 0),
 
 		// 归档段单批日志条数 / records per archive segment (0 = 500)
 		ArchivePageSize: pkgconfig.EnvInt("AUDIT_LOG_ARCHIVE_PAGE_SIZE", 0),
@@ -204,7 +206,7 @@ func (c *Config) Validate() error {
 		ServiceName:          "audit-log",
 		Hosts:                []string{c.Host, c.GRPCHost},
 		APIKey:               c.APIKey,
-		AuthEnabled:          c.APIKey != "",
+		AuthEnabled:          c.APIKey != "" || len(c.ScopeKeys) > 0 || c.KeysFile != "",
 		TLSEnabled:           c.TLSEnabled,
 		RequireTLS:           c.RequireTLS,
 		GRPCEnabled:          true,
@@ -213,6 +215,7 @@ func (c *Config) Validate() error {
 		RequireEncryptionKey: true,
 		HashKey:              c.HashKey,
 		RequireHashKey:       true,
+		AllowedCIDRs:         pkgconfig.EnvStringSlice("PRIVACY_ALLOWED_CIDRS"),
 	}); err != nil {
 		return err
 	}

@@ -231,7 +231,7 @@ func main() {
     agentClient := agent.New(cfg)
 
     // 3. 初始化 Gin 路由器并注入安全中间件
-    server := handlers.New(agentClient, cfg, auditStore, logger, mc)
+    server := handlers.New(agentClient, cfg, nil, auditStore, logger, mc)
     router := gin.New()
     server.RegisterRoutes(router)
 

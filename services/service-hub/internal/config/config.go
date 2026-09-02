@@ -79,6 +79,7 @@ type Config struct {
 	// 生产安全加固与持久化配置
 	APIKey      string                        // 本模块对外暴露接口的入站鉴权 API Key（为空表示免密）
 	ScopeKeys   map[string]*pkgauth.KeyConfig // Scope-based API Key 映射（SERVICE_HUB_API_KEYS），优先于 APIKey
+	KeysFile    string                        // API Key 文件路径（SERVICE_HUB_API_KEYS_FILE），启用热轮转
 	CORSOrigins []string                      // 允许跨域访问的 Origin 来源白名单
 	DBPath      string                        // SQLite 任务数据库文件物理路径（为空表示使用进程内内存存储）
 	LogFormat   string                        // 日志输出格式："json"（生产推荐）或 "text"（开发可读）
@@ -166,6 +167,7 @@ func Load() *Config {
 		// 生产鉴权、跨域与存储参数
 		APIKey:      pkgconfig.EnvString("SERVICE_HUB_API_KEY", ""),
 		ScopeKeys:   pkgauth.LoadAPIKeysFromEnv("SERVICE_HUB_API_KEYS"),
+		KeysFile:    pkgconfig.EnvString("SERVICE_HUB_API_KEYS_FILE", ""),
 		CORSOrigins: pkgconfig.EnvStringSlice("SERVICE_HUB_CORS_ORIGINS"),
 		DBPath:      pkgconfig.EnvString("SERVICE_HUB_DB_PATH", ""),
 		LogFormat:   pkgconfig.EnvString("SERVICE_HUB_LOG_FORMAT", "json"),
@@ -251,6 +253,7 @@ func (c *Config) Validate() error {
 		RequireTLS:        c.RequireTLS,
 		GRPCEnabled:       true, // 中枢进程始终监听 gRPC（默认 :50052）
 		MTLSWhitelistFile: c.MTLSWhitelistFile,
+		AllowedCIDRs:      pkgconfig.EnvStringSlice("PRIVACY_ALLOWED_CIDRS"),
 	})
 }
 

@@ -164,13 +164,13 @@ func TestAuthWithRoles_MetricsRequiresAuth(t *testing.T) {
 // TestIsReadOnlyEndpoint_PathBoundary 前缀匹配必须以 "/" 为边界，防止 /api/audit/logs 越到 /api/audit/logs-backup。
 func TestIsReadOnlyEndpoint_PathBoundary(t *testing.T) {
 	getLogs := []ReadOnlyEndpoint{{Method: http.MethodGet, Path: "/api/audit/logs"}}
-	if !isReadOnlyEndpoint(http.MethodGet, "/api/audit/logs/", getLogs) {
+	if !IsReadOnlyEndpoint(http.MethodGet, "/api/audit/logs/", getLogs) {
 		t.Error("trailing slash form of the exact path should match")
 	}
-	if isReadOnlyEndpoint(http.MethodGet, "/api/audit/logs-backup", getLogs) {
+	if IsReadOnlyEndpoint(http.MethodGet, "/api/audit/logs-backup", getLogs) {
 		t.Error("sibling path must not match a /api/audit/logs prefix entry")
 	}
-	if isReadOnlyEndpoint(http.MethodPost, "/api/audit/logs", getLogs) {
+	if IsReadOnlyEndpoint(http.MethodPost, "/api/audit/logs", getLogs) {
 		t.Error("method must be checked, not only path")
 	}
 }

@@ -56,6 +56,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
@@ -90,7 +91,17 @@ func main() {
 	}
 
 	// 三级等保/密评 G-17：初始化 gRPC API Key + Scope 应用层鉴权配置。
-	grpcserver.InitAuthSettings(cfg)
+	// 当配置 KeysFile 时创建 KeyStore，支持 API Key 文件热轮转（K8s Secret 投影场景）。
+	var keyStore *pkgauth.KeyStore
+	if cfg.KeysFile != "" {
+		ks, ksErr := pkgauth.NewKeyStore(cfg.KeysFile)
+		if ksErr != nil {
+			log.Fatalf("failed to initialize API Key store: %v", ksErr)
+		}
+		defer ks.Close()
+		keyStore = ks
+	}
+	grpcserver.InitAuthSettings(cfg.APIKey, cfg.ScopeKeys, keyStore)
 
 	// =========================================================================
 	// 2. Structured Logger Setup / 结构化日志系统初始化
@@ -198,7 +209,7 @@ func main() {
 	// 3) 初始化无默认中间件的 Gin 引擎，并通过 RegisterRoutes 挂载通用中间件链（RequestID、Logger、Recovery、CORS、Auth）；
 	// 4) 显式配置 http.Server 网络超时参数，防范 Slowloris 慢速连接拒绝服务攻击。
 	gin.SetMode(gin.ReleaseMode)
-	server := handlers.New(agentClient, dsClient, cfg, taskStore, logger, mc)
+	server := handlers.New(agentClient, dsClient, cfg, keyStore, taskStore, logger, mc)
 	router := gin.New()
 	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv()) // G-02
 	router.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv()))           // IP access control
@@ -337,7 +348,7 @@ func main() {
 		"agent_rest", cfg.AgentBaseURL(),
 		"datasource_rest", cfg.DatasourceBaseURL(),
 		"tls_enabled", cfg.TLSEnabled,
-		"auth_enabled", cfg.APIKey != "",
+		"auth_enabled", cfg.APIKey != "" || len(cfg.ScopeKeys) > 0 || keyStore != nil,
 		"cors_origins", len(cfg.CORSOrigins),
 		"db_path", cfg.DBPath,
 		"pg_dsn", redactDSN(cfg.PGDSN),
@@ -350,7 +361,7 @@ func main() {
 
 	// Emit a prominent security warning when all protections are disabled.
 	// 当所有安全功能均未启用时输出醒目警告，防止生产环境意外裸奔。
-	if !cfg.TLSEnabled && cfg.APIKey == "" && len(cfg.ScopeKeys) == 0 {
+	if !cfg.TLSEnabled && cfg.APIKey == "" && len(cfg.ScopeKeys) == 0 && keyStore == nil {
 		logger.Warn("========================================================================\n" +
 			"  SECURITY WARNING: All security features are DISABLED.\n" +
 			"  TLS=off  Auth=off\n" +
@@ -387,14 +398,31 @@ func main() {
 
 	// 2) 启动 HTTP REST 服务并在后台独立协程中监听请求
 	go func() {
-		if cfg.TLSEnabled {
+		if tlsutil.IsTLCPEnabled() {
+			tlcpCfg := tlsutil.TLCPConfigFromEnv()
+			gmtlsConfig, tlcpErr := tlsutil.BuildTLCPConfig(tlcpCfg)
+			if tlcpErr != nil {
+				log.Fatalf("failed to build TLCP config: %v", tlcpErr)
+			}
+			tlcpLis, tlcpErr := tlsutil.NewTLCPListener("tcp", cfg.Address(), gmtlsConfig)
+			if tlcpErr != nil {
+				log.Fatalf("failed to create TLCP listener: %v", tlcpErr)
+			}
+			logger.Info("service-hub TLCP (国密) REST server started",
+				"addr", cfg.Address(),
+				"sign_cert", tlcpCfg.SignCertFile,
+			)
+			if err := httpSrv.Serve(tlcpLis); err != nil && err != http.ErrServerClosed {
+				logger.Error("TLCP server error", "error", err.Error())
+			}
+		} else if cfg.TLSEnabled {
 			logger.Info("service-hub HTTPS REST server started (mTLS enabled)",
 				"addr", cfg.Address(),
 				"grpc_addr", cfg.GRPCAddress(),
 				"agent_rest", cfg.AgentBaseURL(),
 				"datasource_rest", cfg.DatasourceBaseURL(),
 				"db_path", cfg.DBPath,
-				"auth_enabled", cfg.APIKey != "",
+				"auth_enabled", cfg.APIKey != "" || len(cfg.ScopeKeys) > 0 || keyStore != nil,
 				"mtls_client_auth", cfg.TLSClientAuth,
 			)
 			// ListenAndServeTLS 使用 httpSrv.TLSConfig 中的证书，空字符串表示从 TLSConfig 读取
@@ -408,7 +436,7 @@ func main() {
 				"agent_rest", cfg.AgentBaseURL(),
 				"datasource_rest", cfg.DatasourceBaseURL(),
 				"db_path", cfg.DBPath,
-				"auth_enabled", cfg.APIKey != "",
+				"auth_enabled", cfg.APIKey != "" || len(cfg.ScopeKeys) > 0 || keyStore != nil,
 			)
 			if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				logger.Error("HTTP server error", "error", err.Error())

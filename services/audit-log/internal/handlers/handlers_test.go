@@ -49,7 +49,7 @@ func newTestServer() *Server {
 		mc:     metrics.NewCollector("audit-log-test"),
 	}
 	ag := agent.New(cfg)
-	return New(ag, cfg, d.audit, d.logger, d.mc)
+	return New(ag, cfg, nil, d.audit, d.logger, d.mc)
 }
 
 func newTestRouter(s *Server) *gin.Engine {
@@ -679,7 +679,7 @@ func TestBufferedAuditStore_Handler_VerifyChain_E2E(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	mc := metrics.NewCollector("audit-log-e2e-test")
 	ag := agent.New(cfg)
-	server := New(ag, cfg, bufStore, logger, mc)
+	server := New(ag, cfg, nil, bufStore, logger, mc)
 	router := newTestRouter(server)
 
 	const count = 30

@@ -146,16 +146,17 @@ func (r *Runtime) Validate() error {
 	}
 
 	if err := pkgconfig.ValidateFailClosed(pkgconfig.SecurityRequirements{
-		ServiceName:    r.ServiceName,
-		Hosts:          r.Hosts(),
-		APIKey:         r.inboundCredential(),
-		AuthEnabled:    r.AuthEnabled,
-		TLSEnabled:     r.TLSEnabled,
-		RequireTLS:     r.RequireTLS,
+		ServiceName:      r.ServiceName,
+		Hosts:            r.Hosts(),
+		APIKey:           r.inboundCredential(),
+		AuthEnabled:      r.AuthEnabled,
+		TLSEnabled:       r.TLSEnabled,
+		RequireTLS:       r.RequireTLS,
 		SkipTLSForRemote: r.SkipTLSForRemote,
-		GRPCEnabled:    r.GRPCEnabled,
+		GRPCEnabled:      r.GRPCEnabled,
 		// 引擎始终监听 gRPC，故 TLS 开启时白名单文件为必填项。
 		MTLSWhitelistFile: r.MTLSWhitelistFile,
+		AllowedCIDRs:      pkgconfig.EnvStringSlice("PRIVACY_ALLOWED_CIDRS"),
 	}); err != nil {
 		return err
 	}

@@ -59,7 +59,7 @@ type Config struct {
 	// ── RBAC 用户认证配置 ──
 	AuthEnabled    bool   // 是否启用用户认证（JWT），默认 false（开发模式放行）
 	JWTSecret      string // JWT 签名密钥（最少 32 字符）
-	JWTExpiryHours int    // JWT 令牌有效期（小时，默认 24）
+	JWTExpiryHours int    // JWT 令牌有效期（小时，默认 1）
 	UserDBPath     string // 用户数据持久化路径（空 = 内存模式）
 
 	// ── 限流配置 ──

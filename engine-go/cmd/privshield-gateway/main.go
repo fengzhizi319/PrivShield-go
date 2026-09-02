@@ -76,6 +76,13 @@ func main() {
 	r.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv()))           // IP access control
 	r.Use(gin.Recovery())
 	r.Use(middleware.WAF(slog.Default())) // 三级等保 G-12：Web 攻击载荷检测
+	r.Use(middleware.SecurityHeaders())   // CSP + HSTS + X-Frame-Options 等安全响应头
+	r.Use(middleware.MaxBodySize(int64(pkgconfig.EnvInt("GATEWAY_MAX_BODY_BYTES", 32<<20))))
+	if rps := pkgconfig.EnvInt("GATEWAY_RATE_LIMIT_RPS", 0); rps > 0 {
+		burst := pkgconfig.EnvInt("GATEWAY_RATE_LIMIT_BURST", rps*2)
+		r.Use(middleware.RateLimit(rps, burst)) // 32 分片令牌桶限流
+		slog.Info("Gateway rate limiting enabled", "rps", rps, "burst", burst)
+	}
 	r.Use(observability.RequestLogger())
 	r.Use(gwMetrics.PrometheusMiddleware()) // 网关转发指标
 

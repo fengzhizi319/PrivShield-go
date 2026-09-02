@@ -131,6 +131,7 @@ func Recovery(logger *slog.Logger, module string) gin.HandlerFunc {
 // SecurityHeaders 返回设置企业级 HTTP 安全响应头的中间件。
 //
 // 设置的安全响应头：
+//   - Content-Security-Policy — 限制页面可加载的资源来源，防 XSS 与数据注入；
 //   - X-Content-Type-Options: nosniff — 禁止浏览器对响应 MIME 类型进行猜测嗅探；
 //   - X-Frame-Options: SAMEORIGIN — 禁止外部站点通过 iframe 嵌入本页面，防点击劫持（Clickjacking）；
 //   - X-XSS-Protection: 1; mode=block — 启用浏览器内置 XSS 过滤器并在检测到攻击时停止渲染；
@@ -148,6 +149,7 @@ func SecurityHeaders() gin.HandlerFunc {
 // It is exposed so callers can apply the same headers and override specific
 // values (e.g. X-Frame-Options) before the response is sent.
 func SecurityHeadersTo(w http.ResponseWriter) {
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 	w.Header().Set("X-XSS-Protection", "1; mode=block")

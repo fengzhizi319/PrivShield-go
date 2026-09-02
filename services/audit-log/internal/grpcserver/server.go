@@ -440,13 +440,14 @@ func (s *GRPCServer) VerifyIntegrity(ctx context.Context, req *pb.VerifyIntegrit
 
 	// P0 fix: verify the snapshot using its own integrity hash that covers input/output samples.
 	var valid bool
-	valid, _ = store.VerifySnapshotIntegrityHash(
+	var hashLabel string
+	valid, hashLabel = store.VerifySnapshotIntegrityHash(
 		snap.IntegrityHash, snap.ID, snap.AuditLogID, prevHash, snap.Timestamp, snap.Algorithm,
 		snap.InputSample, snap.OutputSample, snap.ParametersJSON,
 	)
 	// Legacy fallback: snapshots written before this fix copied the parent audit log's integrity hash.
 	if !valid {
-		valid, _ = store.VerifyAuditIntegrityHash(
+		valid, hashLabel = store.VerifyAuditIntegrityHash(
 			snap.IntegrityHash, snap.AuditLogID, prevHash, snap.Timestamp, snap.Algorithm,
 			log.InputHash, log.OutputHash, log.User, log.SecurityLevel, snap.ParametersJSON,
 		)
@@ -465,14 +466,27 @@ func (s *GRPCServer) VerifyIntegrity(ctx context.Context, req *pb.VerifyIntegrit
 		// When the caller supplies an explicit expected hash, the matched algorithm label is unknown.
 	}
 
+	reason := store.ChainReasonOK
 	msg := "integrity verified: SM3 hash matches non-repudiation proof"
-	if !valid {
-		msg = "integrity violation: hash mismatch, potential data tampering detected"
+
+	// G-10: verify the SM2 digital signature over the snapshot integrity hash.
+	if valid && snap.SM2Signature != "" {
+		sigOk, _ := store.VerifyAuditSignature(snap.IntegrityHash, snap.SM2Signature)
+		if !sigOk {
+			valid = false
+			reason = store.ChainReasonInvalidSM2Signature
+			msg = "integrity violation: SM2 signature invalid, non-repudiation proof forged or key mismatch"
+		}
 	}
 
-	reason := store.ChainReasonOK
-	if !valid {
+	if !valid && reason == store.ChainReasonOK {
+		msg = "integrity violation: hash mismatch, potential data tampering detected"
 		reason = store.ChainReasonHashMismatch
+	}
+
+	hashLabelStr := hashLabel
+	if hashLabelStr == "" {
+		hashLabelStr = snap.Algorithm
 	}
 
 	return &pb.VerifyIntegrityResponse{
@@ -483,7 +497,7 @@ func (s *GRPCServer) VerifyIntegrity(ctx context.Context, req *pb.VerifyIntegrit
 		Message:      msg,
 		Via:          moduleVia,
 		Reason:       reason,
-		HashLabel:    snap.Algorithm,
+		HashLabel:    hashLabelStr,
 	}, nil
 }
 

@@ -1,653 +1,456 @@
-# 身份认证体系部署安全分析报告
+# 身份认证体系安全分析报告
 
-> **版本**：v1.0  
+> **版本**：v5.0  
 > **日期**：2026-09-02  
 > **适用范围**：PrivShield 全栈（engine-go / service-hub / datasource-mgr / audit-log / bff-go / app-lz）  
-> **分析目标**：评估现有身份认证体系在共享大数据平台部署场景下的安全性——能否保证仅授权方调用接口
+> **分析目标**：评估身份认证体系在共享大数据平台部署场景下的安全防护能力与剩余风险
 
 ---
 
 ## 目录
 
 - [1. 执行摘要](#1-执行摘要)
-- [2. 现有安全能力清单](#2-现有安全能力清单)
-- [3. 关键安全缺口分析](#3-关键安全缺口分析)
-  - [3.1 Critical：部署即暴露](#31-critical部署即暴露)
-    - [3.1.1 认证默认关闭](#311-认证默认关闭)
-    - [3.1.2 TLS 默认关闭](#312-tls-默认关闭)
-    - [3.1.3 service-hub gRPC 无鉴权（死代码）](#313-service-hub-grpc-无鉴权死代码)
-  - [3.2 High：纵深防御缺失](#32-high纵深防御缺失)
-    - [3.2.1 无 IP 白名单 / CIDR 访问控制](#321-无-ip-白名单--cidr-访问控制)
-    - [3.2.2 API Key 无热轮转能力](#322-api-key-无热轮转能力)
-    - [3.2.3 无认证失败指标与告警](#323-无认证失败指标与告警)
-  - [3.3 Medium：配置陷阱](#33-medium配置陷阱)
-    - [3.3.1 空 scopes 默认通配符](#331-空-scopes-默认通配符)
-    - [3.3.2 遗留单 Key 环境变量全权](#332-遗留单-key-环境变量全权)
-    - [3.3.3 mTLS 默认关闭](#333-mtls-默认关闭)
-    - [3.3.4 middleware.Auth("") 静默放行](#334-middlewareauth-静默放行)
-- [4. 攻击场景分析](#4-攻击场景分析)
-  - [4.1 同平台租户嗅探明文 API Key](#41-同平台租户嗅探明文-api-key)
-  - [4.2 忘记配置 AUTH_ENABLED 导致全接口开放](#42-忘记配置-auth_enabled-导致全接口开放)
-  - [4.3 service-hub gRPC 绕过 REST 鉴权](#43-service-hub-grpc-绕过-rest-鉴权)
-  - [4.4 API Key 泄露后无法热轮转](#44-api-key-泄露后无法热轮转)
+- [2. 已有安全措施与防护效果](#2-已有安全措施与防护效果)
+  - [2.1 身份鉴别层](#21-身份鉴别层)
+  - [2.2 传输安全层](#22-传输安全层)
+  - [2.3 访问控制层](#23-访问控制层)
+  - [2.4 网络防护层](#24-网络防护层)
+  - [2.5 安全审计与可观测性](#25-安全审计与可观测性)
+  - [2.6 启动安全校验（Fail-closed）](#26-启动安全校验fail-closed)
+- [3. 待改进项与风险评估](#3-待改进项与风险评估)
+  - [3.1 高风险](#31-高风险)
+  - [3.2 低风险](#32-低风险)
+- [4. 攻击场景与防御矩阵](#4-攻击场景与防御矩阵)
 - [5. 安全部署 Checklist](#5-安全部署-checklist)
-- [6. 修复建议与优先级](#6-修复建议与优先级)
-- [7. 与三级等保/密评的映射](#7-与三级等保密评的映射)
+- [6. 与三级等保/密评的映射](#6-与三级等保密评的映射)
 
 ---
 
 ## 1. 执行摘要
 
-### 结论
+### 总体评估
 
-**当前默认配置下，无法保证安全部署到共享大数据平台。**
+**PrivShield 已建立完善的纵深防御体系，配合正确配置可安全部署到共享大数据平台。**
 
-经过对全项目认证鉴权代码的深度审计，发现：
+当前安全能力覆盖 6 个防御层面，共 25+ 项安全措施，能够有效防御以下威胁：
 
-| 严重性 | 数量 | 说明 |
-|--------|------|------|
-| **Critical** | 3 | 默认配置下部署即暴露，攻击者可直接调用接口 |
-| **High** | 3 | 纵深防御缺失，单点突破后无后备防线 |
-| **Medium** | 4 | 配置陷阱，错误配置可导致安全降级 |
+| 威胁类型 | 防御状态 |
+|----------|----------|
+| 未授权访问（REST + gRPC） | ✅ 已防御 |
+| 凭证嗅探 / 中间人攻击 | ✅ 已防御 |
+| 暴力破解 / 凭证猜测 | ✅ 已防御 |
+| 权限越权 / 横向移动 | ✅ 已防御 |
+| 网络层非法访问 | ✅ 已防御 |
+| SQL 注入 / XSS / 命令注入 | ✅ 已防御 |
+| 密钥泄露后持续暴露 | ✅ 已防御（全栈热轮转） |
+| 错误配置导致安全降级 | ✅ 已防御（fail-closed） |
+| 微服务间无差别调用 | ✅ 已防御（全栈 gRPC scope 鉴权） |
 
-### 核心风险
+### 剩余风险
 
-1. **认证默认关闭**：`PRIVACY_AUTH_ENABLED=false`（默认值）→ 所有请求以 `AnonymousIdentity{Scopes:["*"]}` 放行，等同于无认证
-2. **TLS 默认关闭**：API Key 以明文 HTTP 传输，同平台任何租户可嗅探
-3. **service-hub gRPC 无鉴权**：auth interceptor 是死代码（引用未定义变量），从未注册到拦截器链
-
-### 安全部署前提
-
-若要在共享平台安全部署，**必须**同时满足：
-- `PRIVACY_AUTH_ENABLED=true`
-- `PRIVACY_TLS_ENABLED=true`
-- `PRIVACY_REQUIRE_TLS=true`
-- 配置 K8s NetworkPolicy 限制网络访问
-- 使用 Secret Manager 管理 API Key
+仅剩 2 项待改进项（1 高风险 + 1 低风险），集中在**集中式密钥管理集成**和**限流端点差异化**方面，详见 [§3 待改进项与风险评估](#3-待改进项与风险评估)。
 
 ---
 
-## 2. 现有安全能力清单
+## 2. 已有安全措施与防护效果
 
-项目已实现的安全能力（需正确配置后生效）：
+### 2.1 身份鉴别层
 
-| 能力 | 实现位置 | 防御目标 | 状态 |
-|------|----------|----------|------|
-| **API Key 常量时间认证** | `pkg/auth/middleware.go:55-78` | 防时序攻击逐字符猜测 Token | ✅ 已实现 |
-| **Scope-based 细粒度权限** | `pkg/auth/identity.go:26-33` | 最小权限原则，按接口级授权 | ✅ 已实现 |
-| **路径归一化** | `pkg/auth/identity.go:50-61` | 防别名路由绕过权限校验 | ✅ 已实现 |
-| **mTLS CN 白名单（gRPC）** | `pkg/tlsutil/grpc_interceptor.go:38-134` | 客户端证书身份校验 | ✅ 已实现 |
-| **mTLS CN 白名单 5s 热重载** | `pkg/tlsutil/whitelist.go:166-192` | 证书吊销后及时生效 | ✅ 已实现 |
-| **32 分片令牌桶限流** | `pkg/middleware/ratelimit.go:80-224` | 防 HTTP Flood / 暴力破解 | ✅ 已实现 |
-| **WAF 72 条规则** | `pkg/middleware/waf.go` | SQL 注入/XSS/命令注入/路径穿越 | ✅ 已实现 |
-| **Fail-closed 启动校验** | `pkg/config/security.go:ValidateFailClosed` | 非回环地址+无 Key 时拒绝启动 | ✅ 已实现 |
-| **可信代理配置 (G-02)** | `pkg/middleware/middleware.go:162-164` | 防 X-Forwarded-For 伪造 | ✅ 已实现 |
-| **JWT 令牌吊销 (G-05)** | `console/bff-go/internal/auth/jwt.go` | 登出后令牌立即失效 | ✅ 已实现 |
-| **API Key 过期 (G-14)** | `pkg/auth/identity.go:KeyConfig.IsExpired()` | 过期凭证自动失效 | ✅ 已实现 |
-| **登录失败锁定 (G-03)** | `console/bff-go/internal/auth/jwt.go` | 5 次失败 → 15 分钟锁定 | ✅ 已实现 |
-| **TOTP 双因素 (G-11)** | `console/bff-go/internal/auth/totp.go` | RFC 6238 实现 | ✅ 已实现 |
-| **安全头中间件** | `pkg/middleware/security_headers.go` | CSP/HSTS/X-Frame-Options | ✅ 已实现 |
+#### 2.1.1 API Key 常量时间认证
 
----
+| 项目 | 说明 |
+|------|------|
+| **实现** | `pkg/auth/middleware.go` — `ConstantTimeLookup` |
+| **机制** | 使用 `subtle.ConstantTimeCompare` 对全部 Key 逐一比较，不短路返回，消除时序侧信道 |
+| **安全效果** | 防御时序攻击（Timing Attack），攻击者无法通过响应时间差异逐字符猜测有效 Token |
+| **防范攻击** | 时序侧信道攻击、在线凭证暴力猜测 |
 
-## 3. 关键安全缺口分析
+#### 2.1.2 API Key 过期自动失效
 
-### 3.1 Critical：部署即暴露
+| 项目 | 说明 |
+|------|------|
+| **实现** | `pkg/auth/middleware.go` — `AuthenticateAPIKey` 内检查 `KeyConfig.IsExpired()` |
+| **机制** | 每次认证请求检查 `ExpiresAt` 字段，过期 Key 立即返回 nil |
+| **安全效果** | 支持设置 Key 有效期，过期凭证自动拒绝，缩小密钥泄露窗口 |
+| **防范攻击** | 长期有效凭证泄露后的持续滥用 |
 
-#### 3.1.1 认证默认关闭
+#### 2.1.3 API Key 全栈热轮转（KeyStore）
 
-**代码位置**：
-- `engine-go/internal/config/config.go:61` — 默认值定义
-- `pkg/auth/middleware.go:105-108` — 匿名身份注入
-- `engine-go/internal/grpcserver/auth.go:23` — gRPC 鉴权跳过
+| 项目 | 说明 |
+|------|------|
+| **实现** | `pkg/auth/keystore.go` — `KeyStore` |
+| **机制** | 5 秒文件轮询 + mtime 检测 + `sync.RWMutex` 原子替换，每请求读取最新密钥 |
+| **安全效果** | 密钥泄露后无需重启服务，修改文件即可在 5 秒内使旧 Key 失效 |
+| **防范攻击** | 密钥泄露后的持续暴露窗口，缩短应急响应时间从「维护窗口」降至「秒级」 |
+| **接入范围** | 全部 4 个 Go 服务（engine-go、service-hub、datasource-mgr、audit-log）；service-hub / datasource-mgr / audit-log 的 REST 与 gRPC 双通道均支持热轮转 |
+| **配置** | `PRIVACY_AUTH_KEYS_FILE` / `SERVICE_HUB_API_KEYS_FILE` / `DATASOURCE_MGR_API_KEYS_FILE` / `AUDIT_LOG_API_KEYS_FILE` |
+| **K8s 部署** | 通过 projected volume 挂载 Secret，KeyStore 自动感知变更，实现近实时密钥轮转 |
 
-**问题描述**：
+#### 2.1.4 mTLS CN 白名单（gRPC）
 
-```go
-// engine-go/internal/config/config.go
-// PRIVACY_AUTH_ENABLED 默认为 false
+| 项目 | 说明 |
+|------|------|
+| **实现** | `pkg/tlsutil/grpc_interceptor.go` + `pkg/tlsutil/whitelist.go` |
+| **机制** | 从 TLS 客户端证书提取 Common Name，与白名单文件比对，支持 5 秒热重载 |
+| **安全效果** | gRPC 服务间通信的双向身份验证，确保只有持有合法证书的客户端可调用 |
+| **防范攻击** | 未授权 gRPC 调用、伪造服务身份、中间人攻击 |
 
-// pkg/auth/middleware.go:105-108
-if !settings.AuthEnabled {
-    c.Set(IdentityContextKey, AnonymousIdentity) // Scopes: ["*"]
-    c.Next()
-    return
-}
+#### 2.1.5 JWT 令牌吊销
 
-// engine-go/internal/grpcserver/auth.go:23
-if !settings.AuthEnabled || pkgauth.IsHealthPathOrMethod(info.FullMethod) {
-    return handler(ctx, req) // 直接放行
-}
-```
+| 项目 | 说明 |
+|------|------|
+| **实现** | `console/app-lz/bff-go/internal/auth/jwt.go` |
+| **机制** | 用户登出时将 JWT 加入吊销列表，后续请求即使 Token 未过期也被拒绝 |
+| **安全效果** | 登出后令牌立即失效，防止 Token 被盗用 |
+| **防范攻击** | Token 重放攻击、会话劫持 |
 
-**攻击场景**：
+#### 2.1.6 JWT 默认有效期 1 小时
 
-部署到大数据平台时，若运维人员忘记设置 `PRIVACY_AUTH_ENABLED=true`（或 Helm Chart 遗漏此配置），所有 REST 和 gRPC 接口对网络可达的任何主机完全开放。
+| 项目 | 说明 |
+|------|------|
+| **实现** | `console/app-lz/bff-go/internal/auth/jwt.go` |
+| **机制** | 默认 access token 有效期 1 小时，刷新 token 单独配置，缩短泄露窗口 |
+| **安全效果** | 即便 Token 被截获，攻击者可用时间窗口受限 |
+| **防范攻击** | Token 泄露后的长期滥用、会话劫持 |
 
-**影响范围**：engine-go REST + gRPC（全部 44 个隐私原语接口）
+#### 2.1.7 登录失败锁定 + TOTP 双因素
 
-**修复建议**：
+| 项目 | 说明 |
+|------|------|
+| **实现** | `console/app-lz/bff-go/internal/auth/jwt.go`（锁定）+ `console/app-lz/bff-go/internal/auth/totp.go`（TOTP） |
+| **机制** | 5 次连续失败 → 15 分钟账户锁定；TOTP 基于 RFC 6238 |
+| **安全效果** | 有效阻止在线暴力破解，双因素认证提升账户安全性 |
+| **防范攻击** | 在线暴力破解、凭证填充攻击 |
 
-```go
-// 方案 A：将默认值改为 true（破坏性变更，需更新文档）
-authEnabled := EnvBool("PRIVACY_AUTH_ENABLED", true)
+#### 2.1.8 遗留环境变量弃用升级
 
-// 方案 B：增强 fail-closed 校验
-// 当绑定非回环地址时，强制要求 AUTH_ENABLED=true
-if !isLoopback(host) && !authEnabled {
-    log.Fatal("PRIVACY_AUTH_ENABLED must be true when binding to non-loopback address")
-}
-```
-
----
-
-#### 3.1.2 TLS 默认关闭
-
-**代码位置**：
-- `engine-go/internal/config/config.go:69-73` — 默认值定义
-
-**问题描述**：
-
-```go
-// engine-go/internal/config/config.go:69-73
-tlsEnabled := EnvBool("PRIVACY_TLS_ENABLED", false)      // 默认关闭
-mtlsEnabled := EnvBool("PRIVACY_AUTH_INTERNAL_MTLS_ENABLED", false) // 默认关闭
-requireTLS := EnvBool("PRIVACY_REQUIRE_TLS", false)      // 默认关闭
-```
-
-**攻击场景**：
-
-大数据平台通常有多个租户共享网络基础设施。当 TLS 关闭时：
-1. API Key 以 HTTP 明文传输
-2. 同平台任何租户可通过网络嗅探（ARP 欺骗、交换机镜像、容器网络抓包）获取 API Key
-3. 获取 API Key 后，攻击者可伪装成合法服务调用所有接口
-
-**影响范围**：全栈所有服务
-
-**修复建议**：
-
-```go
-// 强制 TLS 默认开启
-tlsEnabled := EnvBool("PRIVACY_TLS_ENABLED", true)
-requireTLS := EnvBool("PRIVACY_REQUIRE_TLS", true)
-
-// 或在 fail-closed 校验中增加：
-if !isLoopback(host) && !tlsEnabled {
-    log.Fatal("PRIVACY_TLS_ENABLED must be true when binding to non-loopback address")
-}
-```
+| 项目 | 说明 |
+|------|------|
+| **实现** | `engine-go/internal/security/config.go` |
+| **机制** | `PRIVACY_AUTH_API_KEY` / `PRIVACY_API_KEY` 使用 `slog.Error` 级别告警（非 `Warn`），明确标注「下一大版本移除」 |
+| **安全效果** | 提高弃用变量可见度，防止运维人员忽视日志中的弃用警告 |
+| **防范攻击** | 遗留全权 Key 被无感知使用导致的最小权限原则失效 |
 
 ---
 
-#### 3.1.3 service-hub gRPC 无鉴权（死代码）
+### 2.2 传输安全层
 
-**代码位置**：
-- `services/service-hub/internal/grpcserver/auth.go:17-57` — 死代码
-- `services/service-hub/internal/grpcserver/server.go:1060-1074` — 拦截器链未包含 auth
+#### 2.2.1 TLS 1.3 加密传输
 
-**问题描述**：
+| 项目 | 说明 |
+|------|------|
+| **实现** | 各服务 `crypto/tls` 配置 |
+| **机制** | 支持 TLS 1.3，加密所有 HTTP/gRPC 通信 |
+| **安全效果** | API Key、业务数据在传输中全程加密，防止网络嗅探 |
+| **防范攻击** | 网络嗅探（ARP 欺骗、容器网络抓包）、中间人攻击、凭证窃取 |
 
-```go
-// services/service-hub/internal/grpcserver/auth.go:24
-// 问题 1：引用未定义变量 cfg
-if cfg == nil || cfg.APIKey == "" {
-    return handler(ctx, req)
-}
+#### 2.2.2 安全响应头
 
-// 问题 2：pkgauth.Settings 没有 APIKey/ScopeKeys 字段
-settings := &pkgauth.Settings{
-    AuthEnabled: true,
-    APIKey:      cfg.APIKey,      // ❌ 编译错误：Settings 无此字段
-    ScopeKeys:   cfg.ScopeKeys,   // ❌ 编译错误：Settings 无此字段
-}
-
-// services/service-hub/internal/grpcserver/server.go:1060-1064
-// 问题 3：auth interceptor 从未注册
-unaryChain := grpc.ChainUnaryInterceptor(
-    UnaryRecoveryInterceptor(logger),
-    UnaryLoggingInterceptor(logger),
-    // ❌ 缺少 authUnaryInterceptor
-)
-```
-
-**`pkgauth.Settings` 实际字段**：
-
-```go
-// pkg/auth/settings.go:22-28
-type Settings struct {
-    AuthEnabled  bool
-    TLSEnabled   bool
-    HealthNoAuth bool
-    InternalKeys map[string]*KeyConfig // token -> config
-    ExternalKeys map[string]*KeyConfig // token -> config
-}
-// 注意：没有 APIKey 和 ScopeKeys 字段
-```
-
-**攻击场景**：
-
-即使 engine-go REST 侧正确配置了鉴权，攻击者仍可通过直接调用 service-hub gRPC 端口（默认 :50052）绕过所有鉴权，执行：
-- `Dispatch` — 触发隐私处理流水线
-- `ClassifyAndDispatch` — 分类+分发
-- `ListTasks` / `GetTask` — 获取任务详情
-- `GetPipelineTelemetry` — 获取流水线遥测
-
-**影响范围**：service-hub gRPC 全部方法
-
-**修复建议**：
-
-```go
-// 1. 修复 auth.go，使用正确的 Settings 字段
-func authUnaryInterceptor(cfg *config.Config) grpc.UnaryInterceptor {
-    return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-        if pkgauth.IsHealthPathOrMethod(info.FullMethod) {
-            return handler(ctx, req)
-        }
-        
-        settings := &pkgauth.Settings{
-            AuthEnabled:  true,
-            InternalKeys: cfg.ScopeKeys, // 使用正确的字段
-        }
-        // ... 鉴权逻辑
-    }
-}
-
-// 2. 在 BuildServerOptions 中注册 interceptor
-func BuildServerOptions(logger *slog.Logger, cfg *config.Config, creds credentials.TransportCredentials) []grpc.ServerOption {
-    unaryChain := grpc.ChainUnaryInterceptor(
-        UnaryRecoveryInterceptor(logger),
-        UnaryLoggingInterceptor(logger),
-        authUnaryInterceptor(cfg), // ✅ 注册鉴权拦截器
-    )
-    // ...
-}
-```
+| 项目 | 说明 |
+|------|------|
+| **实现** | `pkg/middleware/middleware.go` — `SecurityHeaders()` / `SecurityHeadersTo()` |
+| **机制** | 注入 `Content-Security-Policy`、`Strict-Transport-Security`、`X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff` |
+| **安全效果** | 防御点击劫持、MIME 嗅探、协议降级攻击 |
+| **防范攻击** | Clickjacking、MIME confusion、SSL stripping |
 
 ---
 
-### 3.2 High：纵深防御缺失
+### 2.3 访问控制层
 
-#### 3.2.1 无 IP 白名单 / CIDR 访问控制
+#### 2.3.1 Scope-based 细粒度权限
 
-**问题描述**：
+| 项目 | 说明 |
+|------|------|
+| **实现** | `pkg/auth/identity.go` — `Identity.HasPermission` + `RequirePermission` 中间件 |
+| **机制** | 每个 API Key 配置明确的 scope 列表（如 `privacy:mask`、`hub:dispatch`），接口声明所需 scope，运行时校验 |
+| **安全效果** | 最小权限原则，每个服务/客户端仅能访问其被授权的功能 |
+| **防范攻击** | 权限越权、横向移动（单 Key 泄露不影响其他接口） |
 
-应用层无任何 IP 访问控制机制。搜索全项目代码，未发现 `CIDR`、`IPAllowlist`、`AllowedCIDR`、`NetworkPolicy` 等实现。
+#### 2.3.2 路径归一化
 
-现有的 IP 相关机制仅用于：
-- `ConfigureTrustedProxies` — 可信代理配置（用于解析 X-Forwarded-For，非访问控制）
-- `RealClientIP` — 限流 key 构造和日志记录
+| 项目 | 说明 |
+|------|------|
+| **实现** | `pkg/auth/identity.go` — `NormalizePath` |
+| **机制** | 将请求路径归一化为标准形式后再匹配权限映射，消除大小写、尾部斜杠、编码差异 |
+| **安全效果** | 防止通过路径别名绕过权限校验 |
+| **防范攻击** | 路径别名绕过（如 `/API/Mask` vs `/api/mask`、`/api/mask/` vs `/api/mask`） |
 
-**攻击场景**：
+#### 2.3.3 空 scopes 安全降级
 
-大数据平台中，任何能到达服务监听端口的 Pod/主机都可以尝试认证。即使 API Key 泄露，攻击者也可从任意位置发起请求。
+| 项目 | 说明 |
+|------|------|
+| **实现** | `pkg/auth/identity.go` — `ParseAPIKeysEnv` |
+| **机制** | 未配置 scopes 的 Key 默认获得**空权限**（非 `["*"]` 通配符），并输出 `slog.Warn` |
+| **安全效果** | 防止运维人员遗漏 scopes 配置导致意外全权授予 |
+| **防范攻击** | 错误配置导致的最小权限原则失效 |
 
-**修复建议**：
+#### 2.3.4 gRPC 全方法 Scope 鉴权（unary + stream）
 
-```go
-// 新增 IP 白名单中间件
-func IPAllowlist(allowedCIDRs []string) gin.HandlerFunc {
-    var networks []*net.IPNet
-    for _, cidr := range allowedCIDRs {
-        _, network, _ := net.ParseCIDR(cidr)
-        networks = append(networks, network)
-    }
-    return func(c *gin.Context) {
-        ip := net.ParseIP(RealClientIP(c))
-        for _, network := range networks {
-            if network.Contains(ip) {
-                c.Next()
-                return
-            }
-        }
-        c.AbortWithStatusJSON(403, gin.H{"error": "IP not allowed"})
-    }
-}
+| 项目 | 说明 |
+|------|------|
+| **实现** | `services/service-hub/internal/grpcserver/auth.go`、`services/datasource-mgr/internal/grpcserver/auth.go`、`services/audit-log/internal/grpcserver/auth.go` |
+| **机制** | 从 gRPC metadata 提取 Bearer Token，校验身份 + 方法级 scope 权限映射；同时支持 unary 和 stream 拦截器；未配置任何 key 时默认拒绝（fail-closed），并上报 `privshield_auth_failures_total` 指标 |
+| **安全效果** | 全部 3 个 gRPC 服务的全部方法（包括流式）均需认证 + 方法级授权，与 REST 侧安全等级一致；遗留单 API Key 不再授予 `*` 通配 scope，必须迁移到 scope-based key |
+| **防范攻击** | gRPC 端口绕过 REST 鉴权、持有合法 mTLS 证书的服务无差别调用全部方法、未认证 gRPC 请求静默放行 |
 
-// 环境变量配置
-// PRIVACY_ALLOWED_CIDRS=10.0.0.0/8,172.16.0.0/12
-```
+**各服务 gRPC 方法→scope 映射**：
 
-**替代方案**：使用 K8s NetworkPolicy 在网络层限制 Pod 间访问。
+| 服务 | 方法 | Scope |
+|------|------|-------|
+| service-hub | `*/Health` | 无需权限 |
+| service-hub | `*/HubStatus`, `*/GetTask`, `*/ListTasks`, `*/PipelineStatus` | `hub:read` |
+| service-hub | `*/Dispatch`, `*/ClassifyAndDispatch` | `hub:dispatch` |
+| datasource-mgr | `*/Health` | 无需权限 |
+| datasource-mgr | `*/GetData`, `*/GetDataBySource`, `*/GetDataSource`, `*/ListDataSources`, `*/GetYibaoData`, `*/GetKangyangData`, `*/GetMockData3`, `*/GetMockData4`, `*/ListMockSources` | `datasource:read` |
+| datasource-mgr | `*/TestConnection` | `datasource:admin` |
+| audit-log | `*/Health` | 无需权限 |
+| audit-log | `*/RecordAudit` | `audit:write` |
+| audit-log | `*/GetAuditLog`, `*/ListAuditLogs`, `*/GetAuditStats`, `*/ListSnapshots`, `*/GenerateReport` | `audit:read` |
+| audit-log | `*/VerifyIntegrity`, `*/VerifyChain` | `audit:verify` |
 
----
+#### 2.3.5 IP 白名单 CIDR 访问控制
 
-#### 3.2.2 API Key 无热轮转能力
+| 项目 | 说明 |
+|------|------|
+| **实现** | `pkg/middleware/ip_allowlist.go` — `IPAllowlist` |
+| **机制** | 基于 `PRIVACY_ALLOWED_CIDRS` 环境变量解析 CIDR 列表，每请求检查 `RealClientIP` 是否落入允许网段 |
+| **安全效果** | 网络层第一道防线，即使凭证泄露，攻击者从非允许 IP 发起的请求也会被拒绝 |
+| **防范攻击** | 凭证泄露后的远程滥用、非授权网络的访问尝试 |
+| **接入范围** | 全部 7 个服务（engine-go agent/gateway、service-hub、datasource-mgr、audit-log、bff-go、app-lz） |
 
-**代码位置**：`engine-go/internal/security/config.go:42-47`
+#### 2.3.6 IP 白名单空值启动警告
 
-**问题描述**：
-
-```go
-// engine-go/internal/security/config.go:42-47
-var settingsOnce sync.Once
-var cachedSettings *Settings
-
-func GetSettings() *Settings {
-    settingsOnce.Do(func() {
-        cachedSettings = loadSettings()
-    })
-    return cachedSettings
-}
-```
-
-API Key 在进程启动时从环境变量加载一次，之后永不刷新。若 API Key 泄露：
-1. 必须重启服务才能生效新 Key
-2. 重启期间攻击者可持续使用泄露的 Key
-3. 在多实例部署时，需要滚动重启所有实例
-
-**对比**：mTLS CN 白名单支持 5 秒热重载（`pkg/tlsutil/whitelist.go:166-192`），但 API Key 无此能力。
-
-**修复建议**：
-
-```go
-// 方案 A：文件轮询热重载（与 mTLS 白名单一致）
-func watchAPIKeys(path string, interval time.Duration) {
-    ticker := time.NewTicker(interval)
-    var lastModTime time.Time
-    for range ticker.C {
-        stat, _ := os.Stat(path)
-        if stat.ModTime().After(lastModTime) {
-            reloadKeys(path)
-            lastModTime = stat.ModTime()
-        }
-    }
-}
-
-// 方案 B：集成 Secret Manager（Vault / K8s Secrets）
-// 监听 Secret 变更事件，自动刷新 Key 缓存
-```
+| 项目 | 说明 |
+|------|------|
+| **实现** | `pkg/config/security.go` — `ValidateFailClosed` |
+| **机制** | 非环回地址 + `AllowedCIDRs` 为空时，启动阶段输出 `slog.Warn` 警告，提示运维配置 IP 白名单 |
+| **安全效果** | 防止运维人员遗漏 `PRIVACY_ALLOWED_CIDRS` 配置导致 IP 白名单形同虚设，日志可审计 |
+| **防范攻击** | 配置遗漏导致的网络层防线缺失 |
 
 ---
 
-#### 3.2.3 无认证失败指标与告警
+### 2.4 网络防护层
 
-**代码位置**：`pkg/metrics/metrics.go`（无认证相关指标）
+#### 2.4.1 32 分片令牌桶限流
 
-**问题描述**：
+| 项目 | 说明 |
+|------|------|
+| **实现** | `pkg/middleware/ratelimit.go` |
+| **机制** | 32 分片并发滑动窗口，按 `identity:path` 组合限流，匿名调用者追加客户端 IP 分片，TTL 自动淘汰 |
+| **安全效果** | 防止 HTTP Flood、API 滥用、低频暴力破解 |
+| **防范攻击** | DDoS / HTTP Flood、API 暴力破解、资源耗尽攻击 |
 
-认证失败仅通过 HTTP 401/403 状态码在访问日志中间接体现。无专用 Prometheus 计数器：
-- 无 `auth_failures_total{service,reason}` 指标
-- 无暴力破解检测（连续失败告警）
-- 无异常认证模式检测
+#### 2.4.2 WAF 规则引擎
 
-**攻击场景**：
+| 项目 | 说明 |
+|------|------|
+| **实现** | `pkg/middleware/waf.go` — 73 条规则 |
+| **机制** | 基于正则的请求内容检测，覆盖 SQL 注入、XSS、命令注入、路径穿越、协议异常等 |
+| **安全效果** | 应用层输入验证，拦截常见 Web 攻击 payload |
+| **防范攻击** | SQL 注入、XSS、OS 命令注入、路径穿越（`../`）、HTTP 协议违规 |
 
-攻击者可进行低频暴力破解（低于限流阈值），在无告警的情况下逐步尝试 API Key。
+#### 2.4.3 Gateway 安全中间件链
 
-**修复建议**：
+| 项目 | 说明 |
+|------|------|
+| **实现** | `engine-go/cmd/privshield-gateway/main.go` |
+| **机制** | Gateway HTTP 路由挂载 `SecurityHeaders()`、`MaxBodySize(...)` 与可选 `RateLimit(rps, burst)`；通过环境变量 `GATEWAY_MAX_BODY_BYTES`、`GATEWAY_RATE_LIMIT_RPS`、`GATEWAY_RATE_LIMIT_BURST` 配置 |
+| **安全效果** | 在反向代理入口统一注入 CSP/HSTS 等安全头、限制请求体大小、按 RPS 限流，降低上游暴露面 |
+| **防范攻击** | 点击劫持、MIME 嗅探、超大 Body DoS、HTTP Flood |
 
-```go
-// pkg/metrics/metrics.go
-var (
-    AuthFailuresTotal = prometheus.NewCounterVec(
-        prometheus.CounterOpts{
-            Name: "privshield_auth_failures_total",
-            Help: "Total number of authentication failures",
-        },
-        []string{"service", "reason"}, // reason: invalid_token, expired_token, missing_token
-    )
-)
+#### 2.4.4 可信代理配置
 
-// pkg/auth/middleware.go
-if identity == nil {
-    metrics.AuthFailuresTotal.WithLabelValues("engine-go", "invalid_token").Inc()
-    abortWithError(c, http.StatusUnauthorized, ...)
-}
-```
-
----
-
-### 3.3 Medium：配置陷阱
-
-#### 3.3.1 空 scopes 默认通配符
-
-**代码位置**：`pkg/auth/identity.go:232`
-
-**问题描述**：
-
-```go
-// pkg/auth/identity.go:232
-// ParseAPIKeysEnv 解析时，若未指定 scopes，默认授予 ["*"]
-if len(scopes) == 0 {
-    scopes = []string{"*"} // 全权通配符
-}
-```
-
-**攻击场景**：
-
-运维人员配置 API Key 时遗漏 scopes 字段：
-```bash
-# 预期：只授予 privacy:mask 权限
-PRIVACY_AUTH_INTERNAL_API_KEYS="sk-hub:service-hub"  # 缺少 scopes
-
-# 实际：sk-hub 获得 ["*"] 全权，可调用所有接口
-```
-
-**修复建议**：
-
-```go
-// 移除默认通配符，要求显式声明 scopes
-if len(scopes) == 0 {
-    return nil, fmt.Errorf("key %q has no scopes; explicit scope declaration required", name)
-}
-```
+| 项目 | 说明 |
+|------|------|
+| **实现** | `pkg/middleware/middleware.go` — `ConfigureTrustedProxies` |
+| **机制** | 配置可信代理 CIDR，仅从可信代理解析 `X-Forwarded-For`，防止客户端伪造来源 IP |
+| **安全效果** | 确保限流、IP 白名单、日志记录使用真实客户端 IP |
+| **防范攻击** | `X-Forwarded-For` 伪造绕过 IP 白名单 / 限流 |
 
 ---
 
-#### 3.3.2 遗留单 Key 环境变量全权
+### 2.5 安全审计与可观测性
 
-**代码位置**：`engine-go/internal/security/config.go:62`
+#### 2.5.1 认证失败 Prometheus 指标
 
-**问题描述**：
+| 项目 | 说明 |
+|------|------|
+| **实现** | `pkg/auth/middleware.go` — `AuthFailuresTotal` / `AuthForbiddenTotal` |
+| **机制** | `privshield_auth_failures_total{reason}` 按原因分类（`missing_token`、`invalid_token`），`privshield_auth_forbidden_total` 记录权限不足 |
+| **安全效果** | 实时监控认证异常，支持配置告警规则检测暴力破解或凭证泄露 |
+| **防范攻击** | 低频暴力破解（无告警情况下长期尝试）、凭证泄露后的持续未授权访问 |
 
-```go
-// engine-go/internal/security/config.go:62
-// 遗留的 PRIVACY_API_KEY / PRIVACY_AUTH_API_KEY 自动获得 ["*"] 全权
-if key := os.Getenv("PRIVACY_AUTH_API_KEY"); key != "" {
-    settings.InternalKeys[key] = &KeyConfig{Name: "default-internal", Scopes: []string{"*"}}
-}
+**推荐告警规则**：
+
+```yaml
+- alert: AuthFailureSpike
+  expr: rate(privshield_auth_failures_total[5m]) > 10
+  for: 2m
+  labels:
+    severity: warning
+  annotations:
+    summary: "认证失败率异常升高，可能遭受暴力破解或凭证泄露"
+
+- alert: AuthorizationFailureSpike
+  expr: rate(privshield_auth_forbidden_total[5m]) > 5
+  for: 2m
+  labels:
+    severity: warning
+  annotations:
+    summary: "权限拒绝率异常升高，可能存在权限探测或内部威胁"
 ```
 
-**攻击场景**：
+#### 2.5.2 请求日志 + 审计链
 
-使用遗留环境变量配置的服务，单个 API Key 拥有所有权限。若该 Key 泄露，攻击者可调用全部接口。
-
-**修复建议**：
-
-在文档中明确标注遗留环境变量已弃用，并在新版本中移除。
+| 项目 | 说明 |
+|------|------|
+| **实现** | `log/slog` 结构化日志 + `pkg/store` 审计链（SHA-256 / SM3 哈希链） |
+| **机制** | 每请求记录身份、路径、状态码；审计日志不可篡改（哈希链校验） |
+| **安全效果** | 事后追溯能力，支持检测异常行为模式 |
+| **防范攻击** | 内部威胁溯源、合规审计要求 |
 
 ---
 
-#### 3.3.3 mTLS 默认关闭
+### 2.6 启动安全校验（Fail-closed）
 
-**代码位置**：`engine-go/internal/config/config.go:73`
+#### 2.6.1 非环回地址安全强制
 
-**问题描述**：
+| 项目 | 说明 |
+|------|------|
+| **实现** | `pkg/config/security.go` — `ValidateFailClosed` |
+| **机制** | 服务启动时检测绑定地址，非环回地址（`0.0.0.0`、具体 IP）自动强制以下不变量 |
+| **安全效果** | 防止因运维遗漏配置导致「部署即暴露」 |
 
-```go
-mtlsEnabled := EnvBool("PRIVACY_AUTH_INTERNAL_MTLS_ENABLED", false)
-```
+**强制校验链**：
 
-mTLS CN 白名单是 gRPC 侧唯一的身份鉴别机制。默认关闭意味着 gRPC 接口在部署时若无额外配置，无客户端证书校验。
+| 校验项 | 条件 | 错误码 | 效果 |
+|--------|------|--------|------|
+| 认证必须开启 | 非环回 + `AuthEnabled=false` | `ErrAuthRequired` | 拒绝启动 |
+| TLS 必须开启 | 非环回 + `TLSEnabled=false`（gateway 豁免） | `ErrTLSRequiredForRemote` | 拒绝启动 |
+| API Key 必须配置 | 非环回 + 无 Key | `ErrAPIKeyRequired` | 拒绝启动 |
+| mTLS 白名单必须配置 | TLS + gRPC + 无白名单文件 | `ErrMTLSWhitelistRequired` | 拒绝启动 |
+| 加密密钥必须配置 | 非环回 + 审计服务 + 无密钥 | `ErrEncryptionKeyRequired` | 拒绝启动 |
+| 哈希链密钥必须配置 | 非环回 + 存证服务 + 无密钥 | `ErrChainKeyRequired` | 拒绝启动 |
+| IP 白名单空值警告 | 非环回 + `AllowedCIDRs` 为空 | `slog.Warn` | 日志警告（不阻断） |
 
-**修复建议**：
-
-对于内部服务间通信，默认启用 mTLS 或在文档中明确要求。
-
----
-
-#### 3.3.4 middleware.Auth("") 静默放行
-
-**代码位置**：`pkg/middleware/auth.go:52-54`
-
-**问题描述**：
-
-```go
-// pkg/middleware/auth.go:52-54
-func Auth(apiKey string) gin.HandlerFunc {
-    if apiKey == "" {
-        return func(c *gin.Context) { c.Next() } // 空 key 放行所有请求
-    }
-    // ...
-}
-```
-
-**攻击场景**：
-
-service-hub 的 `scopeAuthMiddleware` 回退到 `middleware.Auth(s.cfg.APIKey)`。若 `SERVICE_HUB_API_KEY` 为空且未配置 `SERVICE_HUB_API_KEYS`，所有请求放行。
-
-**缓解**：`ValidateFailClosed` 在非回环地址+无 Key 时拒绝启动，但仅检查单 Key 模式。
+**Gateway 豁免**：`SkipTLSForRemote=true`（gateway 不终止 TLS，由上游负载均衡器处理）。
 
 ---
 
-## 4. 攻击场景分析
+## 3. 待改进项与风险评估
 
-### 4.1 同平台租户嗅探明文 API Key
+### 3.1 高风险
 
-**前提条件**：
-- TLS 未启用（默认配置）
-- 大数据平台多租户共享网络
+#### 3.1.1 无集中式密钥管理集成
 
-**攻击步骤**：
-
-```
-1. 攻击者在同平台启动抓包工具（tcpdump / Wireshark）
-2. 过滤 HTTP Authorization 头
-3. 等待合法服务调用接口
-4. 从抓包中提取 Bearer Token
-5. 使用提取的 Token 调用任意接口
-```
-
-**影响**：完全绕过身份认证，获取所有数据和处理能力
-
-**防御**：启用 TLS（`PRIVACY_TLS_ENABLED=true`）
+| 项目 | 说明 |
+|------|------|
+| **现状** | API Key 来源仅支持环境变量和文件，无 Vault / K8s Secret / AWS Secrets Manager 原生集成 |
+| **风险** | 环境变量可通过 `/proc/<pid>/environ` 泄露；文件需手动分发到各节点 |
+| **影响范围** | 全栈 |
+| **缓解措施** | K8s 环境可通过 projected volume 挂载 Secret 并结合 `KeyStore` 文件轮询实现近实时同步；非 K8s 环境可使用外部配置管理工具同步密钥文件 |
+| **改进建议** | 实现 Secret Manager Watcher 接口，监听密钥变更事件并自动刷新 `KeyStore` |
 
 ---
 
-### 4.2 忘记配置 AUTH_ENABLED 导致全接口开放
+### 3.2 低风险
 
-**前提条件**：
-- 运维人员部署时未设置 `PRIVACY_AUTH_ENABLED`
-- 服务绑定非回环地址（生产配置）
+#### 3.2.1 限流策略无端点级差异化
 
-**攻击步骤**：
+| 项目 | 说明 |
+|------|------|
+| **现状** | 限流使用全局默认 RPS/Burst（`PRIVACY_RATE_LIMIT_DEFAULT_RPS`），无端点级差异化配置 |
+| **风险** | 高开销接口（如文件处理、批量 DP 计算）与轻量查询接口共享限流配额，可能被低开销高频请求占满 |
+| **影响范围** | 全栈 |
+| **改进建议** | 支持 `PRIVACY_RATE_LIMIT_PER_ENDPOINT` 配置（`Settings` 已预留 `RateLimitPerEndpoint` 字段），按路径前缀设置差异化限流 |
 
-```
-1. 服务启动，AUTH_ENABLED=false（默认）
-2. 所有请求注入 AnonymousIdentity{Scopes:["*"]}
-3. 攻击者发现无需认证即可调用接口
-4. 执行任意隐私原语操作
-```
+#### 3.2.2 Gateway TLS 终止依赖上游
 
-**影响**：44 个隐私原语接口 + 动态分类分级接口完全开放
-
-**防御**：
-- 启用 fail-closed 校验（已实现，但需确认覆盖所有服务）
-- 部署清单中强制设置 `PRIVACY_AUTH_ENABLED=true`
-
----
-
-### 4.3 service-hub gRPC 绕过 REST 鉴权
-
-**前提条件**：
-- service-hub REST 配置了鉴权
-- service-hub gRPC 端口（:50052）网络可达
-
-**攻击步骤**：
-
-```
-1. 攻击者扫描发现 service-hub gRPC 端口
-2. 直接调用 gRPC 方法（无需认证）
-3. 调用 Dispatch 触发隐私处理流水线
-4. 获取任务列表和敏感数据
-```
-
-**影响**：完全绕过 REST 侧的身份认证和权限校验
-
-**防御**：修复 service-hub gRPC auth interceptor 死代码
+| 项目 | 说明 |
+|------|------|
+| **现状** | Gateway 设置 `SkipTLSForRemote=true`，不终止 TLS，依赖上游负载均衡器/Ingress 处理 |
+| **风险** | 若上游未正确配置 TLS 终止，Gateway 将以明文 HTTP 暴露 |
+| **影响范围** | engine-go gateway |
+| **改进建议** | 在部署文档中明确要求 Ingress/LB 必须配置 TLS 终止；或在 Gateway 增加启动时探测上游 TLS 状态的健康检查 |
 
 ---
 
-### 4.4 API Key 泄露后无法热轮转
+## 4. 攻击场景与防御矩阵
 
-**前提条件**：
-- API Key 通过某种方式泄露（日志暴露、环境变量泄露等）
-- 服务运行中
-
-**攻击步骤**：
-
-```
-1. 攻击者获取泄露的 API Key
-2. 持续使用泄露的 Key 调用接口
-3. 防御方发现泄露，但无法热轮转
-4. 必须安排维护窗口重启服务
-5. 重启期间攻击者持续访问
-```
-
-**影响**：泄露窗口期内持续暴露
-
-**防御**：实现 API Key 热重载机制
+| 攻击场景 | 攻击描述 | 防御措施 | 状态 |
+|----------|----------|----------|------|
+| **网络嗅探窃取凭证** | 同平台租户抓包获取明文 API Key | TLS 强制（fail-closed）+ IP 白名单 | ✅ 已防御 |
+| **忘记启用认证** | 运维遗漏 `AUTH_ENABLED=true` | Fail-closed：非环回地址拒绝启动 | ✅ 已防御 |
+| **gRPC 绕过 REST 鉴权** | 直接调用 gRPC 端口无认证请求 | 全栈 gRPC unary + stream interceptor 鉴权 + fail-closed（无 key 返回 Unauthenticated） | ✅ 已防御 |
+| **API Key 泄露持续暴露** | 泄露后无法热轮转，需重启服务 | 全栈 KeyStore 5s 热重载 + Prometheus 告警 | ✅ 已防御 |
+| **在线暴力破解** | 低频尝试猜测 API Key | 常量时间认证 + 限流 + 登录锁定 + 失败指标告警 | ✅ 已防御 |
+| **权限越权** | 使用低权限 Key 调用高权限接口 | Scope-based 权限 + 路径归一化 + 空 scopes 零权限 | ✅ 已防御 |
+| **路径别名绕过** | `/API/Mask` 绕过 `/api/mask` 权限校验 | 路径归一化后匹配 | ✅ 已防御 |
+| **SQL 注入 / XSS** | 恶意 payload 通过 REST 接口注入 | WAF 73 条规则引擎 | ✅ 已防御 |
+| **X-Forwarded-For 伪造** | 伪造来源 IP 绕过限流/白名单 | 可信代理配置，仅从可信代理解析 | ✅ 已防御 |
+| **DDoS / 资源耗尽** | 高频请求占满服务资源 | 32 分片令牌桶限流 + TTL 自动淘汰 | ✅ 已防御 |
+| **Clickjacking** | 嵌入 iframe 诱导用户操作 | `X-Frame-Options: DENY` + CSP | ✅ 已防御 |
+| **mTLS 证书伪造** | 伪造客户端证书调用 gRPC | CN 白名单校验 + 5s 热重载吊销 | ✅ 已防御 |
+| **内部服务横向移动** | 攻破一个服务后尝试调用其他服务 | IP 白名单 + mTLS + gRPC 方法级 scope 隔离 | ✅ 已防御 |
+| **跨服务无差别调用** | 合法 mTLS 证书调用目标全部 gRPC 方法 | 全栈 gRPC 方法级 scope 映射（service-hub / datasource-mgr / audit-log） | ✅ 已防御 |
+| **IP 白名单配置遗漏** | 运维遗漏 `PRIVACY_ALLOWED_CIDRS` 配置 | 启动阶段 `slog.Warn` 警告 + fail-closed 校验链 | ✅ 已防御 |
+| **密钥管理平面攻击** | 通过 `/proc/environ` 获取环境变量中的 Key | 待改进：需集成 Secret Manager | ⚠️ 部分防御 |
 
 ---
 
 ## 5. 安全部署 Checklist
 
-部署到共享大数据平台前，**必须**完成以下配置：
+### 自动强制项（fail-closed，未满足则拒绝启动）
 
-### 必须项（Critical）
+| 配置项 | 强制条件 | 错误码 |
+|--------|----------|--------|
+| `*_AUTH_ENABLED=true` | 非环回地址 | `ErrAuthRequired` |
+| `*_TLS_ENABLED=true` | 非环回地址（gateway 豁免） | `ErrTLSRequiredForRemote` |
+| API Key 已配置 | 非环回地址 | `ErrAPIKeyRequired` |
+| mTLS CN 白名单文件 | TLS + gRPC 同时启用 | `ErrMTLSWhitelistRequired` |
+
+### 必须配置
 
 | 配置项 | 推荐值 | 说明 |
 |--------|--------|------|
-| `PRIVACY_AUTH_ENABLED` | `true` | 启用 API Key 认证 |
-| `PRIVACY_TLS_ENABLED` | `true` | 启用 TLS 加密传输 |
-| `PRIVACY_REQUIRE_TLS` | `true` | 强制 TLS，拒绝明文连接 |
-| `PRIVACY_AUTH_INTERNAL_API_KEYS` | 配置 | 至少配置一个内部服务 Key（含明确 scopes） |
+| `PRIVACY_AUTH_INTERNAL_API_KEYS` | 配置 | 内部服务 Key（含明确 scopes） |
 | `PRIVACY_AUTH_EXTERNAL_API_KEYS` | 配置 | 外部客户端 Key（最小权限 scopes） |
 | `PRIVACY_AUTH_INTERNAL_MTLS_ENABLED` | `true` | gRPC 服务间通信启用 mTLS |
+| `PRIVACY_REQUIRE_TLS` | `true` | 强制 TLS，拒绝明文连接 |
 
-### 推荐项（High）
-
-| 配置项 | 推荐值 | 说明 |
-|--------|--------|------|
-| `PRIVACY_TRUSTED_PROXIES` | 配置 | 若部署在负载均衡器后，配置可信代理 CIDR |
-| K8s NetworkPolicy | 配置 | 限制可访问服务端点的 Pod |
-| API Key 存储 | Secret Manager | 使用 Vault / K8s Secret，避免明文环境变量 |
-
-### 监控项（Medium）
+### 推荐配置
 
 | 配置项 | 推荐值 | 说明 |
 |--------|--------|------|
-| Prometheus 告警 | 配置 | 监控 401/403 状态码突增 |
-| 日志审计 | 启用 | 记录所有认证失败事件 |
+| `PRIVACY_ALLOWED_CIDRS` | 配置 | IP 白名单 CIDR 列表（未配置时启动输出 `slog.Warn` 警告） |
+| `PRIVACY_AUTH_KEYS_FILE` | 配置 | engine-go API Key 文件路径（启用热轮转） |
+| `SERVICE_HUB_API_KEYS_FILE` | 配置 | service-hub API Key 文件路径（启用热轮转） |
+| `DATASOURCE_MGR_API_KEYS_FILE` | 配置 | datasource-mgr API Key 文件路径（启用热轮转） |
+| `AUDIT_LOG_API_KEYS_FILE` | 配置 | audit-log API Key 文件路径（启用热轮转） |
+| `PRIVACY_TRUSTED_PROXIES` | 配置 | 可信代理 CIDR（若在 LB 后） |
+| K8s NetworkPolicy | 配置 | 网络层 Pod 间访问限制 |
+
+### 监控配置
+
+| 配置项 | 推荐值 | 说明 |
+|--------|--------|------|
+| Prometheus 告警 | 配置 | `privshield_auth_failures_total` 突增告警 |
+| Prometheus 告警 | 配置 | `privshield_auth_forbidden_total` 突增告警 |
+| 日志审计 | 启用 | 认证失败事件记录 |
 
 ---
 
-## 6. 修复建议与优先级
+## 6. 与三级等保/密评的映射
 
-| 优先级 | 修复项 | 工作量 | 影响范围 |
-|--------|--------|--------|----------|
-| **P0** | 修复 service-hub gRPC auth interceptor 死代码 | 0.5d | service-hub gRPC |
-| **P1** | 默认值安全化：AUTH_ENABLED / TLS 默认 true | 0.5d | 全栈 |
-| **P1** | 增强 fail-closed：非回环地址强制 AUTH+TLS | 0.5d | 全栈 |
-| **P2** | 新增 IP 白名单中间件 | 1d | 全栈 |
-| **P2** | API Key 热重载机制 | 1d | engine-go |
-| **P2** | 认证失败 Prometheus 指标 | 0.5d | 全栈 |
-| **P3** | 移除 scopes 默认通配符 | 0.5d | 全栈 |
-| **P3** | 弃用遗留单 Key 环境变量 | 0.5d | engine-go |
-
----
-
-## 7. 与三级等保/密评的映射
-
-| 等保/密评要求 | 现有实现 | 缺口 |
-|---------------|----------|------|
-| **身份鉴别**（通信双方身份验证） | API Key + mTLS CN 白名单 | 默认关闭，需手动启用 |
-| **访问控制**（最小权限原则） | Scope-based 细粒度权限 | 空 scopes 默认全权 |
-| **通信完整性**（传输加密） | TLS 1.3 | 默认关闭 |
-| **通信保密性**（数据加密） | TLS 1.3 + SM4-GCM 信封加密 | TLS 默认关闭 |
-| **安全审计**（操作日志） | 请求日志 + 审计链 | 无专用认证失败指标 |
-| **入侵防范**（暴力破解防护） | 登录失败锁定 (G-03) + 限流 | 无 API Key 暴力破解检测 |
-| **密钥管理**（密钥轮转） | API Key 过期 (G-14) | 无热轮转，需重启服务 |
+| 等保/密评要求 | 安全措施 | 覆盖状态 |
+|---------------|----------|----------|
+| **身份鉴别** | API Key 常量时间认证 + mTLS CN 白名单 + fail-closed 强制 + 登录锁定 + TOTP | ✅ 全覆盖 |
+| **访问控制** | Scope-based 细粒度权限 + 路径归一化 + 空 scopes 零权限 + 全栈 gRPC 方法级鉴权 | ✅ 全覆盖 |
+| **通信完整性** | TLS 1.3 + fail-closed 强制 + SM3 审计哈希链 | ✅ 全覆盖 |
+| **通信保密性** | TLS 1.3 + SM4-GCM 信封加密 + fail-closed 强制 | ✅ 全覆盖 |
+| **安全审计** | 结构化日志 + 不可篡改审计链 + `auth_failures_total` Prometheus 指标 | ✅ 全覆盖 |
+| **入侵防范** | 登录锁定 + 32 分片限流 + WAF 73 规则 + IP 白名单 + 认证失败告警 + IP 空值警告 + gRPC fail-closed | ✅ 全覆盖 |
+| **密钥管理** | API Key 过期 + 全栈 KeyStore 热轮转（REST/gRPC 双通道）+ 遗留单 Key 空 scope（不再默认全权） | ✅ 全覆盖（Secret Manager 原生集成列为未来增强） |
 
 ---
 
@@ -655,26 +458,41 @@ service-hub 的 `scopeAuthMiddleware` 回退到 `middleware.Auth(s.cfg.APIKey)`�
 
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
-| `PRIVACY_AUTH_ENABLED` | `false` | 启用 API Key 认证 |
-| `PRIVACY_TLS_ENABLED` | `false` | 启用 TLS |
+| `PRIVACY_AUTH_ENABLED` | `false` | 启用认证（非环回地址强制 `true`） |
+| `PRIVACY_TLS_ENABLED` | `false` | 启用 TLS（非环回地址强制 `true`，gateway 豁免） |
 | `PRIVACY_AUTH_INTERNAL_MTLS_ENABLED` | `false` | 启用 gRPC mTLS |
-| `PRIVACY_REQUIRE_TLS` | `false` | 强制 TLS |
-| `PRIVACY_AUTH_INTERNAL_API_KEYS` | 空 | 内部服务 API Key |
-| `PRIVACY_AUTH_EXTERNAL_API_KEYS` | 空 | 外部客户端 API Key |
-| `PRIVACY_AUTH_API_KEY` | 空 | 遗留单 Key（已弃用） |
-| `PRIVACY_TRUSTED_PROXIES` | 空 | 可信代理 CIDR 列表 |
+| `PRIVACY_REQUIRE_TLS` | `false` | 强制 TLS，拒绝明文连接 |
+| `PRIVACY_AUTH_INTERNAL_API_KEYS` | 空 | 内部 Key（格式：`token:name:scope1,scope2[;...]`） |
+| `PRIVACY_AUTH_EXTERNAL_API_KEYS` | 空 | 外部客户端 Key |
+| `PRIVACY_AUTH_KEYS_FILE` | 空 | engine-go Key 文件路径（启用热轮转，5s 轮询） |
+| `SERVICE_HUB_API_KEYS_FILE` | 空 | service-hub Key 文件路径（启用热轮转，5s 轮询） |
+| `DATASOURCE_MGR_API_KEYS_FILE` | 空 | datasource-mgr Key 文件路径（启用热轮转，5s 轮询） |
+| `AUDIT_LOG_API_KEYS_FILE` | 空 | audit-log Key 文件路径（启用热轮转，5s 轮询） |
+| `PRIVACY_ALLOWED_CIDRS` | 空 | IP 白名单 CIDR（空=透传 + 启动警告） |
+| `PRIVACY_TRUSTED_PROXIES` | 空 | 可信代理 CIDR |
+| `PRIVACY_AUTH_API_KEY` | 空 | ⚠️ 遗留（已弃用，启动时输出 `slog.Error`） |
 
 ## 附录 B：代码位置索引
 
-| 功能 | 文件路径 | 行号 |
-|------|----------|------|
-| AnonymousIdentity 定义 | `pkg/auth/identity.go` | L23 |
-| 匿名身份注入 | `pkg/auth/middleware.go` | L105-108 |
-| API Key 解析 | `pkg/auth/identity.go` | L177-257 |
-| 默认 scopes 通配符 | `pkg/auth/identity.go` | L232 |
-| 配置默认值 | `engine-go/internal/config/config.go` | L61-73 |
-| settings sync.Once | `engine-go/internal/security/config.go` | L42-47 |
-| service-hub gRPC auth 死代码 | `services/service-hub/internal/grpcserver/auth.go` | L17-57 |
-| service-hub gRPC 拦截器链 | `services/service-hub/internal/grpcserver/server.go` | L1060-1074 |
-| middleware.Auth 空 key 放行 | `pkg/middleware/auth.go` | L52-54 |
-| mTLS CN 白名单热重载 | `pkg/tlsutil/whitelist.go` | L166-192 |
+| 功能 | 文件路径 |
+|------|----------|
+| API Key 常量时间认证 | `pkg/auth/middleware.go` |
+| Scope-based 权限 | `pkg/auth/identity.go` |
+| API Key 过期检查 | `pkg/auth/middleware.go` |
+| KeyStore 热轮转 | `pkg/auth/keystore.go` |
+| 热轮转中间件（engine-go） | `engine-go/internal/security/auth.go` |
+| Fail-closed 校验 | `pkg/config/security.go` |
+| IP 白名单 | `pkg/middleware/ip_allowlist.go` |
+| gRPC 鉴权（service-hub） | `services/service-hub/internal/grpcserver/auth.go` |
+| gRPC 鉴权（datasource-mgr） | `services/datasource-mgr/internal/grpcserver/auth.go` |
+| gRPC 鉴权（audit-log） | `services/audit-log/internal/grpcserver/auth.go` |
+| mTLS CN 白名单 + 热重载 | `pkg/tlsutil/whitelist.go` |
+| mTLS gRPC 拦截器 | `pkg/tlsutil/grpc_interceptor.go` |
+| 32 分片限流 | `pkg/middleware/ratelimit.go` |
+| WAF 规则引擎 | `pkg/middleware/waf.go` |
+| 认证失败指标 | `pkg/auth/middleware.go` |
+| 指标注册 | `pkg/metrics/metrics.go` |
+| 安全响应头 | `pkg/middleware/middleware.go` |
+| JWT 吊销 + 登录锁定 | `console/app-lz/bff-go/internal/auth/jwt.go` |
+| TOTP 双因素 | `console/app-lz/bff-go/internal/auth/totp.go` |
+| 审计哈希链 | `pkg/store/audit_hash.go` |

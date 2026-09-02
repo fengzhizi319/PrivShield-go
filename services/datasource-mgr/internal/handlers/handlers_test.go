@@ -40,7 +40,7 @@ func newTestRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	cfg := config.Load()
 	logger := pkgobs.NewLogger("text", "debug")
-	server := New(cfg, logger, metrics.NewCollector("datasource-mgr"))
+	server := New(cfg, nil, logger, metrics.NewCollector("datasource-mgr"))
 
 	r := gin.New()
 	server.RegisterRoutes(r)

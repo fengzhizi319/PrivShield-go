@@ -149,7 +149,7 @@ func AuthWithRoles(apiKey, readerKey string, readOnly []ReadOnlyEndpoint) gin.Ha
 		}
 
 		if subtle.ConstantTimeCompare([]byte(token), []byte(readerKey)) == 1 {
-			if !isReadOnlyEndpoint(c.Request.Method, path, readOnly) {
+			if !IsReadOnlyEndpoint(c.Request.Method, path, readOnly) {
 				AbortWithError(c, http.StatusForbidden,
 					"FORBIDDEN",
 					"Forbidden: reader key is limited to verification endpoints",
@@ -177,8 +177,8 @@ type ReadOnlyEndpoint struct {
 	Path   string
 }
 
-// isReadOnlyEndpoint 判断 (method, path) 是否落在只读核验白名单内。
-func isReadOnlyEndpoint(method, path string, readOnly []ReadOnlyEndpoint) bool {
+// IsReadOnlyEndpoint 判断 (method, path) 是否落在只读核验白名单内。
+func IsReadOnlyEndpoint(method, path string, readOnly []ReadOnlyEndpoint) bool {
 	cleaned := path
 	if cleaned != "/" {
 		cleaned = strings.TrimRight(cleaned, "/")

@@ -80,6 +80,23 @@ func TestValidateFailClosed(t *testing.T) {
 			t.Fatalf("encryption key present must pass, got %v", err)
 		}
 	})
+
+	t.Run("empty AllowedCIDRs on remote bind warns but does not fail", func(t *testing.T) {
+		req := base
+		req.Hosts = []string{"0.0.0.0"}
+		req.AuthEnabled = true
+		req.TLSEnabled = true
+		req.SkipTLSForRemote = false
+		req.MTLSWhitelistFile = "mtls.yaml"
+		req.AllowedCIDRs = nil
+		if err := ValidateFailClosed(req); err != nil {
+			t.Fatalf("empty AllowedCIDRs should only warn, not fail; got %v", err)
+		}
+		req.AllowedCIDRs = []string{"10.0.0.0/8"}
+		if err := ValidateFailClosed(req); err != nil {
+			t.Fatalf("populated AllowedCIDRs must pass, got %v", err)
+		}
+	})
 }
 
 func TestIsLoopbackHost(t *testing.T) {

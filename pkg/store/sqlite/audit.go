@@ -80,7 +80,7 @@ func (s *AuditStore) SaveLog(log *store.AuditLog) error {
 	_, err := s.db.Exec(`
 		INSERT INTO audit_logs (id, seq, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash,
 			algorithm, parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash, sm2_signature)
-		VALUES (?, COALESCE((SELECT MAX(seq) FROM audit_logs), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, COALESCE((SELECT MAX(seq) FROM audit_logs), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, log.ID, log.TaskID, log.APICode, log.DatasourceID, log.Timestamp.Format(time.RFC3339Nano), log.Operation, log.DataSource,
 		log.InputHash, log.OutputHash, log.Algorithm, log.ParametersJSON,
 		log.InputRows, log.OutputRows, log.DurationMs, log.User, log.Status, log.ErrorMessage, log.SecurityLevel,
@@ -128,7 +128,7 @@ func (s *AuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *store.Sn
 	if _, err := tx.Exec(`
 		INSERT INTO audit_logs (id, seq, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash,
 			algorithm, parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash, sm2_signature)
-		VALUES (?, COALESCE((SELECT MAX(seq) FROM audit_logs), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, COALESCE((SELECT MAX(seq) FROM audit_logs), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, log.ID, log.TaskID, log.APICode, log.DatasourceID, log.Timestamp.Format(time.RFC3339Nano), log.Operation, log.DataSource,
 		log.InputHash, log.OutputHash, log.Algorithm, log.ParametersJSON,
 		log.InputRows, log.OutputRows, log.DurationMs, log.User, log.Status, log.ErrorMessage, log.SecurityLevel,
@@ -167,7 +167,7 @@ func (s *AuditStore) SaveLogsBatch(logs []store.AuditLog, snapshots []store.Snap
 	logStmt, err := tx.Prepare(`
 		INSERT INTO audit_logs (id, seq, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash,
 			algorithm, parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash, sm2_signature)
-		VALUES (?, COALESCE((SELECT MAX(seq) FROM audit_logs), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, COALESCE((SELECT MAX(seq) FROM audit_logs), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err

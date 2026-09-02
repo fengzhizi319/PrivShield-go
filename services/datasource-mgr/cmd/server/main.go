@@ -47,6 +47,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	pkggrpcserver "github.com/fengzhizi319/PrivShield-go/pkg/grpcserver"
 	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
@@ -89,6 +90,21 @@ func main() {
 	logger.Info("datasource-mgr storage posture", "strict_data_integrity", cfg.StrictStorage)
 
 	// =========================================================================
+	// 2.6 API Key 文件热轮转（K8s Secret 投影场景）
+	// =========================================================================
+	var keyStore *pkgauth.KeyStore
+	if cfg.KeysFile != "" {
+		ks, ksErr := pkgauth.NewKeyStore(cfg.KeysFile)
+		if ksErr != nil {
+			log.Fatalf("failed to initialize API Key store: %v", ksErr)
+		}
+		defer ks.Close()
+		keyStore = ks
+		logger.Info("API Key store initialized with hot-reload",
+			"path", cfg.KeysFile, "keys", len(ks.Keys()))
+	}
+
+	// =========================================================================
 	// 3. HTTP REST Server Setup / HTTP REST 路由与服务器构建
 	// =========================================================================
 	// 1) 锁定 Gin 为生产发布模式（ReleaseMode），禁用控制台调试冗余输出与性能损耗；
@@ -105,7 +121,7 @@ func main() {
 	// 使别名流量 / 脏 ID 计数在归一化统一入口自动上报。
 	mc := metrics.NewCollector("datasource-mgr")
 	naming.SetObserver(mc)
-	server := handlers.New(cfg, logger, mc)
+	server := handlers.New(cfg, keyStore, logger, mc)
 	router := gin.New()
 	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv()) // G-02
 	router.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv()))           // IP access control
@@ -184,10 +200,14 @@ func main() {
 	}
 
 	// G-17: 应用层 API Key 鉴权拦截器（与 mTLS 叠加，形成双层鉴权）。
-	grpcServer = grpcServer.WithUnaryInterceptor(grpcserver.AuthUnaryInterceptor(cfg.APIKey, cfg.ScopeKeys))
-	if cfg.APIKey != "" || len(cfg.ScopeKeys) > 0 {
+	grpcserver.InitAuthSettings(cfg.APIKey, cfg.ScopeKeys, keyStore)
+	grpcServer = grpcServer.
+		WithUnaryInterceptor(grpcserver.AuthUnaryInterceptor()).
+		WithStreamInterceptor(grpcserver.AuthStreamInterceptor())
+	if cfg.APIKey != "" || len(cfg.ScopeKeys) > 0 || keyStore != nil {
 		logger.Info("gRPC server configured with API Key auth",
 			"scope_keys", len(cfg.ScopeKeys),
+			"keys_file", cfg.KeysFile,
 		)
 	}
 
@@ -220,7 +240,7 @@ func main() {
 		"http_addr", cfg.Address(),
 		"grpc_addr", cfg.GRPCAddress(),
 		"tls_enabled", cfg.TLSEnabled,
-		"auth_enabled", cfg.APIKey != "",
+		"auth_enabled", cfg.APIKey != "" || len(cfg.ScopeKeys) > 0 || keyStore != nil,
 		"require_tls", cfg.RequireTLS,
 		"strict_storage", cfg.StrictStorage,
 		"cors_origins", len(cfg.CORSOrigins),
@@ -231,7 +251,7 @@ func main() {
 
 	// Emit a prominent security warning when all protections are disabled.
 	// 当所有安全功能均未启用时输出醒目警告，防止生产环境意外裸奔。
-	if !cfg.TLSEnabled && cfg.APIKey == "" {
+	if !cfg.TLSEnabled && cfg.APIKey == "" && len(cfg.ScopeKeys) == 0 && keyStore == nil {
 		logger.Warn("========================================================================\n" +
 			"  SECURITY WARNING: All security features are DISABLED.\n" +
 			"  TLS=off  Auth=off\n" +
@@ -302,7 +322,24 @@ func main() {
 
 	// 3) 在后台独立 Goroutine 中启动 HTTP/HTTPS REST 服务
 	go func() {
-		if cfg.TLSEnabled {
+		if tlsutil.IsTLCPEnabled() {
+			tlcpCfg := tlsutil.TLCPConfigFromEnv()
+			gmtlsConfig, tlcpErr := tlsutil.BuildTLCPConfig(tlcpCfg)
+			if tlcpErr != nil {
+				log.Fatalf("failed to build TLCP config: %v", tlcpErr)
+			}
+			tlcpLis, tlcpErr := tlsutil.NewTLCPListener("tcp", cfg.Address(), gmtlsConfig)
+			if tlcpErr != nil {
+				log.Fatalf("failed to create TLCP listener: %v", tlcpErr)
+			}
+			logger.Info("datasource-mgr TLCP (国密) REST server started",
+				"addr", cfg.Address(),
+				"sign_cert", tlcpCfg.SignCertFile,
+			)
+			if err := httpSrv.Serve(tlcpLis); err != nil && err != http.ErrServerClosed {
+				logger.Error("TLCP server error", "error", err.Error())
+			}
+		} else if cfg.TLSEnabled {
 			logger.Info("mock datasource-mgr HTTPS REST server started with mTLS",
 				"addr", cfg.Address(),
 				"grpc_addr", cfg.GRPCAddress(),

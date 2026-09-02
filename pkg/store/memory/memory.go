@@ -211,6 +211,20 @@ type DataSourceStore struct {
 // P60 fix: 内存访问审计记录上限设为 10,000 条，超出自动淘汰最旧记录。
 const maxAuditRecords = 10_000
 
+// signAuditLog 为审计记录生成 SM2 签名（若已配置签名器）。
+func signAuditLog(log *store.AuditLog) {
+	if log.IntegrityHash != "" && log.SM2Signature == "" {
+		log.SM2Signature = store.SignAuditRecord(log.IntegrityHash)
+	}
+}
+
+// signSnapshot 为快照记录生成 SM2 签名（若已配置签名器）。
+func signSnapshot(snap *store.SnapshotRecord) {
+	if snap != nil && snap.IntegrityHash != "" && snap.SM2Signature == "" {
+		snap.SM2Signature = store.SignAuditRecord(snap.IntegrityHash)
+	}
+}
+
 // NewDataSourceStore creates a new in-memory data source store.
 func NewDataSourceStore() *DataSourceStore {
 	return &DataSourceStore{
@@ -368,6 +382,7 @@ func (s *AuditStore) SaveLog(log *store.AuditLog) error {
 	if log.IntegrityHash == "" {
 		log.IntegrityHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 	}
+	signAuditLog(log)
 
 	cp := *log
 	s.logs = append(s.logs, cp)
@@ -388,6 +403,7 @@ func (s *AuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *store.Sn
 	if log.IntegrityHash == "" {
 		log.IntegrityHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 	}
+	signAuditLog(log)
 	if snapshot != nil {
 		// P0 fix: snapshot prev_hash binds to the parent log's integrity hash
 		// and its integrity hash covers the snapshot's own sample fields.
@@ -400,6 +416,7 @@ func (s *AuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *store.Sn
 				snapshot.InputSample, snapshot.OutputSample, snapshot.ParametersJSON,
 			)
 		}
+		signSnapshot(snapshot)
 	}
 
 	logCopy := *log
@@ -422,11 +439,13 @@ func (s *AuditStore) SaveLogsBatch(logs []store.AuditLog, snapshots []store.Snap
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for _, l := range logs {
-		s.logs = append(s.logs, l)
+	for i := range logs {
+		signAuditLog(&logs[i])
+		s.logs = append(s.logs, logs[i])
 	}
-	for _, snap := range snapshots {
-		s.snapshots = append(s.snapshots, snap)
+	for i := range snapshots {
+		signSnapshot(&snapshots[i])
+		s.snapshots = append(s.snapshots, snapshots[i])
 	}
 
 	if len(s.logs) > maxAuditLogs {
@@ -624,6 +643,13 @@ func generateRecommendations(byLevel map[string]int, successRate float64) []stri
 func (s *AuditStore) SaveSnapshot(snap *store.SnapshotRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if snap.IntegrityHash == "" {
+		snap.IntegrityHash = store.ComputeSnapshotIntegrityHash(
+			snap.ID, snap.AuditLogID, snap.PrevHash, snap.Timestamp, snap.Algorithm,
+			snap.InputSample, snap.OutputSample, snap.ParametersJSON,
+		)
+	}
+	signSnapshot(snap)
 	cp := *snap
 	s.snapshots = append(s.snapshots, cp)
 	if len(s.snapshots) > maxSnapshots {
@@ -796,8 +822,24 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 	for i := 0; i < limit; i++ {
 		l := s.logs[i]
 		if l.IntegrityHash != "" {
-			ok, hashLabel := store.VerifyAuditIntegrityHash(l.IntegrityHash, l.ID, l.PrevHash, l.Timestamp, l.Algorithm, l.InputHash, l.OutputHash, l.User, l.SecurityLevel, l.ParametersJSON)
+			ok, hashLabel := store.VerifyAuditRecord(&l)
 			if !ok {
+				// 优先判定是否为 SM2 签名无效（完整性哈希已通过但签名失败）。
+				if hashLabel != "" {
+					integrityOk, _ := store.VerifyAuditIntegrityHash(l.IntegrityHash, l.ID, l.PrevHash, l.Timestamp, l.Algorithm, l.InputHash, l.OutputHash, l.User, l.SecurityLevel, l.ParametersJSON)
+					if integrityOk && l.SM2Signature != "" {
+						return &store.ChainVerificationResult{
+							Reason:        store.ChainReasonInvalidSM2Signature,
+							TotalVerified: count,
+							TotalRecords:  totalRecords,
+							Valid:         false,
+							BrokenAtID:    l.ID,
+							ActualHash:    l.SM2Signature,
+							LegacyHashed:  legacyCount,
+							Message:       fmt.Sprintf("SM2 signature invalid at log %s: non-repudiation proof forged or key mismatch", l.ID),
+						}, nil
+					}
+				}
 				// 锚点仍与上游衔接 ⇒ 记录被「原位改写业务字段」；否则为一般性哈希分叉。两者均判无效（fail-closed）。
 				reason := store.ChainReasonHashMismatch
 				if count == 0 || l.PrevHash == previousHash {

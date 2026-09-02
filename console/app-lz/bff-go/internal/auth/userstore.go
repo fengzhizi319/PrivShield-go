@@ -43,6 +43,7 @@ var (
 	ErrPasswordTooShort  = errors.New("auth: password must be at least 12 characters")
 	ErrPasswordWeak      = errors.New("auth: password must contain at least 3 of: uppercase, lowercase, digits, special characters")
 	ErrAccountLocked     = errors.New("auth: account temporarily locked due to too many failed attempts")
+	ErrPasswordSame      = errors.New("auth: new password must be different from old password")
 )
 
 const (
@@ -188,6 +189,38 @@ func (s *UserStore) GetUser(username string) (*User, error) {
 		return nil, ErrUserNotFound
 	}
 	return user, nil
+}
+
+// ChangePassword 修改用户密码（三级等保 G-04）。
+// 校验旧密码后，对新密码执行强度校验并更新 bcrypt 哈希。
+func (s *UserStore) ChangePassword(username, oldPassword, newPassword string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	user, exists := s.users[username]
+	if !exists {
+		return ErrUserNotFound
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(oldPassword)); err != nil {
+		return ErrInvalidPassword
+	}
+
+	if oldPassword == newPassword {
+		return ErrPasswordSame
+	}
+
+	if err := validatePasswordStrength(newPassword, username); err != nil {
+		return err
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), 12)
+	if err != nil {
+		return fmt.Errorf("auth: hash password: %w", err)
+	}
+
+	user.PasswordHash = string(hash)
+	return nil
 }
 
 // Count 返回已注册用户总数。

@@ -6,6 +6,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"strings"
 )
@@ -65,6 +66,9 @@ type SecurityRequirements struct {
 	HashKey string
 	// RequireHashKey 用于写入链式存证的服务（audit-log）。
 	RequireHashKey bool
+	// AllowedCIDRs 是 IP 白名单（PRIVACY_ALLOWED_CIDRS）。空表示透传。
+	// 非环回地址且为空时 ValidateFailClosed 输出 slog.Warn 警告。
+	AllowedCIDRs []string
 }
 
 // ValidateFailClosed 强制「安全开关缺失即启动失败」，取代原先的空值静默放行。
@@ -117,6 +121,11 @@ func ValidateFailClosed(req SecurityRequirements) error {
 
 	if req.RequireHashKey && strings.TrimSpace(req.HashKey) == "" && remoteExposed {
 		return fmt.Errorf("%s: %w (set AUDIT_LOG_HASH_KEY to the 局方托管 secret; un-keyed SM3 hashes can be re-computed and forged)", name, ErrChainKeyRequired)
+	}
+
+	if remoteExposed && len(req.AllowedCIDRs) == 0 {
+		slog.Warn("IP allowlist is empty; all client IPs are accepted. Set PRIVACY_ALLOWED_CIDRS to restrict access",
+			"service", name)
 	}
 
 	return nil

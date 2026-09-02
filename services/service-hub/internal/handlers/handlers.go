@@ -74,6 +74,7 @@ type Server struct {
 	datasource *datasource.Client // 下游 datasource-mgr 数据源服务客户端
 	audit      *audit.Client      // audit-log 存证客户端（P0-6：出域 ↔ 留痕强绑定）
 	cfg        *config.Config     // 模块全局运行配置
+	keyStore   *pkgauth.KeyStore  // API Key 文件热轮转 KeyStore（可选，K8s Secret 投影场景）
 	startTime  time.Time          // 服务启动时间戳（用于计算 Uptime）
 	tasks      store.TaskStore    // 任务持久化存储介质（SQLite 或内存实现）
 	logger     *slog.Logger       // 结构化日志记录器
@@ -90,13 +91,14 @@ type Server struct {
 // 存证客户端在此无条件装配：即使 SERVICE_HUB_AUDIT_LOG_URLS 未配置也保留实例，
 // 其提交必然返回 audit.ErrNotConfigured，由流水线 audit 阶段将任务判定为 failed（fail-closed），
 // 绝不允许「没有存证链路却把出域任务标成 done」。测试通过配置中的 AuditLogBaseURLs 指向桩服务。
-func New(ag *agent.Client, ds *datasource.Client, cfg *config.Config, tasks store.TaskStore, logger *slog.Logger, mc *metrics.Collector) *Server {
+func New(ag *agent.Client, ds *datasource.Client, cfg *config.Config, keyStore *pkgauth.KeyStore, tasks store.TaskStore, logger *slog.Logger, mc *metrics.Collector) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{
 		agent:      ag,
 		datasource: ds,
 		audit:      audit.New(cfg, mc),
 		cfg:        cfg,
+		keyStore:   keyStore,
 		startTime:  time.Now(),
 		tasks:      tasks,
 		logger:     logger,
@@ -239,12 +241,30 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 	r.GET("/metrics", s.mc.Handler())
 }
 
-// scopeAuthMiddleware 返回 Gin 中间件，优先使用 Scope-based 鉴权（SERVICE_HUB_API_KEYS），
+// currentAuthKeys 返回当前生效的 scope key 集合：KeyStore 热轮转 key 优先，并与静态
+// SERVICE_HUB_API_KEYS 合并；同名 token 以 KeyStore 为准。
+func (s *Server) currentAuthKeys() map[string]*pkgauth.KeyConfig {
+	static := s.cfg.ScopeKeys
+	if s.keyStore == nil {
+		return static
+	}
+	merged := make(map[string]*pkgauth.KeyConfig, len(static))
+	for k, v := range static {
+		merged[k] = v
+	}
+	for k, v := range s.keyStore.Keys() {
+		merged[k] = v
+	}
+	return merged
+}
+
+// scopeAuthMiddleware 返回 Gin 中间件，优先使用 Scope-based 鉴权（SERVICE_HUB_API_KEYS + KeyStore），
 // 向后兼容单 APIKey 模式（SERVICE_HUB_API_KEY）。
 // Scope-based 模式下，每个 Key 携带 Name 与 Scopes，按路径映射所需权限进行细粒度校验。
 func (s *Server) scopeAuthMiddleware() gin.HandlerFunc {
-	// Scope-based 模式：SERVICE_HUB_API_KEYS 已配置
-	if len(s.cfg.ScopeKeys) > 0 {
+	// Scope-based 模式：SERVICE_HUB_API_KEYS 或 KeyStore 已配置
+	scopeKeys := s.currentAuthKeys()
+	if len(scopeKeys) > 0 {
 		return func(c *gin.Context) {
 			path := c.Request.URL.Path
 			if path == "/health" || path == "/readyz" || path == "/api/health" {
@@ -253,16 +273,19 @@ func (s *Server) scopeAuthMiddleware() gin.HandlerFunc {
 			}
 			token := pkgauth.ExtractBearerToken(c.GetHeader("Authorization"))
 			if token == "" {
+				pkgauth.AuthFailuresTotal.WithLabelValues("missing_token").Inc()
 				middleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: missing credentials", nil)
 				return
 			}
-			identity := constantTimeLookupKeys(s.cfg.ScopeKeys, token)
+			identity := constantTimeLookupKeys(s.currentAuthKeys(), token)
 			if identity == nil {
+				pkgauth.AuthFailuresTotal.WithLabelValues("invalid_token").Inc()
 				middleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: invalid credentials", nil)
 				return
 			}
 			requiredPerm := pkgauth.ServiceHubPermissionForPath(path)
 			if requiredPerm != "" && !identity.HasPermission(requiredPerm) {
+				pkgauth.AuthForbiddenTotal.Inc()
 				middleware.AbortWithError(c, http.StatusForbidden, "FORBIDDEN", "Forbidden: insufficient scope", nil)
 				return
 			}

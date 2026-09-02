@@ -8,14 +8,18 @@
 package handlers
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 	naming "github.com/fengzhizi319/PrivShield-go/pkg/naming"
@@ -50,19 +54,123 @@ func (s *Server) setDeprecationHeaders(c *gin.Context, canonicalID string) {
 // Server aggregates HTTP handler dependencies.
 // Server 结构体聚合了 HTTP 处理器层所需的运行配置、结构化日志与监控指标组件。
 type Server struct {
-	cfg    *config.Config     // 全局运行配置
-	logger *slog.Logger       // 结构化日志记录器
-	mc     *metrics.Collector // Prometheus 指标收集器（可为 nil，测试场景）
+	cfg      *config.Config     // 全局运行配置
+	keyStore *pkgauth.KeyStore  // API Key 文件热轮转 KeyStore（可选，K8s Secret 投影场景）
+	logger   *slog.Logger       // 结构化日志记录器
+	mc       *metrics.Collector // Prometheus 指标收集器（可为 nil，测试场景）
 }
 
 // New creates a new Server instance.
 // New 创建并返回一个新的 Server 实例；mc 可为 nil（不上报指标）。
-func New(cfg *config.Config, logger *slog.Logger, mc *metrics.Collector) *Server {
+func New(cfg *config.Config, keyStore *pkgauth.KeyStore, logger *slog.Logger, mc *metrics.Collector) *Server {
 	return &Server{
-		cfg:    cfg,
-		logger: logger,
-		mc:     mc,
+		cfg:      cfg,
+		keyStore: keyStore,
+		logger:   logger,
+		mc:       mc,
 	}
+}
+
+// currentAuthKeys 合并静态 DATASOURCE_MGR_API_KEYS 与 KeyStore 热轮转 key；
+// 同名 token 以 KeyStore 为准。
+func (s *Server) currentAuthKeys() map[string]*pkgauth.KeyConfig {
+	static := s.cfg.ScopeKeys
+	if s.keyStore == nil {
+		return static
+	}
+	merged := make(map[string]*pkgauth.KeyConfig, len(static))
+	for k, v := range static {
+		merged[k] = v
+	}
+	for k, v := range s.keyStore.Keys() {
+		merged[k] = v
+	}
+	return merged
+}
+
+// DatasourceMgrPermissionForPath 将 datasource-mgr REST 路径映射为所需 scope。
+func DatasourceMgrPermissionForPath(path string) string {
+	if len(path) > 1 && path[len(path)-1] == '/' {
+		path = path[:len(path)-1]
+	}
+	switch {
+	case path == "/health" || path == "/readyz" || path == "/api/health", path == "/metrics":
+		return ""
+	case path == "/api/v1/yibao" || path == "/api/v1/kangyang" ||
+		path == "/api/v1/mock3" || path == "/api/v1/mock4" ||
+		path == "/api/datasources" || path == "/api/datasources/:id" ||
+		strings.HasPrefix(path, "/api/datasources/") && strings.HasSuffix(path, "/records") ||
+		strings.HasPrefix(path, "/api/datasources/") && strings.HasSuffix(path, "/sample") ||
+		strings.HasPrefix(path, "/api/datasources/") && strings.HasSuffix(path, "/metadata") ||
+		strings.HasPrefix(path, "/api/datasources/") && strings.HasSuffix(path, "/audit"):
+		return "datasource:read"
+	case strings.HasPrefix(path, "/api/datasources/") && strings.HasSuffix(path, "/test") ||
+		path == "/api/datasources/seed":
+		return "datasource:admin"
+	}
+	return ""
+}
+
+// constantTimeLookupKeys 在排序后的 key 集合上执行常量时间 token 查找，防止时序攻击。
+func constantTimeLookupKeys(keys map[string]*pkgauth.KeyConfig, token string) *pkgauth.Identity {
+	if len(keys) == 0 {
+		return nil
+	}
+	sortedKeys := make([]string, 0, len(keys))
+	for k := range keys {
+		sortedKeys = append(sortedKeys, k)
+	}
+	sort.Strings(sortedKeys)
+	tokenBytes := []byte(token)
+	var matched *pkgauth.KeyConfig
+	for _, key := range sortedKeys {
+		if subtle.ConstantTimeCompare([]byte(key), tokenBytes) == 1 {
+			matched = keys[key]
+		}
+	}
+	if matched == nil {
+		return nil
+	}
+	if matched.IsExpired() {
+		return nil
+	}
+	return &pkgauth.Identity{ServiceType: "external", Name: matched.Name, Scopes: matched.Scopes}
+}
+
+// scopeAuthMiddleware 返回 Scope-based API Key 鉴权中间件，支持 KeyStore 热轮转。
+// 未配置 scope key 时回退到单 APIKey 模式。
+func (s *Server) scopeAuthMiddleware() gin.HandlerFunc {
+	scopeKeys := s.currentAuthKeys()
+	if len(scopeKeys) > 0 {
+		return func(c *gin.Context) {
+			path := c.Request.URL.Path
+			if path == "/health" || path == "/readyz" || path == "/api/health" {
+				c.Next()
+				return
+			}
+			token := pkgauth.ExtractBearerToken(c.GetHeader("Authorization"))
+			if token == "" {
+				pkgauth.AuthFailuresTotal.WithLabelValues("missing_token").Inc()
+				middleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: missing credentials", nil)
+				return
+			}
+			identity := constantTimeLookupKeys(s.currentAuthKeys(), token)
+			if identity == nil {
+				pkgauth.AuthFailuresTotal.WithLabelValues("invalid_token").Inc()
+				middleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: invalid credentials", nil)
+				return
+			}
+			requiredPerm := DatasourceMgrPermissionForPath(path)
+			if requiredPerm != "" && !identity.HasPermission(requiredPerm) {
+				pkgauth.AuthForbiddenTotal.Inc()
+				middleware.AbortWithError(c, http.StatusForbidden, "FORBIDDEN", "Forbidden: insufficient scope", nil)
+				return
+			}
+			c.Set(pkgauth.IdentityContextKey, identity)
+			c.Next()
+		}
+	}
+	return middleware.Auth(s.cfg.APIKey)
 }
 
 // RegisterRoutes registers all HTTP routes and middleware on the Gin engine.
@@ -92,7 +200,7 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 		r.Use(middleware.RateLimit(s.cfg.RateLimitRPS, s.cfg.RateLimitBurst)) // 每客户端 IP 令牌桶限流
 	}
 	r.Use(middleware.CORS(s.cfg.CORSOrigins))
-	r.Use(middleware.Auth(s.cfg.APIKey))
+	r.Use(s.scopeAuthMiddleware())
 
 	// 健康探针路由
 	r.GET("/health", s.Health)     // Liveness probe / 存活探针

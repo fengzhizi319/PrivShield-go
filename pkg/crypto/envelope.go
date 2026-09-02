@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -147,6 +148,43 @@ func RegisterKeyVersion(version string, key []byte, active bool) {
 			}
 		}
 	}
+}
+
+// RegisterKeyVersionsFromEnv 从环境变量注册多版本密钥（G-08 密钥轮换）。
+//
+// 环境变量约定：
+//   - PRIVACY_CRYPTO_KEY_<VERSION>=<key_material>：注册一个密钥版本（VERSION 即版本标识）
+//   - PRIVACY_CRYPTO_ACTIVE_VERSION=<version>：指定当前活跃版本（用于加密写入）
+//
+// 示例：
+//
+//	PRIVACY_CRYPTO_KEY_V1=old-key-material
+//	PRIVACY_CRYPTO_KEY_V2=new-key-material
+//	PRIVACY_CRYPTO_ACTIVE_VERSION=V2
+//
+// 返回注册的版本数量。
+func RegisterKeyVersionsFromEnv() int {
+	activeVersion := os.Getenv("PRIVACY_CRYPTO_ACTIVE_VERSION")
+
+	count := 0
+	for _, env := range os.Environ() {
+		kv := strings.SplitN(env, "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		name, material := kv[0], kv[1]
+		if !strings.HasPrefix(name, "PRIVACY_CRYPTO_KEY_") || name == "PRIVACY_CRYPTO_ACTIVE_VERSION" {
+			continue
+		}
+		version := strings.TrimPrefix(name, "PRIVACY_CRYPTO_KEY_")
+		if version == "" || material == "" {
+			continue
+		}
+		active := strings.EqualFold(version, activeVersion)
+		RegisterKeyVersion(version, []byte(material), active)
+		count++
+	}
+	return count
 }
 
 // ActiveKeyVersion 返回当前活跃密钥版本（用于加密写入）。

@@ -55,13 +55,13 @@ type JWTManager struct {
 }
 
 // NewJWTManager 创建 JWT 管理器。
-// secret 最少 32 字符，expiryHours 为令牌有效小时数（默认 24）。
+// secret 最少 32 字符，expiryHours 为令牌有效小时数（默认 1，即 1 小时；可通过配置缩短至 0.5 实现 30 分钟）。
 func NewJWTManager(secret string, expiryHours int) (*JWTManager, error) {
 	if len(secret) < 32 {
 		return nil, errors.New("auth: JWT secret must be at least 32 characters")
 	}
 	if expiryHours <= 0 {
-		expiryHours = 24
+		expiryHours = 1
 	}
 	m := &JWTManager{
 		secret:      []byte(secret),

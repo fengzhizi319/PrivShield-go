@@ -376,7 +376,7 @@ func InitAuditTables(db *sql.DB) error {
 			parameters_json TEXT,
 			integrity_hash TEXT,
 			prev_hash TEXT DEFAULT '',
-			sm2_signature TEXT DEFAULT ''
+			sm2_signature TEXT DEFAULT '',
 			FOREIGN KEY(audit_log_id) REFERENCES audit_logs(id)
 		);
 		CREATE INDEX IF NOT EXISTS idx_audit_logs_ts ON audit_logs(timestamp);

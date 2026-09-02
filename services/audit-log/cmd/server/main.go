@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -24,6 +25,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	pkgcrypto "github.com/fengzhizi319/PrivShield-go/pkg/crypto"
 	pkggrpcserver "github.com/fengzhizi319/PrivShield-go/pkg/grpcserver"
 	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
@@ -54,9 +56,13 @@ func main() {
 	}
 
 	// ── Envelope encryption key registry / 信封加密密钥版本注册（G-08）──
-	// 将配置主密钥注册为当前活跃版本，后续 EncryptString/DecryptString 优先读取注册表，
-	// 支持多版本密钥轮换过渡期解密旧版本数据。
-	if cfg.EncryptionKey != "" {
+	// 多版本密钥轮换：从 PRIVACY_CRYPTO_KEY_<VERSION> 环境变量注册所有版本，
+	// PRIVACY_CRYPTO_ACTIVE_VERSION 指定当前活跃版本（用于加密写入）。
+	// 若未配置多版本环境变量，回退到配置主密钥注册为 v1。
+	if n := pkgcrypto.RegisterKeyVersionsFromEnv(); n > 0 {
+		log.Printf("envelope encryption key versions registered from env (count=%d, active=%s)",
+			n, os.Getenv("PRIVACY_CRYPTO_ACTIVE_VERSION"))
+	} else if cfg.EncryptionKey != "" {
 		pkgcrypto.RegisterKeyVersion("v1", []byte(cfg.EncryptionKey), true)
 		log.Printf("envelope encryption key registered (version=v1, active=true)")
 	}
@@ -76,6 +82,19 @@ func main() {
 	// ── Structured logger / 结构化日志 ────────────────────────
 	pkgobs.InitLogger(cfg.LogFormat, cfg.LogLevel)
 	logger := slog.Default()
+
+	// ── API Key 文件热轮转（K8s Secret 投影场景）───────────────
+	var keyStore *pkgauth.KeyStore
+	if cfg.KeysFile != "" {
+		ks, ksErr := pkgauth.NewKeyStore(cfg.KeysFile)
+		if ksErr != nil {
+			log.Fatalf("failed to initialize API Key store: %v", ksErr)
+		}
+		defer ks.Close()
+		keyStore = ks
+		logger.Info("API Key store initialized with hot-reload",
+			"path", cfg.KeysFile, "keys", len(ks.Keys()))
+	}
 
 	// ── Keyed evidence chain / 密钥化存证哈希（P1-2）───────────────
 	// 存证哈希密钥由局方托管注入；未注入时退回无密钥 SM3，只能证明「未被误改」，
@@ -122,7 +141,7 @@ func main() {
 
 	// ── HTTP REST Server / HTTP REST 服务器 ──────────────────────
 	gin.SetMode(gin.ReleaseMode)
-	server := handlers.New(agentClient, cfg, auditStore, logger, mc)
+	server := handlers.New(agentClient, cfg, keyStore, auditStore, logger, mc)
 	router := gin.New()
 	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv()) // G-02
 	router.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv()))           // IP access control
@@ -189,10 +208,14 @@ func main() {
 	}
 
 	// G-17: 应用层 API Key 鉴权拦截器（与 mTLS 叠加，形成双层鉴权）。
-	grpcServer = grpcServer.WithUnaryInterceptor(grpcserver.AuthUnaryInterceptor(cfg.APIKey, cfg.ScopeKeys))
-	if cfg.APIKey != "" || len(cfg.ScopeKeys) > 0 {
+	grpcserver.InitAuthSettings(cfg.APIKey, cfg.ScopeKeys, keyStore)
+	grpcServer = grpcServer.
+		WithUnaryInterceptor(grpcserver.AuthUnaryInterceptor()).
+		WithStreamInterceptor(grpcserver.AuthStreamInterceptor())
+	if cfg.APIKey != "" || len(cfg.ScopeKeys) > 0 || keyStore != nil {
 		logger.Info("gRPC server configured with API Key auth",
 			"scope_keys", len(cfg.ScopeKeys),
+			"keys_file", cfg.KeysFile,
 		)
 	}
 
@@ -224,7 +247,7 @@ func main() {
 		"grpc_addr", cfg.GRPCAddress(),
 		"agent_rest", fmt.Sprintf("http://%s:%d", cfg.AgentRESTHost, cfg.AgentRESTPort),
 		"tls_enabled", cfg.TLSEnabled,
-		"auth_enabled", cfg.APIKey != "",
+		"auth_enabled", cfg.APIKey != "" || cfg.ReaderAPIKey != "" || len(cfg.ScopeKeys) > 0 || keyStore != nil,
 		"cors_origins", len(cfg.CORSOrigins),
 		"db_path", cfg.DBPath,
 		"retention_days", cfg.RetentionDays,
@@ -235,7 +258,7 @@ func main() {
 
 	// Emit a prominent security warning when all protections are disabled.
 	// 当所有安全功能均未启用时输出醒目警告，防止生产环境意外裸奔。
-	if !cfg.TLSEnabled && cfg.APIKey == "" {
+	if !cfg.TLSEnabled && cfg.APIKey == "" && cfg.ReaderAPIKey == "" && len(cfg.ScopeKeys) == 0 && keyStore == nil {
 		logger.Warn("========================================================================\n" +
 			"  SECURITY WARNING: All security features are DISABLED.\n" +
 			"  TLS=off  Auth=off\n" +
@@ -267,13 +290,30 @@ func main() {
 
 	// Start HTTP server / 启动 HTTP 监听
 	go func() {
-		if cfg.TLSEnabled {
+		if tlsutil.IsTLCPEnabled() {
+			tlcpCfg := tlsutil.TLCPConfigFromEnv()
+			gmtlsConfig, tlcpErr := tlsutil.BuildTLCPConfig(tlcpCfg)
+			if tlcpErr != nil {
+				log.Fatalf("failed to build TLCP config: %v", tlcpErr)
+			}
+			tlcpLis, tlcpErr := tlsutil.NewTLCPListener("tcp", cfg.Address(), gmtlsConfig)
+			if tlcpErr != nil {
+				log.Fatalf("failed to create TLCP listener: %v", tlcpErr)
+			}
+			logger.Info("audit-log TLCP (国密) REST server started",
+				"addr", cfg.Address(),
+				"sign_cert", tlcpCfg.SignCertFile,
+			)
+			if err := httpSrv.Serve(tlcpLis); err != nil && err != http.ErrServerClosed {
+				logger.Error("TLCP server error", "error", err.Error())
+			}
+		} else if cfg.TLSEnabled {
 			logger.Info("audit-log HTTPS REST server started (TLS enabled)",
 				"addr", cfg.Address(),
 				"grpc_addr", cfg.GRPCAddress(),
 				"agent_rest", cfg.AgentBaseURL(),
 				"db_path", cfg.DBPath,
-				"auth_enabled", cfg.APIKey != "",
+				"auth_enabled", cfg.APIKey != "" || cfg.ReaderAPIKey != "" || len(cfg.ScopeKeys) > 0 || keyStore != nil,
 				"retention_days", cfg.RetentionDays,
 			)
 			if err := httpSrv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
@@ -285,7 +325,7 @@ func main() {
 				"grpc_addr", cfg.GRPCAddress(),
 				"agent_rest", cfg.AgentBaseURL(),
 				"db_path", cfg.DBPath,
-				"auth_enabled", cfg.APIKey != "",
+				"auth_enabled", cfg.APIKey != "" || cfg.ReaderAPIKey != "" || len(cfg.ScopeKeys) > 0 || keyStore != nil,
 				"retention_days", cfg.RetentionDays,
 			)
 			if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

@@ -359,7 +359,7 @@ func setupFullIntegrationEnvironment(t *testing.T) (*hubdatasource.Client, *huba
 	mc := metrics.NewCollector("service-hub-pipeline-test")
 	agentClient := hubagent.New(hubCfg, mc)
 
-	hubSrv := New(agentClient, dsClient, hubCfg, taskStore, logger, mc)
+	hubSrv := New(agentClient, dsClient, hubCfg, nil, taskStore, logger, mc)
 
 	cleanup := func() {
 		_ = dsClient.Close()

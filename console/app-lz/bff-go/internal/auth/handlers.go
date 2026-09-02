@@ -48,9 +48,9 @@ type RegisterRequest struct {
 
 // LoginRequest 用户登录请求体。
 type LoginRequest struct {
-	Username  string `json:"username" binding:"required"`
-	Password  string `json:"password" binding:"required"`
-	TOTPCode  string `json:"totp_code"` // 特权用户/admin 登录时必须提供
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required"`
+	TOTPCode string `json:"totp_code"` // 特权用户/admin 登录时必须提供
 }
 
 // AuthResponse 认证响应（注册/登录共用）。
@@ -89,6 +89,12 @@ type ValidateTOTPResponse struct {
 	Valid   bool   `json:"valid"`   // 校验结果
 	Message string `json:"message"` // 结果说明
 	Via     string `json:"via"`     // 来源标识
+}
+
+// ChangePasswordRequest 修改密码请求体。
+type ChangePasswordRequest struct {
+	OldPassword string `json:"old_password" binding:"required"`
+	NewPassword string `json:"new_password" binding:"required"`
 }
 
 // ============================================================================
@@ -460,12 +466,77 @@ func (h *Handlers) HandleValidateTOTP(c *gin.Context) {
 	})
 }
 
+// HandleChangePassword 处理用户修改密码请求。
+//
+// POST /api/auth/change-password
+// Authorization: Bearer <token>
+// Body: {"old_password": "...", "new_password": "..."}
+// Response 200: {"message": "Password changed successfully", "via": "app-lz-bff"}
+//
+// 三级等保 G-04：新密码必须通过强度校验，且不能与旧密码相同。
+func (h *Handlers) HandleChangePassword(c *gin.Context) {
+	claims := GetClaims(c)
+	if claims == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    "UNAUTHORIZED",
+			"message": "Unauthorized: authentication required",
+			"via":     "app-lz-bff",
+		})
+		return
+	}
+
+	var req ChangePasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    "INVALID_REQUEST",
+			"message": "Invalid request: " + err.Error(),
+			"via":     "app-lz-bff",
+		})
+		return
+	}
+
+	if err := h.store.ChangePassword(claims.Subject, req.OldPassword, req.NewPassword); err != nil {
+		status := http.StatusBadRequest
+		code := "PASSWORD_CHANGE_FAILED"
+
+		switch {
+		case errors.Is(err, ErrUserNotFound):
+			status = http.StatusNotFound
+			code = "USER_NOT_FOUND"
+		case errors.Is(err, ErrInvalidPassword):
+			status = http.StatusUnauthorized
+			code = "INVALID_OLD_PASSWORD"
+		case errors.Is(err, ErrPasswordTooShort):
+			code = "PASSWORD_TOO_SHORT"
+		case errors.Is(err, ErrPasswordWeak):
+			code = "PASSWORD_WEAK"
+		case errors.Is(err, ErrPasswordSame):
+			code = "PASSWORD_SAME"
+		}
+
+		c.JSON(status, gin.H{
+			"code":    code,
+			"message": err.Error(),
+			"via":     "app-lz-bff",
+		})
+		return
+	}
+
+	h.logger.Info("user password changed", "username", claims.Subject)
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Password changed successfully",
+		"via":     "app-lz-bff",
+	})
+}
+
 // RegisterRoutes 在 Gin 路由引擎上注册认证相关路由。
 func (h *Handlers) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/register", h.HandleRegister)
 	r.POST("/login", h.HandleLogin)
 	r.POST("/logout", h.HandleLogout)
 	r.GET("/me", h.HandleMe)
+	r.POST("/change-password", h.HandleChangePassword)
 	r.POST("/totp/enable", h.HandleEnableTOTP)
 	r.POST("/totp/validate", h.HandleValidateTOTP)
 }

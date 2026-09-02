@@ -769,7 +769,6 @@ func sm2ConstantTimeEqual(a, b []byte) bool {
 	return v == 0
 }
 
-
 // ---------------------------------------------------------------------------
 // 审计存证 SM2 签名器/验签器包装（三级等保/密评 G-10：审计不可否认性）
 // ---------------------------------------------------------------------------
@@ -796,7 +795,7 @@ func NewSM2SignerVerifier(priv *SM2PrivateKey, pub *SM2PublicKey) *SM2SignerVeri
 // 参数：
 //   - privHex: 32 字节私钥标量 D 的 hex 编码；为空表示仅验签。
 //   - pubHex : 65 字节非压缩公钥（0x04 ‖ X ‖ Y）或 64 字节裸公钥（X ‖ Y）的 hex 编码；
-//             为空表示仅签名（此时必须提供 privHex）。
+//     为空表示仅签名（此时必须提供 privHex）。
 //
 // 若私钥非空而公钥为空，会自动从私钥推导出公钥。
 func NewSM2SignerVerifierFromHex(privHex, pubHex string) (*SM2SignerVerifier, error) {

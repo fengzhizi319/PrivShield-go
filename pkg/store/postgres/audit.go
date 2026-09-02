@@ -134,6 +134,20 @@ func NewAuditStoreWithPool(ctx context.Context, pool *pgxpool.Pool, logger *slog
 	return s, nil
 }
 
+// signAuditLog 为审计记录生成 SM2 签名（若已配置签名器）。
+func signAuditLog(log *store.AuditLog) {
+	if log.IntegrityHash != "" && log.SM2Signature == "" {
+		log.SM2Signature = store.SignAuditRecord(log.IntegrityHash)
+	}
+}
+
+// signSnapshot 为快照记录生成 SM2 签名（若已配置签名器）。
+func signSnapshot(snap *store.SnapshotRecord) {
+	if snap != nil && snap.IntegrityHash != "" && snap.SM2Signature == "" {
+		snap.SM2Signature = store.SignAuditRecord(snap.IntegrityHash)
+	}
+}
+
 // initAuditSchema 初始化 audit_logs 与 snapshots 表结构、外键与索引。
 func (s *AuditStore) initAuditSchema(ctx context.Context) error {
 	_, err := s.pool.Exec(ctx, `
@@ -158,7 +172,8 @@ func (s *AuditStore) initAuditSchema(ctx context.Context) error {
 			error_message   TEXT,
 			security_level  TEXT,
 			prev_hash       TEXT DEFAULT '',
-			integrity_hash  TEXT DEFAULT ''
+			integrity_hash  TEXT DEFAULT '',
+			sm2_signature   TEXT DEFAULT ''
 		);
 
 		CREATE TABLE IF NOT EXISTS snapshots (
@@ -170,7 +185,8 @@ func (s *AuditStore) initAuditSchema(ctx context.Context) error {
 			algorithm       TEXT,
 			parameters_json TEXT,
 			integrity_hash  TEXT,
-			prev_hash       TEXT DEFAULT ''
+			prev_hash       TEXT DEFAULT '',
+			sm2_signature   TEXT DEFAULT ''
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs (timestamp DESC);
@@ -184,9 +200,11 @@ func (s *AuditStore) initAuditSchema(ctx context.Context) error {
 		ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS datasource_id TEXT DEFAULT '';
 		ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS prev_hash TEXT DEFAULT '';
 		ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS integrity_hash TEXT DEFAULT '';
+		ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS sm2_signature TEXT DEFAULT '';
 
 		ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS prev_hash TEXT DEFAULT '';
 		ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS integrity_hash TEXT DEFAULT '';
+		ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS sm2_signature TEXT DEFAULT '';
 	`)
 	if err != nil {
 		return fmt.Errorf("init audit schema base: %w", err)
@@ -253,15 +271,16 @@ func (s *AuditStore) SaveLog(log *store.AuditLog) error {
 	if log.IntegrityHash == "" {
 		log.IntegrityHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 	}
+	signAuditLog(log)
 
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO audit_logs (id, seq, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash,
-			algorithm, parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash)
-		VALUES ($1, nextval('audit_logs_seq_seq'), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+			algorithm, parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash, sm2_signature)
+		VALUES ($1, nextval('audit_logs_seq_seq'), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 	`, log.ID, log.TaskID, log.APICode, log.DatasourceID, log.Timestamp, log.Operation, log.DataSource,
 		log.InputHash, log.OutputHash, log.Algorithm, log.ParametersJSON,
 		log.InputRows, log.OutputRows, log.DurationMs, log.User, log.Status, log.ErrorMessage, log.SecurityLevel,
-		log.PrevHash, log.IntegrityHash)
+		log.PrevHash, log.IntegrityHash, log.SM2Signature)
 	return err
 }
 
@@ -280,6 +299,7 @@ func (s *AuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *store.Sn
 	if log.IntegrityHash == "" {
 		log.IntegrityHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 	}
+	signAuditLog(log)
 	if snapshot != nil {
 		// P0 fix: snapshot prev_hash binds to the parent log's integrity hash
 		// and its integrity hash covers the snapshot's own sample fields.
@@ -292,6 +312,7 @@ func (s *AuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *store.Sn
 				snapshot.InputSample, snapshot.OutputSample, snapshot.ParametersJSON,
 			)
 		}
+		signSnapshot(snapshot)
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -302,21 +323,21 @@ func (s *AuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *store.Sn
 
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO audit_logs (id, seq, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash,
-			algorithm, parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash)
-		VALUES ($1, nextval('audit_logs_seq_seq'), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+			algorithm, parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash, sm2_signature)
+		VALUES ($1, nextval('audit_logs_seq_seq'), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 	`, log.ID, log.TaskID, log.APICode, log.DatasourceID, log.Timestamp, log.Operation, log.DataSource,
 		log.InputHash, log.OutputHash, log.Algorithm, log.ParametersJSON,
 		log.InputRows, log.OutputRows, log.DurationMs, log.User, log.Status, log.ErrorMessage, log.SecurityLevel,
-		log.PrevHash, log.IntegrityHash); err != nil {
+		log.PrevHash, log.IntegrityHash, log.SM2Signature); err != nil {
 		return err
 	}
 
 	if snapshot != nil {
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO snapshots (id, audit_log_id, timestamp, input_sample, output_sample, algorithm, parameters_json, integrity_hash, prev_hash)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			INSERT INTO snapshots (id, audit_log_id, timestamp, input_sample, output_sample, algorithm, parameters_json, integrity_hash, prev_hash, sm2_signature)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		`, snapshot.ID, snapshot.AuditLogID, snapshot.Timestamp,
-			snapshot.InputSample, snapshot.OutputSample, snapshot.Algorithm, snapshot.ParametersJSON, snapshot.IntegrityHash, snapshot.PrevHash); err != nil {
+			snapshot.InputSample, snapshot.OutputSample, snapshot.Algorithm, snapshot.ParametersJSON, snapshot.IntegrityHash, snapshot.PrevHash, snapshot.SM2Signature); err != nil {
 			return err
 		}
 	}
@@ -342,26 +363,30 @@ func (s *AuditStore) SaveLogsBatch(logs []store.AuditLog, snapshots []store.Snap
 	defer tx.Rollback(ctx)
 
 	batch := &pgx.Batch{}
-	for _, log := range logs {
+	for i := range logs {
+		log := &logs[i]
 		if log.IntegrityHash == "" {
 			log.IntegrityHash = store.ComputeAuditIntegrityHash(log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
 		}
+		signAuditLog(log)
 		batch.Queue(`
 			INSERT INTO audit_logs (id, seq, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash,
-				algorithm, parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash)
-			VALUES ($1, nextval('audit_logs_seq_seq'), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+				algorithm, parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash, sm2_signature)
+			VALUES ($1, nextval('audit_logs_seq_seq'), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 		`, log.ID, log.TaskID, log.APICode, log.DatasourceID, log.Timestamp, log.Operation, log.DataSource,
 			log.InputHash, log.OutputHash, log.Algorithm, log.ParametersJSON,
 			log.InputRows, log.OutputRows, log.DurationMs, log.User, log.Status, log.ErrorMessage, log.SecurityLevel,
-			log.PrevHash, log.IntegrityHash)
+			log.PrevHash, log.IntegrityHash, log.SM2Signature)
 	}
 
-	for _, snap := range snapshots {
+	for i := range snapshots {
+		snap := &snapshots[i]
+		signSnapshot(snap)
 		batch.Queue(`
-			INSERT INTO snapshots (id, audit_log_id, timestamp, input_sample, output_sample, algorithm, parameters_json, integrity_hash, prev_hash)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			INSERT INTO snapshots (id, audit_log_id, timestamp, input_sample, output_sample, algorithm, parameters_json, integrity_hash, prev_hash, sm2_signature)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		`, snap.ID, snap.AuditLogID, snap.Timestamp,
-			snap.InputSample, snap.OutputSample, snap.Algorithm, snap.ParametersJSON, snap.IntegrityHash, snap.PrevHash)
+			snap.InputSample, snap.OutputSample, snap.Algorithm, snap.ParametersJSON, snap.IntegrityHash, snap.PrevHash, snap.SM2Signature)
 	}
 
 	br := tx.SendBatch(ctx, batch)
@@ -386,7 +411,7 @@ func (s *AuditStore) GetLog(id string) (*store.AuditLog, error) {
 
 	row := s.pool.QueryRow(ctx, `
 		SELECT id, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash, algorithm,
-			parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash
+			parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash, sm2_signature
 		FROM audit_logs WHERE id = $1
 	`, id)
 	return scanPGAuditRow(row)
@@ -403,7 +428,7 @@ func (s *AuditStore) GetLatestLog() (*store.AuditLog, error) {
 
 	row := s.pool.QueryRow(ctx, `
 		SELECT id, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash, algorithm,
-			parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash
+			parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash, sm2_signature
 		FROM audit_logs ORDER BY seq DESC, timestamp DESC, id DESC LIMIT 1
 	`)
 	log, err := scanPGAuditRow(row)
@@ -436,7 +461,7 @@ func (s *AuditStore) ListLogs(filter store.AuditFilter) ([]store.AuditLog, int, 
 
 	query := fmt.Sprintf(`
 		SELECT id, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash, algorithm,
-			parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash
+			parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash, sm2_signature
 		FROM audit_logs%s ORDER BY timestamp DESC LIMIT $%d OFFSET $%d
 	`, whereClause, len(args)+1, len(args)+2)
 
@@ -581,11 +606,19 @@ func (s *AuditStore) SaveSnapshot(snap *store.SnapshotRecord) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	if snap.IntegrityHash == "" {
+		snap.IntegrityHash = store.ComputeSnapshotIntegrityHash(
+			snap.ID, snap.AuditLogID, snap.PrevHash, snap.Timestamp, snap.Algorithm,
+			snap.InputSample, snap.OutputSample, snap.ParametersJSON,
+		)
+	}
+	signSnapshot(snap)
+
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO snapshots (id, audit_log_id, timestamp, input_sample, output_sample, algorithm, parameters_json, integrity_hash, prev_hash)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO snapshots (id, audit_log_id, timestamp, input_sample, output_sample, algorithm, parameters_json, integrity_hash, prev_hash, sm2_signature)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`, snap.ID, snap.AuditLogID, snap.Timestamp,
-		snap.InputSample, snap.OutputSample, snap.Algorithm, snap.ParametersJSON, snap.IntegrityHash, snap.PrevHash)
+		snap.InputSample, snap.OutputSample, snap.Algorithm, snap.ParametersJSON, snap.IntegrityHash, snap.PrevHash, snap.SM2Signature)
 	return err
 }
 
@@ -607,7 +640,7 @@ func (s *AuditStore) ListSnapshots(limit, offset int) ([]store.SnapshotRecord, i
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, audit_log_id, timestamp, input_sample, output_sample, algorithm, parameters_json, integrity_hash, prev_hash
+		SELECT id, audit_log_id, timestamp, input_sample, output_sample, algorithm, parameters_json, integrity_hash, prev_hash, sm2_signature
 		FROM snapshots ORDER BY timestamp DESC LIMIT $1 OFFSET $2
 	`, limit, offset)
 	if err != nil {
@@ -632,7 +665,7 @@ func (s *AuditStore) GetSnapshot(id string) (*store.SnapshotRecord, error) {
 	defer cancel()
 
 	row := s.pool.QueryRow(ctx, `
-		SELECT id, audit_log_id, timestamp, input_sample, output_sample, algorithm, parameters_json, integrity_hash, prev_hash
+		SELECT id, audit_log_id, timestamp, input_sample, output_sample, algorithm, parameters_json, integrity_hash, prev_hash, sm2_signature
 		FROM snapshots WHERE id = $1
 	`, id)
 	return scanPGSnapshotRow(row)
@@ -662,7 +695,7 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 
 	query := `
 		SELECT id, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash, algorithm,
-			parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash
+			parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash, sm2_signature
 		FROM audit_logs ORDER BY seq ASC, timestamp ASC, id ASC`
 	var args []any
 	if limit > 0 {
@@ -690,8 +723,24 @@ func (s *AuditStore) VerifyChain(limit int) (*store.ChainVerificationResult, err
 		// 为确定性兜底尾序，与写入侧链尾裁定、SQLite 及重签工具保持同一口径（P2-4）。
 
 		if log.IntegrityHash != "" {
-			ok, hashLabel := store.VerifyAuditIntegrityHash(log.IntegrityHash, log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
+			ok, hashLabel := store.VerifyAuditRecord(log)
 			if !ok {
+				// 优先判定是否为 SM2 签名无效（完整性哈希已通过但签名失败）。
+				if hashLabel != "" {
+					integrityOk, _ := store.VerifyAuditIntegrityHash(log.IntegrityHash, log.ID, log.PrevHash, log.Timestamp, log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON)
+					if integrityOk && log.SM2Signature != "" {
+						return &store.ChainVerificationResult{
+							Reason:        store.ChainReasonInvalidSM2Signature,
+							TotalVerified: count,
+							TotalRecords:  totalRecords,
+							Valid:         false,
+							BrokenAtID:    log.ID,
+							ActualHash:    log.SM2Signature,
+							LegacyHashed:  legacyCount,
+							Message:       fmt.Sprintf("SM2 signature invalid at log %s: non-repudiation proof forged or key mismatch", log.ID),
+						}, nil
+					}
+				}
 				// 锚点仍与上游衔接 ⇒ 记录被「原位改写业务字段」；否则为一般性哈希分叉。两者均判无效（fail-closed）。
 				reason := store.ChainReasonHashMismatch
 				if count == 0 || log.PrevHash == previousHash {
@@ -791,7 +840,7 @@ func (s *AuditStore) FetchOldestForArchive(before time.Time, limit int) ([]store
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, task_id, api_code, datasource_id, timestamp, operation, datasource, input_hash, output_hash, algorithm,
-			parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash
+			parameters_json, input_rows, output_rows, duration_ms, user_name, status, error_message, security_level, prev_hash, integrity_hash, sm2_signature
 		FROM audit_logs
 		WHERE timestamp < $1
 		ORDER BY seq ASC, timestamp ASC, id ASC LIMIT $2
@@ -827,7 +876,7 @@ func (s *AuditStore) FetchOldestForArchive(before time.Time, limit int) ([]store
 			args[i] = id
 			placeholders[i] = fmt.Sprintf("$%d", i+1)
 		}
-		query := `SELECT id, audit_log_id, timestamp, input_sample, output_sample, algorithm, parameters_json, integrity_hash, prev_hash
+		query := `SELECT id, audit_log_id, timestamp, input_sample, output_sample, algorithm, parameters_json, integrity_hash, prev_hash, sm2_signature
 			 FROM snapshots WHERE audit_log_id IN (` + strings.Join(placeholders, ",") + `) ORDER BY timestamp ASC, id ASC`
 		snapRows, err := s.pool.Query(ctx, query, args...)
 		if err != nil {
@@ -958,11 +1007,11 @@ type pgRowScanner interface {
 func scanPGAuditRow(row pgRowScanner) (*store.AuditLog, error) {
 	var l store.AuditLog
 	var paramsJSON *string
-	var taskID, apiCode, datasourceID, prevHash, integrityHash *string
+	var taskID, apiCode, datasourceID, prevHash, integrityHash, sm2Signature *string
 
 	err := row.Scan(&l.ID, &taskID, &apiCode, &datasourceID, &l.Timestamp, &l.Operation, &l.DataSource, &l.InputHash, &l.OutputHash,
 		&l.Algorithm, &paramsJSON, &l.InputRows, &l.OutputRows, &l.DurationMs,
-		&l.User, &l.Status, &l.ErrorMessage, &l.SecurityLevel, &prevHash, &integrityHash)
+		&l.User, &l.Status, &l.ErrorMessage, &l.SecurityLevel, &prevHash, &integrityHash, &sm2Signature)
 	if err != nil {
 		return nil, err
 	}
@@ -982,6 +1031,9 @@ func scanPGAuditRow(row pgRowScanner) (*store.AuditLog, error) {
 	if integrityHash != nil {
 		l.IntegrityHash = *integrityHash
 	}
+	if sm2Signature != nil {
+		l.SM2Signature = *sm2Signature
+	}
 	if l.DatasourceID == "" && l.DataSource != "" {
 		l.DatasourceID = l.DataSource
 	}
@@ -998,16 +1050,19 @@ func scanPGAuditRow(row pgRowScanner) (*store.AuditLog, error) {
 
 func scanPGSnapshotRow(row pgRowScanner) (*store.SnapshotRecord, error) {
 	var snap store.SnapshotRecord
-	var paramsJSON, prevHash *string
+	var paramsJSON, prevHash, sm2Signature *string
 
 	err := row.Scan(&snap.ID, &snap.AuditLogID, &snap.Timestamp, &snap.InputSample, &snap.OutputSample,
-		&snap.Algorithm, &paramsJSON, &snap.IntegrityHash, &prevHash)
+		&snap.Algorithm, &paramsJSON, &snap.IntegrityHash, &prevHash, &sm2Signature)
 	if err != nil {
 		return nil, err
 	}
 
 	if prevHash != nil {
 		snap.PrevHash = *prevHash
+	}
+	if sm2Signature != nil {
+		snap.SM2Signature = *sm2Signature
 	}
 	if paramsJSON != nil {
 		snap.ParametersJSON = *paramsJSON

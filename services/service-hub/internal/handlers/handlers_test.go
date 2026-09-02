@@ -99,7 +99,7 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 	d := newTestDeps()
 	ag := agent.New(cfg, d.mc)
 	ds := datasource.New(cfg)
-	srv := New(ag, ds, cfg, d.tasks, d.logger, d.mc)
+	srv := New(ag, ds, cfg, nil, d.tasks, d.logger, d.mc)
 	return srv, mockAgent
 }
 
@@ -120,7 +120,7 @@ func newSimpleTestServer(t *testing.T) *Server {
 	d := newTestDeps()
 	ag := agent.New(cfg, d.mc)
 	ds := datasource.New(cfg)
-	return New(ag, ds, cfg, d.tasks, d.logger, d.mc)
+	return New(ag, ds, cfg, nil, d.tasks, d.logger, d.mc)
 }
 
 // newMockE2EServer creates a Server connected to a mock agent (httptest.Server)
@@ -246,7 +246,7 @@ func newMockEngineServer(t *testing.T, level string, withEvidence bool) (*Server
 	d := newTestDeps()
 	ag := agent.New(cfg, d.mc)
 	ds := datasource.New(cfg)
-	srv := New(ag, ds, cfg, d.tasks, d.logger, d.mc)
+	srv := New(ag, ds, cfg, nil, d.tasks, d.logger, d.mc)
 	return srv, mockAgent
 }
 
@@ -902,7 +902,7 @@ func TestAuthMiddleware_Protection(t *testing.T) {
 	d := newTestDeps()
 	ag := agent.New(cfg, d.mc)
 	ds := datasource.New(cfg)
-	s := New(ag, ds, cfg, d.tasks, d.logger, d.mc)
+	s := New(ag, ds, cfg, nil, d.tasks, d.logger, d.mc)
 
 	r := gin.New()
 	s.RegisterRoutes(r)
@@ -956,7 +956,7 @@ func TestScopeAuthMiddleware_AccessControl(t *testing.T) {
 	d := newTestDeps()
 	ag := agent.New(cfg, d.mc)
 	ds := datasource.New(cfg)
-	s := New(ag, ds, cfg, d.tasks, d.logger, d.mc)
+	s := New(ag, ds, cfg, nil, d.tasks, d.logger, d.mc)
 
 	r := gin.New()
 	s.RegisterRoutes(r)

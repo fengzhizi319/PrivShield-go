@@ -140,7 +140,7 @@ func TestPipelineOperationDerivationIsIdenticalAcrossRESTandGRPC(t *testing.T) {
 			grpcStore := memory.NewTaskStore()
 
 			restSrv := handlers.New(agent.New(cfg, metrics.NewCollector("hub-rest-contract")),
-				datasource.New(cfg), cfg, restStore, logger, metrics.NewCollector("hub-rest-contract"))
+				datasource.New(cfg), cfg, nil, restStore, logger, metrics.NewCollector("hub-rest-contract"))
 			defer restSrv.Shutdown()
 			grpcSrv := grpcserver.New(agent.New(cfg, metrics.NewCollector("hub-grpc-contract")),
 				datasource.New(cfg), cfg, grpcStore, logger)
@@ -210,7 +210,7 @@ func TestPipelineFailsClosedWithoutClassificationOnBothPaths(t *testing.T) {
 
 	restStore := memory.NewTaskStore()
 	restMC := metrics.NewCollector("hub-rest-contract-failclosed")
-	restSrv := handlers.New(agent.New(cfg, restMC), datasource.New(cfg), cfg, restStore, logger, restMC)
+	restSrv := handlers.New(agent.New(cfg, restMC), datasource.New(cfg), cfg, nil, restStore, logger, restMC)
 	defer restSrv.Shutdown()
 	grpcStore := memory.NewTaskStore()
 	grpcSrv := grpcserver.New(agent.New(cfg, metrics.NewCollector("hub-grpc-contract-failclosed")), datasource.New(cfg), cfg, grpcStore, logger)
