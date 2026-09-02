@@ -86,6 +86,11 @@ type ServerTLSConfig struct {
 	// PinnedPubKeyFile 为固定的受信任客户端公钥 PEM 文件路径（可选）。
 	// 若配置此项，将在 TLS 握手阶段比对客户端证书公钥指纹。
 	PinnedPubKeyFile string
+
+	// NationalCipher 启用国密 TLS 合规模式（三级等保/密评 G-01）。
+	// 启用后将在日志中输出 TLCP 部署指引。完整国密 TLS（TLCP/GB/T 38636）
+	// 需在 Ingress/Envoy 层或第三方库实现，Go 标准库尚未原生支持 SM2/SM3/SM4 套件。
+	NationalCipher bool
 }
 
 // BuildServerTLSConfig constructs a *tls.Config supporting TLS 1.3, mTLS client auth, and public key pinning.
@@ -130,6 +135,17 @@ func BuildServerTLSConfig(cfg *ServerTLSConfig) (*tls.Config, error) {
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS13,
+	}
+
+	// 三级等保/密评 G-01：国密 TLS 合规指引
+	if cfg.NationalCipher {
+		// Go 标准库 crypto/tls 不支持 SM2/SM3/SM4 密码套件。
+		// 完整国密 TLS（TLCP）需在 Ingress/Envoy 层部署国密终结，
+		// 或使用第三方库（如 tjfoc/gmsm/tlcp）。
+		// 此处记录合规指引日志，供运维参考。
+		fmt.Fprintln(os.Stderr, "[TLS] NationalCipher enabled: Go stdlib TLS does not support SM2/SM3/SM4 cipher suites.")
+		fmt.Fprintln(os.Stderr, "[TLS] For full TLCP (GB/T 38636) compliance, deploy national cipher at Ingress/Envoy layer")
+		fmt.Fprintln(os.Stderr, "[TLS] or use a third-party library such as tjfoc/gmsm/tlcp.")
 	}
 
 	clientAuthMode := strings.ToLower(strings.TrimSpace(cfg.ClientAuth))

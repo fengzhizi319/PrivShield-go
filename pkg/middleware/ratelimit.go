@@ -245,7 +245,7 @@ func RateLimitWithKeyFunc(rps int, burst int, keyFunc func(*gin.Context) string)
 
 		key := keyFunc(c)
 		if key == "" {
-			key = c.ClientIP()
+			key = RealClientIP(c)
 		}
 		if !limiter.Allow(key) {
 			c.Writer.Header().Set("Retry-After", "1")
@@ -263,7 +263,7 @@ func RateLimitWithKeyFunc(rps int, burst int, keyFunc func(*gin.Context) string)
 }
 
 func defaultRateLimitKey(c *gin.Context) string {
-	return c.ClientIP()
+	return RealClientIP(c)
 }
 
 // NormalizeRateLimitPath 将路径中的动态 ID 段替换为 :id 占位符，防止高基数路径导致限流桶爆炸。

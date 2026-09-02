@@ -67,6 +67,30 @@ type UserInfo struct {
 }
 
 // ============================================================================
+// TOTP 请求/响应模型
+// ============================================================================
+
+// EnableTOTPResponse 启用 TOTP 的响应体。
+type EnableTOTPResponse struct {
+	Secret    string `json:"secret"`     // Base32 编码的 TOTP 密钥
+	AuthURL   string `json:"auth_url"`   // otpauth:// URI（供二维码扫描器使用）
+	Enabled   bool   `json:"enabled"`    // 是否已启用
+	Via       string `json:"via"`        // 来源标识
+}
+
+// ValidateTOTPRequest TOTP 校验请求体。
+type ValidateTOTPRequest struct {
+	Code string `json:"code" binding:"required"` // 6 位 TOTP 码
+}
+
+// ValidateTOTPResponse TOTP 校验响应体。
+type ValidateTOTPResponse struct {
+	Valid   bool   `json:"valid"`   // 校验结果
+	Message string `json:"message"` // 结果说明
+	Via     string `json:"via"`     // 来源标识
+}
+
+// ============================================================================
 // HTTP Handlers
 // ============================================================================
 
@@ -99,6 +123,8 @@ func (h *Handlers) HandleRegister(c *gin.Context) {
 			code = "INVALID_USERNAME"
 		case errors.Is(err, ErrPasswordTooShort):
 			code = "PASSWORD_TOO_SHORT"
+		case errors.Is(err, ErrPasswordWeak):
+			code = "PASSWORD_WEAK"
 		case errors.Is(err, ErrInvalidRole):
 			code = "INVALID_ROLE"
 		}
@@ -159,6 +185,16 @@ func (h *Handlers) HandleLogin(c *gin.Context) {
 	// 校验用户名和密码
 	user, err := h.store.Authenticate(req.Username, req.Password)
 	if err != nil {
+		if errors.Is(err, ErrAccountLocked) {
+			h.logger.Warn("login attempt on locked account", "username", req.Username)
+			c.JSON(http.StatusLocked, gin.H{
+				"code":    "ACCOUNT_LOCKED",
+				"message": "Account temporarily locked due to too many failed attempts. Try again later.",
+				"via":     "app-lz-bff",
+			})
+			return
+		}
+
 		status := http.StatusUnauthorized
 		code := "AUTH_FAILED"
 
@@ -240,9 +276,166 @@ func (h *Handlers) HandleMe(c *gin.Context) {
 	})
 }
 
+// HandleLogout 吊销当前用户的 JWT 令牌。
+//
+// POST /api/auth/logout
+// Authorization: Bearer <token>
+// Response 200: {"message": "Logged out", "via": "app-lz-bff"}
+func (h *Handlers) HandleLogout(c *gin.Context) {
+	token := extractBearerToken(c.GetHeader("Authorization"))
+	if token != "" {
+		h.jwtMgr.RevokeToken(token)
+		claims := GetClaims(c)
+		if claims != nil {
+			h.logger.Info("user logged out", "username", claims.Subject)
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Logged out successfully",
+		"via":     "app-lz-bff",
+	})
+}
+
+// HandleEnableTOTP 处理启用 TOTP 多因素认证请求。
+//
+// POST /api/auth/totp/enable
+// Authorization: Bearer <token>
+// Response 200: {"secret": "...", "auth_url": "...", "enabled": true, "via": "app-lz-bff"}
+//
+// 流程：
+//  1. 从 JWT 中提取当前用户名
+//  2. 为用户生成 TOTP 密钥并启用
+//  3. 返回密钥和 otpauth:// URI（供扫描器生成二维码）
+func (h *Handlers) HandleEnableTOTP(c *gin.Context) {
+	claims := GetClaims(c)
+	if claims == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    "UNAUTHORIZED",
+			"message": "Unauthorized: authentication required",
+			"via":     "app-lz-bff",
+		})
+		return
+	}
+
+	// 为用户生成 TOTP 密钥
+	secret, err := h.store.EnableTOTP(claims.Subject)
+	if err != nil {
+		status := http.StatusBadRequest
+		code := "TOTP_ENABLE_FAILED"
+
+		if errors.Is(err, ErrTOTPAlreadyEnabled) {
+			code = "TOTP_ALREADY_ENABLED"
+		} else if errors.Is(err, ErrUserNotFound) {
+			status = http.StatusNotFound
+			code = "USER_NOT_FOUND"
+		}
+
+		c.JSON(status, gin.H{
+			"code":    code,
+			"message": err.Error(),
+			"via":     "app-lz-bff",
+		})
+		return
+	}
+
+	// 生成 otpauth:// URI
+	authURL := GenerateOTPAuthURL(secret, claims.Subject, "PrivShield")
+
+	h.logger.Info("TOTP enabled for user",
+		"username", claims.Subject,
+	)
+
+	c.JSON(http.StatusOK, EnableTOTPResponse{
+		Secret:  secret,
+		AuthURL: authURL,
+		Enabled: true,
+		Via:     "app-lz-bff",
+	})
+}
+
+// HandleValidateTOTP 处理 TOTP 码校验请求。
+//
+// POST /api/auth/totp/validate
+// Authorization: Bearer <token>
+// Body: {"code": "123456"}
+// Response 200: {"valid": true, "message": "...", "via": "app-lz-bff"}
+//
+// 流程：
+//  1. 从 JWT 中提取当前用户名
+//  2. 校验用户提交的 6 位 TOTP 码
+//  3. 返回校验结果（true/false）
+func (h *Handlers) HandleValidateTOTP(c *gin.Context) {
+	claims := GetClaims(c)
+	if claims == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    "UNAUTHORIZED",
+			"message": "Unauthorized: authentication required",
+			"via":     "app-lz-bff",
+		})
+		return
+	}
+
+	var req ValidateTOTPRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    "INVALID_REQUEST",
+			"message": "Invalid request: " + err.Error(),
+			"via":     "app-lz-bff",
+		})
+		return
+	}
+
+	// 校验 TOTP 码
+	err := h.store.ValidateTOTP(claims.Subject, req.Code)
+	if err != nil {
+		if errors.Is(err, ErrTOTPInvalidCode) {
+			h.logger.Warn("TOTP validation failed",
+				"username", claims.Subject,
+				"reason", "invalid code",
+			)
+			c.JSON(http.StatusOK, ValidateTOTPResponse{
+				Valid:   false,
+				Message: "Invalid TOTP code",
+				Via:     "app-lz-bff",
+			})
+			return
+		}
+
+		status := http.StatusBadRequest
+		code := "TOTP_VALIDATION_FAILED"
+
+		if errors.Is(err, ErrTOTPNotEnabled) {
+			code = "TOTP_NOT_ENABLED"
+		} else if errors.Is(err, ErrUserNotFound) {
+			status = http.StatusNotFound
+			code = "USER_NOT_FOUND"
+		}
+
+		c.JSON(status, gin.H{
+			"code":    code,
+			"message": err.Error(),
+			"via":     "app-lz-bff",
+		})
+		return
+	}
+
+	h.logger.Info("TOTP validation successful",
+		"username", claims.Subject,
+	)
+
+	c.JSON(http.StatusOK, ValidateTOTPResponse{
+		Valid:   true,
+		Message: "TOTP code validated successfully",
+		Via:     "app-lz-bff",
+	})
+}
+
 // RegisterRoutes 在 Gin 路由引擎上注册认证相关路由。
 func (h *Handlers) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/register", h.HandleRegister)
 	r.POST("/login", h.HandleLogin)
+	r.POST("/logout", h.HandleLogout)
 	r.GET("/me", h.HandleMe)
+	r.POST("/totp/enable", h.HandleEnableTOTP)
+	r.POST("/totp/validate", h.HandleValidateTOTP)
 }

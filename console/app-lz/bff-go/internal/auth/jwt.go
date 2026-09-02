@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -48,8 +49,9 @@ func (c *Claims) Valid() bool {
 
 // JWTManager 管理 JWT 令牌的签发与校验。
 type JWTManager struct {
-	secret      []byte // HMAC 签名密钥
-	expiryHours int    // 令牌有效期（小时）
+	secret      []byte
+	expiryHours int
+	blacklist   sync.Map // token SHA-256 hash -> expiry Unix timestamp (int64)
 }
 
 // NewJWTManager 创建 JWT 管理器。
@@ -61,10 +63,12 @@ func NewJWTManager(secret string, expiryHours int) (*JWTManager, error) {
 	if expiryHours <= 0 {
 		expiryHours = 24
 	}
-	return &JWTManager{
+	m := &JWTManager{
 		secret:      []byte(secret),
 		expiryHours: expiryHours,
-	}, nil
+	}
+	go m.cleanupLoop()
+	return m, nil
 }
 
 // GenerateToken 为指定用户签发 JWT 令牌。
@@ -125,6 +129,11 @@ func (m *JWTManager) ValidateToken(tokenString string) (*Claims, error) {
 		return nil, errors.New("auth: token expired")
 	}
 
+	// 校验吊销名单（三级等保 G-05）
+	if m.isBlacklisted(tokenString) {
+		return nil, errors.New("auth: token has been revoked")
+	}
+
 	return &claims, nil
 }
 
@@ -133,6 +142,51 @@ func (m *JWTManager) sign(data []byte) string {
 	mac := hmac.New(sha256.New, m.secret)
 	mac.Write(data)
 	return base64URLEncode(mac.Sum(nil))
+}
+
+// RevokeToken 将令牌加入吊销名单（三级等保 G-05）。
+// 吊销后的令牌在过期之前都无法再通过 ValidateToken 校验。
+func (m *JWTManager) RevokeToken(tokenString string) {
+	h := tokenHash(tokenString)
+	claims, err := m.ValidateToken(tokenString)
+	if err != nil {
+		return
+	}
+	m.blacklist.Store(h, claims.ExpiresAt)
+}
+
+// isBlacklisted 检查令牌是否在吊销名单中。
+func (m *JWTManager) isBlacklisted(tokenString string) bool {
+	h := tokenHash(tokenString)
+	if v, ok := m.blacklist.Load(h); ok {
+		expiry := v.(int64)
+		if time.Now().Unix() < expiry {
+			return true
+		}
+		m.blacklist.Delete(h)
+	}
+	return false
+}
+
+// tokenHash 计算令牌的 SHA-256 摘要作为黑名单 key。
+func tokenHash(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return fmt.Sprintf("%x", sum)
+}
+
+// cleanupLoop 定期清理已过期的吊销记录，防止内存无限增长。
+func (m *JWTManager) cleanupLoop() {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		now := time.Now().Unix()
+		m.blacklist.Range(func(key, value any) bool {
+			if expiry, ok := value.(int64); ok && now >= expiry {
+				m.blacklist.Delete(key)
+			}
+			return true
+		})
+	}
 }
 
 // ============================================================================

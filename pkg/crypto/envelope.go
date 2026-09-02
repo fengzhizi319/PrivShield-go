@@ -29,6 +29,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
+	"time"
 )
 
 const (
@@ -55,7 +57,118 @@ var (
 	// ErrUnencryptedValue 表示读到的值不带任何密文版本前缀：在启用加密的实例上视为
 	// 被篡改或降级数据，拒绝当作明文返回给调用方。
 	ErrUnencryptedValue = errors.New("crypto: value is not envelope-encrypted (missing enc:v1:/enc:v2: prefix)")
+
+	// ErrKeyVersionNotFound 表示请求的密钥版本不存在。
+	ErrKeyVersionNotFound = errors.New("crypto: key version not found")
 )
+
+// CryptoAuditEvent 记录一次密码操作的审计事件（三级等保 G-13）。
+type CryptoAuditEvent struct {
+	Operation  string // "sm4_encrypt", "sm4_decrypt", "sm3_hash"
+	Timestamp  int64  // Unix nano
+	KeyVersion string // 使用的密钥版本
+	InputLen   int    // 输入数据长度（不记录明文内容）
+	Success    bool   // 操作是否成功
+	Error      string // 错误信息（如有）
+}
+
+// CryptoAuditLogger 密码操作审计日志接口（G-13）。
+// 实现方可将审计事件写入独立审计表、SIEM 或日志文件。
+type CryptoAuditLogger interface {
+	LogCryptoAudit(event CryptoAuditEvent)
+}
+
+var cryptoAuditLogger CryptoAuditLogger
+
+// SetCryptoAuditLogger 注册密码操作审计日志记录器（G-13）。
+func SetCryptoAuditLogger(logger CryptoAuditLogger) {
+	cryptoAuditLogger = logger
+}
+
+func auditCrypto(op, keyVersion string, inputLen int, success bool, err error) {
+	if cryptoAuditLogger == nil {
+		return
+	}
+	errMsg := ""
+	if err != nil {
+		errMsg = err.Error()
+	}
+	cryptoAuditLogger.LogCryptoAudit(CryptoAuditEvent{
+		Operation:  op,
+		Timestamp:  time.Now().UnixNano(),
+		KeyVersion: keyVersion,
+		InputLen:   inputLen,
+		Success:    success,
+		Error:      errMsg,
+	})
+}
+
+// KeyVersion 表示一个带版本标识的加密密钥（三级等保 G-08 密钥生命周期管理）。
+type KeyVersion struct {
+	Version   string // 版本标识（如 "v1", "v2", "20250901"）
+	Key       []byte // 密钥材料
+	Active    bool   // 是否为当前活跃密钥（写入使用）
+	CreatedAt int64  // 创建时间（Unix timestamp）
+}
+
+// keyRegistry 管理多版本密钥，支持密钥轮换过渡期。
+var (
+	keyRegistry   []*KeyVersion
+	keyRegistryMu sync.RWMutex
+)
+
+// RegisterKeyVersion 注册一个新的密钥版本（G-08 密钥轮换）。
+// 注册后该版本可用于解密，若 active=true 则同时用于加密。
+func RegisterKeyVersion(version string, key []byte, active bool) {
+	keyRegistryMu.Lock()
+	defer keyRegistryMu.Unlock()
+	// 若已有同版本，更新之
+	for _, kv := range keyRegistry {
+		if kv.Version == version {
+			kv.Key = key
+			kv.Active = active
+			return
+		}
+	}
+	keyRegistry = append(keyRegistry, &KeyVersion{
+		Version:   version,
+		Key:       key,
+		Active:    active,
+		CreatedAt: time.Now().Unix(),
+	})
+	// 若设为 active，取消其他 active 标记
+	if active {
+		for _, kv := range keyRegistry {
+			if kv.Version != version {
+				kv.Active = false
+			}
+		}
+	}
+}
+
+// ActiveKeyVersion 返回当前活跃密钥版本（用于加密写入）。
+func ActiveKeyVersion() *KeyVersion {
+	keyRegistryMu.RLock()
+	defer keyRegistryMu.RUnlock()
+	for _, kv := range keyRegistry {
+		if kv.Active {
+			return kv
+		}
+	}
+	return nil
+}
+
+// LookupKeyVersion 根据版本号查找密钥（用于解密读取）。
+func LookupKeyVersion(version string) (*KeyVersion, error) {
+	keyRegistryMu.RLock()
+	defer keyRegistryMu.RUnlock()
+	for _, kv := range keyRegistry {
+		if kv.Version == version {
+			return kv, nil
+		}
+	}
+	return nil, ErrKeyVersionNotFound
+}
 
 // DeriveKey derives a 16-byte (128-bit) SM4 key from a passphrase using SHA-256.
 //

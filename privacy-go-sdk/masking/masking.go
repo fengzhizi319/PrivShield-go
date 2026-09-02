@@ -7,7 +7,6 @@ package masking
 
 import (
 	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"hash"
@@ -17,6 +16,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/fengzhizi319/PrivShield-go/privacy-go-sdk/internal/sm3"
 )
 
 // ──────────────────────────────────────────────
@@ -274,14 +275,14 @@ func getHMACPool(salt string) *sync.Pool {
 	}
 	p, _ := hmacPools.LoadOrStore(salt, &sync.Pool{
 		New: func() any {
-			return hmac.New(sha256.New, []byte(salt))
+			return hmac.New(sm3.New, []byte(salt))
 		},
 	})
 	return p.(*sync.Pool)
 }
 
-// HashHMAC 生成 HMAC-SHA256 不可逆加盐散列，base64 编码后截取前 16 字符。
-// 与 Python hash_value 对齐：HMAC-SHA256(salt, value) → base64 → 前16字符。
+// HashHMAC 生成 HMAC-SM3 不可逆加盐散列，base64 编码后截取前 16 字符。
+// 密评合规 G-07：使用国密 SM3 替代 HMAC-SHA256。
 // 内部使用 sync.Pool 复用 hash.Hash 实例，同 salt 场景下降低堆分配。
 func HashHMAC(value, salt string) string {
 	pool := getHMACPool(salt)
@@ -311,7 +312,7 @@ func Truncate(value string, keepPrefix int) (string, error) {
 }
 
 // FpeEncryptNumeric 保留格式加密 (FPE) 算子。
-// 与 Python fpe_encrypt_numeric 对齐：HMAC-SHA256 派生密钥流，逐字符模加置换。
+// 密评合规 G-07：使用国密 HMAC-SM3 派生密钥流，逐字符模加置换。
 // 数字 mod 10、字母 mod 26、分隔符原样保留。
 func FpeEncryptNumeric(value, secretKey string) string {
 	if value == "" {
@@ -320,7 +321,7 @@ func FpeEncryptNumeric(value, secretKey string) string {
 	if secretKey == "" {
 		secretKey = "privshield-default-fpe-key"
 	}
-	h := hmac.New(sha256.New, []byte(secretKey))
+	h := hmac.New(sm3.New, []byte(secretKey))
 	h.Write([]byte(value))
 	digest := h.Sum(nil)
 

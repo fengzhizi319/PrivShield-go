@@ -52,6 +52,7 @@ func ExtractBearerToken(header string) string {
 // ConstantTimeLookup 常量时间查找 token，防止计时攻击。
 // 对 key 进行排序以确保确定性迭代顺序（Go map 迭代顺序随机），
 // 遍历全部 key 且始终比较所有 key，避免时序侧信道泄漏。
+// 三级等保 G-14：跳过已过期的密钥。
 func ConstantTimeLookup(keys map[string]*KeyConfig, token string) *KeyConfig {
 	if len(keys) == 0 {
 		return nil
@@ -70,6 +71,9 @@ func ConstantTimeLookup(keys map[string]*KeyConfig, token string) *KeyConfig {
 		if subtle.ConstantTimeCompare([]byte(key), tokenBytes) == 1 {
 			matched = keys[key]
 		}
+	}
+	if matched != nil && matched.IsExpired() {
+		return nil
 	}
 	return matched
 }

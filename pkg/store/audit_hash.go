@@ -271,3 +271,63 @@ func VerifySnapshotIntegrityHash(stored, snapshotID, auditLogID, prevHash string
 	}
 	return false, ""
 }
+
+// ==============================================================================
+// SM2 数字签名（三级等保/密评 G-10：审计存证不可否认性）
+// ==============================================================================
+
+// SM2Signer 是 SM2 私钥签名器接口。
+type SM2Signer interface {
+	Sign(data []byte) ([]byte, error)
+}
+
+// SM2Verifier 是 SM2 公钥验签器接口。
+type SM2Verifier interface {
+	Verify(data, signature []byte) bool
+}
+
+var (
+	sm2Signer   SM2Signer
+	sm2Verifier SM2Verifier
+)
+
+// SetSM2Signer 注册 SM2 签名器（G-10 审计不可否认性）。
+func SetSM2Signer(signer SM2Signer) {
+	sm2Signer = signer
+}
+
+// SetSM2Verifier 注册 SM2 验签器（G-10 审计不可否认性）。
+func SetSM2Verifier(verifier SM2Verifier) {
+	sm2Verifier = verifier
+}
+
+// SignAuditRecord 使用 SM2 私钥对审计记录签名（G-10）。
+// 返回 hex 编码的签名值。若未配置 SM2 签名器则返回空串。
+func SignAuditRecord(integrityHash string) string {
+	if sm2Signer == nil || integrityHash == "" {
+		return ""
+	}
+	sig, err := sm2Signer.Sign([]byte(integrityHash))
+	if err != nil {
+		return ""
+	}
+	return hex.EncodeToString(sig)
+}
+
+// VerifyAuditSignature 使用 SM2 公钥验证审计记录签名（G-10）。
+func VerifyAuditSignature(integrityHash, signature string) (bool, string) {
+	if signature == "" {
+		return false, "no_signature"
+	}
+	if sm2Verifier == nil {
+		return false, "verifier_not_configured"
+	}
+	sigBytes, err := hex.DecodeString(signature)
+	if err != nil {
+		return false, "invalid_signature_encoding"
+	}
+	if sm2Verifier.Verify([]byte(integrityHash), sigBytes) {
+		return true, "sm2_verified"
+	}
+	return false, "sm2_verification_failed"
+}

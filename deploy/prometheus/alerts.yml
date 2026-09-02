@@ -215,3 +215,99 @@ groups:
           summary: "Audit Log service write failure rate (> 5%)"
           description: "Audit Log write or query error rate exceeds 5%."
 
+  # ==============================================================================
+  # 三级等保 G-09：安全事件集中管理与告警
+  # ==============================================================================
+  - name: PrivShield.security
+    rules:
+      # 暴力破解检测：单 IP 认证失败率突增 / Brute force: single IP auth failure spike
+      - alert: BruteForceDetected
+        expr: |
+          sum by (client_ip) (rate(privacy_auth_failures_total[5m])) > 0.5
+        for: 2m
+        labels:
+          severity: critical
+          service: PrivShield
+          attack_type: brute_force
+        annotations:
+          summary: "Brute force attack detected from {{ $labels.client_ip }}"
+          description: "Client IP {{ $labels.client_ip }} has authentication failure rate > 0.5/s for 2 minutes."
+
+      # 账号锁定事件激增 / Account lockout surge
+      - alert: AccountLockoutSurge
+        expr: |
+          sum(rate(privacy_auth_account_lockouts_total[5m])) > 3
+        for: 5m
+        labels:
+          severity: critical
+          service: PrivShield
+          attack_type: credential_attack
+        annotations:
+          summary: "Multiple account lockouts detected"
+          description: "More than 3 account lockouts per second. Possible coordinated credential attack."
+
+      # 越权访问尝试 / Privilege escalation attempts
+      - alert: PrivilegeEscalationAttempt
+        expr: |
+          sum(rate(privacy_auth_forbidden_total[5m])) > 0.2
+        for: 3m
+        labels:
+          severity: warning
+          service: PrivShield
+          attack_type: privilege_escalation
+        annotations:
+          summary: "Privilege escalation attempts detected"
+          description: "Elevated rate of 403 Forbidden responses. Possible privilege escalation attempts."
+
+      # WAF 攻击拦截率异常 / WAF block rate anomaly
+      - alert: WAFHighBlockRate
+        expr: |
+          sum(rate(privacy_waf_blocks_total[5m])) > 1
+        for: 2m
+        labels:
+          severity: warning
+          service: PrivShield
+          attack_type: web_attack
+        annotations:
+          summary: "High WAF block rate"
+          description: "WAF is blocking > 1 request/s. Possible active web attack (SQLi/XSS/command injection)."
+
+      # JWT 令牌吊销事件 / JWT token revocation events
+      - alert: JWTRevocationSpike
+        expr: |
+          sum(rate(privacy_jwt_revocations_total[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          service: PrivShield
+          attack_type: session_anomaly
+        annotations:
+          summary: "Unusual JWT token revocation rate"
+          description: "High rate of JWT token revocations. Possible session hijacking or mass logout event."
+
+      # 异常流量模式：单 IP 请求量过高 / Abnormal traffic: single IP request volume
+      - alert: AbnormalTrafficVolume
+        expr: |
+          sum by (client_ip) (rate(privacy_requests_total[5m])) > 100
+        for: 3m
+        labels:
+          severity: warning
+          service: PrivShield
+          attack_type: dos
+        annotations:
+          summary: "Abnormal traffic volume from {{ $labels.client_ip }}"
+          description: "Single IP sending > 100 req/s for 3 minutes. Possible DoS or abuse."
+
+      # 密码操作审计：加密/解密操作异常频率 / Crypto operation audit: abnormal frequency
+      - alert: CryptoOperationAnomaly
+        expr: |
+          sum(rate(privacy_crypto_operations_total[5m])) > 500
+        for: 5m
+        labels:
+          severity: warning
+          service: PrivShield
+          attack_type: crypto_abuse
+        annotations:
+          summary: "Abnormal crypto operation frequency"
+          description: "Crypto operations (SM4 encrypt/decrypt, SM3 hash) exceed 500/s. Possible data exfiltration attempt."
+

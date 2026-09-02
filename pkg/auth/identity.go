@@ -6,6 +6,7 @@ package auth
 import (
 	"os"
 	"strings"
+	"time"
 )
 
 // Identity 表示已认证的调用者身份。
@@ -167,11 +168,12 @@ func PermissionForGRPCMethod(method string) string {
 	return ""
 }
 
-// ParseAPIKeysEnv 解析 "token:name:scope1,scope2;token2:name2:scope3" 格式的 API Key 配置。
+// ParseAPIKeysEnv 解析 "token:name:scope1,scope2;token2:name2:scope3:2025-12-31T23:59:59Z" 格式的 API Key 配置。
 // 供 engine-go 与各微服务共享统一的密钥解析逻辑。
-// 安全增强：
-//  1. 对 token、name、scope 做 TrimSpace，避免环境变量中的前后空格导致 Key 无法命中或生成脏名称；
-//  2. 丢弃空 token 的条目，防止空字符串作为合法 Key 被注册。
+// 安全增强（三级等保 G-14）：
+//  1. 支持第 4 字段为 ISO 8601 过期时间
+//  2. 对 token、name、scope 做 TrimSpace
+//  3. 丢弃空 token 的条目
 func ParseAPIKeysEnv(raw string) map[string]*KeyConfig {
 	if raw == "" {
 		return nil
@@ -182,7 +184,7 @@ func ParseAPIKeysEnv(raw string) map[string]*KeyConfig {
 		if entry == "" {
 			continue
 		}
-		parts := strings.SplitN(entry, ":", 3)
+		parts := strings.SplitN(entry, ":", 4)
 		if len(parts) < 2 {
 			continue
 		}
@@ -192,7 +194,7 @@ func ParseAPIKeysEnv(raw string) map[string]*KeyConfig {
 			continue
 		}
 		var scopes []string
-		if len(parts) == 3 && strings.TrimSpace(parts[2]) != "" {
+		if len(parts) >= 3 && strings.TrimSpace(parts[2]) != "" {
 			for _, s := range strings.Split(parts[2], ",") {
 				s = strings.TrimSpace(s)
 				if s != "" {
@@ -203,7 +205,13 @@ func ParseAPIKeysEnv(raw string) map[string]*KeyConfig {
 		if len(scopes) == 0 {
 			scopes = []string{"*"}
 		}
-		keys[token] = &KeyConfig{Name: name, Scopes: scopes}
+		kc := &KeyConfig{Name: name, Scopes: scopes}
+		if len(parts) == 4 && strings.TrimSpace(parts[3]) != "" {
+			if t, err := time.Parse(time.RFC3339, strings.TrimSpace(parts[3])); err == nil {
+				kc.ExpiresAt = &t
+			}
+		}
+		keys[token] = kc
 	}
 	return keys
 }

@@ -154,3 +154,24 @@ func SecurityHeadersTo(w http.ResponseWriter) {
 	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 	w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 }
+
+// ConfigureTrustedProxies 配置 Gin 引擎的可信代理列表（三级等保 G-02）。
+// 仅信任指定 IP/CIDR 的 X-Forwarded-For / X-Real-IP 头部，防止源地址伪造绕过限流。
+// 传入 nil 表示不信任任何代理（直接连接模式），传入空 slice 恢复 Gin 默认行为。
+func ConfigureTrustedProxies(r *gin.Engine, trustedProxies []string) {
+	_ = r.SetTrustedProxies(trustedProxies)
+}
+
+// RealClientIP 从请求中提取真实客户端 IP（三级等保 G-02）。
+// 优先使用 Gin 的 ClientIP()（已受 TrustedProxies 约束），
+// 若为空则回退到 RemoteAddr。该值可安全用于限流 key 与审计日志。
+func RealClientIP(c *gin.Context) string {
+	if ip := c.ClientIP(); ip != "" {
+		return ip
+	}
+	addr := c.Request.RemoteAddr
+	if idx := strings.LastIndex(addr, ":"); idx >= 0 {
+		return addr[:idx]
+	}
+	return addr
+}
