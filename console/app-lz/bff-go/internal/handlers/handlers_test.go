@@ -34,7 +34,7 @@ func setupTestRouter() *Handler {
 	}
 	pool := clients.NewClientPool(cfg)
 	testRunner := runner.NewTestRunner(pool)
-	return NewHandler(cfg, pool, testRunner, nil, nil)
+	return NewHandler(cfg, pool, testRunner, nil, nil, nil)
 }
 
 // TestHealthCheck 验证健康检查端点。
@@ -332,7 +332,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 		RateLimitBurst: 2,
 	}
 	pool := clients.NewClientPool(cfg)
-	h := NewHandler(cfg, pool, runner.NewTestRunner(pool), nil, nil)
+	h := NewHandler(cfg, pool, runner.NewTestRunner(pool), nil, nil, nil)
 	router := SetupRouter(h)
 
 	// 突发 2 次应成功（桶容量 2）
@@ -368,7 +368,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 		RateLimitRPS:  0, // 禁用限流
 	}
 	pool2 := clients.NewClientPool(cfg2)
-	h2 := NewHandler(cfg2, pool2, runner.NewTestRunner(pool2), nil, nil)
+	h2 := NewHandler(cfg2, pool2, runner.NewTestRunner(pool2), nil, nil, nil)
 	router2 := SetupRouter(h2)
 
 	for i := 0; i < 10; i++ {
@@ -381,49 +381,44 @@ func TestRateLimitMiddleware(t *testing.T) {
 	}
 }
 
-// TestAuthMiddleware 验证 API Key 鉴权中间件：空密钥跳过、正确密钥通过、错误密钥 401。
+// TestAuthMiddleware 验证 JWT 鉴权中间件：未启用时放行、启用后无令牌 401、健康探针豁免。
 func TestAuthMiddleware(t *testing.T) {
-	// 场景 1：API Key 为空 → 全部通过
-	cfg1 := &config.Config{RateLimitRPS: 0}
+	// 场景 1：认证未启用（AuthEnabled=false）→ 全部通过
+	cfg1 := &config.Config{RateLimitRPS: 0, AuthEnabled: false}
 	pool1 := clients.NewClientPool(cfg1)
-	h1 := NewHandler(cfg1, pool1, runner.NewTestRunner(pool1), nil, nil)
+	h1 := NewHandler(cfg1, pool1, runner.NewTestRunner(pool1), nil, nil, nil)
 	r1 := SetupRouter(h1)
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/api/lz/topology", nil)
 	r1.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
-		t.Errorf("empty APIKey: expected 200, got %d", w.Code)
+		t.Errorf("auth disabled: expected 200, got %d", w.Code)
 	}
 
-	// 场景 2：API Key 设置 + 正确密钥 → 通过
-	cfg2 := &config.Config{APIKey: "test-secret-key", RateLimitRPS: 0}
+	// 场景 2：认证启用 + 无令牌 → 401
+	cfg2 := &config.Config{
+		RateLimitRPS: 0,
+		AuthEnabled:  true,
+		JWTSecret:    "test-jwt-secret-key-minimum-32-chars!!",
+		JWTExpiryHours: 24,
+	}
 	pool2 := clients.NewClientPool(cfg2)
-	h2 := NewHandler(cfg2, pool2, runner.NewTestRunner(pool2), nil, nil)
+	h2 := NewHandler(cfg2, pool2, runner.NewTestRunner(pool2), nil, nil, nil)
 	r2 := SetupRouter(h2)
 
 	w2 := httptest.NewRecorder()
 	req2, _ := http.NewRequest("GET", "/api/lz/topology", nil)
-	req2.Header.Set("Authorization", "Bearer test-secret-key")
 	r2.ServeHTTP(w2, req2)
-	// 200 或 502（上游不可达）均表示通过了鉴权
-	if w2.Code == http.StatusUnauthorized {
-		t.Errorf("correct APIKey: got 401, should pass auth")
+	if w2.Code != http.StatusUnauthorized {
+		t.Errorf("auth enabled + no token: expected 401, got %d", w2.Code)
 	}
 
-	// 场景 3：API Key 设置 + 缺失密钥 → 401
+	// 场景 3：认证启用 + 健康检查端点豁免 → 200
 	w3 := httptest.NewRecorder()
-	req3, _ := http.NewRequest("GET", "/api/lz/topology", nil)
+	req3, _ := http.NewRequest("GET", "/api/health", nil)
 	r2.ServeHTTP(w3, req3)
-	if w3.Code != http.StatusUnauthorized {
-		t.Errorf("missing APIKey: expected 401, got %d", w3.Code)
-	}
-
-	// 场景 4：健康检查端点豁免
-	w4 := httptest.NewRecorder()
-	req4, _ := http.NewRequest("GET", "/api/health", nil)
-	r2.ServeHTTP(w4, req4)
-	if w4.Code != http.StatusOK {
-		t.Errorf("health endpoint: expected 200, got %d", w4.Code)
+	if w3.Code != http.StatusOK {
+		t.Errorf("health endpoint: expected 200, got %d", w3.Code)
 	}
 }

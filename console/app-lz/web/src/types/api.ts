@@ -10,7 +10,8 @@
  *  6. E2E 测试套件        → TestSuiteAssertion, TestSuiteCase, RunTestSuiteRequest/Response
  *  7. 数据源切片          → Datasource, DatasourceSliceResponse
  *  8. 审计 & Merkle 验真 → AuditLogItem, AuditVerifyResponse
- *  9. 预设数据 API 会话  → DataApiDef, DataApiSessionStage, DataApiSessionResponse
+ * 9. 预设数据 API 会话  → DataApiDef, DataApiSessionStage, DataApiSessionResponse
+ * 10. 用户认证与 RBAC    → User, LoginRequest, LoginResponse, RegisterRequest
  *
  * 注意：字段命名使用 snake_case，与 Go JSON tag 保持一致。
  */
@@ -488,4 +489,48 @@ export interface DataApiSessionResponse {
   total_duration_ms: number;
   /** 错误信息（仅当 status='failed' 时存在） */
   error?: string;
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 10. 用户认证与 RBAC
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/** 用户角色类型 */
+export type UserRole = 'user' | 'admin';
+
+/**
+ * 系统用户信息。
+ * 对应 BFF auth/handlers.go 中的 UserInfo 结构体。
+ */
+export interface User {
+  /** 用户名（唯一标识） */
+  username: string;
+  /** 显示名称 */
+  display_name: string;
+  /** 角色: 'user' | 'admin' */
+  role: UserRole;
+  /** 注册时间（ISO 8601） */
+  created_at?: string;
+}
+
+/** 用户登录请求。 */
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
+/** 用户注册请求。 */
+export interface RegisterRequest {
+  username: string;
+  password: string;
+  display_name?: string;
+  role: UserRole;
+}
+
+/** 认证响应（登录/注册共用）。 */
+export interface AuthResponse {
+  /** JWT 令牌 */
+  token: string;
+  /** 用户信息 */
+  user: User;
 }

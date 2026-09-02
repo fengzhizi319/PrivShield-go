@@ -34,6 +34,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/auth"
 	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/catalog"
 	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/clients"
 	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/config"
@@ -48,24 +49,26 @@ import (
 // Handler 持有所有 HTTP 处理器的依赖。
 // 所有 handler 方法共享同一个 Handler 实例，通过它访问配置、客户端池、测试执行器与监控指标。
 type Handler struct {
-	cfg    *config.Config      // 运行时配置
-	pool   *clients.ClientPool // 上游微服务 HTTP 客户端池
-	runner *runner.TestRunner  // E2E 测试套件执行器
-	mc     *metrics.Collector  // 本 BFF 自身的 Prometheus 指标（可为 nil）
-	logger *slog.Logger        // 结构化日志记录器
+	cfg         *config.Config      // 运行时配置
+	pool        *clients.ClientPool // 上游微服务 HTTP 客户端池
+	runner      *runner.TestRunner  // E2E 测试套件执行器
+	mc          *metrics.Collector  // 本 BFF 自身的 Prometheus 指标（可为 nil）
+	logger      *slog.Logger        // 结构化日志记录器
+	authHandler *auth.Handlers      // RBAC 认证处理器（可为 nil，认证未启用时）
 }
 
 // NewHandler 创建一个新的 Handler 实例；mc 可为 nil（不暴露 /metrics）。
-func NewHandler(cfg *config.Config, pool *clients.ClientPool, runner *runner.TestRunner, mc *metrics.Collector, logger *slog.Logger) *Handler {
+func NewHandler(cfg *config.Config, pool *clients.ClientPool, runner *runner.TestRunner, mc *metrics.Collector, logger *slog.Logger, authHandler *auth.Handlers) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Handler{
-		cfg:    cfg,
-		pool:   pool,
-		runner: runner,
-		mc:     mc,
-		logger: logger,
+		cfg:         cfg,
+		pool:        pool,
+		runner:      runner,
+		mc:          mc,
+		logger:      logger,
+		authHandler: authHandler,
 	}
 }
 
@@ -73,13 +76,14 @@ func NewHandler(cfg *config.Config, pool *clients.ClientPool, runner *runner.Tes
 //
 // 路由结构：
 //
+//	/api/auth/*        — 用户认证（注册/登录/当前用户）
 //	/api/health          — BFF 自身健康检查
 //	/api/lz/topology     — 服务拓扑探测
 //	/api/lz/pipeline     — 6 阶段流水线状态
 //	/api/lz/tasks/*      — 任务管理（列表/详情/租约/派发）
-//	/api/lz/suites/*     — E2E 测试套件
+//	/api/lz/suites/*     — E2E 测试套件（仅 admin）
 //	/api/lz/audit/*      — 审计日志与 Merkle 验真
-//	/api/lz/metrics*     — Prometheus 指标
+//	/api/lz/metrics*     — Prometheus 指标（仅 admin）
 //	/api/lz/data-api/*   — 预设数据 API
 //	/*                   — SPA 静态文件回退（NoRoute handler）
 func SetupRouter(h *Handler) *gin.Engine {
@@ -88,15 +92,31 @@ func SetupRouter(h *Handler) *gin.Engine {
 	r.Use(middleware.TraceMiddleware())             // 分布式追踪 ID 自动注入与双头下发
 	r.Use(pkgobs.RequestLoggerWithModule("app-lz")) // 每请求结构化日志（method/path/status/latency）
 	r.Use(middleware.Recovery(h.logger, "app-lz"))  // 全局 panic 恢复中间件
-	r.Use(gzipResponse())                            // gzip 响应压缩（JSON 文本压缩率 ~70-80%）
+	r.Use(gzipResponse())                           // gzip 响应压缩（JSON 文本压缩率 ~70-80%）
 	r.Use(middleware.SecurityHeaders())             // 安全响应头 (CSP/HSTS/X-Frame-Options)
 	r.Use(middleware.MaxBodySize(32 << 20))         // 32 MiB 请求体最大保护
 	r.Use(middleware.MaxConcurrent(1000))           // 并发在途请求上限，超限返回 503
 	if h.cfg.RateLimitRPS > 0 {
 		r.Use(middleware.RateLimit(h.cfg.RateLimitRPS, h.cfg.RateLimitBurst)) // 每客户端 IP 令牌桶限流
 	}
-	r.Use(corsMiddleware())              // 全局 CORS 中间件
-	r.Use(middleware.Auth(h.cfg.APIKey)) // API Key 鉴权（为空时跳过）
+	r.Use(corsMiddleware()) // 全局 CORS 中间件
+
+	// ── JWT 认证中间件（authEnabled=false 时放行）──
+	var jwtMgr *auth.JWTManager
+	if h.cfg.AuthEnabled && h.cfg.JWTSecret != "" {
+		var err error
+		jwtMgr, err = auth.NewJWTManager(h.cfg.JWTSecret, h.cfg.JWTExpiryHours)
+		if err != nil {
+			h.logger.Error("failed to create JWT manager, auth disabled", "error", err.Error())
+		}
+	}
+	if jwtMgr != nil {
+		r.Use(auth.JWTAuthMiddleware(jwtMgr, true))
+	} else {
+		// 认证未启用时使用空 JWT manager + authEnabled=false 放行
+		dummyMgr, _ := auth.NewJWTManager("development-only-secret-key-32chars!!", 24)
+		r.Use(auth.JWTAuthMiddleware(dummyMgr, false))
+	}
 
 	// ── 健康检查（两个路径均支持，兼容不同探测配置）──
 	r.GET("/api/health", h.HealthCheck)
@@ -108,7 +128,13 @@ func SetupRouter(h *Handler) *gin.Engine {
 		r.GET("/metrics", h.mc.Handler())
 	}
 
-	// ── App-LZ API 分组 ──
+	// ── 认证路由（公开，无需 JWT）──
+	if h.authHandler != nil {
+		authGroup := r.Group("/api/auth")
+		h.authHandler.RegisterRoutes(authGroup)
+	}
+
+	// ── App-LZ API 分组（需认证，user + admin 均可）──
 	api := r.Group("/api/lz")
 	{
 		// 1. 拓扑探测（GET 和 POST 均支持，POST 用于强制刷新）
@@ -124,21 +150,23 @@ func SetupRouter(h *Handler) *gin.Engine {
 		api.GET("/tasks/leases", h.GetLeases)
 		api.POST("/tasks/dispatch", h.DispatchTask)
 
-		// 3. E2E 测试套件（获取可用套件 / 执行套件）
-		api.GET("/suites", h.GetSuites)
-		api.POST("/suites/run", h.RunSuites)
-
-		// 4. 审计日志与 Merkle 验真
+		// 3. 审计日志与 Merkle 验真
 		api.GET("/audit/logs", h.GetAuditLogs)
 		api.POST("/audit/verify", h.VerifyAudit)
 
-		// 5. Prometheus 性能指标（原始 / 解析后）
-		api.GET("/metrics", h.GetMetrics)
-		api.GET("/metrics/parsed", h.GetParsedMetrics)
-
-		// 6. 预设数据 API（获取定义 / 调用会话）
+		// 4. 预设数据 API（获取定义 / 调用会话）
 		api.GET("/data-api/definitions", h.GetDataApiDefinitions)
 		api.POST("/data-api/invoke", h.InvokeDataApi)
+
+		// 5. 管理员专属端点（仅 admin 角色可访问）
+		adminRoutes := api.Group("")
+		adminRoutes.Use(auth.RequireRole("admin"))
+		{
+			adminRoutes.GET("/suites", h.GetSuites)
+			adminRoutes.POST("/suites/run", h.RunSuites)
+			adminRoutes.GET("/metrics", h.GetMetrics)
+			adminRoutes.GET("/metrics/parsed", h.GetParsedMetrics)
+		}
 	}
 
 	// ── SPA 静态文件服务 ──
@@ -587,7 +615,7 @@ func (h *Handler) InvokeDataApi(c *gin.Context) {
 		stages = append(stages, models.DataApiSessionStage{
 			Name: "audit", Title: "不可篡改审计存证", Status: "success",
 			DurationMs: auditDuration, ComputeMs: auditComputeMs, NetworkMs: auditNetMs,
-			Detail:     fmt.Sprintf("SHA-256 存证已写入 audit-log (%s)", auditEntryID),
+			Detail: fmt.Sprintf("SHA-256 存证已写入 audit-log (%s)", auditEntryID),
 		})
 	}
 

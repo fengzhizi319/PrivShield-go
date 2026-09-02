@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/auth"
 	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/clients"
 	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/config"
 	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/handlers"
@@ -52,7 +53,7 @@ func main() {
 	pkgobs.InitLogger(cfg.LogFormat, cfg.LogLevel)
 	logger := slog.Default()
 
-	// ── 第 3 步：初始化核心组件 ────────────────────────────────────────
+	// ── 第 3 步：初始化核心组件 ────────────────────────────────────────────
 	// Collector: Prometheus 指标收集器；注册为 naming 的观测器后，
 	// 别名流量 / 归一化失败会在解析收口处自动上报（api_rename_design.md §7.2）。
 	mc := metrics.NewCollector("app-lz-bff")
@@ -61,8 +62,25 @@ func main() {
 	pool := clients.NewClientPool(cfg)
 	// TestRunner: E2E 测试套件执行器（TS-01 审计验真 / TS-02 压测 / TS-03 租约争抢）
 	testRunner := runner.NewTestRunner(pool)
+
+	// ── 第 3.5 步：初始化 RBAC 用户认证组件 ────────────────────────────
+	var authHandler *auth.Handlers
+	if cfg.AuthEnabled && cfg.JWTSecret != "" {
+		jwtMgr, jwtErr := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTExpiryHours)
+		if jwtErr != nil {
+			log.Fatalf("invalid JWT configuration: %v", jwtErr)
+		}
+		userStore := auth.NewUserStore()
+		authHandler = auth.NewHandlers(userStore, jwtMgr, logger)
+		logger.Info("RBAC user authentication enabled",
+			"jwt_expiry_hours", cfg.JWTExpiryHours,
+			"user_db_path", cfg.UserDBPath)
+	} else {
+		logger.Info("RBAC user authentication disabled (development mode)")
+	}
+
 	// Handler: 所有 HTTP 请求的处理层，编排 ClientPool 和 TestRunner
-	h := handlers.NewHandler(cfg, pool, testRunner, mc, logger)
+	h := handlers.NewHandler(cfg, pool, testRunner, mc, logger, authHandler)
 	// SetupRouter: 注册所有 API 路由 + SPA 静态文件回退
 	router := handlers.SetupRouter(h)
 

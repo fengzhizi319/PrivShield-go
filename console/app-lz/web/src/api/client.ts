@@ -28,10 +28,38 @@ import {
   AuditVerifyResponse,
   DataApiDef,
   DataApiSessionResponse,
+  LoginRequest,
+  RegisterRequest,
+  AuthResponse,
+  User,
 } from '../types/api';
 
 /** BFF 统一 API 前缀（Vite proxy / Nginx 将此路径反代到 Go BFF :8081） */
 const BASE_URL = '/api/lz';
+
+/** localStorage 中存储 JWT 令牌的 key */
+const TOKEN_KEY = 'privshield_token';
+
+/**
+ * 获取存储的 JWT 令牌。
+ */
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+/**
+ * 存储 JWT 令牌。
+ */
+export function setToken(token: string): void {
+  localStorage.setItem(TOKEN_KEY, token);
+}
+
+/**
+ * 清除 JWT 令牌。
+ */
+export function clearToken(): void {
+  localStorage.removeItem(TOKEN_KEY);
+}
 
 /**
  * 通用 JSON 请求函数 — 所有 API 调用的底层入口。
@@ -48,12 +76,19 @@ const BASE_URL = '/api/lz';
  * @throws Error 当 HTTP 状态非 2xx 时抛出，消息优先取响应体中的 error/detail 字段
  */
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
+  // 自动附加 JWT 令牌（如果存在）
+  const token = getToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options?.headers as Record<string, string> || {}),
+  };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   const res = await fetch(url, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
+    headers,
   });
   if (!res.ok) {
     // 尝试从响应体提取人类可读的错误信息
@@ -241,5 +276,38 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ api_id: apiId, limit, lean }),
     });
+  },
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // 7. 用户认证（注册 / 登录 / 当前用户）
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  /**
+   * 用户注册。
+   * @param req 用户名、密码、显示名称、角色
+   */
+  async register(req: RegisterRequest): Promise<AuthResponse> {
+    return fetchJSON<AuthResponse>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(req),
+    });
+  },
+
+  /**
+   * 用户登录。
+   * @param req 用户名、密码
+   */
+  async login(req: LoginRequest): Promise<AuthResponse> {
+    return fetchJSON<AuthResponse>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(req),
+    });
+  },
+
+  /**
+   * 获取当前登录用户信息。
+   */
+  async getMe(): Promise<User> {
+    return fetchJSON<User>('/api/auth/me');
   },
 };

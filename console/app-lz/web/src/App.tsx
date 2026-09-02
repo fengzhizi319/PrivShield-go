@@ -18,8 +18,9 @@
  *   - 每个 fetch 函数都有 fallback 兆底（BFF 层已做一层兆底，前端做二层兆底）
  *
  * 渲染逻辑：
- *   - 左侧固定 Sidebar 导航
- *   - 右侧根据 currentTab 条件渲染对应的面板组件
+ *   - AuthProvider 包裹整个应用，管理用户认证与角色
+ *   - 未登录 → 显示 LoginPage
+ *   - 已登录 → 左侧固定 Sidebar 导航（按角色过滤） + 右侧面板
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import { api } from './api/client';
@@ -41,8 +42,21 @@ import { AuditVerifierPanel } from './components/AuditVerifierPanel';
 import { MetricsPanel } from './components/MetricsPanel';
 import { DataApiPanel } from './components/DataApiPanel';
 import { BenchmarkPanel } from './components/BenchmarkPanel';
+import { AuthProvider, useAuth } from './auth/AuthContext';
+import { LoginPage } from './pages/LoginPage';
 
 export const App: React.FC = () => {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
+  );
+};
+
+/** AppContent — 主内容组件（在 AuthProvider 内部使用） */
+const AppContent: React.FC = () => {
+  const { isAuthenticated, isAdmin, isLoading } = useAuth();
+
   // ── 导航状态 ──
   const [currentTab, setCurrentTab] = useState<TabType>('topology');
   const [activeProtocol, setActiveProtocol] = useState<'rest' | 'grpc'>('rest');
@@ -64,6 +78,25 @@ export const App: React.FC = () => {
   const [loadingRunner, setLoadingRunner] = useState(false);
   const [loadingAudit, setLoadingAudit] = useState(false);
   const [loadingMetrics, setLoadingMetrics] = useState(false);
+
+  // ── 认证加载状态：正在检查令牌有效性时显示加载屏 ──
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-12 h-12 mx-auto rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-amber-500 flex items-center justify-center text-white font-bold text-xl mb-4 animate-pulse">
+            LZ
+          </div>
+          <p className="text-slate-400 text-sm">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── 未登录：显示登录页面 ──
+  if (!isAuthenticated) {
+    return <LoginPage />;
+  }
 
   // ── 数据拉取函数 ──────────────────────────────────────────────────
 
@@ -244,10 +277,10 @@ export const App: React.FC = () => {
     }
   }, [currentTab, hasActiveTasks, fetchTasksAndLeases]);
 
-  // ── 渲染：左侧导航 + 右侧面板 ──────────────────────────────────
+  // ── 渲染：左侧导航 + 右侧面板 ────────────────────────────────────
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex">
-      {/* 左侧固定导航栏（品牌标识 + 6 个标签页 + 语言切换） */}
+      {/* 左侧固定导航栏（品牌标识 + 角色过滤导航 + 用户信息） */}
       <Sidebar
         currentTab={currentTab}
         onSelectTab={setCurrentTab}
@@ -267,12 +300,14 @@ export const App: React.FC = () => {
           />
         </div>
 
-        {/* 性能与吞吐量压测大屏 */}
-        <div style={{ display: currentTab === 'benchmark' ? 'block' : 'none' }}>
-          <BenchmarkPanel
-            apis={dataApiDefs}
-          />
-        </div>
+        {/* 性能与吞吐量压测大屏（仅 admin） */}
+        {isAdmin && (
+          <div style={{ display: currentTab === 'benchmark' ? 'block' : 'none' }}>
+            <BenchmarkPanel
+              apis={dataApiDefs}
+            />
+          </div>
+        )}
 
         {/* 任务生命周期大屏 */}
         <div style={{ display: currentTab === 'tasks' ? 'block' : 'none' }}>
@@ -284,23 +319,25 @@ export const App: React.FC = () => {
           />
         </div>
 
-        {/* E2E 测试运行器大屏 */}
-        <div style={{ display: currentTab === 'runner' ? 'block' : 'none' }}>
-          <TestRunnerPanel
-            suites={suites}
-            onRunSuites={async (req) => {
-              setLoadingRunner(true);
-              try {
-                const res = await api.runSuites(req);
-                fetchTasksAndLeases();
-                return res;
-              } finally {
-                setLoadingRunner(false);
-              }
-            }}
-            loading={loadingRunner}
-          />
-        </div>
+        {/* E2E 测试运行器大屏（仅 admin） */}
+        {isAdmin && (
+          <div style={{ display: currentTab === 'runner' ? 'block' : 'none' }}>
+            <TestRunnerPanel
+              suites={suites}
+              onRunSuites={async (req) => {
+                setLoadingRunner(true);
+                try {
+                  const res = await api.runSuites(req);
+                  fetchTasksAndLeases();
+                  return res;
+                } finally {
+                  setLoadingRunner(false);
+                }
+              }}
+              loading={loadingRunner}
+            />
+          </div>
+        )}
 
         {/* 审计验证大屏 */}
         <div style={{ display: currentTab === 'audit' ? 'block' : 'none' }}>
@@ -312,15 +349,17 @@ export const App: React.FC = () => {
           />
         </div>
 
-        {/* 性能指标大屏 */}
-        <div style={{ display: currentTab === 'metrics' ? 'block' : 'none' }}>
-          <MetricsPanel
-            metricsRaw={metricsRaw}
-            parsedMetrics={parsedMetrics}
-            onRefreshMetrics={fetchMetrics}
-            loading={loadingMetrics}
-          />
-        </div>
+        {/* 性能指标大屏（仅 admin） */}
+        {isAdmin && (
+          <div style={{ display: currentTab === 'metrics' ? 'block' : 'none' }}>
+            <MetricsPanel
+              metricsRaw={metricsRaw}
+              parsedMetrics={parsedMetrics}
+              onRefreshMetrics={fetchMetrics}
+              loading={loadingMetrics}
+            />
+          </div>
+        )}
 
         {/* 预设数据 API 大屏 */}
         <div style={{ display: currentTab === 'dataApi' ? 'block' : 'none' }}>

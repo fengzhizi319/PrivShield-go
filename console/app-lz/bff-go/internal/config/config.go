@@ -54,7 +54,13 @@ type Config struct {
 	ClientCAFile string // 客户端 CA 证书路径（用于 mTLS）
 
 	// ── 认证配置 ──
-	APIKey string // API Key（用于 BFF 自身的认证校验）
+	APIKey string // API Key（用于 BFF 自身的出站认证校验）
+
+	// ── RBAC 用户认证配置 ──
+	AuthEnabled    bool   // 是否启用用户认证（JWT），默认 false（开发模式放行）
+	JWTSecret      string // JWT 签名密钥（最少 32 字符）
+	JWTExpiryHours int    // JWT 令牌有效期（小时，默认 24）
+	UserDBPath     string // 用户数据持久化路径（空 = 内存模式）
 
 	// ── 限流配置 ──
 	RateLimitRPS   int // 每客户端 IP 每秒允许请求数（默认 100，0 = 不限流）
@@ -103,6 +109,12 @@ func Load() *Config {
 	// ── 认证 ──
 	apiKey := pkgconfig.EnvString("APP_LZ_API_KEY", "")
 
+	// ── RBAC 用户认证 ──
+	authEnabled := pkgconfig.EnvBool("APP_LZ_AUTH_ENABLED", false)
+	jwtSecret := pkgconfig.EnvString("APP_LZ_JWT_SECRET", "")
+	jwtExpiryHours := pkgconfig.EnvInt("APP_LZ_JWT_EXPIRY_HOURS", 24)
+	userDBPath := pkgconfig.EnvString("APP_LZ_USER_DB_PATH", "")
+
 	return &Config{
 		Host:             host,
 		Port:             port,
@@ -127,6 +139,10 @@ func Load() *Config {
 		KeyFile:          keyFile,
 		ClientCAFile:     clientCAFile,
 		APIKey:           apiKey,
+		AuthEnabled:      authEnabled,
+		JWTSecret:        jwtSecret,
+		JWTExpiryHours:   jwtExpiryHours,
+		UserDBPath:       userDBPath,
 
 		// ── 限流 ──
 		RateLimitRPS:   pkgconfig.EnvInt("APP_LZ_RATE_LIMIT_RPS", 100),
