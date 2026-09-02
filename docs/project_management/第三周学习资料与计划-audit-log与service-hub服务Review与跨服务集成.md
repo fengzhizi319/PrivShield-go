@@ -926,3 +926,586 @@ type Task struct {
 | k_anon (2) | mask (1) | k_anon | 只允许上调 |
 | dp (3) | dp (3) | dp | 强度相等 |
 | mask (1) | "" (空) | mask | 空请求采用定级结果 |
+
+---
+
+## 第 7 章：audit-log 归档段格式与验真算法深度走读
+
+### 7.1 归档段文件命名与防覆盖策略
+
+归档段文件名格式：`audit-archive-<cutoff>-<seq>.ndjson.gz.enc`
+
+```go
+func (a *Archiver) nextSegmentName(cutoff time.Time) (string, error) {
+    prefix := "audit-archive-" + cutoff.UTC().Format("20060102T150405Z") + "-"
+    for seq := 0; seq < 1000000; seq++ {
+        name := fmt.Sprintf("%s%06d%s", prefix, seq, segmentSuffix)
+        // 检查文件是否已存在，绝不覆盖既有归档证据
+        switch _, err := os.Stat(path); {
+        case errors.Is(err, fs.ErrNotExist):
+            return name, nil  // 找到未占用的文件名
+        }
+    }
+}
+```
+
+**设计要点**：
+- cutoff 时间戳 UTC 格式化为 `20060102T150405Z`，保证排序与可读性
+- 6 位序号（`%06d`）支持同一 cutoff 最多 100 万个段
+- `os.O_EXCL` 创建标志防止并发覆盖
+- 路径穿越防护：`resolveInDir` 拒绝含 `/`、`\\`、`..` 的文件名
+
+### 7.2 NDJSON 行哈希链构造
+
+归档段内每行 NDJSON 记录通过 SM3 哈希链串联：
+
+```go
+func writeChainLine(w io.Writer, chain *string, line *archiveLine) error {
+    raw, err := json.Marshal(line)
+    // chain[i] = SM3(chain[i-1] || line[i])
+    *chain = crypto.SumSM3Hex(append([]byte(*chain), raw...))
+    raw = append(raw, '\n')
+    _, err = w.Write(raw)
+    return err
+}
+```
+
+**链式结构**：
+```
+chain[0] = SM3("" || line[0])     // 首行：前驱为空串
+chain[1] = SM3(chain[0] || line[1])
+chain[2] = SM3(chain[1] || line[2])
+...
+chainTail = chain[n-1]            // 链尾写入 manifest.json
+```
+
+**与主日志哈希链的区别**：
+- 主日志链：9 要素前映像 + HMAC-SM3，每条记录独立可验
+- 归档段行链：SM3(前驱 || 当前行 JSON)，检测增删改与重排序
+
+### 7.3 SM4-GCM 加密落盘与 fsync 持久化
+
+归档段写入流程：
+
+```
+NDJSON 行 → bytes.Buffer → gzip 压缩 → SM4-GCM 加密 → O_EXCL 写入 → fsync 文件 + 目录
+```
+
+```go
+func writeFsync(path string, data []byte) error {
+    f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+    f.Write(data)
+    f.Sync()        // 文件数据刷盘
+    f.Close()
+    d, _ := os.Open(filepath.Dir(path))
+    d.Sync()        // 目录项刷盘（确保文件条目持久化）
+    d.Close()
+}
+```
+
+**权限控制**：文件 `0o600`（仅属主可读写），目录 `0o700`
+
+### 7.4 VerifySegment 独立验真全流程
+
+`VerifySegment` 无需访问数据库，仅凭段文件 + 清单 + 密钥即可判定归档证据完整性：
+
+```
+① 读取 manifest.json → 校验版本与段文件名引用
+② 读取 .ndjson.gz.enc → SM4-GCM 解密 → gzip 解压 → 得到 NDJSON 原文
+③ 逐行重算 SM3 行哈希链 → 与 manifest.ChainTail 比对
+④ 逐行 JSON 反序列化 → 统计 log/snapshot 计数
+⑤ 对每条 log 重算 9 要素 integrity_hash → 与记录中的 IntegrityHash 比对
+⑥ 校验边界 ID 与时间戳与 manifest 一致
+```
+
+**验真失败条件**：
+- 行哈希链不匹配 → 证据被修改、截断或重排序
+- 记录计数不一致 → 证据被增删
+- 边界 ID/时间戳不匹配 → 段文件与清单不对应
+- 单条 log 的 integrity_hash 不匹配 → 记录内容被篡改
+
+### 7.5 路径穿越防护与安全文件名校验
+
+```go
+func resolveInDir(dir, name string) (string, error) {
+    // 拒绝含路径分隔符或特殊字符的文件名
+    if strings.ContainsRune(name, os.PathSeparator) || name == "." || name == ".." ||
+       strings.Contains(name, "/") || strings.Contains(name, "\\") {
+        return "", fmt.Errorf("archive: unsafe file name %q", name)
+    }
+    // 解析绝对路径后校验目录包含关系
+    base, _ := filepath.Abs(dir)
+    full, _ := filepath.Abs(filepath.Join(base, name))
+    if filepath.Dir(full) != base {
+        return "", fmt.Errorf("archive: %q escapes archive dir %s", name, dir)
+    }
+    return full, nil
+}
+```
+
+---
+
+## 第 8 章：service-hub 流水线 processTask 完整执行路径走读
+
+### 8.1 ingest → fetch → classify 阶段
+
+**① ingest 阶段**：
+- 更新 `task.Status = "running"`、`task.Stage = "ingest"`
+- 持久化任务状态到 TaskStore
+- 检查优雅停机信号（`s.ctx.Done()`）
+
+**② fetch 阶段**：
+- 若 `req.Payload` 为空，自动向 datasource-mgr 拉取数据
+- `s.datasource.FetchData(ctx, datasourceID, 10, 0)` — 最多拉取 10 条
+- 获取成功后回写 `task.PayloadJSON` 并持久化
+
+**③ classify 阶段**（核心）：
+- 一次调用 engine 医疗流水线 `/v1/medical/process`
+- 同时完成：3-Layer 分类分级 + L4/L5 高敏文本剥离 + PII 强掩码 + ICD-10 脱敏
+- 15 秒超时，幂等键 `hub-<taskID>-classify-<retryCount>`
+- 失败时按 `BiasDownstream` 分类错误（可重试/不可重试）
+
+### 8.2 desensitize 阶段：Agent 调用与指纹回传
+
+**④ desensitize 阶段**：
+- 已由 ③ classify 合并完成，快速通过
+- 保留阶段状态追踪（`task.Stage = "desensitize"`）
+- 从 classify 结果中提取：`egressOutput`（脱敏数据）、`egressLevel`（最高敏感级别）、`egressHashIn/Out`（SM3 指纹）
+
+**算子强度校验**（P1-1）：
+```go
+effectiveOp := models.EffectiveOperation(req.Operation, derivedOp)
+// 调用方请求的算子只允许上调保护强度
+```
+
+### 8.3 return 阶段：结果返回与脱敏快照
+
+**⑤ return 阶段**：
+- 组装脱敏后的数据对象
+- 保存脱敏快照（`SnapshotRecord`）到审计存储
+- 快照包含：输入/输出样本（截断）、算法参数、完整性哈希
+
+### 8.4 audit 阶段：存证强绑定与证据链锚定
+
+**⑥ audit 阶段**（P0-6 红线）：
+- 调用 `s.audit.Submit(ctx, evidence)` 向 audit-log 提交存证
+- 存证内容包含：`task_id`、`api_code`、`datasource_id`、`input_hash`、`output_hash`、`security_level`、`operation`
+- **提交失败 → 任务失败**：无论何种原因（未配置/网络不可达/4xx/5xx），任务状态置为 `failed`
+- 存证成功后，将 `integrity_hash` 回写到任务记录（证据链锚定）
+
+### 8.5 信号量并发控制与优雅停机
+
+**并发控制**：
+```go
+s.taskSem <- struct{}{}        // 获取信号量（最多 10 个并发任务）
+defer func() { <-s.taskSem }() // 释放信号量
+```
+
+**Panic 安全恢复**：
+```go
+defer func() {
+    if r := recover(); r != nil {
+        task.Status = "failed"
+        task.Error = fmt.Sprintf("internal panic: %v", r)
+        task.ErrorClass = retry.ClassInternal
+        _ = s.persistTask(task, "panic recovery")
+    }
+}()
+```
+
+**优雅停机检查**：每个阶段开始前检查 `s.ctx.Done()`，收到停机信号时任务标记为 `failed`（`ClassShutdown`）。
+
+---
+
+## 第 9 章：app-lz BFF 层聚合代理深度走读
+
+### 9.1 四上游服务客户端注册
+
+BFF 层通过 `ClientPool` 管理与 4 个上游服务的 HTTP 通信：
+
+```go
+type ClientPool struct {
+    cfg        *config.Config
+    httpClient *http.Client  // 共享 HTTP 客户端（连接池复用）
+}
+```
+
+**连接池配置**：
+- 全局超时：10s
+- 最大空闲连接：100
+- 每主机最大空闲连接：25
+- 空闲连接回收：90s
+- TLS：`InsecureSkipVerify: true`（兼容自签名证书）
+
+**请求头注入**（`setHeaders`）：
+- `X-Request-ID`：链路追踪标识
+- `X-Trace-ID`：分布式追踪 ID
+- `Authorization: Bearer <APIKey>`：按 serviceID 选择对应的 Key
+
+### 9.2 请求路由与转发映射
+
+BFF 路由分组（`/api/lz/*`）：
+
+| 路由组 | 上游服务 | 说明 |
+|---|---|---|
+| `/api/lz/topology` | 全部 4 个 | 服务拓扑探测 |
+| `/api/lz/pipeline` | service-hub | 6 阶段流水线状态 |
+| `/api/lz/tasks/*` | service-hub | 任务管理 |
+| `/api/lz/suites/*` | 本地执行 | E2E 测试套件 |
+| `/api/lz/audit/*` | audit-log | 审计日志与验真 |
+| `/api/lz/metrics*` | 本 BFF | Prometheus 指标 |
+| `/api/lz/data-api/*` | 编排调用 | 预设数据 API（5 阶段会话） |
+
+**降级策略**：上游不可达时返回硬编码 fallback 数据（`sourceFallback` 标记），确保前端大屏在开发/演示模式下仍有数据展示。
+
+### 9.3 认证与会话管理（JWT + TOTP）
+
+BFF 层本地管理用户认证：
+
+```go
+// JWT 认证中间件
+if h.cfg.AuthEnabled && h.cfg.JWTSecret != "" {
+    jwtMgr, _ := auth.NewJWTManager(h.cfg.JWTSecret, h.cfg.JWTExpiryHours)
+    r.Use(auth.JWTAuthMiddleware(jwtMgr, true))
+}
+```
+
+**认证流程**：
+1. 用户登录 → 验证用户名/密码 → 签发 JWT
+2. 后续请求携带 `Authorization: Bearer <JWT>` → 中间件校验
+3. TOTP 双因素（可选）：登录时验证 TOTP 码
+
+### 9.4 上游健康检查聚合
+
+`ProbeNode` 方法探测单个上游微服务的健康状态：
+
+```
+① REST 探测：GET /api/health → 失败则回退 /health
+② gRPC 探测：TCP Dial 检测端口可达性（800ms 超时）
+③ 综合判断：根据前端选择的活跃协议设置整体状态
+```
+
+**特殊处理**：gRPC TCP 探测失败但 REST 正常时，认为 gRPC 也「ready」（本地 mock 模式兼容）。
+
+---
+
+## 第 10 章：代码走读指南
+
+### 推荐阅读顺序
+
+1. **先读测试文件**：理解预期行为与边界条件
+   - `services/audit-log/internal/archive/archive_test.go`
+   - `services/service-hub/internal/handlers/handlers_test.go`
+   - `services/service-hub/internal/retry/retry_test.go`
+
+2. **再读核心实现**：
+   - `services/audit-log/internal/archive/archive.go` — 归档留存红线
+   - `services/service-hub/internal/handlers/handlers.go` — 6 阶段流水线
+   - `services/service-hub/internal/audit/client.go` — 存证客户端
+
+3. **最后读启动流程**：
+   - `services/audit-log/cmd/server/main.go`
+   - `services/service-hub/cmd/server/main.go`
+
+### 标记约定
+
+- `// REVIEW:` — 需要讨论的代码段
+- `// P0-6` — 出域 ↔ 留痕强绑定相关
+- `// P1-1` — 算子强度单调不减约束
+- `// G-05` — 三级等保合规相关
+
+---
+
+## 第 11 章：常见问题与排查指南
+
+### 问题 1：service-hub 任务一直 pending 不执行
+
+**排查步骤**：
+1. 检查存储模式：PostgreSQL 模式由共享租约 worker 消费，SQLite/内存模式由本地 worker 消费
+2. 检查 `StartLocalWorker` 是否被调用
+3. 检查任务信号量是否已满（`taskSem` 容量 10）
+
+### 问题 2：audit-log 归档段验真失败
+
+**排查步骤**：
+1. 确认密钥与归档时使用的密钥一致
+2. 检查段文件是否被修改（`os.Stat` 对比文件大小）
+3. 检查 manifest.json 的 `chain_tail` 与实际重算结果
+
+### 问题 3：存证提交失败导致任务 failed
+
+**排查步骤**：
+1. 检查 `SERVICE_HUB_AUDIT_LOG_URLS` 是否配置
+2. 检查 audit-log 服务是否存活（`GET /health`）
+3. 检查 audit-log 返回的状态码（4xx = 契约问题，5xx = 服务端问题）
+4. 查看 service-hub 日志中的 `error_class` 字段
+
+### 问题 4：BFF 层返回 fallback 数据
+
+**排查步骤**：
+1. 检查响应中的 `source` 字段是否为 `"fallback"`
+2. 检查上游服务是否存活（`/api/lz/topology`）
+3. 检查 BFF 日志中的上游调用错误
+
+---
+
+## 第 12 章：术语表
+
+| 术语 | 英文 | 含义 |
+|---|---|---|
+| 6 阶段流水线 | 6-Stage Pipeline | ingest → fetch → classify → desensitize → return → audit |
+| 租约任务存储 | Leased Task Store | 基于租约的任务并发抢占与崩溃恢复机制 |
+| 归档留存红线 | Archive Retention Red Line | 到期存证必须先归档后删除的强制策略 |
+| 错误分类 | Error Classification | 将错误归一化为有界枚举（timeout/downstream/contract 等） |
+| 算子强度单调不减 | Operation Strength Monotonic | 调用方请求的算子只允许上调保护强度 |
+| 出域留痕绑定 | Egress-Evidence Binding | 每次脱敏数据出域必须关联一条存证记录 |
+| BFF 聚合代理 | BFF Aggregation Proxy | 前端专用后端，聚合多个上游服务的 API |
+| 命名归一化 | Naming Normalization | 将各种词表统一映射到规范标识符 |
+| 写只角色 | Write-Only Role | PostgreSQL 仅授予 INSERT/SELECT 权限的数据库角色 |
+| 独立验真 | Independent Verification | 无需访问数据库，仅凭段文件 + 清单 + 密钥验证归档完整性 |
+
+---
+
+## 第 13 章：Review 检查清单详细版
+
+### audit-log 服务检查清单
+
+#### `cmd/server/main.go`
+
+- [ ] 配置加载后立即校验（`cfg.Validate()`）
+- [ ] 信封加密密钥版本注册先于存储初始化
+- [ ] SM2 签名器未配置时跳过（不影响哈希链）
+- [ ] 存证密钥为空时 Warn 而非 Fatal
+- [ ] SQLite 启动时完整性校验
+- [ ] 存储分层降级：PostgreSQL → SQLite → 内存
+- [ ] Write-Only PostgreSQL 自检覆盖 UPDATE/DELETE
+- [ ] BufferedAuditStore 装饰器包装
+- [ ] 留存清理协程：`RetentionDays=0` 时不启动
+- [ ] 优雅停机：gRPC 30s 超时 → 强制停止
+
+#### `internal/archive/archive.go`
+
+- [ ] 目录/密钥缺失时 fail-closed（`ErrMissingDir`/`ErrMissingKey`）
+- [ ] 分页循环上限 `maxArchivePages=100000`
+- [ ] 归档段写入后立即 `VerifySegment` 验真
+- [ ] 验真失败 → 不删除（`"deletion refused"`）
+- [ ] 删除返回 0 → `ErrNotDeleted` 中止
+- [ ] 行哈希链：`chain[i] = SM3(chain[i-1] || line[i])`
+- [ ] `writeFsync`：`O_EXCL` + `fsync` 文件 + 目录
+- [ ] `resolveInDir` 路径穿越防护
+- [ ] 段文件名防覆盖（序号递增 + `Stat` 检查）
+
+### service-hub 服务检查清单
+
+#### `internal/handlers/handlers.go`
+
+- [ ] `processTask` 信号量限流（`taskSem` 容量 10）
+- [ ] Panic 安全恢复：`recover()` → 任务 failed + 持久化
+- [ ] 每阶段前检查优雅停机信号（`s.ctx.Done()`）
+- [ ] ③ classify 阶段：15s 超时 + 幂等键
+- [ ] ⑥ audit 阶段：提交失败 → 任务 failed（P0-6）
+- [ ] `EffectiveOperation` 算子强度单调不减
+- [ ] `scopeAuthMiddleware` 常量时间 Key 查找
+- [ ] 过期 Key 不得使用（`matched.IsExpired()`）
+- [ ] `Dispatch` 数据源 ID 归一化（`naming.ResolveInbound`）
+- [ ] PostgreSQL 模式由租约 worker 消费，非本地 goroutine
+
+#### `internal/audit/client.go`
+
+- [ ] 三条红线：失败即任务失败 / 禁止伪造链头 / 真实指纹
+- [ ] 多端点支持（`SERVICE_HUB_AUDIT_LOG_URLS` 逗号分隔）
+- [ ] 重试策略：指数退避 + 随机抖动（500ms base, 3 retries）
+- [ ] 响应体大小限制（4 MiB）
+- [ ] `ErrNotConfigured` 哨兵错误
+
+#### `internal/retry/retry.go`
+
+- [ ] `Classify` 使用 `errors.Is`/`errors.As`（不匹配文案）
+- [ ] `retryableClasses` 表完整（每个分类都有重试判定）
+- [ ] `BiasDownstream` 未知错误按瞬时处理
+- [ ] `BiasConservative` 未知错误按内部故障
+
+### app-lz BFF 层检查清单
+
+- [ ] `ClientPool` 连接池配置合理（100 idle, 25 per host）
+- [ ] `setHeaders` 注入 `X-Request-ID` + `Authorization`
+- [ ] 降级数据标记 `sourceFallback`
+- [ ] JWT 认证中间件（`authEnabled=false` 时放行）
+- [ ] gzip 响应压缩
+- [ ] WAF 中间件（G-12）
+- [ ] 32 MiB 请求体限制
+- [ ] 1000 并发上限
+
+---
+
+## 第 14 章：周交付物清单
+
+### 交付物 1：audit-log 与 service-hub Review 笔记
+
+- [ ] audit-log 启动流程与依赖装配分析
+- [ ] 归档留存红线（archive.go）设计原理报告
+- [ ] service-hub 6 阶段流水线 processTask 完整执行路径分析
+- [ ] 算子强度单调不减约束（P1-1）安全性分析
+- [ ] 存证客户端三条红线设计原理
+- [ ] 错误分类与结构化重试机制分析
+- [ ] 崩溃恢复与租约过期回收机制分析
+
+### 交付物 2：发现的问题清单与改进建议
+
+| 优先级 | 问题 | 位置 | 状态 | 建议 |
+|---|---|---|---|---|
+| P0 | audit 客户端未配置时任务必然 failed | `handlers.go:99` | 设计决策 | 文档明确说明 fail-closed 语义 |
+| P1 | 本地 worker 500ms 轮询间隔可能延迟任务启动 | `handlers.go:131` | 待优化 | 可考虑事件驱动通知 |
+| P1 | BFF 降级数据无显式标记时前端难以区分 | `clients/clients.go` | 待评估 | 统一 `source` 字段标记 |
+| P2 | 归档段文件名序号上限 100 万 | `archive.go:294` | 设计决策 | 极端场景下可能需要扩展 |
+| P2 | processTask 信号量容量硬编码 10 | `handlers.go:106` | 待配置化 | 建议通过环境变量配置 |
+
+### 交付物 3：跨服务集成测试报告
+
+- [ ] 全栈端到端链路验证（hub → engine → audit-log）
+- [ ] 存证证据链一致性验证（integrity_hash 跨服务比对）
+- [ ] 命名归一化一致性验证（安全级别标识跨服务统一）
+- [ ] 错误信封一致性验证（5 字段信封所有服务统一使用）
+- [ ] 超时传播链路验证
+
+---
+
+## 附录 A：关键环境变量速查表
+
+### audit-log 环境变量
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `AUDIT_LOG_PORT` | `8084` | HTTP REST 端口 |
+| `AUDIT_LOG_GRPC_PORT` | `50054` | gRPC 端口 |
+| `AUDIT_LOG_DB_PATH` | `./audit.db` | SQLite 数据库路径 |
+| `AUDIT_LOG_PG_DSN` | `""` | PostgreSQL DSN |
+| `AUDIT_LOG_HASH_KEY` | `""` | HMAC-SM3 存证密钥 |
+| `AUDIT_LOG_ENCRYPTION_KEY` | `""` | SM4-GCM 加密密钥 |
+| `AUDIT_LOG_RETENTION_DAYS` | `0` | 存证保留天数（0=永不清理） |
+| `AUDIT_LOG_ARCHIVE_DIR` | `./archives` | 归档段存储目录 |
+| `AUDIT_LOG_STRICT_STORAGE` | `false` | 严格存储模式（不降级） |
+| `AUDIT_LOG_DB_WRITE_ONLY` | `false` | PostgreSQL 写只角色自检 |
+
+### service-hub 环境变量
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `SERVICE_HUB_PORT` | `8082` | HTTP REST 端口 |
+| `SERVICE_HUB_GRPC_PORT` | `50052` | gRPC 端口 |
+| `AGENT_REST_HOST` | `127.0.0.1` | engine-go REST 地址 |
+| `AGENT_REST_PORT` | `8079` | engine-go REST 端口 |
+| `SERVICE_HUB_DATASOURCE_URL` | `http://127.0.0.1:8083` | datasource-mgr 地址 |
+| `SERVICE_HUB_AUDIT_LOG_URLS` | `""` | audit-log 存证端点（逗号分隔多端点） |
+| `SERVICE_HUB_DB_PATH` | `./hub.db` | SQLite 任务存储路径 |
+| `SERVICE_HUB_API_KEY` | `""` | 单 API Key（向后兼容） |
+| `SERVICE_HUB_API_KEYS` | `""` | Scope-based 多 Key JSON |
+
+---
+
+## 附录 B：服务间调用关系全景图
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        全栈服务调用关系全景图                             │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌──────────────────┐                                                   │
+│  │  React Web (:5173)│                                                  │
+│  └────────┬─────────┘                                                   │
+│           │ HTTP/JSON                                                   │
+│  ┌────────▼─────────────────────────────────────────────────────────┐  │
+│  │  app-lz BFF (:8081)                                              │  │
+│  │  ├── JWT + TOTP 认证                                             │  │
+│  │  ├── ClientPool（4 上游 HTTP 客户端）                             │  │
+│  │  └── 降级 fallback（sourceFallback 标记）                        │  │
+│  └──┬──────────┬──────────┬──────────┬──────────────────────────────┘  │
+│     │          │          │          │                                  │
+│     ▼          ▼          ▼          ▼                                  │
+│  ┌──────┐  ┌──────┐  ┌──────┐  ┌──────────┐                          │
+│  │ hub  │  │audit │  │ ds   │  │ engine   │                          │
+│  │:8082 │  │:8084 │  │:8083 │  │ :8079    │                          │
+│  └──┬───┘  └──────┘  └──────┘  └──────────┘                          │
+│     │                                                                  │
+│     ├──▶ datasource-mgr (:8083) ──── fetch 阶段                       │
+│     ├──▶ engine-go (:8079) ─────────── classify + desensitize 阶段     │
+│     └──▶ audit-log (:8084) ─────────── audit 阶段（P0-6 强绑定）       │
+│                                                                         │
+│  pkg 层共享基础设施：                                                    │
+│  ├── pkg/crypto (SM3/SM4/HKDF)                                        │
+│  ├── pkg/store (AuditStore/TaskStore/flusher)                          │
+│  ├── pkg/middleware (auth/ratelimit/WAF/security headers)               │
+│  ├── pkg/auth (Identity/KeyStore/Scope)                                │
+│  └── pkg/naming (归一化/词表一致性)                                     │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 附录 C：REST API 路由清单
+
+### audit-log REST API
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | `/health` | 无 | 存活探针 |
+| GET | `/readyz` | 无 | 就绪探针 |
+| POST | `/api/audit/logs` | `audit:write` | 创建审计日志 |
+| GET | `/api/audit/logs` | `audit:read` | 分页查询 |
+| GET | `/api/audit/logs/:id` | `audit:read` | 查询单条 |
+| GET | `/api/audit/stats` | `audit:read` | 统计聚合 |
+| GET | `/api/audit/snapshots` | `audit:read` | 查询快照 |
+| POST | `/api/audit/snapshots/verify` | `audit:read` | 验真快照 |
+| GET/POST | `/api/audit/chain/verify` | `audit:read` | 哈希链核验 |
+| GET | `/metrics` | 无 | Prometheus |
+
+### service-hub REST API
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | `/health` | 无 | 存活探针 |
+| GET | `/readyz` | 无 | 就绪探针 |
+| GET | `/api/hub/status` | `hub:read` | 中枢状态 |
+| GET | `/api/hub/tasks` | `hub:read` | 任务列表 |
+| GET | `/api/hub/tasks/:id` | `hub:read` | 任务详情 |
+| POST | `/api/hub/dispatch` | `hub:write` | 分发任务 |
+| GET | `/api/hub/pipeline` | `hub:read` | 流水线状态 |
+| GET | `/metrics` | 无 | Prometheus |
+
+### app-lz BFF REST API
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/health` | BFF 健康检查 |
+| GET | `/api/lz/topology` | 服务拓扑探测 |
+| GET | `/api/lz/pipeline` | 流水线状态 |
+| GET | `/api/lz/tasks` | 任务列表 |
+| POST | `/api/lz/tasks/dispatch` | 分发任务 |
+| GET | `/api/lz/audit/logs` | 审计日志 |
+| POST | `/api/lz/audit/verify` | 归档验真 |
+| POST | `/api/auth/login` | 用户登录 |
+| POST | `/api/auth/register` | 用户注册 |
+
+---
+
+## 附录 D：推荐阅读与延伸阅读
+
+### 必读
+
+1. **《设计数据密集型应用》(DERTA)** — Martin Kleppmann，分布式系统基础
+2. **PostgreSQL `FOR UPDATE SKIP LOCKED` 文档** — 理解租约抢占的 SQL 语义
+3. **RFC 7231 HTTP/1.1 Semantics** — 理解 202 Accepted 语义（异步任务接受）
+4. **Go `signal.NotifyContext` 文档** — 理解优雅停机的最佳实践
+
+### 选读
+
+5. **《Go 并发编程实战》** — 理解信号量、WaitGroup、Context 取消模式
+6. **NDJSON 格式规范** — [ndjson.org](http://ndjson.org/)
+7. **SM4-GCM 安全性分析** — NIST SP 800-38D
+8. **OpenTelemetry Specification** — 理解分布式追踪的 W3C TraceContext 传播
+
+### 在线资源
+
+9. [PostgreSQL SKIP LOCKED 演示](https://www.2ndquadrant.com/en/blog/what-is-select-skip-locked-and-for-update-skip-locked/) — 可视化理解行级锁跳过
+10. [gRPC Keepalive 参数详解](https://github.com/grpc/grpc/blob/master/doc/keepalive.md) — 理解 MaxConnectionAge 与 MaxConnectionAgeGrace 的配合
