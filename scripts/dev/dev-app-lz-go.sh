@@ -190,6 +190,7 @@ start_service_hub() {
     if [[ "$MTLS_MODE" == "true" ]]; then
         SERVICE_HUB_HOST=127.0.0.1 SERVICE_HUB_PORT="$port" \
         SERVICE_HUB_AGENT_REST_HOST=127.0.0.1 SERVICE_HUB_AGENT_REST_PORT=8079 \
+        SERVICE_HUB_AUDIT_LOG_URLS="http://127.0.0.1:8084" \
         SERVICE_HUB_DB_PATH="${DATA_DIR}/service-hub.db" \
         PRIVACY_AGENT_TLS_ENABLED=true \
         PRIVACY_AGENT_TLS_CA_FILE="$CERT_DIR/ca.crt" \
@@ -200,6 +201,7 @@ start_service_hub() {
     else
         SERVICE_HUB_HOST=127.0.0.1 SERVICE_HUB_PORT="$port" \
         SERVICE_HUB_AGENT_REST_HOST=127.0.0.1 SERVICE_HUB_AGENT_REST_PORT=8079 \
+        SERVICE_HUB_AUDIT_LOG_URLS="http://127.0.0.1:8084" \
         SERVICE_HUB_DB_PATH="${DATA_DIR}/service-hub.db" \
         ./bin/service-hub > "${LOGS_DIR}/service-hub_app_lz.log" 2>&1 &
     fi

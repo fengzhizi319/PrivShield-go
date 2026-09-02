@@ -138,6 +138,8 @@ if [ "$WITH_SERVICES" = true ]; then
     (
         cd "$PROJECT_ROOT/services/service-hub"
         go build -o bin/service-hub ./cmd/server
+        SERVICE_HUB_AGENT_REST_HOST=127.0.0.1 SERVICE_HUB_AGENT_REST_PORT=8079 \
+        SERVICE_HUB_AUDIT_LOG_URLS="http://127.0.0.1:8084" \
         nohup ./bin/service-hub < /dev/null > "${LOG_DIR}/service_hub.log" 2>&1 &
         echo $! > "${PIDS_DIR}/service-hub.pid"
     )
