@@ -8,7 +8,42 @@
 
 ---
 
-## 前置知识准备
+## 目录
+
+- [第 1 章：前置知识准备](#第-1-章前置知识准备)
+  - [P0：Go 并发原语速览](#p0go-并发原语速览)
+  - [P1：HTTP 反向代理原理](#p1http-反向代理原理)
+  - [P2：gRPC 流式通信模型](#p2grpc-流式通信模型)
+  - [P3：mTLS 双向认证基础](#p3mtls-双向认证基础)
+  - [P4：Prometheus 指标类型](#p4prometheus-指标类型)
+  - [P5：令牌桶限流算法](#p5令牌桶限流算法)
+- [第 2 章：Day 1-2 网关与流量治理 Review](#第-2-章day-1-2-网关与流量治理-review)
+- [第 3 章：Day 3-4 安全体系 Review](#第-3-章day-3-4-安全体系-reviewmtls认证权限)
+  - [3.1 审查文件清单](#31-审查文件清单)
+  - [3.2 核心知识点详解](#32-核心知识点详解)
+  - [3.3 Day 3-4 Review 方法](#33-day-3-4-review-方法)
+  - [3.4 安全体系纵深分析](#34-安全体系纵深分析)
+  - [3.5 接口权限控制漏洞修复案例](#35-接口权限控制漏洞修复案例sec-09--sec-13)
+- [第 4 章：三级等保/密评合规增强](#第-4-章三级等保密评合规增强)
+  - [4.1 G-03 登录失败处理与账号锁定](#41-g-03-登录失败处理与账号锁定)
+  - [4.2 G-04 密码策略强化](#42-g-04-密码策略强化)
+  - [4.3 G-05 JWT 令牌吊销](#43-g-05-jwt-令牌吊销)
+  - [4.4 G-11 TOTP 双因素认证](#44-g-11-totp-双因素认证)
+  - [4.5 G-12 WAF Web 攻击防护](#45-g-12-waf-web-攻击防护)
+  - [4.6 G-14 API Key 过期与自动轮换](#46-g-14-api-key-过期与自动轮换)
+  - [4.7 G-02 可信代理与源地址校验](#47-g-02-可信代理与源地址校验)
+- [第 5 章：Day 5 可观测性 Review](#第-5-章day-5-可观测性-review日志指标追踪)
+- [第 6 章：Engine-go 启动流程与配置加载链路深度分析](#第-6-章engine-go-启动流程与配置加载链路深度分析)
+- [第 7 章：gRPC 透明代理完整代码走读](#第-7-章grpc-透明代理完整代码走读)
+- [第 8 章：网关部署拓扑与运维指南](#第-8-章网关部署拓扑与运维指南)
+- [附录 A：关键环境变量速查表](#附录-a关键环境变量速查表)
+- [附录 B：核心数据结构关系图](#附录-b核心数据结构关系图)
+- [附录 C：安全认证链路全景图](#附录-c安全认证链路全景图)
+- [附录 D：推荐阅读与延伸阅读](#附录-d推荐阅读与延伸阅读)
+
+---
+
+## 第 1 章：前置知识准备
 
 在开始 Review 之前，需要掌握以下基础概念。这些知识是理解网关与安全体系代码的前提。
 
@@ -25,6 +60,581 @@
 | `chan struct{}` | 信号通道 | 限流器 GC 停机信号、并发信号量 |
 | CAS 循环 (`CompareAndSwap`) | 无锁原子递减防负数 | `DecrementInFlight()` |
 
+以下是每个并发原语都附带**完整可运行代码片段**的详细解释：
+
+---
+
+#### 1. `sync.Mutex` / `sync.RWMutex`
+
+**`sync.Mutex`** 用于**完全互斥**：同一时刻只有一个 goroutine 能进入临界区。  
+**`sync.RWMutex`** 用于**读多写少**：读操作可并发，写操作独占。
+- `sync.Mutex`：最基本的互斥锁。当一个 goroutine 调用 Lock() 后，其他所有尝试 Lock() 的 goroutine 都会进入阻塞等待，直到持有者调用 Unlock()。适用于读写频率相当，或写操作占主导的场景。 
+- `sync.RWMutex`：读写分离锁。允许多个 goroutine 同时持有读锁（RLock()），但写锁（Lock()）会独占，且写锁会阻塞新的读锁。适用于"读多写少"的场景，如熔断器状态查询（高频读）与状态切换（低频写）。 
+
+本项目注意：白名单重载时，使用写锁确保重载过程中不会有 goroutine 读到半量数据；熔断器状态查询使用读锁，保证并发查询不互斥。 
+```go
+package main
+
+import (
+    "fmt"
+    "sync"
+    "time"
+)
+
+// CircuitBreaker 熔断器状态机
+type CircuitBreaker struct {
+    mu     sync.RWMutex        // 保护 state 的读写锁
+    state  string              // "closed"(通路) / "open"(熔断) / "half-open"(半开)
+    counts int                 // 连续失败计数
+}
+
+// GetState 高频调用：使用 RLock，允许多个 goroutine 并发读
+func (cb *CircuitBreaker) GetState() string {
+    cb.mu.RLock()         // 读锁：多个 goroutine 可同时持有
+    defer cb.mu.RUnlock()
+    return cb.state
+}
+
+// Trip 低频调用：使用 Lock，独占式修改状态
+func (cb *CircuitBreaker) Trip() {
+    cb.mu.Lock()          // 写锁：阻塞所有读锁和写锁
+    defer cb.mu.Unlock()
+    cb.state = "open"
+    cb.counts = 0
+    fmt.Println("熔断器已打开")
+}
+
+// Reset 恢复通路
+func (cb *CircuitBreaker) Reset() {
+    cb.mu.Lock()
+    defer cb.mu.Unlock()
+    cb.state = "closed"
+    cb.counts = 0
+}
+
+// WhiteList 白名单配置，需要全量重载
+type WhiteList struct {
+    mu    sync.RWMutex
+    rules map[string]bool  // 如: {"192.168.1.1": true}
+}
+
+// Reload 全量替换：必须加写锁，防止读取方读到半量数据
+func (wl *WhiteList) Reload(newRules map[string]bool) {
+    wl.mu.Lock()
+    defer wl.mu.Unlock()
+    
+    // 直接替换 map 引用，而非逐个修改
+    // 这样读取方要么读到旧 map（完整），要么读到新 map（完整），不会出现中间态
+    wl.rules = newRules
+    fmt.Printf("白名单已重载，共 %d 条规则\n", len(newRules))
+}
+
+// Contains 高频查询：使用读锁
+func (wl *WhiteList) Contains(ip string) bool {
+    wl.mu.RLock()
+    defer wl.mu.RUnlock()
+    return wl.rules[ip]
+}
+
+func main() {
+    cb := &CircuitBreaker{state: "closed"}
+    
+    // 模拟 100 个 goroutine 并发查询状态
+    var wg sync.WaitGroup
+    for i := 0; i < 100; i++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            _ = cb.GetState()  // 100 个并发读，不会阻塞彼此
+        }()
+    }
+    
+    // 同时触发熔断（写操作）
+    go func() {
+        time.Sleep(10 * time.Millisecond)
+        cb.Trip()  // 写锁会等待所有读锁释放后才进入
+    }()
+    
+    wg.Wait()
+}
+```
+
+**关键点**：`RWMutex` 的读锁不互斥，但**写锁会阻塞新的读锁**。如果写操作频繁，读 goroutine 可能"饿死"（长期拿不到锁），此时应降级为 `Mutex`。
+
+---
+
+#### 2. `sync/atomic` — 无锁原子操作
+
+- `sync/atomic`：直接映射到 CPU 原子指令，**无内核态切换**，适合极高频计数器。
+- 直接调用 CPU 提供的原子指令（如 x86 的 LOCK XADD），不涉及操作系统调度，不引发 goroutine 阻塞切换，因此比 Mutex 快 1~2 个数量级。
+局限：只能操作整型（int32/64、uint32/64、uintptr）和指针，无法保护复杂数据结构。
+本项目注意：
+- InFlight（当前处理中请求数）是高频增减的热点变量，用 atomic 避免成为性能瓶颈。
+- RoundRobin 索引只需原子递增后取模，无需锁保护。
+- SWRR（Smooth Weighted Round Robin）的当前权重 currentWeight 也是原子变量，确保多 goroutine 调度时权重计算正确。
+```go
+package main
+
+import (
+    "fmt"
+    "sync"
+    "sync/atomic"
+)
+
+// BackendNode 后端节点，用于负载均衡
+type BackendNode struct {
+    // 使用 atomic.Int64 替代普通 int64，确保并发安全
+    InFlight      atomic.Int64  // 当前处理中的请求数（热点变量）
+    RoundRobinIdx atomic.Int64  // RoundRobin 轮询索引
+    CurWeight     atomic.Int64  // SWRR 当前权重
+    Weight        int64          // 静态配置权重（只读，无需原子）
+    Addr          string
+}
+
+// IncrementInFlight 请求进入时原子递增
+func (n *BackendNode) IncrementInFlight() {
+    // Add(1) 直接映射到 CPU LOCK XADD 指令，纳秒级完成
+    n.InFlight.Add(1)
+}
+
+// GetInFlight 获取当前值
+func (n *BackendNode) GetInFlight() int64 {
+    return n.InFlight.Load()
+}
+
+// NextRoundRobin 原子递增并取模，返回选中的节点索引
+func NextRoundRobin(nodes []*BackendNode) *BackendNode {
+    if len(nodes) == 0 {
+        return nil
+    }
+    // 使用全局原子计数器，所有 goroutine 共享
+    var globalIdx atomic.Int64
+    
+    idx := globalIdx.Add(1) % int64(len(nodes))
+    return nodes[idx]
+}
+
+// SWRRNext Smooth Weighted Round Robin 选择节点
+func SWRRNext(nodes []*BackendNode) *BackendNode {
+    var best *BackendNode
+    var total int64 = 0
+    
+    for _, n := range nodes {
+        // 原子读取当前权重
+        cw := n.CurWeight.Load()
+        cw += n.Weight       // cw = cw + weight
+        n.CurWeight.Store(cw) // 原子写回
+        total += n.Weight
+        
+        if best == nil || cw > best.CurWeight.Load() {
+            best = n
+        }
+    }
+    
+    if best != nil {
+        // 原子递减：best.CurWeight -= total
+        best.CurWeight.Add(-total)
+    }
+    return best
+}
+
+func main() {
+    node := &BackendNode{Addr: "10.0.0.1:8080", Weight: 5}
+    
+    var wg sync.WaitGroup
+    for i := 0; i < 10000; i++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            node.IncrementInFlight()
+        }()
+    }
+    wg.Wait()
+    
+    fmt.Printf("InFlight: %d (应为 10000)\n", node.GetInFlight())
+}
+```
+
+**关键点**：`atomic` 只保证**单个变量的原子性**，不保证**多变量之间的顺序一致性**。如果业务逻辑需要同时修改 `InFlight` 和 `CurWeight` 且两者必须强一致，仍需用 `Mutex`。
+
+---
+
+#### 3. `sync.Pool` — 对象复用
+
+复用临时对象，减轻 GC 压力。**GC 时会清空池内对象**。
+
+- 本质是一个线程安全的对象缓存池。调用 Get() 取对象，Put() 归还。若池为空，Get() 返回 nil（需自行初始化）。
+- 核心特性：每次 GC 运行时，Pool 内所有对象会被无条件清空。这是 Go 的设计，目的是防止 Pool 变成长期引用、阻碍垃圾回收。
+- 本项目注意：32KB 的 []byte 缓冲区如果每次请求都 make，在高并发下会给 GC 带来巨大压力。使用 sync.Pool 复用后，相同内存被反复利用，显著降低分配次数和 GC 频率。但绝不能把 Pool 当作持久缓存——如果业务逻辑要求对象必须长期存活，Pool 不适合。
+```go
+package main
+
+import (
+    "fmt"
+    "sync"
+)
+
+// BufferPool 复用 32KB 的缓冲区，用于读写 HTTP Body
+var BufferPool = sync.Pool{
+    // New 函数：当 Pool 为空时，调用此函数创建新对象
+    New: func() interface{} {
+        // 分配 32KB 的 []byte
+        buf := make([]byte, 32*1024)
+        fmt.Println("Pool 为空，新建 32KB buffer")
+        return &buf  // 返回指针，避免接口转换时的拷贝
+    },
+}
+
+// ProcessRequest 模拟网关处理请求
+func ProcessRequest(bodySize int) {
+    // 从池中取出一个 buffer（可能是复用的，也可能是新创建的）
+    bufPtr := BufferPool.Get().(*[]byte)
+    buf := *bufPtr
+    
+    // 使用 buffer 处理数据
+    if len(buf) < bodySize {
+        // 如果不够大，扩容（实际项目中应避免频繁扩容）
+        newBuf := make([]byte, bodySize)
+        bufPtr = &newBuf
+        buf = newBuf
+    }
+    
+    // 模拟写入数据
+    for i := 0; i < bodySize && i < len(buf); i++ {
+        buf[i] = byte(i % 256)
+    }
+    
+    fmt.Printf("处理 %d 字节数据，buffer 容量 %d\n", bodySize, len(buf))
+    
+    // 使用完毕后归还到池中，供下一个请求复用
+    // 注意：归还前无需清空（reset），因为下一个使用者会覆盖写入
+    BufferPool.Put(bufPtr)
+}
+
+func main() {
+    // 第一次：Pool 为空，触发 New 创建
+    ProcessRequest(1000)
+    
+    // 第二次：复用第一次归还的 buffer，不再触发 New
+    ProcessRequest(2000)
+    
+    // 第三次：继续复用
+    ProcessRequest(500)
+    
+    // 触发 GC 后，Pool 内对象会被清空
+    // 下一次 Get 将再次触发 New
+    fmt.Println("--- 触发 GC ---")
+    // runtime.GC() // 若手动调用，Pool 会被清空
+}
+```
+
+**关键点**：
+- **必须 `Put` 归还**：如果取出后永不归还，Pool 退化为普通分配器，失去复用意义。
+- **不能放有状态对象**：因为 GC 会清空 Pool，且对象可能被其他 goroutine 拿到，**绝不能把 Pool 当作数据库连接池或会话缓存**。
+- **存指针而非值**：`sync.Pool` 的接口是 `interface{}`，存大对象时应存指针（`*[]byte`），避免值拷贝开销。
+
+---
+
+#### 4. `sync.Once` — 惰性初始化
+
+确保某段代码在并发环境下**只执行一次**，后续调用零开销。
+- 内部通过一个原子变量标记"是否已执行"，第一次调用时走慢路径（加锁执行目标函数），后续调用直接原子读标记并返回，后续调用几乎零开销。
+- 本项目注意：反向代理对象（如 httputil.ReverseProxy）的创建可能涉及解析配置、建立连接池等较重操作，使用 sync.Once 确保只创建一次，且多个并发请求不会触发重复创建。追踪器（Tracer）的初始化同理。
+
+```go
+package main
+
+import (
+    "fmt"
+    "net/http/httputil"
+    "net/url"
+    "sync"
+)
+
+// GatewayBackend 网关后端
+type GatewayBackend struct {
+    targetURL *url.URL
+    
+    // once 确保 ReverseProxy 只创建一次
+    once      sync.Once
+    
+    // proxy 是惰性创建的对象，可能被多个 goroutine 并发访问
+    proxy     *httputil.ReverseProxy
+}
+
+// Proxy 获取反向代理实例（线程安全且惰性）
+func (gb *GatewayBackend) Proxy() *httputil.ReverseProxy {
+    // 无论多少 goroutine 同时调用，once.Do 内的函数只执行一次
+    gb.once.Do(func() {
+        fmt.Println("【首次】创建 ReverseProxy，解析目标 URL...")
+        
+        // 创建反向代理：涉及 URL 解析、Transport 配置、连接池初始化
+        // 这是一个较重的操作，不应重复执行
+        gb.proxy = httputil.NewSingleHostReverseProxy(gb.targetURL)
+        
+        // 可以在这里配置自定义 Transport、错误处理、超时等
+        gb.proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+            w.WriteHeader(http.StatusBadGateway)
+            w.Write([]byte("后端服务不可用"))
+        }
+    })
+    
+    // 首次之后的所有调用，直接返回已创建的 proxy，无锁、无阻塞
+    return gb.proxy
+}
+
+// Tracer 分布式追踪器
+type Tracer struct {
+    once sync.Once
+    initErr error
+}
+
+// Init 初始化追踪器（如连接 Jaeger/Zipkin）
+func (t *Tracer) Init() error {
+    t.once.Do(func() {
+        fmt.Println("【首次】初始化追踪器...")
+        // 模拟初始化：建立连接、注册服务名等
+        // t.initErr = initJaeger()
+    })
+    return t.initErr
+}
+
+func main() {
+    backend := &GatewayBackend{
+        targetURL: &url.URL{Scheme: "http", Host: "localhost:8080"},
+    }
+    
+    var wg sync.WaitGroup
+    for i := 0; i < 100; i++ {
+        wg.Add(1)
+        go func(id int) {
+            defer wg.Done()
+            p := backend.Proxy()  // 100 个 goroutine 同时调用
+            fmt.Printf("Goroutine %d 拿到 proxy 指针: %p\n", id, p)
+        }(i)
+    }
+    wg.Wait()
+    
+    // 输出中只有一条 "【首次】创建 ReverseProxy"，证明只执行了一次
+}
+```
+
+**关键点**：
+- `sync.Once` 的 `Do` 方法**没有返回值**，如果初始化可能报错，需通过闭包捕获错误（如上面的 `initErr`）。
+- **不能重置**：`sync.Once` 没有 `Reset` 方法。如果业务需要"重新初始化"，不能用 `sync.Once`，需改用 `atomic.Value` 或 `Mutex`。
+
+---
+
+#### 5. `chan struct{}` — 零内存信号通道
+
+`struct{}` 不占内存，适合纯信号通知（而非数据传输）。
+- struct{} 在 Go 中不占任何内存（unsafe.Sizeof(struct{}{}) == 0），因此 chan struct{} 是传递"纯信号"的最经济方式：关闭通道即广播信号，发送空结构体即单播信号。
+
+本项目注意：
+- 限流器 GC 停机：当限流器需要退出时，关闭一个 chan struct{}，监听该通道的 goroutine 收到零值后优雅退出，避免 goroutine 泄漏。
+- 并发信号量：通过缓冲通道的容量控制并发数，如 sem := make(chan struct{}, 100)，每个请求进入前 sem <- struct{}{}，完成后 <-sem，天然实现"最多 100 并发"的限流。
+
+```go
+package main
+
+import (
+    "fmt"
+    "time"
+)
+
+// RateLimiter 带优雅停机的限流器
+type RateLimiter struct {
+    stopCh   chan struct{}   // 停机信号：关闭此通道即广播"停止工作"
+    tokens   chan struct{}   // 令牌桶：容量即最大并发数
+}
+
+// NewRateLimiter 创建限流器：maxConcurrent 为最大并发数
+func NewRateLimiter(maxConcurrent int) *RateLimiter {
+    return &RateLimiter{
+        stopCh: make(chan struct{}),
+        tokens: make(chan struct{}, maxConcurrent), // 缓冲通道 = 信号量
+    }
+}
+
+// Acquire 获取一个执行许可（阻塞直到获取成功或收到停机信号）
+func (rl *RateLimiter) Acquire() bool {
+    select {
+    case rl.tokens <- struct{}{}:  // 向通道发送空结构体，占用一个槽位
+        return true                 // 成功获取令牌
+    case <-rl.stopCh:              // 若 stopCh 被关闭，此处立即得到零值
+        return false                // 收到停机信号，拒绝新请求
+    }
+}
+
+// Release 归还执行许可
+func (rl *RateLimiter) Release() {
+    select {
+    case <-rl.tokens:  // 从通道取出一个空结构体，释放一个槽位
+    default:            // 防止重复释放导致死锁
+    }
+}
+
+// Stop 优雅停机：关闭信号通道，广播停机指令
+func (rl *RateLimiter) Stop() {
+    close(rl.stopCh)  // 关闭后，所有监听 stopCh 的 goroutine 都会收到通知
+    fmt.Println("限流器停机信号已广播")
+}
+
+// Worker 模拟一个工作 goroutine
+func (rl *RateLimiter) Worker(id int, task string) {
+    if !rl.Acquire() {
+        fmt.Printf("Worker %d: 收到停机信号，拒绝任务 %s\n", id, task)
+        return
+    }
+    defer rl.Release()
+    
+    fmt.Printf("Worker %d: 开始处理 %s\n", id, task)
+    time.Sleep(100 * time.Millisecond)
+    fmt.Printf("Worker %d: 完成 %s\n", id, task)
+}
+
+func main() {
+    // 创建并发数为 3 的限流器
+    rl := NewRateLimiter(3)
+    
+    // 启动 10 个任务
+    for i := 0; i < 10; i++ {
+        go rl.Worker(i, fmt.Sprintf("task-%d", i))
+    }
+    
+    time.Sleep(50 * time.Millisecond)
+    
+    // 模拟系统收到 SIGTERM，触发停机
+    rl.Stop()
+    
+    // 再尝试提交新任务
+    go rl.Worker(99, "late-task")
+    
+    time.Sleep(200 * time.Millisecond)
+}
+```
+
+**关键点**：
+- **关闭通道广播**：`close(stopCh)` 后，所有 `<-stopCh` 的接收方都能立刻得到零值，实现**一对多广播**。这是通道最优雅的用法之一。
+- **缓冲通道作信号量**：`make(chan struct{}, N)` 的容量就是信号量上限。发送占用，接收释放，天然实现"最多 N 并发"。
+- **select 非阻塞检查**：`Release` 中的 `default` 防止在通道已满时阻塞（虽然正常逻辑不应出现这种情况，但作为防御性编程）。
+
+---
+
+#### 6. CAS 循环 (`CompareAndSwap`) — 乐观锁
+
+**Compare-And-Swap**：只有当内存值等于预期值 `old` 时，才将其更新为 `new`，否则失败重试。
+- CAS（Compare-And-Swap） 是 CPU 提供的原子指令：只有当某个内存地址的当前值等于预期值 old 时，才将其更新为新值 new，否则不做任何操作并返回失败。
+- "循环"的含义：因为 CAS 可能失败（其他 goroutine 抢先修改了值），所以需要用 for 循环不断重试：重新读取当前值 → 计算新值 → 再次 CAS，直到成功。
+- 与 atomic.Add 的区别：Add 只能做简单的加减，无法做"条件判断后再修改"。DecrementInFlight 需要先判断 old > 0，才能决定是否减 1，这是 Add(-1) 做不到的。
+
+```go
+package main
+
+import (
+    "fmt"
+    "sync"
+    "sync/atomic"
+)
+
+// BackendNode 后端节点
+type BackendNode struct {
+    InFlight atomic.Int64  // 当前正在处理的请求数
+    Addr     string
+}
+
+// IncrementInFlight 请求进入：简单原子递增
+func (n *BackendNode) IncrementInFlight() {
+    n.InFlight.Add(1)
+}
+
+// DecrementInFlight 请求完成：CAS 循环确保不会减到负数
+func (n *BackendNode) DecrementInFlight() {
+    for {
+        old := n.InFlight.Load()  // Step 1: 读取当前值
+        if old <= 0 {
+            // Step 2: 业务条件判断——已归零则不再递减
+            // 这防止了以下场景：
+            // - 请求超时后，业务层和网关层都调用了 Decrement，导致重复减
+            // - 某个请求异常退出，未先调用 Increment，直接调了 Decrement
+            return
+        }
+        
+        // Step 3: 尝试原子交换
+        // 语义：如果 n.InFlight 的当前值 == old，则设为 old-1，返回 true
+        //       否则不做任何事，返回 false
+        if n.InFlight.CompareAndSwap(old, old-1) {
+            return  // 成功，退出循环
+        }
+        
+        // Step 4: CAS 失败 → 其他 goroutine 抢先修改了值
+        // 循环回到 Step 1，重新读取最新值
+        // 这种自旋在竞争不激烈时极快（几个纳秒），比 Mutex 的阻塞-唤醒快得多
+    }
+}
+
+// SafeDecrement 带重试次数上限的 CAS（防止极端竞争下无限自旋）
+func (n *BackendNode) SafeDecrement(maxRetries int) bool {
+    for i := 0; i < maxRetries; i++ {
+        old := n.InFlight.Load()
+        if old <= 0 {
+            return false
+        }
+        if n.InFlight.CompareAndSwap(old, old-1) {
+            return true
+        }
+        // 可选：每次失败让出时间片，降低 CPU 占用
+        // runtime.Gosched()
+    }
+    // 重试耗尽，降级为 Mutex 或报错
+    return false
+}
+
+// 模拟并发场景：100 个请求进入，但只完成 80 个（20 个超时未回调）
+func main() {
+    node := &BackendNode{Addr: "10.0.0.1:8080"}
+    
+    var wg sync.WaitGroup
+    
+    // 100 个请求进入
+    for i := 0; i < 100; i++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            node.IncrementInFlight()
+        }()
+    }
+    wg.Wait()
+    fmt.Printf("100 个请求进入后，InFlight = %d\n", node.InFlight.Load())
+    
+    // 只有 80 个正常完成
+    for i := 0; i < 80; i++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            node.DecrementInFlight()
+        }()
+    }
+    wg.Wait()
+    fmt.Printf("80 个请求完成后，InFlight = %d\n", node.InFlight.Load())
+    
+    // 模拟重复 Decrement（如超时回调 + 正常回调重复触发）
+    for i := 0; i < 30; i++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            node.DecrementInFlight()  // 多余的 Decrement 会被 CAS 拦截
+        }()
+    }
+    wg.Wait()
+    fmt.Printf("30 次额外 Decrement 后，InFlight = %d（不会为负）\n", node.InFlight.Load())
+}
+```
+
+**关键点**：
+- **为什么不用 `atomic.Add(-1)`？** `Add` 无法做"条件判断"。如果当前值已经是 0，`Add(-1)` 会直接变成 -1，导致统计失真。
+- **ABA 问题在此无害**：即使 `old` 经历了 1→2→1 的变化，最终结果也只是多一次循环重试，不会导致逻辑错误。
+- **自旋 vs 阻塞**：CAS 循环是"自旋"（忙等待），适合**极短临界区**（如一个整数的修改）。如果循环体内逻辑复杂或竞争激烈，应改用 `Mutex` 或加入退避策略（`runtime.Gosched()`）。
 **CAS 循环示例**（`DecrementInFlight`）：
 ```go
 // 为何不用简单的 Add(-1)？因为 Add(-1) 可能让 InFlight 变为负数。
@@ -129,7 +739,7 @@ mTLS：      客户端 ──验证──▶ 服务端证书
 
 ---
 
-## Day 1-2：网关与流量治理 Review
+## 第 2 章：Day 1-2 网关与流量治理 Review
 
 ### 1.1 审查文件清单
 
@@ -720,6 +1330,16 @@ func BuildBackendTLSConfig(caCertPath, clientCertPath, clientKeyPath string) (*t
 3. **画图理解**：画出 P2C 选择流程、熔断器状态机、gRPC 双向流转发时序图
 4. **标记疑问**：对不理解的地方添加 `// REVIEW:` 注释
 
+#### 一周计划总览（重新分配）
+
+| 天 | 主题 | 对应章节 | 核心产出 |
+|---|---|---|---|
+| Day 1 | 前置知识 + 网关负载均衡器 | 第 1 章 P0-P3 + 第 2 章 §2.1-2.2 | P2C-EWMA 算法笔记、5 种调度策略对比 |
+| Day 2 | gRPC 透明代理 + 熔断器 + BufferPool | 第 2 章剩余 + 第 7 章 | 双向流时序图、RawCodec 设计分析 |
+| Day 3 | 安全体系：认证/权限/限流 | 第 3 章 §3.1-3.4 | 常量时间认证分析、32 分片限流性能分析 |
+| Day 4 | 安全体系：合规增强 + 漏洞案例 | 第 4 章 + §3.5 | 7 项合规修复理解、SEC-09~13 案例 |
+| Day 5 | 可观测性 + 部署运维 + 总结 | 第 5 章 + 第 8 章 + 交付物 | RED 指标验证、Prometheus 告警规则、交付物汇总 |
+
 ### 1.4 网关架构深度解析
 
 #### 1.4.1 网关在整体架构中的位置
@@ -925,7 +1545,7 @@ sharedTransport = &http.Transport{
 
 ---
 
-## Day 3-4：安全体系 Review（mTLS、认证、权限）
+## 第 3 章：Day 3-4 安全体系 Review（mTLS、认证、权限）
 
 ### 2.1 审查文件清单
 
@@ -1793,8 +2413,8 @@ unaryInt, streamInt, whitelist, err := tlsutil.NewWhitelistInterceptor(path)
    - [x] ~~REST 路径到权限的映射是否有遗漏~~ → **已修复**：路径归一化 `/api/v1/*` → `/v1/*` + 根路径别名 + 快捷别名路由全覆盖（50+ 测试用例）。含 SEC-12（`dynclassification:write` 读写区分）和 SEC-13（`budget/reset` 映射补充）两个子项
    - [x] ~~service-hub 对外接口是否具备独立 Scope 鉴权~~ → **已修复**：`scopeAuthMiddleware` 双模式鉴权 + `ServiceHubPermissionForPath` 路径映射
    - [x] ~~API Key 解析逻辑是否在各服务间一致~~ → **已修复**：`ParseAPIKeysEnv` 共享解析器下沉到 `pkg/auth`，engine-go 与 service-hub 统一使用
-   - [ ] mTLS CN 白名单是否已接入 Gin 主中间件链
-   - [ ] API Key 无过期机制，生产环境需要轮转能力
+   - [x] ~~mTLS CN 白名单是否已接入 Gin 主中间件链~~ → **已修复**：`pkg/tlsutil/grpc_interceptor.go` 一元 + 流式拦截器全覆盖
+   - [x] ~~API Key 无过期机制~~ → **已修复**（G-14）：`KeyConfig.ExpiresAt` + `IsExpired()` + RFC3339 环境配置
    - [ ] 限流完全基于内存，多实例部署时无法共享限流状态
    - [ ] 新增端点时是否同步添加权限映射（需代码 Review 流程保障，防止 SEC-09/12/13 类问题复发）
 
@@ -2084,7 +2704,107 @@ func MaxConcurrent(limit int) gin.HandlerFunc {
 
 ---
 
-## Day 5：可观测性 Review（日志、指标、追踪）
+## 第 4 章：三级等保/密评合规增强
+
+> 本章记录对标 GB/T 22239-2019（三级等保）与 GM/T 0115-2023（密评）标准完成的 7 项合规修复。详见 `docs/production_security/compliance_gap_analysis.md`。
+
+### 4.1 G-03 登录失败处理与账号锁定
+
+**对标**：三级等保 身份鉴别  
+**文件**：`console/app-lz/bff-go/internal/auth/userstore.go`
+
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| `maxFailedAttempts` | 5 | 连续失败次数阈值 |
+| `lockoutDuration` | 15 分钟 | 锁定时长 |
+| 存储 | `failedAttempts map[string]int` + `lockedUntil map[string]time.Time` | 内存级，`sync.RWMutex` 保护 |
+
+认证流程：`Authenticate()` 入口检查 `IsLocked()` → 已锁定返回 `ErrAccountLocked`（HTTP 423）→ 失败 `recordFailedLogin()` → 成功 `resetFailedLogin()`。
+
+### 4.2 G-04 密码策略强化
+
+**对标**：三级等保 身份鉴别  
+**文件**：`console/app-lz/bff-go/internal/auth/userstore.go` `validatePasswordStrength()`
+
+| 规则 | 要求 |
+|------|------|
+| 最低长度 | 12 字符 |
+| 字符类混合 | 4 类（大写/小写/数字/特殊）中至少 3 类 |
+| 弱密码字典 | 16 个常见弱密码黑名单 |
+| 用户名包含 | 密码不得包含用户名（大小写不敏感） |
+
+### 4.3 G-05 JWT 令牌吊销
+
+**对标**：三级等保 访问控制  
+**文件**：`console/app-lz/bff-go/internal/auth/jwt.go`
+
+```go
+type JWTManager struct {
+    secret      []byte
+    expiryHours int
+    blacklist   sync.Map  // SHA-256(token) → expiryUnix
+}
+```
+
+- `RevokeToken(token)`：SHA-256 哈希存入黑名单
+- `ValidateToken(token)`：签名 → 过期 → 黑名单 三阶段校验
+- `cleanupLoop()`：每 10 分钟清理过期条目
+- `HandleLogout()`：`/logout` 端点调用 `RevokeToken()`
+
+### 4.4 G-11 TOTP 双因素认证
+
+**对标**：三级等保 身份鉴别  
+**文件**：`console/app-lz/bff-go/internal/auth/totp.go`
+
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| 密钥长度 | 20 字节（160-bit） | RFC 推荐最低值 |
+| 验证码 | 6 位数字 | 标准 TOTP 输出 |
+| 时间步长 | 30 秒 | RFC 6238 |
+| 容忍窗口 | ±1 步 | 容忍时钟偏差 |
+
+核心：`GenerateSecret()` → `ValidateCode()` (RFC 6238 HMAC-SHA1 + 动态截断) → `GenerateOTPAuthURL()` (otpauth:// URI)。
+
+### 4.5 G-12 WAF Web 攻击防护
+
+**对标**：三级等保 入侵防范  
+**文件**：`pkg/middleware/waf.go`
+
+5 类 72 条正则规则（`init()` 编译，运行时不可变）：
+
+| 类别 | 规则数 | 典型检测 |
+|------|:------:|---------|
+| SQL 注入 | 21 | UNION SELECT、OR 1=1、SLEEP 盲注 |
+| XSS | 18 | `<script>`、`javascript:`、`on\w+=` |
+| 命令注入 | 12 | 管道 + 系统命令、反引号替换 |
+| 路径穿越 | 14 | `../`、URL 编码变体、`/etc/passwd` |
+| 已知漏洞 | 7 | Log4Shell、Shellshock、Spring4Shell |
+
+扫描范围：URL path + query + 5 种 header + body（≤1 MiB）。命中返回 `403 WAF_BLOCKED`。
+
+### 4.6 G-14 API Key 过期与自动轮换
+
+**对标**：三级等保 访问控制 + 密评 密钥管理  
+**文件**：`pkg/auth/settings.go`、`pkg/auth/identity.go`、`pkg/auth/middleware.go`
+
+- `KeyConfig.ExpiresAt *time.Time`（nil = 永不过期）
+- `IsExpired()` → 认证时拒绝过期 Key
+- 环境变量格式扩展：`token:name:scopes:2025-12-31T23:59:59Z`
+- `findExpirySeparator()` 回溯扫描，兼容含冒号 scope（如 `privacy:mask`）
+
+### 4.7 G-02 可信代理与源地址校验
+
+**对标**：三级等保 入侵防范  
+**文件**：`pkg/middleware/middleware.go`、`pkg/middleware/ratelimit.go`
+
+- `ConfigureTrustedProxies(r, trustedProxies)` → 仅受信代理的 `X-Forwarded-For` 被采信
+- `RealClientIP(c)` → `c.ClientIP()` + RemoteAddr 回退
+- `PRIVACY_TRUSTED_PROXIES` 环境变量，未配置时不信任任何代理
+- 限流 key、WAF 日志统一使用 `RealClientIP`
+
+---
+
+## 第 5 章：Day 5 可观测性 Review（日志、指标、追踪）
 
 ### 3.1 审查文件清单
 
@@ -2704,7 +3424,7 @@ curl -H "Authorization: Bearer <admin-key>" http://localhost:8082/api/hub/dispat
 
 ---
 
-## Engine-go 启动流程与配置加载链路深度分析
+## 第 6 章：Engine-go 启动流程与配置加载链路深度分析
 
 理解进程启动流程是 Review 的基础——它揭示了各组件的初始化顺序、依赖关系和故障模式。
 
@@ -2940,7 +3660,7 @@ K8s 的 Endpoints 更新和 iptables 规则传播有延迟（通常 1-3 秒）�
 
 ---
 
-## gRPC 透明代理完整代码走读
+## 第 7 章：gRPC 透明代理完整代码走读
 
 gRPC 透明代理是网关中最复杂的组件（310 行），理解它需要掌握 gRPC 底层流式通信模型。
 
@@ -3089,7 +3809,7 @@ func isConnReady(conn *grpc.ClientConn) bool {
 
 ---
 
-## 网关部署拓扑与运维指南
+## 第 8 章：网关部署拓扑与运维指南
 
 ### Docker Compose 部署拓扑
 
@@ -3367,6 +4087,14 @@ go tool pprof block.prof
 | **P1** | **SEC-11**: `parseAPIKeys` 重复实现逻辑漂移 | `engine-go/internal/security/config.go` | **已修复** | 共享 `ParseAPIKeysEnv` 到 `pkg/auth` |
 | **P1** | **SEC-12**: 动态分类分级读写权限未区分 | `pkg/auth/identity.go` | **已修复** | `dynclassification:write` vs `dynclassification:read` |
 | **P1** | **SEC-13**: `/v1/privacy/budget/reset` 权限映射缺失 | `pkg/auth/identity.go` | **已修复** | 新增 `privacy:budget` 映射 |
+| **P0** | **G-03**: 缺少登录失败处理与账号锁定 | `console/app-lz/bff-go/internal/auth/userstore.go` | **已修复** | 5 次失败锁定 15 分钟 |
+| **P0** | **G-04**: 密码策略过于宽松 | `console/app-lz/bff-go/internal/auth/userstore.go` | **已修复** | 12 位 + 3 类字符 + 弱密码字典 |
+| **P0** | **G-06**: SM2 非对称密码算法 | `pkg/crypto/sm2.go` | **已修复** | 纯 Go SM2 签名/验签/加密/解密 |
+| **P1** | **G-05**: 缺少 JWT 令牌吊销 | `console/app-lz/bff-go/internal/auth/jwt.go` | **已修复** | sync.Map 黑名单 + 自动清理 |
+| **P1** | **G-11**: 缺少特权用户双因素认证 | `console/app-lz/bff-go/internal/auth/totp.go` | **已修复** | RFC 6238 TOTP |
+| **P1** | **G-12**: 缺少 WAF 攻击检测 | `pkg/middleware/waf.go` | **已修复** | 5 类 72 条正则规则 |
+| **P1** | **G-14**: API Key 无过期机制 | `pkg/auth/settings.go` + `identity.go` | **已修复** | ExpiresAt + IsExpired |
+| **P1** | **G-02**: X-Forwarded-For 注入 | `pkg/middleware/middleware.go` | **已修复** | TrustedProxies + RealClientIP |
 | P1 | `OTelTracer.StartSpan()` 为 no-op | `pkg/observability/tracing.go:32` | 待修复 | 引入 OTel SDK 实现真实 Span 创建 |
 | P1 | 缺少 Prometheus 告警规则 | `deploy/prometheus/` | 待修复 | 补充 P99/错误率/熔断器/证书过期告警 |
 | P2 | gRPC 代理使用 `insecure` 凭证 | `grpc_proxy.go:114` | 待修复 | 升级为 mTLS 回源 |

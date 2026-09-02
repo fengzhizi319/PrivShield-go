@@ -15,8 +15,19 @@
 - [5. 模块设计与实现细节](#5-模块设计与实现细节)
   - [5.1 配置管理 (security/config.py)](#51-配置管理-securityconfigpy)
   - [5.2 TLS 传输层参数生成 (security/tls.py)](#52-tls-传输层参数生成-securitytlspy)
-  - [5.3 身份模型与 Scope 权限映射 (security/identity.py)](#53-身份模型与-scope-权限映射-securityidentitypy)
-  - [5.4 认证与鉴权依赖 (security/auth.py)](#54-认证与鉴权依赖-securityauthpy)
+  - [5.3 身份模型与 Scope 权限映射 (pkg/auth/identity.go)](#53-身份模型与-scope-权限映射-pkgauthidentitygo)
+    - [5.3.1 Identity 数据结构](#531-identity-数据结构)
+    - [5.3.2 API Key 配置解析 (ParseAPIKeysEnv)](#532-api-key-配置解析parseapikeysenv)
+    - [5.3.3 路径归一化与 REST 权限映射](#533-路径归一化与-rest-权限映射permissionforrestpath)
+    - [5.3.4 gRPC 方法权限映射](#534-grpc-方法权限映射permissionforgrpcmethod)
+    - [5.3.5 service-hub 权限映射](#535-service-hub-权限映射servicehubpermissionforpath)
+  - [5.4 认证与鉴权依赖 (pkg/auth/, pkg/middleware/, console/)](#54-认证与鉴权依赖-pkgauth-pkgmiddleware-console)
+    - [5.4.1 REST API Key 认证中间件](#541-rest-api-key-认证中间件)
+    - [5.4.2 gRPC mTLS CN 白名单拦截器](#542-grpc-mtls-cn-白名单拦截器)
+    - [5.4.3 控制台 BFF 增强认证（三级等保合规）](#543-控制台-bff-增强认证三级等保合规)
+    - [5.4.4 WAF Web 攻击防护 (G-12)](#544-waf-web-攻击防护g-12)
+    - [5.4.5 可信代理与真实 IP (G-02)](#545-可信代理与真实-ipg-02)
+    - [5.4.6 API Key 生命周期管理 (G-14)](#546-api-key-生命周期管理g-14)
   - [5.5 速率限制引擎 (security/ratelimit.py)](#55-速率限制引擎-securityratelimitpy)
 - [6. mTLS 白名单认证鉴权体系](#6-mtls-白名单认证鉴权体系)
   - [6.1 原理与双层校验模型](#61-原理与双层校验模型)
@@ -166,22 +177,92 @@ def grpc_server_credentials(settings: SecuritySettings) -> grpc.ServerCredential
     return grpc.ssl_server_credentials(((private_key, certificate_chain),))
 ```
 
-### 5.3 身份模型与 Scope 权限映射 (`security/identity.py`)
+### 5.3 身份模型与 Scope 权限映射 (`pkg/auth/identity.go`)
 
-```python
-@dataclass(frozen=True)
-class Identity:
-    service_type: Literal["internal", "external"]
-    name: str
-    scopes: list[str]
+#### 5.3.1 Identity 数据结构
 
-    def has_permission(self, permission: str) -> bool:
-        return "*" in self.scopes or permission in self.scopes
+```go
+// pkg/auth/identity.go
+type Identity struct {
+    ServiceType string   // "internal" (高信任内部服务) | "external" (外部客户端) | "anonymous" (开发模式)
+    Name        string   // 服务/账户名称（如 "service-hub"、"bff-go"）
+    Scopes      []string // 权限列表；["*"] 表示通配所有权限
+}
+
+func (id *Identity) HasPermission(permission string) bool {
+    for _, s := range id.Scopes {
+        if s == "*" || s == permission {
+            return true
+        }
+    }
+    return false
+}
 ```
 
-#### Engine 权限映射（`PermissionForRESTPath`）
+**设计要点**：
+- `internal` 与 `external` 分别存储于独立的 Key 池（`InternalKeys` / `ExternalKeys`），认证时先查 internal 再查 external；
+- `"*"` 通配符授予所有权限，用于管理员/网关全量访问场景；
+- 认证未启用时注入 `AnonymousIdentity{ServiceType: "anonymous", Scopes: ["*"]}`，开发环境零配置可用。
 
-支持 `/v1/*` 与 `/api/v1/*` 双前缀（别名路由归一化后统一匹配），以及根路径直调别名。
+#### 5.3.2 API Key 配置解析（`ParseAPIKeysEnv`）
+
+**环境变量格式**：
+```text
+token:name:scope1,scope2;token2:name2:scope3:2025-12-31T23:59:59Z
+```
+
+- 条目按 `;` 分隔，每条按 `:` 拆分为 `token`、`name`、`rest` 三段（`SplitN(, 3)` 保留 scope 中的冒号如 `privacy:mask`）；
+- `rest` 部分通过 `findExpirySeparator()` 从末尾回溯扫描，检测是否存在 RFC3339 时间戳后缀（G-14 合规增强）；
+- 缺少 scopes 时默认 `["*"]`（全部权限）；空 token 或空 name 的条目被丢弃。
+
+```go
+// pkg/auth/identity.go
+func ParseAPIKeysEnv(raw string) map[string]*KeyConfig {
+    // 1. 按 ";" 分割多 Key 条目
+    // 2. 每条 SplitN(entry, ":", 3) → token, name, rest
+    // 3. findExpirySeparator(rest) 回溯查找 RFC3339 时间戳
+    // 4. 剩余部分按 "," 分割为 scopes
+    // 5. 缺少 scopes → 默认 ["*"]
+}
+
+// findExpirySeparator 从末尾回溯查找过期时间分隔冒号。
+// RFC3339 最短 20 字符（如 2006-01-02T15:04:05Z），
+// 逐冒号位尝试 time.Parse(time.RFC3339, candidate)，成功即返回位置。
+func findExpirySeparator(s string) int { ... }
+```
+
+**KeyConfig 与过期检查**（`pkg/auth/settings.go`）：
+```go
+type KeyConfig struct {
+    Name      string
+    Scopes    []string
+    ExpiresAt *time.Time  // nil = 永不过期
+}
+
+func (k *KeyConfig) IsExpired() bool {
+    if k.ExpiresAt == nil { return false }
+    return time.Now().After(*k.ExpiresAt)
+}
+```
+
+认证中间件在 `ConstantTimeLookup` 命中后检查 `matched.IsExpired()`，过期 Key 视为无效（G-14 合规）。
+
+#### 5.3.3 路径归一化与 REST 权限映射（`PermissionForRESTPath`）
+
+函数入口处执行两步归一化，确保别名路由与主路由共享同一权限映射：
+
+```go
+func PermissionForRESTPath(path string) string {
+    // 1. 去除尾部斜杠（防 /api/hub/dispatch/ 绕过精确匹配）
+    // 2. 前缀归一化：/api/v1/* → /v1/*（别名路由统一映射）
+    // 3. switch-case 前缀匹配 → 返回权限字符串
+    // 4. 未映射路径返回 ""（对所有已认证身份开放）
+}
+```
+
+> **已修复的安全漏洞（SEC-09）**：早期版本仅匹配 `/v1/*` 前缀，导致 40+ 别名路由（`/api/v1/*`、根路径别名、快捷别名）完全绕过权限校验。修复方案是在函数入口统一归一化路径前缀。
+
+#### Engine 权限映射表
 
 | REST 路径 / gRPC 方法 | 对应权限 Scope |
 |---|---|
@@ -201,7 +282,30 @@ class Identity:
 | `/v1/ops/*`, `/api/v1/ops/*`, `/ops/diagnostics` | `ops:diagnostics` |
 | `/debug/pprof*` | `ops:admin` |
 
-#### service-hub 权限映射（`ServiceHubPermissionForPath`）
+#### 5.3.4 gRPC 方法权限映射（`PermissionForGRPCMethod`）
+
+覆盖 44 个隐私原语 gRPC 方法，映射逻辑与 REST 一致：
+
+```go
+func PermissionForGRPCMethod(method string) string {
+    // method 格式："/PrivacyService/Mask"
+    // 提取最后一段方法名，查 map 返回权限字符串
+    mapping := map[string]string{
+        "Mask": "privacy:mask", "MaskRecord": "privacy:mask",
+        "MaskBatch": "privacy:mask", "MaskDataFrame": "privacy:mask",
+        "DPCount": "privacy:dp", "DPSum": "privacy:dp", "DPMean": "privacy:dp",
+        "DPHistogram": "privacy:dp", "DPChunkedCount": "privacy:dp",
+        "KAnonymizeRecord": "privacy:kano", "KAnonymizeTable": "privacy:kano",
+        "ObfuscateQuery": "privacy:qol",
+        "ClassifyField": "classification:read",
+        "DynClassify": "dynclassification:read",
+        "Health": "health:read",
+        // ... 共 44 个方法
+    }
+}
+```
+
+#### 5.3.5 service-hub 权限映射（`ServiceHubPermissionForPath`）
 
 | REST 路径 | 对应权限 Scope |
 |---|---|
@@ -209,11 +313,154 @@ class Identity:
 | `/api/hub/dispatch`, `/api/hub/classify` | `hub:dispatch` |
 | `/health`, `/readyz`, `/api/health`, `/metrics` | 无需特定权限（已认证即可） |
 
-### 5.4 认证与鉴权依赖 (`security/auth.py`)
+**设计要点**：`hub:dispatch` 仅授予需要触发数据流通流水线的调用方（如 BFF 网关），只读查询用 `hub:read`，遵循最小权限原则。
 
-- **API Key 认证**：从 `Authorization: Bearer <token>` 提取，使用 `secrets.compare_digest` 恒定时间比较；
-- **FastAPI 依赖**：`get_current_identity` 与 `require_permission(scope)`；
-- **gRPC Interceptor**：`AuthInterceptor` 在 `intercept_service` 中拦截并校验 metadata/auth_context。
+### 5.4 认证与鉴权依赖 (`pkg/auth/`, `pkg/middleware/`, `console/`)
+
+#### 5.4.1 REST API Key 认证中间件
+
+**完整认证链路**（`pkg/auth/middleware.go` `AuthMiddleware`）：
+
+```text
+HTTP 请求
+  │
+  ├─ IsHealthPathOrMethod(path)?  ──YES──▶ 注入健康探针身份，放行
+  │
+  ├─ !settings.AuthEnabled?       ──YES──▶ 注入 AnonymousIdentity{Scopes:["*"]}，放行
+  │
+  ├─ ExtractBearerToken(Authorization header)
+  │   └─ 空?  ──YES──▶ 401 UNAUTHENTICATED
+  │
+  ├─ authenticateAPIKey(settings, token)
+  │   ├─ ConstantTimeLookup(InternalKeys, token)  ──命中──▶ Identity{internal}
+  │   ├─ ConstantTimeLookup(ExternalKeys, token)  ──命中──▶ Identity{external}
+  │   └─ 都未命中 / 已过期  ──▶ 401 UNAUTHENTICATED
+  │
+  ├─ PermissionForRESTPath(path) → requiredPerm
+  │   └─ requiredPerm != "" && !identity.HasPermission(requiredPerm)?
+  │       ──YES──▶ 403 FORBIDDEN
+  │
+  └─ c.Set("security_identity", identity) → c.Next()
+```
+
+**常量时间查找**（防时序侧信道攻击）：
+
+```go
+func ConstantTimeLookup(keys map[string]*KeyConfig, token string) *KeyConfig {
+    // 1. 排序 key：消除 Go map 迭代随机性带来的时序差异
+    // 2. 遍历全部 key，不提前 break（即使已命中也继续比较）
+    // 3. subtle.ConstantTimeCompare 确保每次比较耗时恒定
+    // 4. G-14 合规：命中后检查 matched.IsExpired()，过期返回 nil
+}
+```
+
+#### 5.4.2 gRPC mTLS CN 白名单拦截器
+
+**源码位置**：`pkg/tlsutil/grpc_interceptor.go`
+
+```text
+gRPC 请求 → extractClientCN(ctx) → 从 peer.Peer.AuthInfo 提取
+           → VerifiedChains[0][0].Subject.CommonName（经 CA 验证）
+           → DynamicWhitelist.CheckScope(cn, fullMethod)
+           → 匹配规则："*" → 精确匹配 → 前缀通配符（如 /AuditLog/*）
+           → 通过 → 执行 RPC | 拒绝 → PERMISSION_DENIED
+```
+
+同时提供 `UnaryServerInterceptor` 和 `StreamServerInterceptor`，一元与流式全覆盖。快速装配工厂：
+```go
+unaryInt, streamInt, whitelist, err := tlsutil.NewWhitelistInterceptor(path)
+// path 为空 → 返回全 nil（禁用 CN 白名单鉴权）
+```
+
+#### 5.4.3 控制台 BFF 增强认证（三级等保合规）
+
+**G-03 登录失败处理与账号锁定**（`console/app-lz/bff-go/internal/auth/userstore.go`）：
+
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| `maxFailedAttempts` | 5 | 连续失败次数阈值 |
+| `lockoutDuration` | 15 分钟 | 锁定时长 |
+| 存储 | `failedAttempts map[string]int` + `lockedUntil map[string]time.Time` | 内存级，`sync.RWMutex` 保护 |
+
+认证流程：`Authenticate()` 入口检查 `IsLocked()` → 已锁定则返回 `ErrAccountLocked`（HTTP 423）→ 失败则 `recordFailedLogin()` → 成功则 `resetFailedLogin()`。
+
+**G-04 密码策略强化**（`validatePasswordStrength`）：
+
+| 规则 | 要求 |
+|------|------|
+| 最低长度 | 12 字符 |
+| 字符类混合 | 4 类（大写/小写/数字/特殊）中至少 3 类 |
+| 弱密码字典 | 16 个常见弱密码黑名单（`password`、`1234567890`、`qwerty123456` 等） |
+| 用户名包含 | 密码不得包含用户名（大小写不敏感） |
+
+注册时（`Register()`）在 bcrypt 哈希前调用，不合规返回 `ErrPasswordWeak`。
+
+**G-05 JWT 令牌吊销**（`console/app-lz/bff-go/internal/auth/jwt.go`）：
+
+```go
+type JWTManager struct {
+    secret    []byte
+    expiryHours int
+    blacklist sync.Map  // key: SHA-256(token) hex → value: int64(expiryUnix)
+}
+```
+
+- `RevokeToken(token)`：验证 token 有效后，将 SHA-256 哈希存入黑名单；
+- `ValidateToken(token)`：三阶段校验 — 签名验证（`hmac.Equal` 常量时间）→ 过期检查 → 黑名单检查；
+- `cleanupLoop()`：后台 goroutine 每 10 分钟清理过期黑名单条目，防止内存无限增长；
+- `HandleLogout()`：新增 `/logout` 端点，调用 `RevokeToken()` 使 JWT 提前失效。
+
+**G-11 TOTP 双因素认证**（`console/app-lz/bff-go/internal/auth/totp.go`）：
+
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| 密钥长度 | 20 字节（160-bit） | RFC 推荐最低值 |
+| 验证码位数 | 6 位 | 标准 TOTP 输出 |
+| 时间步长 | 30 秒 | RFC 6238 标准 |
+| 容忍窗口 | ±1 步（±30 秒） | 容忍时钟偏差 |
+
+核心函数：`GenerateSecret()`（crypto/rand → Base32）、`ValidateCode(secret, code)`（RFC 6238 HMAC-SHA1 + 动态截断）、`GenerateOTPAuthURL()`（生成 `otpauth://totp/...` URI 供 QR 码扫描）。
+
+#### 5.4.4 WAF Web 攻击防护（G-12）
+
+**源码位置**：`pkg/middleware/waf.go`
+
+5 类 72 条正则规则，`init()` 时编译为 `[]*regexp.Regexp`，运行时不可变：
+
+| 类别 | 规则数 | 典型检测 |
+|------|:------:|---------|
+| `SQL_INJECTION` | 21 | UNION SELECT、OR 1=1、DROP TABLE、SLEEP/BENCHMARK 盲注、`information_schema` |
+| `XSS` | 18 | `<script>`、`javascript:`、事件处理器 `on\w+=`、`<iframe>`、`document.cookie` |
+| `COMMAND_INJECTION` | 12 | 管道/分号 + 系统命令、反引号/`$()` 替换、`exec()`/`system()` |
+| `PATH_TRAVERSAL` | 14 | `../`、URL 编码变体（`%2e%2e%2f`）、`/etc/passwd`、空字节（`%00`） |
+| `EXPLOIT` | 7 | Log4Shell（CVE-2021-44228）、Shellshock（CVE-2014-6271）、Spring4Shell SSTI |
+
+**扫描范围**：URL path + raw query + 5 种 header（`User-Agent`/`Referer`/`Cookie`/`X-Forwarded-For`/`Content-Type`）+ body（仅 form 类型，≤1 MiB，扫描后重建 body 供下游读取）。
+
+**命中响应**：`403 Forbidden`，错误码 `WAF_BLOCKED`，结构化日志记录攻击详情（类别、匹配规则、载荷截断至 512 字符）。
+
+#### 5.4.5 可信代理与真实 IP（G-02）
+
+**源码位置**：`pkg/middleware/middleware.go`
+
+```go
+func ConfigureTrustedProxies(r *gin.Engine, trustedProxies []string)
+func RealClientIP(c *gin.Context) string
+```
+
+- `ConfigureTrustedProxies`：包装 `r.SetTrustedProxies()`，仅受信代理 IP/CIDR 的 `X-Forwarded-For` / `X-Real-IP` 头被采信；
+- `RealClientIP`：优先 `c.ClientIP()`（受 TrustedProxies 配置约束），回退 `c.Request.RemoteAddr`（去端口）；
+- 环境变量 `PRIVACY_TRUSTED_PROXIES` 配置受信代理列表，未配置时不信任任何代理（防 `X-Forwarded-For` 伪造）；
+- 限流 key、WAF 日志、审计记录统一使用 `RealClientIP` 获取真实客户端地址。
+
+#### 5.4.6 API Key 生命周期管理（G-14）
+
+| 能力 | 实现 | 位置 |
+|------|------|------|
+| 过期时间 | `KeyConfig.ExpiresAt *time.Time` | `pkg/auth/settings.go` |
+| 过期检查 | `IsExpired()` → 认证时拒绝过期 Key | `pkg/auth/middleware.go` |
+| 环境配置 | 末尾追加 RFC3339 时间戳：`token:name:scopes:2025-12-31T23:59:59Z` | `pkg/auth/identity.go` |
+| 解析兼容 | `findExpirySeparator()` 回溯扫描，不破坏含冒号的 scope（如 `privacy:mask`） | `pkg/auth/identity.go` |
 
 ### 5.5 速率限制引擎 (`security/ratelimit.py`)
 
