@@ -48,8 +48,9 @@ type RegisterRequest struct {
 
 // LoginRequest 用户登录请求体。
 type LoginRequest struct {
-	Username string `json:"username" binding:"required"`
-	Password string `json:"password" binding:"required"`
+	Username  string `json:"username" binding:"required"`
+	Password  string `json:"password" binding:"required"`
+	TOTPCode  string `json:"totp_code"` // 特权用户/admin 登录时必须提供
 }
 
 // AuthResponse 认证响应（注册/登录共用）。
@@ -72,10 +73,10 @@ type UserInfo struct {
 
 // EnableTOTPResponse 启用 TOTP 的响应体。
 type EnableTOTPResponse struct {
-	Secret    string `json:"secret"`     // Base32 编码的 TOTP 密钥
-	AuthURL   string `json:"auth_url"`   // otpauth:// URI（供二维码扫描器使用）
-	Enabled   bool   `json:"enabled"`    // 是否已启用
-	Via       string `json:"via"`        // 来源标识
+	Secret  string `json:"secret"`   // Base32 编码的 TOTP 密钥
+	AuthURL string `json:"auth_url"` // otpauth:// URI（供二维码扫描器使用）
+	Enabled bool   `json:"enabled"`  // 是否已启用
+	Via     string `json:"via"`      // 来源标识
 }
 
 // ValidateTOTPRequest TOTP 校验请求体。
@@ -210,6 +211,35 @@ func (h *Handlers) HandleLogin(c *gin.Context) {
 			"via":     "app-lz-bff",
 		})
 		return
+	}
+
+	// G-11 特权用户双因素认证：admin 必须已启用 TOTP，且登录时提供有效 TOTP 码。
+	if user.Role == "admin" {
+		if !user.TOTPEnabled {
+			h.logger.Warn("admin login rejected: TOTP not enabled", "username", user.Username)
+			c.JSON(http.StatusForbidden, gin.H{
+				"code":    "TOTP_REQUIRED",
+				"message": "Admin users must enable TOTP before login. Use POST /api/auth/totp/enable first.",
+				"via":     "app-lz-bff",
+			})
+			return
+		}
+		if req.TOTPCode == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"code":    "TOTP_CODE_REQUIRED",
+				"message": "TOTP code is required for admin login",
+				"via":     "app-lz-bff",
+			})
+			return
+		}
+		if err := h.store.ValidateTOTP(user.Username, req.TOTPCode); err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"code":    "INVALID_TOTP_CODE",
+				"message": "Invalid or expired TOTP code",
+				"via":     "app-lz-bff",
+			})
+			return
+		}
 	}
 
 	// 签发 JWT 令牌

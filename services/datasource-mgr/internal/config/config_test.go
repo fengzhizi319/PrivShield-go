@@ -159,6 +159,10 @@ func TestFailClosedRejections(t *testing.T) {
 
 		// 配置入站密钥后同一形态必须放行。
 		cfg.APIKey = "secret-key"
+		cfg.TLSEnabled = true
+		cfg.TLSCertFile = writeTempPEM(t)
+		cfg.TLSKeyFile = writeTempPEM(t)
+		cfg.MTLSWhitelistFile = writeTempPEM(t)
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("remote bind with api key must validate, got %v", err)
 		}

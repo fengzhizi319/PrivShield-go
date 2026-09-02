@@ -1,6 +1,7 @@
 package security
 
 import (
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -36,6 +37,7 @@ type Settings struct {
 var (
 	settingsOnce   sync.Once
 	cachedSettings *Settings
+	keyStore       *pkgauth.KeyStore
 )
 
 // GetSettings 返回缓存的安全配置单例。
@@ -46,10 +48,19 @@ func GetSettings() *Settings {
 	return cachedSettings
 }
 
+// GetKeyStore 返回 API Key 热重载存储（可能为 nil）。
+func GetKeyStore() *pkgauth.KeyStore {
+	return keyStore
+}
+
 // ResetSettings 重置缓存（仅测试用）。
 func ResetSettings() {
 	settingsOnce = sync.Once{}
 	cachedSettings = nil
+	if keyStore != nil {
+		keyStore.Close()
+		keyStore = nil
+	}
 }
 
 func loadSettings() *Settings {
@@ -59,7 +70,22 @@ func loadSettings() *Settings {
 	}
 	for _, envK := range []string{"PRIVACY_AUTH_API_KEY", "PRIVACY_API_KEY"} {
 		if k := os.Getenv(envK); k != "" {
+			slog.Warn("deprecated API key env var in use; migrate to PRIVACY_AUTH_INTERNAL_API_KEYS with explicit scopes",
+				"env_var", envK)
 			internalKeys[k] = &KeyConfig{Name: "default-internal", Scopes: []string{"*"}}
+		}
+	}
+
+	if keysFile := pkgconfig.EnvString("PRIVACY_AUTH_KEYS_FILE", ""); keysFile != "" {
+		ks, err := pkgauth.NewKeyStore(keysFile)
+		if err != nil {
+			slog.Error("failed to initialize API Key store; falling back to env vars", "path", keysFile, "error", err.Error())
+		} else {
+			keyStore = ks
+			for k, v := range ks.Keys() {
+				internalKeys[k] = v
+			}
+			slog.Info("API Key store initialized with hot-reload", "path", keysFile, "keys", len(ks.Keys()))
 		}
 	}
 

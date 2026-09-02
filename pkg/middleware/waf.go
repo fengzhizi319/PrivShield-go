@@ -29,8 +29,8 @@ import (
 
 // wafRule 定义单条 WAF 检测规则，包含攻击类别标签、正则表达式集合与人类可读描述。
 type wafRule struct {
-	category    string         // 攻击类别标签（用于日志与告警分类）
-	description string         // 规则中文描述（用于审计溯源）
+	category    string           // 攻击类别标签（用于日志与告警分类）
+	description string           // 规则中文描述（用于审计溯源）
 	patterns    []*regexp.Regexp // 预编译正则表达式列表
 }
 
@@ -53,28 +53,28 @@ func init() {
 			category:    "SQL_INJECTION",
 			description: "SQL 注入攻击检测",
 			patterns: compile([]string{
-				`(?i)\bunion\s+select\b`,                     // UNION SELECT 联合查询注入
-				`(?i)\bunion\s+all\s+select\b`,              // UNION ALL SELECT 联合查询注入
-				`(?i)\bor\s+1\s*=\s*1\b`,                    // OR 1=1 永真条件注入
-				`(?i)\bor\s+'1'\s*=\s*'1'`,                  // OR '1'='1' 字符串永真注入
-				`(?i)\bor\s+"1"\s*=\s*"1"`,                  // OR "1"="1" 双引号永真注入
-				`(?i)\band\s+1\s*=\s*1\b`,                   // AND 1=1 布尔盲注探测
-				`(?i)\bdrop\s+table\b`,                      // DROP TABLE 破坏性注入
-				`(?i)\bdrop\s+database\b`,                   // DROP DATABASE 破坏性注入
-				`(?i)\btruncate\s+table\b`,                  // TRUNCATE TABLE 破坏性注入
-				`(?i)\binsert\s+into\b.*\bvalues\b`,         // INSERT INTO ... VALUES 数据篡改
-				`(?i)\bdelete\s+from\b`,                     // DELETE FROM 数据删除注入
-				`(?i);\s*select\b`,                          // 分号后接 SELECT 堆叠查询注入
-				`(?i);\s*update\b.*\bset\b`,                 // 分号后接 UPDATE...SET 堆叠注入
-				`(?i)\bexec(\s+|\s*\()\s*xp_`,              // 执行 xp_cmdshell 等扩展存储过程
-				`(?i)\bwaitfor\s+delay\b`,                   // WAITFOR DELAY 时间盲注探测
-				`(?i)\bbenchmark\s*\(`,                      // BENCHMARK() MySQL 时间盲注
-				`(?i)\bsleep\s*\(`,                          // SLEEP() MySQL 时间盲注
-				`(?i)'\s*or\s+'`,                            // 单引号 OR 注入闭合
-				`(?i)\bconcat\s*\(\s*char\s*\(`,            // CONCAT(CHAR()) 编码绕过注入
-				`(?i)\bload_file\s*\(`,                      // LOAD_FILE() 文件读取注入
-				`(?i)\binto\s+outfile\b`,                    // INTO OUTFILE 文件写入注入
-				`(?i)\binformation_schema\b`,                // information_schema 元数据枚举
+				`(?i)\bunion\s+select\b`,            // UNION SELECT 联合查询注入
+				`(?i)\bunion\s+all\s+select\b`,      // UNION ALL SELECT 联合查询注入
+				`(?i)\bor\s+1\s*=\s*1\b`,            // OR 1=1 永真条件注入
+				`(?i)\bor\s+'1'\s*=\s*'1'`,          // OR '1'='1' 字符串永真注入
+				`(?i)\bor\s+"1"\s*=\s*"1"`,          // OR "1"="1" 双引号永真注入
+				`(?i)\band\s+1\s*=\s*1\b`,           // AND 1=1 布尔盲注探测
+				`(?i)\bdrop\s+table\b`,              // DROP TABLE 破坏性注入
+				`(?i)\bdrop\s+database\b`,           // DROP DATABASE 破坏性注入
+				`(?i)\btruncate\s+table\b`,          // TRUNCATE TABLE 破坏性注入
+				`(?i)\binsert\s+into\b.*\bvalues\b`, // INSERT INTO ... VALUES 数据篡改
+				`(?i)\bdelete\s+from\b`,             // DELETE FROM 数据删除注入
+				`(?i);\s*select\b`,                  // 分号后接 SELECT 堆叠查询注入
+				`(?i);\s*update\b.*\bset\b`,         // 分号后接 UPDATE...SET 堆叠注入
+				`(?i)\bexec(\s+|\s*\()\s*xp_`,       // 执行 xp_cmdshell 等扩展存储过程
+				`(?i)\bwaitfor\s+delay\b`,           // WAITFOR DELAY 时间盲注探测
+				`(?i)\bbenchmark\s*\(`,              // BENCHMARK() MySQL 时间盲注
+				`(?i)\bsleep\s*\(`,                  // SLEEP() MySQL 时间盲注
+				`(?i)'\s*or\s+'`,                    // 单引号 OR 注入闭合
+				`(?i)\bconcat\s*\(\s*char\s*\(`,     // CONCAT(CHAR()) 编码绕过注入
+				`(?i)\bload_file\s*\(`,              // LOAD_FILE() 文件读取注入
+				`(?i)\binto\s+outfile\b`,            // INTO OUTFILE 文件写入注入
+				`(?i)\binformation_schema\b`,        // information_schema 元数据枚举
 			}),
 		},
 
@@ -83,24 +83,24 @@ func init() {
 			category:    "XSS",
 			description: "XSS 跨站脚本攻击检测",
 			patterns: compile([]string{
-				`(?i)<\s*script[^>]*>`,                       // <script> 标签注入
-				`(?i)javascript\s*:`,                         // javascript: 伪协议
-				`(?i)\bon\w+\s*=`,                            // onerror= / onload= / onmouseover= 等事件处理器
-				`(?i)<\s*img[^>]+onerror\s*=`,               // <img onerror=> 图片标签事件注入
-				`(?i)<\s*iframe[^>]*>`,                      // <iframe> 框架注入
-				`(?i)<\s*object[^>]*>`,                      // <object> 对象标签注入
-				`(?i)<\s*embed[^>]*>`,                       // <embed> 嵌入标签注入
-				`(?i)<\s*svg[^>]*on\w+\s*=`,                // <svg onload=> SVG 事件注入
-				`(?i)\balert\s*\(`,                          // alert() 弹窗探测
-				`(?i)\bprompt\s*\(`,                         // prompt() 弹窗探测
-				`(?i)\bconfirm\s*\(`,                        // confirm() 弹窗探测
-				`(?i)document\s*\.\s*cookie`,                // document.cookie 窃取
-				`(?i)document\s*\.\s*location`,              // document.location 重定向
-				`(?i)window\s*\.\s*location`,                // window.location 重定向
-				`(?i)eval\s*\(`,                             // eval() 动态执行
-				`(?i)expression\s*\(`,                       // CSS expression() IE 注入
-				`(?i)<\s*body[^>]+on\w+\s*=`,              // <body onload=> 标签事件注入
-				`(?i)fromcharcode`,                          // String.fromCharCode() 编码绕过
+				`(?i)<\s*script[^>]*>`,         // <script> 标签注入
+				`(?i)javascript\s*:`,           // javascript: 伪协议
+				`(?i)\bon\w+\s*=`,              // onerror= / onload= / onmouseover= 等事件处理器
+				`(?i)<\s*img[^>]+onerror\s*=`,  // <img onerror=> 图片标签事件注入
+				`(?i)<\s*iframe[^>]*>`,         // <iframe> 框架注入
+				`(?i)<\s*object[^>]*>`,         // <object> 对象标签注入
+				`(?i)<\s*embed[^>]*>`,          // <embed> 嵌入标签注入
+				`(?i)<\s*svg[^>]*on\w+\s*=`,    // <svg onload=> SVG 事件注入
+				`(?i)\balert\s*\(`,             // alert() 弹窗探测
+				`(?i)\bprompt\s*\(`,            // prompt() 弹窗探测
+				`(?i)\bconfirm\s*\(`,           // confirm() 弹窗探测
+				`(?i)document\s*\.\s*cookie`,   // document.cookie 窃取
+				`(?i)document\s*\.\s*location`, // document.location 重定向
+				`(?i)window\s*\.\s*location`,   // window.location 重定向
+				`(?i)eval\s*\(`,                // eval() 动态执行
+				`(?i)expression\s*\(`,          // CSS expression() IE 注入
+				`(?i)<\s*body[^>]+on\w+\s*=`,   // <body onload=> 标签事件注入
+				`(?i)fromcharcode`,             // String.fromCharCode() 编码绕过
 			}),
 		},
 
@@ -111,15 +111,15 @@ func init() {
 			patterns: compile([]string{
 				`[|;]\s*\b(cat|ls|id|whoami|uname|wget|curl|nc|netcat|bash|sh|cmd|powershell)\b`, // 管道/分号后接系统命令
 				`&&\s*\b(cat|ls|id|whoami|uname|wget|curl|nc|netcat|bash|sh|cmd|powershell)\b`,   // && 链式命令注入
-				`\|\|\s*\b(cat|ls|id|whoami|uname|wget|curl)\b`,                                   // || 链式命令注入
-				"`[^`]+`",                             // 反引号命令替换
-				`\$\([^)]+\)`,                         // $() 命令替换
-				`(?i)\bexec\s*\(`,                     // exec() 函数调用
-				`(?i)\bsystem\s*\(`,                   // system() 函数调用
-				`(?i)\bpassthru\s*\(`,                 // passthru() PHP 命令执行
-				`(?i)\bpopen\s*\(`,                    // popen() 进程创建
-				`(?i)\bproc_open\s*\(`,               // proc_open() 进程创建
-				`(?i)\bshell_exec\s*\(`,              // shell_exec() PHP 命令执行
+				`\|\|\s*\b(cat|ls|id|whoami|uname|wget|curl)\b`,                                  // || 链式命令注入
+				"`[^`]+`",               // 反引号命令替换
+				`\$\([^)]+\)`,           // $() 命令替换
+				`(?i)\bexec\s*\(`,       // exec() 函数调用
+				`(?i)\bsystem\s*\(`,     // system() 函数调用
+				`(?i)\bpassthru\s*\(`,   // passthru() PHP 命令执行
+				`(?i)\bpopen\s*\(`,      // popen() 进程创建
+				`(?i)\bproc_open\s*\(`,  // proc_open() 进程创建
+				`(?i)\bshell_exec\s*\(`, // shell_exec() PHP 命令执行
 				`(?i)Runtime\s*\.\s*getRuntime\s*\(\s*\)\s*\.\s*exec`, // Java Runtime.exec()
 			}),
 		},
@@ -129,21 +129,21 @@ func init() {
 			category:    "PATH_TRAVERSAL",
 			description: "路径穿越攻击检测",
 			patterns: compile([]string{
-				`\.\./`,                                 // ../ Unix 目录遍历
-				`\.\.\\`,                                // ..\ Windows 目录遍历
-				`(?i)%2e%2e%2f`,                         // URL 编码 ../ (%2e%2e%2f)
-				`(?i)%2e%2e/`,                           // 部分编码 ../ (%2e%2e/)
-				`(?i)\.\.%2f`,                           // 部分编码 ../ (..%2f)
-				`(?i)%2e%2e%5c`,                         // URL 编码 ..\ (%2e%2e%5c)
-				`(?i)\.\.%5c`,                           // 部分编码 ..\ (..%5c)
-				`(?i)/etc/passwd`,                       // Linux 敏感文件读取
-				`(?i)/etc/shadow`,                       // Linux 密码文件读取
-				`(?i)/etc/hosts`,                        // Linux 主机配置读取
-				`(?i)/proc/self/environ`,                // Linux 进程环境变量泄露
-				`(?i)/proc/self/cmdline`,                // Linux 进程命令行泄露
-				`(?i)\\windows\\system32`,               // Windows 系统目录穿越
-				`(?i)\\boot\.ini`,                       // Windows 启动配置读取
-				`(?i)%00`,                               // Null 字节截断
+				`\.\./`,                   // ../ Unix 目录遍历
+				`\.\.\\`,                  // ..\ Windows 目录遍历
+				`(?i)%2e%2e%2f`,           // URL 编码 ../ (%2e%2e%2f)
+				`(?i)%2e%2e/`,             // 部分编码 ../ (%2e%2e/)
+				`(?i)\.\.%2f`,             // 部分编码 ../ (..%2f)
+				`(?i)%2e%2e%5c`,           // URL 编码 ..\ (%2e%2e%5c)
+				`(?i)\.\.%5c`,             // 部分编码 ..\ (..%5c)
+				`(?i)/etc/passwd`,         // Linux 敏感文件读取
+				`(?i)/etc/shadow`,         // Linux 密码文件读取
+				`(?i)/etc/hosts`,          // Linux 主机配置读取
+				`(?i)/proc/self/environ`,  // Linux 进程环境变量泄露
+				`(?i)/proc/self/cmdline`,  // Linux 进程命令行泄露
+				`(?i)\\windows\\system32`, // Windows 系统目录穿越
+				`(?i)\\boot\.ini`,         // Windows 启动配置读取
+				`(?i)%00`,                 // Null 字节截断
 			}),
 		},
 
@@ -152,13 +152,13 @@ func init() {
 			category:    "EXPLOIT",
 			description: "已知高危漏洞利用检测",
 			patterns: compile([]string{
-				`\$\{jndi:(ldap[s]?|rmi|dns|iiop|corba|nds|http)://`,  // Log4Shell CVE-2021-44228 JNDI 注入
-				`\$\{(?:lower|upper|env|sys|java|date|ctx)\b`,          // Log4j  Lookup 表达式通用检测
-				`(?i)\bshellshock\b`,                                    // Shellshock CVE-2014-6271
-				`\(\)\s*\{[^}]*\}\s*;`,                                  // Shellshock Bash 函数定义载荷
-				`(?i)\$\{TMPL:`,                                         // Spring4Shell / Thymeleaf SSTI
-				`(?i)#\{(?:T\(|Runtime)`,                                // Spring EL / OGNL 表达式注入
-				`(?i)\.class\.forName\s*\(`,                             // Java 反射注入
+				`\$\{jndi:(ldap[s]?|rmi|dns|iiop|corba|nds|http)://`, // Log4Shell CVE-2021-44228 JNDI 注入
+				`\$\{(?:lower|upper|env|sys|java|date|ctx)\b`,        // Log4j  Lookup 表达式通用检测
+				`(?i)\bshellshock\b`,                                 // Shellshock CVE-2014-6271
+				`\(\)\s*\{[^}]*\}\s*;`,                               // Shellshock Bash 函数定义载荷
+				`(?i)\$\{TMPL:`,                                      // Spring4Shell / Thymeleaf SSTI
+				`(?i)#\{(?:T\(|Runtime)`,                             // Spring EL / OGNL 表达式注入
+				`(?i)\.class\.forName\s*\(`,                          // Java 反射注入
 			}),
 		},
 	}

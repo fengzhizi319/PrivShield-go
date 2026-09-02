@@ -8,8 +8,26 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
 
 	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
+)
+
+// AuthFailuresTotal 认证失败计数器，按原因分类。
+var AuthFailuresTotal = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "privshield_auth_failures_total",
+		Help: "Total number of authentication failures by reason",
+	},
+	[]string{"reason"},
+)
+
+// AuthForbiddenTotal 授权失败计数器（认证通过但权限不足）。
+var AuthForbiddenTotal = prometheus.NewCounter(
+	prometheus.CounterOpts{
+		Name: "privshield_auth_forbidden_total",
+		Help: "Total number of authorization failures (insufficient scope)",
+	},
 )
 
 // IdentityContextKey 用于在 gin.Context 中存储认证身份。
@@ -79,11 +97,18 @@ func ConstantTimeLookup(keys map[string]*KeyConfig, token string) *KeyConfig {
 }
 
 // AuthenticateAPIKey 在内部和外部 key 存储中查找 token。
+// 过期 key（IsExpired() == true）视为无效，返回 nil。
 func AuthenticateAPIKey(settings *Settings, token string) *Identity {
 	if internal := ConstantTimeLookup(settings.InternalKeys, token); internal != nil {
+		if internal.IsExpired() {
+			return nil
+		}
 		return &Identity{ServiceType: "internal", Name: internal.Name, Scopes: internal.Scopes}
 	}
 	if external := ConstantTimeLookup(settings.ExternalKeys, token); external != nil {
+		if external.IsExpired() {
+			return nil
+		}
 		return &Identity{ServiceType: "external", Name: external.Name, Scopes: external.Scopes}
 	}
 	return nil
@@ -110,12 +135,14 @@ func AuthMiddleware(settings *Settings) gin.HandlerFunc {
 
 		token := ExtractBearerToken(c.GetHeader("Authorization"))
 		if token == "" {
+			AuthFailuresTotal.WithLabelValues("missing_token").Inc()
 			abortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: missing credentials", nil)
 			return
 		}
 
 		identity := AuthenticateAPIKey(settings, token)
 		if identity == nil {
+			AuthFailuresTotal.WithLabelValues("invalid_token").Inc()
 			abortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: invalid credentials", nil)
 			return
 		}
@@ -124,6 +151,7 @@ func AuthMiddleware(settings *Settings) gin.HandlerFunc {
 		// 未映射路径返回空字符串，表示无需特定权限（对所有已认证身份开放）。
 		requiredPerm := PermissionForRESTPath(path)
 		if requiredPerm != "" && !identity.HasPermission(requiredPerm) {
+			AuthForbiddenTotal.Inc()
 			abortWithError(c, http.StatusForbidden, "FORBIDDEN", "Forbidden: insufficient scope", nil)
 			return
 		}

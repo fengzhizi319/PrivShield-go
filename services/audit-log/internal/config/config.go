@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 )
 
@@ -42,8 +43,9 @@ type Config struct {
 	TLSPinnedPubKeyFile string // Pinned client public key PEM / 固定的客户端公钥文件路径
 
 	// Production hardening / 生产加固
-	APIKey        string   // Inbound API key for this module / 本模块入站 API Key
-	ReaderAPIKey  string   // Read-only verification key (P1-6 只读核验员) / 只读核验员 Key，空=不启用
+	APIKey        string                        // Inbound API key for this module / 本模块入站 API Key
+	ReaderAPIKey  string                        // Read-only verification key (P1-6 只读核验员) / 只读核验员 Key，空=不启用
+	ScopeKeys     map[string]*pkgauth.KeyConfig // Scope-based API Key 映射（AUDIT_LOG_API_KEYS），优先于 APIKey
 	CORSOrigins   []string // Allowed CORS origins / 允许的 CORS 来源
 	DBPath        string   // SQLite database path (empty = in-memory) / SQLite 数据库路径
 	PGDSN         string   // PostgreSQL connection DSN (Phase B / high-concurrency multi-replica)
@@ -57,6 +59,11 @@ type Config struct {
 
 	// HashKey 是链式完整性哈希的 HMAC-SM3 密钥（局方托管）。为空时沿用无密钥 SM3 口径（仅存量兼容）。
 	HashKey string
+
+	// SM2PrivateKey 是审计存证 SM2 签名私钥（hex 编码 32 字节标量），用于不可否认性（G-10）。
+	SM2PrivateKey string
+	// SM2PublicKey 是审计存证 SM2 验签公钥（hex 编码 64 字节裸公钥或 65 字节非压缩公钥），用于核验（G-10）。
+	SM2PublicKey string
 
 	// DBWriteOnly 启用时在启动阶段自检数据库账号是否缺少 UPDATE/DELETE 权限（只写存证账号）。
 	DBWriteOnly bool
@@ -130,6 +137,7 @@ func Load() *Config {
 		// Production hardening / 生产加固
 		APIKey:        pkgconfig.EnvString("AUDIT_LOG_API_KEY", ""),
 		ReaderAPIKey:  pkgconfig.EnvString("AUDIT_LOG_READER_API_KEY", ""),
+		ScopeKeys:     pkgauth.LoadAPIKeysFromEnv("AUDIT_LOG_API_KEYS"),
 		CORSOrigins:   pkgconfig.EnvStringSlice("AUDIT_LOG_CORS_ORIGINS"),
 		DBPath:        pkgconfig.EnvString("AUDIT_LOG_DB_PATH", ""),
 		PGDSN:         pgDSN,
@@ -141,6 +149,8 @@ func Load() *Config {
 		// Fail-closed 生产门禁与密钥化存证 / production gate, keyed chain, write-only self-check
 		RequireTLS:  pkgconfig.EnvBool("AUDIT_LOG_REQUIRE_TLS", false),
 		HashKey:     pkgconfig.EnvString("AUDIT_LOG_HASH_KEY", ""),
+		SM2PrivateKey: pkgconfig.EnvString("AUDIT_LOG_SM2_PRIVATE_KEY", ""),
+		SM2PublicKey:  pkgconfig.EnvString("AUDIT_LOG_SM2_PUBLIC_KEY", ""),
 		DBWriteOnly: pkgconfig.EnvBool("AUDIT_LOG_DB_WRITE_ONLY", false),
 		PGMaxConn:   pkgconfig.EnvInt("AUDIT_LOG_PG_MAX_CONNS", 0),
 		PGMinConn:   pkgconfig.EnvInt("AUDIT_LOG_PG_MIN_CONNS", 0),
@@ -194,6 +204,7 @@ func (c *Config) Validate() error {
 		ServiceName:          "audit-log",
 		Hosts:                []string{c.Host, c.GRPCHost},
 		APIKey:               c.APIKey,
+		AuthEnabled:          c.APIKey != "",
 		TLSEnabled:           c.TLSEnabled,
 		RequireTLS:           c.RequireTLS,
 		GRPCEnabled:          true,

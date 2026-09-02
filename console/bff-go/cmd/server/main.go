@@ -96,6 +96,7 @@ func main() {
 	// 创建一个新的 Gin 引擎实例（包含默认的 Logger + Recovery 中间件）
 	router := gin.New()
 	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv()) // G-02
+	router.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv()))           // IP access control
 	// 将所有 REST 代理路由与可选的静态 UI 托管路由注册到 Gin 引擎
 	// 包括 CORS 中间件、健康检查、代理转发、批量测试、静态文件服务等
 	server.RegisterRoutes(router)

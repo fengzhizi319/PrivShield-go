@@ -15,6 +15,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/clients"
 	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/config"
 	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/models"
@@ -316,24 +318,42 @@ func TestTraceMiddlewareRegistered(t *testing.T) {
 	}
 }
 
+// newRateLimitTestEnv 构造一个带 mock 上游的 Handler，使 /api/lz/topology 快速返回，
+// 避免不可达上游的 10s 探测超时导致限流桶在两次请求之间重新充能。
+func newRateLimitTestEnv(t *testing.T, rps, burst int) (*Handler, *gin.Engine) {
+	t.Helper()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	cfg := &config.Config{
+		Host:           "127.0.0.1",
+		Port:           "8085",
+		HubURL:         upstream.URL,
+		DatasourceURL:  upstream.URL,
+		AuditURL:       upstream.URL,
+		AgentURL:       upstream.URL,
+		HubGRPC:        "127.0.0.1:1",
+		DatasourceGRPC: "127.0.0.1:1",
+		AuditGRPC:      "127.0.0.1:1",
+		AgentGRPC:      "127.0.0.1:1",
+		RateLimitRPS:   rps,
+		RateLimitBurst: burst,
+	}
+	pool := clients.NewClientPool(cfg)
+	h := NewHandler(cfg, pool, runner.NewTestRunner(pool), nil, nil, nil)
+	return h, SetupRouter(h)
+}
+
 // TestRateLimitMiddleware 验证令牌桶限流中间件：
 // 1. RPS > 0 时，超限请求返回 429 Too Many Requests
 // 2. RPS = 0 时，限流中间件不启用，所有请求正常通过
 func TestRateLimitMiddleware(t *testing.T) {
 	// 1. 低 RPS 配置：突发 2，每秒 1 个请求
-	cfg := &config.Config{
-		Host:           "127.0.0.1",
-		Port:           "8085",
-		HubURL:         "http://127.0.0.1:8082",
-		DatasourceURL:  "http://127.0.0.1:8083",
-		AuditURL:       "http://127.0.0.1:8084",
-		AgentURL:       "http://127.0.0.1:8079",
-		RateLimitRPS:   1,
-		RateLimitBurst: 2,
-	}
-	pool := clients.NewClientPool(cfg)
-	h := NewHandler(cfg, pool, runner.NewTestRunner(pool), nil, nil, nil)
-	router := SetupRouter(h)
+	_, router := newRateLimitTestEnv(t, 1, 2)
 
 	// 突发 2 次应成功（桶容量 2）
 	// 注意：/health 和 /api/health 被 RateLimit 中间件豁免，使用 /api/lz/topology 测试
@@ -358,18 +378,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 	}
 
 	// 2. RPS=0 配置：限流禁用，所有请求应通过
-	cfg2 := &config.Config{
-		Host:          "127.0.0.1",
-		Port:          "8085",
-		HubURL:        "http://127.0.0.1:8082",
-		DatasourceURL: "http://127.0.0.1:8083",
-		AuditURL:      "http://127.0.0.1:8084",
-		AgentURL:      "http://127.0.0.1:8079",
-		RateLimitRPS:  0, // 禁用限流
-	}
-	pool2 := clients.NewClientPool(cfg2)
-	h2 := NewHandler(cfg2, pool2, runner.NewTestRunner(pool2), nil, nil, nil)
-	router2 := SetupRouter(h2)
+	_, router2 := newRateLimitTestEnv(t, 0, 0)
 
 	for i := 0; i < 10; i++ {
 		w := httptest.NewRecorder()

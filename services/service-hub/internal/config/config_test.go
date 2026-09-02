@@ -322,10 +322,21 @@ func TestValidateFailClosedZeroTrust(t *testing.T) {
 	})
 
 	t.Run("remote bind with api key is accepted", func(t *testing.T) {
+		cert := t.TempDir() + "/server.crt"
+		key := t.TempDir() + "/server.key"
+		for _, p := range []string{cert, key} {
+			if err := os.WriteFile(p, []byte("PEM"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
 		cfg := base()
 		cfg.Host = "0.0.0.0"
 		cfg.GRPCHost = "0.0.0.0"
 		cfg.APIKey = "hub-inbound-key"
+		cfg.TLSEnabled = true
+		cfg.TLSCertFile = cert
+		cfg.TLSKeyFile = key
+		cfg.MTLSWhitelistFile = "mtls-whitelist.yaml"
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("remote bind with API key must validate, got %v", err)
 		}

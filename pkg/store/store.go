@@ -251,8 +251,9 @@ type AuditLog struct {
 	Status         string    `json:"status"`                   // 脱敏处理状态（"success" | "failed"）
 	ErrorMessage   string    `json:"error,omitempty"`          // 失败时的错误信息
 	SecurityLevel  string    `json:"security_level"`           // 数据安全分级（"L1" ~ "L5"）
-	PrevHash       string    `json:"prev_hash,omitempty"`      // 前序存证哈希（串联形成不可篡改哈希链）
-	IntegrityHash  string    `json:"integrity_hash,omitempty"` // 本条记录在服务端裁定的国密 SM3 综合完整性哈希
+	PrevHash       string    `json:"prev_hash,omitempty"`       // 前序存证哈希（串联形成不可篡改哈希链）
+	IntegrityHash  string    `json:"integrity_hash,omitempty"`  // 本条记录在服务端裁定的国密 SM3 综合完整性哈希
+	SM2Signature   string    `json:"sm2_signature,omitempty"`   // SM2 数字签名值（G-10 审计不可否认性），hex 编码
 }
 
 // AuditFilter specifies filtering criteria for listing audit logs.
@@ -281,8 +282,9 @@ type SnapshotRecord struct {
 	Algorithm      string    `json:"algorithm"`           // 使用的算法标识
 	ParametersJSON string    `json:"-"`                   // 参数 JSON 字符串
 	Parameters     any       `json:"parameters"`          // 解析后的参数对象
-	IntegrityHash  string    `json:"integrity_hash"`      // 继承自主日志的完整性哈希
-	PrevHash       string    `json:"prev_hash,omitempty"` // 继承自主日志的前序哈希
+	IntegrityHash  string    `json:"integrity_hash"`        // 继承自主日志的完整性哈希
+	PrevHash       string    `json:"prev_hash,omitempty"`   // 继承自主日志的前序哈希
+	SM2Signature   string    `json:"sm2_signature,omitempty"` // 快照自身完整性哈希的 SM2 签名（G-10）
 }
 
 // AuditStats holds aggregated audit statistics.
@@ -338,6 +340,10 @@ const (
 	// ChainReasonMissingRecords 表示全量遍历核验通过的记录数小于表内总记录数，
 	// 即链中段存在被物理删除的存证。判为无效。
 	ChainReasonMissingRecords = "missing_records"
+
+	// ChainReasonInvalidSM2Signature 表示完整性哈希与链式锚点均通过，但记录的 SM2
+	// 数字签名无效或无法验证。判为无效（G-10 审计不可否认性）。
+	ChainReasonInvalidSM2Signature = "invalid_sm2_signature"
 )
 
 // ChainVerificationResult represents the result of cryptographic hash chain verification.

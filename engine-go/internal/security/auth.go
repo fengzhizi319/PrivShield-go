@@ -9,9 +9,66 @@ import (
 
 // AuthMiddleware 返回 Gin 中间件，执行 API Key 认证。
 // 认证未启用时透传并注入匿名身份。
+// 若配置了 KeyStore（PRIVACY_AUTH_KEYS_FILE），每请求读取最新 keys 实现热轮转。
 func AuthMiddleware() gin.HandlerFunc {
 	settings := GetSettings()
+	if keyStore != nil {
+		return hotReloadAuthMiddleware(settings)
+	}
 	return pkgauth.AuthMiddleware(&settings.Settings)
+}
+
+// hotReloadAuthMiddleware 每请求从 KeyStore 读取最新 keys，实现 API Key 热轮转。
+func hotReloadAuthMiddleware(settings *Settings) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		path := c.Request.URL.Path
+
+		if pkgauth.IsHealthPathOrMethod(path) && settings.HealthNoAuth {
+			c.Set(pkgauth.IdentityContextKey, &Identity{ServiceType: "internal", Name: "health-probe", Scopes: []string{"*"}})
+			c.Next()
+			return
+		}
+
+		if !settings.AuthEnabled {
+			c.Set(pkgauth.IdentityContextKey, pkgauth.AnonymousIdentity)
+			c.Next()
+			return
+		}
+
+		token := pkgauth.ExtractBearerToken(c.GetHeader("Authorization"))
+		if token == "" {
+			abortWithAuthError(c, "UNAUTHENTICATED", "Unauthorized: missing credentials")
+			return
+		}
+
+		ks := GetKeyStore()
+		if ks == nil {
+			abortWithAuthError(c, "UNAUTHENTICATED", "Unauthorized: key store unavailable")
+			return
+		}
+
+		currentKeys := ks.Keys()
+		lookupSettings := &pkgauth.Settings{
+			AuthEnabled:  true,
+			InternalKeys: currentKeys,
+			ExternalKeys: settings.ExternalKeys,
+		}
+		identity := pkgauth.AuthenticateAPIKey(lookupSettings, token)
+		if identity == nil {
+			abortWithAuthError(c, "UNAUTHENTICATED", "Unauthorized: invalid credentials")
+			return
+		}
+
+		c.Set(pkgauth.IdentityContextKey, identity)
+		c.Next()
+	}
+}
+
+func abortWithAuthError(c *gin.Context, code, msg string) {
+	c.AbortWithStatusJSON(401, map[string]any{
+		"code":    code,
+		"message": msg,
+	})
 }
 
 // RequirePermission 返回需要指定权限的 Gin 中间件。

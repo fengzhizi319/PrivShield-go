@@ -49,9 +49,9 @@ import (
 
 	pkggrpcserver "github.com/fengzhizi319/PrivShield-go/pkg/grpcserver"
 	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
+	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
 	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
-	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 	"github.com/fengzhizi319/PrivShield-go/pkg/tlsutil"
 	"github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/internal/config"
 	"github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/internal/grpcserver"
@@ -108,6 +108,7 @@ func main() {
 	server := handlers.New(cfg, logger, mc)
 	router := gin.New()
 	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv()) // G-02
+	router.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv()))           // IP access control
 	server.RegisterRoutes(router)
 
 	// 4) 显式配置 http.Server 网络超时参数，防范 Slowloris 慢连接拒绝服务攻击与连接泄露：
@@ -179,6 +180,14 @@ func main() {
 			WithStreamInterceptor(streamInterceptor)
 		logger.Info("gRPC server configured with mTLS CN whitelist",
 			"path", cfg.MTLSWhitelistFile,
+		)
+	}
+
+	// G-17: 应用层 API Key 鉴权拦截器（与 mTLS 叠加，形成双层鉴权）。
+	grpcServer = grpcServer.WithUnaryInterceptor(grpcserver.AuthUnaryInterceptor(cfg.APIKey, cfg.ScopeKeys))
+	if cfg.APIKey != "" || len(cfg.ScopeKeys) > 0 {
+		logger.Info("gRPC server configured with API Key auth",
+			"scope_keys", len(cfg.ScopeKeys),
 		)
 	}
 

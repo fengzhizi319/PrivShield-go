@@ -131,6 +131,9 @@ func TestFailClosedRejections(t *testing.T) {
 		cfg := Load()
 		cfg.Host, cfg.GRPCHost = "0.0.0.0", "0.0.0.0"
 		cfg.APIKey, cfg.EncryptionKey = "key", ""
+		cfg.TLSEnabled = true
+		cfg.TLSCertFile, cfg.TLSKeyFile = writeTempPEM(t), writeTempPEM(t)
+		cfg.MTLSWhitelistFile = writeTempPEM(t)
 		if err := cfg.Validate(); !errors.Is(err, pkgconfig.ErrEncryptionKeyRequired) {
 			t.Fatalf("expected ErrEncryptionKeyRequired, got %v", err)
 		}

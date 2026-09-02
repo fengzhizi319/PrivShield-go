@@ -262,7 +262,7 @@ func PermissionForRESTPath(path string) string {
 
 > **已修复的安全漏洞（SEC-09）**：早期版本仅匹配 `/v1/*` 前缀，导致 40+ 别名路由（`/api/v1/*`、根路径别名、快捷别名）完全绕过权限校验。修复方案是在函数入口统一归一化路径前缀。
 
-#### Engine 权限映射表
+##### Engine 权限映射表
 
 | REST 路径 / gRPC 方法 | 对应权限 Scope |
 |---|---|

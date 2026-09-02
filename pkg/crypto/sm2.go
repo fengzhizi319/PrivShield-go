@@ -7,6 +7,7 @@
 //   - 数字签名：基于 SM3 杂凑的 ECDSA 变体，含用户标识 ZA 预处理；
 //   - 公钥加密：ECIES 风格，KDF 由 SM3 驱动，密文格式为 C1‖C3‖C2（新国标）；
 //   - 密钥交换（本包暂未实现，预留接口）。
+//
 // 本实现为纯 Go，不依赖任何外部 C 库或 crypto/elliptic，完全自主实现曲线运算。
 // ==============================================================================
 package crypto
@@ -14,10 +15,12 @@ package crypto
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"math/big"
+	"strings"
 )
 
 // ---------------------------------------------------------------------------
@@ -71,8 +74,8 @@ type SM2PublicKey struct {
 
 // SM2PrivateKey 表示 SM2 私钥，包含标量 D 与对应公钥 PublicKey。
 type SM2PrivateKey struct {
-	D         *big.Int       // 私钥标量，满足 1 ≤ D ≤ n−2
-	PublicKey SM2PublicKey   // 对应的公钥 Q = D·G
+	D         *big.Int     // 私钥标量，满足 1 ≤ D ≤ n−2
+	PublicKey SM2PublicKey // 对应的公钥 Q = D·G
 }
 
 // ---------------------------------------------------------------------------
@@ -764,4 +767,123 @@ func sm2ConstantTimeEqual(a, b []byte) bool {
 		v |= a[i] ^ b[i]
 	}
 	return v == 0
+}
+
+
+// ---------------------------------------------------------------------------
+// 审计存证 SM2 签名器/验签器包装（三级等保/密评 G-10：审计不可否认性）
+// ---------------------------------------------------------------------------
+
+// SM2SignerVerifier 将 SM2 私钥签名与公钥验签封装为 store 包可注册的单对象。
+// 若构造时仅提供私钥，可自动生成对应公钥；若仅提供公钥，则只能验签不能签名。
+type SM2SignerVerifier struct {
+	priv *SM2PrivateKey
+	pub  *SM2PublicKey
+}
+
+// NewSM2SignerVerifier 从已加载的私钥/公钥构建签名器。
+// priv 与 pub 至少提供一个：priv 非空时启用签名，pub 非空时启用验签。
+func NewSM2SignerVerifier(priv *SM2PrivateKey, pub *SM2PublicKey) *SM2SignerVerifier {
+	sv := &SM2SignerVerifier{priv: priv, pub: pub}
+	if priv != nil {
+		sv.pub = &priv.PublicKey
+	}
+	return sv
+}
+
+// NewSM2SignerVerifierFromHex 从 hex 字符串加载 SM2 私钥与公钥。
+//
+// 参数：
+//   - privHex: 32 字节私钥标量 D 的 hex 编码；为空表示仅验签。
+//   - pubHex : 65 字节非压缩公钥（0x04 ‖ X ‖ Y）或 64 字节裸公钥（X ‖ Y）的 hex 编码；
+//             为空表示仅签名（此时必须提供 privHex）。
+//
+// 若私钥非空而公钥为空，会自动从私钥推导出公钥。
+func NewSM2SignerVerifierFromHex(privHex, pubHex string) (*SM2SignerVerifier, error) {
+	var priv *SM2PrivateKey
+	if strings.TrimSpace(privHex) != "" {
+		dBytes, err := hex.DecodeString(strings.TrimSpace(privHex))
+		if err != nil {
+			return nil, fmt.Errorf("crypto/sm2: invalid private key hex: %w", err)
+		}
+		if len(dBytes) != SM2KeySize {
+			return nil, fmt.Errorf("crypto/sm2: private key must be %d bytes, got %d", SM2KeySize, len(dBytes))
+		}
+		d := new(big.Int).SetBytes(dBytes)
+		nMinus2 := new(big.Int).Sub(sm2N, big.NewInt(2))
+		if d.Sign() <= 0 || d.Cmp(nMinus2) > 0 {
+			return nil, fmt.Errorf("crypto/sm2: private key out of valid range [1, n-2]")
+		}
+		qx, qy := sm2ScalarBaseMul(d)
+		priv = &SM2PrivateKey{
+			D: d,
+			PublicKey: SM2PublicKey{
+				X: qx,
+				Y: qy,
+			},
+		}
+	}
+
+	var pub *SM2PublicKey
+	if strings.TrimSpace(pubHex) != "" {
+		pBytes, err := hex.DecodeString(strings.TrimSpace(pubHex))
+		if err != nil {
+			return nil, fmt.Errorf("crypto/sm2: invalid public key hex: %w", err)
+		}
+		switch len(pBytes) {
+		case SM2UncompressedLen:
+			if pBytes[0] != 0x04 {
+				return nil, fmt.Errorf("crypto/sm2: uncompressed public key must start with 0x04")
+			}
+			pub = &SM2PublicKey{
+				X: new(big.Int).SetBytes(pBytes[1 : 1+SM2KeySize]),
+				Y: new(big.Int).SetBytes(pBytes[1+SM2KeySize : SM2UncompressedLen]),
+			}
+		case SM2KeySize * 2:
+			pub = &SM2PublicKey{
+				X: new(big.Int).SetBytes(pBytes[:SM2KeySize]),
+				Y: new(big.Int).SetBytes(pBytes[SM2KeySize:]),
+			}
+		default:
+			return nil, fmt.Errorf("crypto/sm2: public key must be %d or %d bytes, got %d", SM2UncompressedLen, SM2KeySize*2, len(pBytes))
+		}
+	}
+
+	if priv == nil && pub == nil {
+		return nil, errors.New("crypto/sm2: at least one of private key or public key must be provided")
+	}
+
+	return NewSM2SignerVerifier(priv, pub), nil
+}
+
+// Sign 使用 SM2 私钥对 data 签名，返回固定 64 字节签名值（r ‖ s）的 hex 编码。
+// 若私钥未配置，返回错误。
+func (sv *SM2SignerVerifier) Sign(data []byte) ([]byte, error) {
+	if sv.priv == nil {
+		return nil, errors.New("crypto/sm2: signer has no private key")
+	}
+	r, s, err := SignMessage(sv.priv, data)
+	if err != nil {
+		return nil, err
+	}
+	sig := make([]byte, SM2KeySize*2)
+	copy(sig[:SM2KeySize], sm2PadScalar(r))
+	copy(sig[SM2KeySize:], sm2PadScalar(s))
+	return sig, nil
+}
+
+// Verify 使用 SM2 公钥验证 data 上的 64 字节签名值（r ‖ s）。
+// 若公钥未配置，直接返回 false。
+func (sv *SM2SignerVerifier) Verify(data, signature []byte) bool {
+	if sv.pub == nil {
+		return false
+	}
+	if len(signature) != SM2KeySize*2 {
+		return false
+	}
+	r := new(big.Int).SetBytes(signature[:SM2KeySize])
+	s := new(big.Int).SetBytes(signature[SM2KeySize:])
+	za := ComputeZA(sv.pub, nil)
+	e := sm2ComputeE(za, data)
+	return Verify(sv.pub, e, r, s) == nil
 }

@@ -40,6 +40,9 @@ const (
 	// EncryptedPrefixV2 是当前写入的密文版本前缀，密钥经 HKDF-SM3 派生且前缀参与 AAD。
 	EncryptedPrefixV2 = "enc:v2:"
 
+	// EncryptedPrefixV3 是带密钥版本标识的信封格式前缀，支持多版本密钥轮换（G-08）。
+	EncryptedPrefixV3 = "enc:v3:"
+
 	// NonceSize 是国密 SM4-GCM 推荐的标准 12 字节随机数长度（96-bit）。
 	NonceSize = 12
 
@@ -218,6 +221,11 @@ func hkdfExpand(prk, info []byte, length int) []byte {
 //  3. 以版本前缀作为 AAD 执行 Seal，使密文与所属版本强绑定；
 //  4. 输出 `enc:v2:<Base64(salt || nonce || ciphertext || tag)>`。
 func EncryptString(plaintext, secret string) (string, error) {
+	// G-08 密钥轮换：优先使用密钥注册表中的活跃版本；未注册时回退到传入的 secret。
+	if active := ActiveKeyVersion(); active != nil {
+		return encryptV3(plaintext, active)
+	}
+
 	if secret == "" {
 		auditCrypto("sm4_encrypt", "", len(plaintext), false, ErrEmptyKey)
 		return "", ErrEmptyKey
@@ -227,34 +235,84 @@ func EncryptString(plaintext, secret string) (string, error) {
 		return "", nil
 	}
 
+	return encryptV2(plaintext, secret)
+}
+
+// encryptV2 生成 v2 格式密文：`enc:v2:<Base64(salt || nonce || ciphertext || tag)>`。
+func encryptV2(plaintext, secret string) (string, error) {
+	if plaintext == "" {
+		auditCrypto("sm4_encrypt", "v2", 0, true, nil)
+		return "", nil
+	}
+
 	salt := make([]byte, saltSize)
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
-		auditCrypto("sm4_encrypt", "", len(plaintext), false, err)
+		auditCrypto("sm4_encrypt", "v2", len(plaintext), false, err)
 		return "", fmt.Errorf("generate salt: %w", err)
 	}
 
 	block, err := NewCipher(DeriveKeyHKDF(secret, salt))
 	if err != nil {
-		auditCrypto("sm4_encrypt", "", len(plaintext), false, err)
+		auditCrypto("sm4_encrypt", "v2", len(plaintext), false, err)
 		return "", fmt.Errorf("create sm4 cipher: %w", err)
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		auditCrypto("sm4_encrypt", "", len(plaintext), false, err)
+		auditCrypto("sm4_encrypt", "v2", len(plaintext), false, err)
 		return "", fmt.Errorf("create sm4-gcm: %w", err)
 	}
 
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		auditCrypto("sm4_encrypt", "", len(plaintext), false, err)
+		auditCrypto("sm4_encrypt", "v2", len(plaintext), false, err)
 		return "", fmt.Errorf("generate nonce: %w", err)
 	}
 
 	sealed := gcm.Seal(nonce, nonce, []byte(plaintext), []byte(EncryptedPrefixV2))
 	enc := EncryptedPrefixV2 + base64.StdEncoding.EncodeToString(append(salt, sealed...))
-	auditCrypto("sm4_encrypt", "", len(plaintext), true, nil)
+	auditCrypto("sm4_encrypt", "v2", len(plaintext), true, nil)
 	return enc, nil
+}
+
+// encryptV3 生成带密钥版本标识的 v3 格式密文：
+// `enc:v3:<version>:<Base64(salt || nonce || ciphertext || tag)>`。
+func encryptV3(plaintext string, kv *KeyVersion) (string, error) {
+	if plaintext == "" {
+		auditCrypto("sm4_encrypt", kv.Version, 0, true, nil)
+		return "", nil
+	}
+
+	salt := make([]byte, saltSize)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		auditCrypto("sm4_encrypt", kv.Version, len(plaintext), false, err)
+		return "", fmt.Errorf("generate salt: %w", err)
+	}
+
+	block, err := NewCipher(DeriveKeyHKDF(string(kv.Key), salt))
+	if err != nil {
+		auditCrypto("sm4_encrypt", kv.Version, len(plaintext), false, err)
+		return "", fmt.Errorf("create sm4 cipher: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		auditCrypto("sm4_encrypt", kv.Version, len(plaintext), false, err)
+		return "", fmt.Errorf("create sm4-gcm: %w", err)
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		auditCrypto("sm4_encrypt", kv.Version, len(plaintext), false, err)
+		return "", fmt.Errorf("generate nonce: %w", err)
+	}
+
+	// v3 AAD 绑定到具体密钥版本，防止跨版本剥离前缀。
+	aad := []byte(EncryptedPrefixV3 + kv.Version + ":")
+	sealed := gcm.Seal(nonce, nonce, []byte(plaintext), aad)
+	payload := EncryptedPrefixV3 + kv.Version + ":" + base64.StdEncoding.EncodeToString(append(salt, sealed...))
+	auditCrypto("sm4_encrypt", kv.Version, len(plaintext), true, nil)
+	return payload, nil
 }
 
 // DecryptString decrypts an envelope-encrypted value produced by this package.
@@ -271,6 +329,8 @@ func DecryptString(ciphertext, secret string) (string, error) {
 	case ciphertext == "":
 		auditCrypto("sm4_decrypt", "", 0, true, nil)
 		return "", nil
+	case strings.HasPrefix(ciphertext, EncryptedPrefixV3):
+		return decryptV3(ciphertext, secret)
 	case strings.HasPrefix(ciphertext, EncryptedPrefixV2):
 		return decryptV2(ciphertext, secret)
 	case strings.HasPrefix(ciphertext, EncryptedPrefix):
@@ -279,6 +339,56 @@ func DecryptString(ciphertext, secret string) (string, error) {
 		auditCrypto("sm4_decrypt", "", len(ciphertext), false, ErrUnencryptedValue)
 		return "", ErrUnencryptedValue
 	}
+}
+
+// decryptV3 解密带密钥版本标识的 v3 格式密文：
+// `enc:v3:<version>:<Base64(salt || nonce || ciphertext || tag)>`。
+func decryptV3(ciphertext, secret string) (string, error) {
+	trimmed := strings.TrimPrefix(ciphertext, EncryptedPrefixV3)
+	idx := strings.Index(trimmed, ":")
+	if idx < 0 {
+		e := errors.New("invalid v3 envelope: missing key version")
+		auditCrypto("sm4_decrypt", "", len(ciphertext), false, e)
+		return "", e
+	}
+	version := trimmed[:idx]
+	payload := trimmed[idx+1:]
+
+	kv, err := LookupKeyVersion(version)
+	if err != nil {
+		// 若调用方未注册目标版本，尝试回退到传入的 secret（兼容未启用 registry 的场景）。
+		if secret == "" {
+			auditCrypto("sm4_decrypt", version, len(ciphertext), false, err)
+			return "", err
+		}
+		kv = &KeyVersion{Version: version, Key: []byte(secret)}
+	}
+
+	data, err := decodeEnvelope(payload, "")
+	if err != nil {
+		auditCrypto("sm4_decrypt", version, len(ciphertext), false, err)
+		return "", err
+	}
+	if len(data) < saltSize+NonceSize {
+		e := errors.New("ciphertext too short")
+		auditCrypto("sm4_decrypt", version, len(ciphertext), false, e)
+		return "", e
+	}
+	salt, rest := data[:saltSize], data[saltSize:]
+
+	gcm, err := newGCM(DeriveKeyHKDF(string(kv.Key), salt))
+	if err != nil {
+		auditCrypto("sm4_decrypt", version, len(ciphertext), false, err)
+		return "", err
+	}
+	aad := []byte(EncryptedPrefixV3 + version + ":")
+	plaintext, err := gcm.Open(nil, rest[:NonceSize], rest[NonceSize:], aad)
+	if err != nil {
+		auditCrypto("sm4_decrypt", version, len(ciphertext), false, err)
+		return "", fmt.Errorf("sm4-gcm decrypt failed (invalid key or tampered data): %w", err)
+	}
+	auditCrypto("sm4_decrypt", version, len(plaintext), true, nil)
+	return string(plaintext), nil
 }
 
 func decryptV2(ciphertext, secret string) (string, error) {
@@ -367,5 +477,7 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 //
 // IsEncrypted 判断给定字符串是否为本包产出的合法信封密文（v1 或 v2 前缀）。
 func IsEncrypted(value string) bool {
-	return strings.HasPrefix(value, EncryptedPrefixV2) || strings.HasPrefix(value, EncryptedPrefix)
+	return strings.HasPrefix(value, EncryptedPrefixV3) ||
+		strings.HasPrefix(value, EncryptedPrefixV2) ||
+		strings.HasPrefix(value, EncryptedPrefix)
 }

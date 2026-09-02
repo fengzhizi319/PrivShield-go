@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	naming "github.com/fengzhizi319/PrivShield-go/pkg/naming"
 	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 	"github.com/fengzhizi319/PrivShield-go/pkg/store"
@@ -1056,13 +1057,15 @@ func StreamRecoveryInterceptor(logger *slog.Logger) grpc.StreamServerInterceptor
 }
 
 // BuildServerOptions creates server options configuring interceptor chains and transport credentials.
-// BuildServerOptions 组装 gRPC 服务端选项链（Recovery -> Logging 拦截器与可选 TLS 凭证）。
-func BuildServerOptions(logger *slog.Logger, creds credentials.TransportCredentials) []grpc.ServerOption {
+// BuildServerOptions 组装 gRPC 服务端选项链（Recovery -> Auth -> Logging 拦截器与可选 TLS 凭证）。
+func BuildServerOptions(logger *slog.Logger, creds credentials.TransportCredentials, apiKey string, scopeKeys map[string]*pkgauth.KeyConfig) []grpc.ServerOption {
 	unaryChain := grpc.ChainUnaryInterceptor(
 		UnaryRecoveryInterceptor(logger),
+		authUnaryInterceptor(apiKey, scopeKeys),
 		UnaryLoggingInterceptor(logger),
 	)
 	streamChain := grpc.ChainStreamInterceptor(
+		authStreamInterceptor(apiKey, scopeKeys),
 		StreamRecoveryInterceptor(logger),
 		StreamLoggingInterceptor(logger),
 	)
@@ -1086,7 +1089,7 @@ func StartGRPCServer(ag *agent.Client, ds *datasource.Client, cfg *config.Config
 		}
 	}
 
-	opts := BuildServerOptions(logger, creds)
+	opts := BuildServerOptions(logger, creds, cfg.APIKey, cfg.ScopeKeys)
 	grpcServer := grpc.NewServer(opts...)
 	serviceImpl := New(ag, ds, cfg, tasks, logger)
 	pb.RegisterServiceHubServiceServer(grpcServer, serviceImpl)

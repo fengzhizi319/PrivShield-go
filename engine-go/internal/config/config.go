@@ -50,6 +50,8 @@ type Runtime struct {
 	AuthEnabled bool
 	// AuthKeyConfigured 表示至少配置了一把可校验的入站 Key。
 	AuthKeyConfigured bool
+	// SkipTLSForRemote 为真时跳过非环回 TLS 强制校验（网关不终止入站 TLS）。
+	SkipTLSForRemote bool
 }
 
 // LoadAgent 读取 privshield-agent 的运行环境变量。
@@ -96,6 +98,7 @@ func LoadGateway() *Runtime {
 		RequireTLS:        pkgconfig.EnvBool("GATEWAY_REQUIRE_TLS", false),
 		AuthEnabled:       pkgconfig.EnvBool("PRIVACY_AUTH_ENABLED", false),
 		AuthKeyConfigured: inboundKeyConfigured(),
+		SkipTLSForRemote:  true, // 网关不终止入站 TLS，由上游/后端处理
 	}
 }
 
@@ -143,12 +146,14 @@ func (r *Runtime) Validate() error {
 	}
 
 	if err := pkgconfig.ValidateFailClosed(pkgconfig.SecurityRequirements{
-		ServiceName: r.ServiceName,
-		Hosts:       r.Hosts(),
-		APIKey:      r.inboundCredential(),
-		TLSEnabled:  r.TLSEnabled,
-		RequireTLS:  r.RequireTLS,
-		GRPCEnabled: r.GRPCEnabled,
+		ServiceName:    r.ServiceName,
+		Hosts:          r.Hosts(),
+		APIKey:         r.inboundCredential(),
+		AuthEnabled:    r.AuthEnabled,
+		TLSEnabled:     r.TLSEnabled,
+		RequireTLS:     r.RequireTLS,
+		SkipTLSForRemote: r.SkipTLSForRemote,
+		GRPCEnabled:    r.GRPCEnabled,
 		// 引擎始终监听 gRPC，故 TLS 开启时白名单文件为必填项。
 		MTLSWhitelistFile: r.MTLSWhitelistFile,
 	}); err != nil {

@@ -31,6 +31,7 @@ import (
 	"strconv"
 	"time"
 
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
@@ -260,6 +261,8 @@ func NewCollector(module string) *Collector {
 		c.APIAliasRequestsTotal,
 		c.DatasourceNormalizeErrorsTotal,
 		c.DatasourceRequestsTotal,
+		pkgauth.AuthFailuresTotal,
+		pkgauth.AuthForbiddenTotal,
 	)
 
 	return c

@@ -246,6 +246,7 @@ func (c *Config) Validate() error {
 		ServiceName:       "service-hub",
 		Hosts:             []string{c.Host, c.GRPCHost},
 		APIKey:            c.APIKey,
+		AuthEnabled:       c.APIKey != "" || len(c.ScopeKeys) > 0,
 		TLSEnabled:        c.TLSEnabled,
 		RequireTLS:        c.RequireTLS,
 		GRPCEnabled:       true, // 中枢进程始终监听 gRPC（默认 :50052）

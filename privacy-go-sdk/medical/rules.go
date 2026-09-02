@@ -392,9 +392,9 @@ var (
 )
 
 type compiledTermRegex struct {
-	category       string
-	replacement    string
-	regex          *regexp.Regexp
+	category        string
+	replacement     string
+	regex           *regexp.Regexp
 	needsASCIICheck bool // true if any term contains ASCII letters → needs word boundary check
 }
 
@@ -637,22 +637,22 @@ var (
 	allTermsOr string
 
 	// 通用句法模式
-	redactDeathPattern         *regexp.Regexp // 死因句法重构
-	redactSufferDeathPattern   *regexp.Regexp // 患有[病]去世
-	redactDiagnosisPattern     *regexp.Regexp // 独立诊断句法
-	redactPairedPattern        *regexp.Regexp // 复合疾病列表首位
-	redactPairedSuffixPattern  *regexp.Regexp // 复合疾病列表后续
-	redactSingleSufferPattern  *regexp.Regexp // 单疾病场景
-	redactHistoryPattern       *regexp.Regexp // 既往史/病史
+	redactDeathPattern           *regexp.Regexp // 死因句法重构
+	redactSufferDeathPattern     *regexp.Regexp // 患有[病]去世
+	redactDiagnosisPattern       *regexp.Regexp // 独立诊断句法
+	redactPairedPattern          *regexp.Regexp // 复合疾病列表首位
+	redactPairedSuffixPattern    *regexp.Regexp // 复合疾病列表后续
+	redactSingleSufferPattern    *regexp.Regexp // 单疾病场景
+	redactHistoryPattern         *regexp.Regexp // 既往史/病史
 	redactFeatureTendencyPattern *regexp.Regexp // 特征倾向
 
 	// 分类专属四柱句法模式
-	redactCD4Pattern                  *regexp.Regexp // CD4计数+ART治疗
-	redactGeneticClausePattern        *regexp.Regexp // 遗传缺陷基因检测
-	redactSTDFeatureClausePattern     *regexp.Regexp // 性病综合8分支
+	redactCD4Pattern                    *regexp.Regexp // CD4计数+ART治疗
+	redactGeneticClausePattern          *regexp.Regexp // 遗传缺陷基因检测
+	redactSTDFeatureClausePattern       *regexp.Regexp // 性病综合8分支
 	redactHepatitisFeatureClausePattern *regexp.Regexp // 肝炎特征
-	redactMedicationFullPattern       *regexp.Regexp // 完整用药句法
-	redactHospitalPattern             *regexp.Regexp // 就诊机构
+	redactMedicationFullPattern         *regexp.Regexp // 完整用药句法
+	redactHospitalPattern               *regexp.Regexp // 就诊机构
 )
 
 func initSyntacticPatterns() {
@@ -944,36 +944,36 @@ var (
 
 	// ── 新增清理正则（对齐 Python _clean_orphan_syntax 扩展子句）──
 
-	cleanupDevelopAndRe         = regexp.MustCompile(`发展为\s*与`)
-	cleanupPatientTimePrefixRe  = regexp.MustCompile(`(?:患者\s*\d+\s*(?:年|月|天|周)?前)\s*([，,])`)
-	cleanupVerbPunctRe          = regexp.MustCompile(`((?:因|由于|患有?|确诊|患|有|行|进行|接受|服用|合并|伴有))\s*[、,，]`)
-	cleanupNoObjVerbRe          = regexp.MustCompile(`(?:急诊行|急诊就诊|就诊|行|实施|接受|予|给予)\s*(?:提示|检查提示|显示|示)?\s*(?:及|与|和)?\s*([。；;，,])`)
-	cleanupNoObjHintRe          = regexp.MustCompile(`(?:基因检测提示|基因检测示|基因检测|检查提示|检查示|提示|显示|示|予|控制)\s*([。；;，,])`)
-	cleanupEmptyOpParenRe       = regexp.MustCompile(`[\(（][\s\+\-\*\/]*[\)）]`)
-	cleanupHAARTLongRe          = regexp.MustCompile(`开展\s*(?:HAART\s*)?抗病毒治疗`)
-	cleanupHAARTShortRe         = regexp.MustCompile(`(?:HAART\s*)?抗病毒治疗`)
-	cleanupHAARTWordRe          = regexp.MustCompile(`(?i)\bHAART\b`)
-	cleanupHIVParenRe           = regexp.MustCompile(`[\(（]\s*(?:HIV\s*)?(?:[\x{4e00}-\x{9fa5}]{0,6}(?:期|型|阶段|试验)|期|型)?\s*[\)）]`)
-	cleanupNameLabelRe          = regexp.MustCompile(`(姓名[：:])\s*([\x{4e00}-\x{9fa5}])[\x{4e00}-\x{9fa5}]{1,2}`)
-	cleanupPatientLabelRe       = regexp.MustCompile(`(患者[：:])\s*([\x{4e00}-\x{9fa5}])[\x{4e00}-\x{9fa5}]{1,2}`)
-	cleanupColonCommaRe         = regexp.MustCompile(`([：:])\s*[，,、]`)
-	cleanupColonPeriodRe        = regexp.MustCompile(`([：:])\s*[。；;]`)
-	cleanupCommaPeriodRe        = regexp.MustCompile(`([，,])\s*([。；;])`)
-	cleanupAppearPunctRe        = regexp.MustCompile(`(?:出现|发展为|表现为)\s*([。；;，,])`)
-	cleanupRepeatQuotesRe       = regexp.MustCompile(`['\""'""'']{2,}`)
-	cleanupTimePrefixPunctRe    = regexp.MustCompile(`(?:1年前有|半年前|1年前|既往有|曾有|自述有|外阴|曾出现|出现|自愈)\s*([。；;，,])`)
-	cleanupTimePrefixRe         = regexp.MustCompile(`(?:1年前有|半年前|1年前|既往有|曾有|自述有|外阴|曾出现|出现|自愈)`)
-	cleanupHistoryStartPunctRe  = regexp.MustCompile(`(?:追问病史|诊断为|确诊为|建议尽早启动|尽早启动|启动|开展|进一步检查|进一步|发现)\s*([。；;，,])`)
-	cleanupHistoryStartRe       = regexp.MustCompile(`(?:追问病史|诊断为|确诊为|建议尽早启动|尽早启动|启动|开展|进一步检查|进一步)`)
-	cleanupSeekCarePunctRe      = regexp.MustCompile(`(?:曾?就诊于|就诊于|收治于|转诊至|住院于)\s*([。；;，,])`)
-	cleanupSeekCareRe           = regexp.MustCompile(`(?:曾?就诊于|就诊于|收治于|转诊至|住院于)`)
-	cleanupSymptomItchRe        = regexp.MustCompile(`(?:伴|与|和)?\s*(?:局部)?(?:轻度)?(?:瘙痒|异物感|接触性出血)\s*([。；;，,])?`)
-	cleanupDoctorOrderRe        = regexp.MustCompile(`(?:医嘱[：:])\s*(?:立即|及时|定期)?\s*([。；;])`)
-	cleanupDieParenRe           = regexp.MustCompile(`(死于|殁于)\s*[\(（]([^）\)]+)[\)）]`)
-	cleanupBecauseDieRe         = regexp.MustCompile(`(?:因|死于|因于)\s*(去世|死于|离世|逝世)`)
-	cleanupFamilyDieRe          *regexp.Regexp // init 时编译
-	cleanupDiagPrefixCommaRe    = regexp.MustCompile(`((?:因|患有?|确诊(?:为)?|诊断(?:为)?|患|有|合并|伴有?))\s*[、,，]\s*`)
-	cleanupImageExtRe           = regexp.MustCompile(`(?i)(\b[\w/\\.-]*?)(?:syphilis|hiv|aids|cancer|tumor|hepatitis)([\w/\\.-]*\.(?:png|jpg|jpeg|dcm|webp|gif)\b)`)
+	cleanupDevelopAndRe          = regexp.MustCompile(`发展为\s*与`)
+	cleanupPatientTimePrefixRe   = regexp.MustCompile(`(?:患者\s*\d+\s*(?:年|月|天|周)?前)\s*([，,])`)
+	cleanupVerbPunctRe           = regexp.MustCompile(`((?:因|由于|患有?|确诊|患|有|行|进行|接受|服用|合并|伴有))\s*[、,，]`)
+	cleanupNoObjVerbRe           = regexp.MustCompile(`(?:急诊行|急诊就诊|就诊|行|实施|接受|予|给予)\s*(?:提示|检查提示|显示|示)?\s*(?:及|与|和)?\s*([。；;，,])`)
+	cleanupNoObjHintRe           = regexp.MustCompile(`(?:基因检测提示|基因检测示|基因检测|检查提示|检查示|提示|显示|示|予|控制)\s*([。；;，,])`)
+	cleanupEmptyOpParenRe        = regexp.MustCompile(`[\(（][\s\+\-\*\/]*[\)）]`)
+	cleanupHAARTLongRe           = regexp.MustCompile(`开展\s*(?:HAART\s*)?抗病毒治疗`)
+	cleanupHAARTShortRe          = regexp.MustCompile(`(?:HAART\s*)?抗病毒治疗`)
+	cleanupHAARTWordRe           = regexp.MustCompile(`(?i)\bHAART\b`)
+	cleanupHIVParenRe            = regexp.MustCompile(`[\(（]\s*(?:HIV\s*)?(?:[\x{4e00}-\x{9fa5}]{0,6}(?:期|型|阶段|试验)|期|型)?\s*[\)）]`)
+	cleanupNameLabelRe           = regexp.MustCompile(`(姓名[：:])\s*([\x{4e00}-\x{9fa5}])[\x{4e00}-\x{9fa5}]{1,2}`)
+	cleanupPatientLabelRe        = regexp.MustCompile(`(患者[：:])\s*([\x{4e00}-\x{9fa5}])[\x{4e00}-\x{9fa5}]{1,2}`)
+	cleanupColonCommaRe          = regexp.MustCompile(`([：:])\s*[，,、]`)
+	cleanupColonPeriodRe         = regexp.MustCompile(`([：:])\s*[。；;]`)
+	cleanupCommaPeriodRe         = regexp.MustCompile(`([，,])\s*([。；;])`)
+	cleanupAppearPunctRe         = regexp.MustCompile(`(?:出现|发展为|表现为)\s*([。；;，,])`)
+	cleanupRepeatQuotesRe        = regexp.MustCompile(`['\""'""'']{2,}`)
+	cleanupTimePrefixPunctRe     = regexp.MustCompile(`(?:1年前有|半年前|1年前|既往有|曾有|自述有|外阴|曾出现|出现|自愈)\s*([。；;，,])`)
+	cleanupTimePrefixRe          = regexp.MustCompile(`(?:1年前有|半年前|1年前|既往有|曾有|自述有|外阴|曾出现|出现|自愈)`)
+	cleanupHistoryStartPunctRe   = regexp.MustCompile(`(?:追问病史|诊断为|确诊为|建议尽早启动|尽早启动|启动|开展|进一步检查|进一步|发现)\s*([。；;，,])`)
+	cleanupHistoryStartRe        = regexp.MustCompile(`(?:追问病史|诊断为|确诊为|建议尽早启动|尽早启动|启动|开展|进一步检查|进一步)`)
+	cleanupSeekCarePunctRe       = regexp.MustCompile(`(?:曾?就诊于|就诊于|收治于|转诊至|住院于)\s*([。；;，,])`)
+	cleanupSeekCareRe            = regexp.MustCompile(`(?:曾?就诊于|就诊于|收治于|转诊至|住院于)`)
+	cleanupSymptomItchRe         = regexp.MustCompile(`(?:伴|与|和)?\s*(?:局部)?(?:轻度)?(?:瘙痒|异物感|接触性出血)\s*([。；;，,])?`)
+	cleanupDoctorOrderRe         = regexp.MustCompile(`(?:医嘱[：:])\s*(?:立即|及时|定期)?\s*([。；;])`)
+	cleanupDieParenRe            = regexp.MustCompile(`(死于|殁于)\s*[\(（]([^）\)]+)[\)）]`)
+	cleanupBecauseDieRe          = regexp.MustCompile(`(?:因|死于|因于)\s*(去世|死于|离世|逝世)`)
+	cleanupFamilyDieRe           *regexp.Regexp // init 时编译
+	cleanupDiagPrefixCommaRe     = regexp.MustCompile(`((?:因|患有?|确诊(?:为)?|诊断(?:为)?|患|有|合并|伴有?))\s*[、,，]\s*`)
+	cleanupImageExtRe            = regexp.MustCompile(`(?i)(\b[\w/\\.-]*?)(?:syphilis|hiv|aids|cancer|tumor|hepatitis)([\w/\\.-]*\.(?:png|jpg|jpeg|dcm|webp|gif)\b)`)
 	cleanupLeadingPatientChestRe = regexp.MustCompile(`^患者([^，,。；;]{0,10}详见)`)
 
 	// 最终无主语子句检测（≤30字符安全阈值，防 ReDoS）

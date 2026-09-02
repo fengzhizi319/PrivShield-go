@@ -112,7 +112,7 @@ func Load() *Config {
 	// ── RBAC 用户认证 ──
 	authEnabled := pkgconfig.EnvBool("APP_LZ_AUTH_ENABLED", false)
 	jwtSecret := pkgconfig.EnvString("APP_LZ_JWT_SECRET", "")
-	jwtExpiryHours := pkgconfig.EnvInt("APP_LZ_JWT_EXPIRY_HOURS", 24)
+	jwtExpiryHours := pkgconfig.EnvInt("APP_LZ_JWT_EXPIRY_HOURS", 1) // 默认 1 小时，符合等保短会话要求
 	userDBPath := pkgconfig.EnvString("APP_LZ_USER_DB_PATH", "")
 
 	return &Config{

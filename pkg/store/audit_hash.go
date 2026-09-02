@@ -178,6 +178,31 @@ func VerifyAuditIntegrityHash(stored, logID, prevHash string, timestamp time.Tim
 	return false, ""
 }
 
+// VerifyAuditIntegrityHashWithSignature 在 VerifyAuditIntegrityHash 基础上额外校验 SM2 数字签名。
+// 当 sm2Signature 非空且已注册验签器时，必须同时通过完整性哈希与 SM2 签名验证；签名缺失或
+// 验签器未配置时不影响完整性哈希判定，保持向下兼容。
+func VerifyAuditIntegrityHashWithSignature(stored, sm2Signature, logID, prevHash string, timestamp time.Time, algorithm, inputHash, outputHash, user, securityLevel, paramsJSON string) (bool, string) {
+	ok, label := VerifyAuditIntegrityHash(stored, logID, prevHash, timestamp, algorithm, inputHash, outputHash, user, securityLevel, paramsJSON)
+	if !ok {
+		return false, label
+	}
+	if sm2Signature != "" {
+		sigOk, _ := VerifyAuditSignature(stored, sm2Signature)
+		if !sigOk {
+			return false, ""
+		}
+	}
+	return ok, label
+}
+
+// VerifyAuditRecord 是 AuditLog 结构体上的便捷验真封装：依次核验完整性哈希与 SM2 签名。
+func VerifyAuditRecord(log *AuditLog) (bool, string) {
+	return VerifyAuditIntegrityHashWithSignature(
+		log.IntegrityHash, log.SM2Signature, log.ID, log.PrevHash, log.Timestamp,
+		log.Algorithm, log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON,
+	)
+}
+
 // IsCanonicalHashLabel reports whether a verification label matches the write convention that is
 // active right now. Once a chain key is configured, un-keyed SM3 rows stop being canonical and are
 // counted as pending re-signing, which is what the re-signing tool consumes.

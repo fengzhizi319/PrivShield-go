@@ -33,13 +33,18 @@
   - [4.6 G-14 API Key 过期与自动轮换](#46-g-14-api-key-过期与自动轮换)
   - [4.7 G-02 可信代理与源地址校验](#47-g-02-可信代理与源地址校验)
 - [第 5 章：Day 5 可观测性 Review](#第-5-章day-5-可观测性-review日志指标追踪)
-- [第 6 章：Engine-go 启动流程与配置加载链路深度分析](#第-6-章engine-go-启动流程与配置加载链路深度分析)
-- [第 7 章：gRPC 透明代理完整代码走读](#第-7-章grpc-透明代理完整代码走读)
-- [第 8 章：网关部署拓扑与运维指南](#第-8-章网关部署拓扑与运维指南)
+- [第 6 章：代码走读指南](#第-6-章代码走读指南)
+- [第 7 章：常见问题与排查指南](#第-7-章常见问题与排查指南)
+- [第 8 章：术语表](#第-8-章术语表)
+- [第 9 章：Engine-go 启动流程与配置加载链路深度分析](#第-9-章engine-go-启动流程与配置加载链路深度分析)
+- [第 10 章：gRPC 透明代理完整代码走读](#第-10-章grpc-透明代理完整代码走读)
+- [第 11 章：网关部署拓扑与运维指南](#第-11-章网关部署拓扑与运维指南)
+- [第 12 章：Review 检查清单详细版](#第-12-章review-检查清单详细版)
 - [附录 A：关键环境变量速查表](#附录-a关键环境变量速查表)
 - [附录 B：核心数据结构关系图](#附录-b核心数据结构关系图)
 - [附录 C：安全认证链路全景图](#附录-c安全认证链路全景图)
 - [附录 D：推荐阅读与延伸阅读](#附录-d推荐阅读与延伸阅读)
+
 
 ---
 
@@ -669,6 +674,304 @@ Go 标准库 `net/http/httputil.ReverseProxy` 是 HTTP 反向代理的基础：
 - `ErrorHandler`：后端不可达时的错误处理回调
 
 本项目中，所有代理共享同一个 `sharedTransport`（全局连接池），并通过 `byteBufferPool`（`sync.Pool`）复用 32KB 缓冲区。
+**HTTP 反向代理**的本质是**"流量中转站"**：它站在客户端和后端服务器之间，对外暴露统一入口，对内将请求分发到各个后端实例，并把响应原路返回。`net/http/httputil.ReverseProxy` 是 Go 标准库提供的工业级实现，下面从原理到源码级细节逐层拆解。
+
+---
+
+#### 一、ReverseProxy 的核心工作流程
+
+```text
+┌─────────┐   HTTP Request    ┌──────────────────┐   HTTP Request    ┌──────────────┐
+│ 客户端  │ ────────────────▶ │ ReverseProxy     │ ────────────────▶ │ 后端服务器    │
+│ (浏览器)│                    │ (service-hub)    │                   │ (citizen-svc) │
+│         │ ◀──────────────── │                  │ ◀──────────────── │              │
+└─────────┘   HTTP Response   └──────────────────┘   HTTP Response   └──────────────┘
+                              修改请求头(X-Forwarded-For)
+                              复用连接池、复用缓冲区
+                              错误时返回502/504
+```
+
+**一次完整转发的时序：**
+
+1. **接收**：`ReverseProxy` 作为 `http.Handler`，先接收客户端的 `*http.Request`
+2. **克隆**：深度克隆请求对象（避免修改原始请求），重写 `RequestURI`、`Host`、`X-Forwarded-*` 等头部
+3. **拨号**：通过 `Transport.RoundTrip(clonedReq)` 向后端发起 HTTP 请求
+4. **流式拷贝**：收到后端响应后，将 `StatusCode`、`Header` 复制给客户端，再通过 `io.CopyBuffer` 将 Body 泵回客户端
+5. **清理**：请求结束后归还缓冲区、关闭或复用连接
+
+---
+
+#### 二、三大关键接口详解
+
+##### 1. Transport — 连接与请求的生命线
+
+`Transport` 是 `http.RoundTripper` 接口，决定了**"如何与后端建立通信"**。如果不指定，`ReverseProxy` 默认使用 `http.DefaultTransport`。
+
+```go
+type ReverseProxy struct {
+    Transport http.RoundTripper  // 默认 http.DefaultTransport
+    // ...
+}
+```
+
+**Transport 控制的核心能力：**
+
+| 能力 | 配置项 | 本项目意义 |
+|------|--------|-----------|
+| **连接池** | `MaxIdleConns`、`MaxIdleConnsPerHost` | 避免每个请求都新建 TCP 连接，后端压力降低 90% |
+| **连接超时** | `DialContext.Timeout` | 防止后端僵死导致 goroutine 堆积 |
+| **请求超时** | `ResponseHeaderTimeout` | 后端响应头超过 N 秒未返回即断开 |
+| **TLS 配置** | `TLSClientConfig` | 政务云内网 mTLS 双向认证 |
+| **HTTP/2** | `ForceAttemptHTTP2` | 支持 gRPC-over-HTTP/2 透传 |
+
+**本项目实践：共享 `sharedTransport`**
+
+```go
+// 全局共享 Transport，所有反向代理实例共用同一个连接池
+var sharedTransport = &http.Transport{
+    // 连接池：最多空闲 1024 个连接，每个后端主机最多 100 个空闲连接
+    MaxIdleConns:        1024,
+    MaxIdleConnsPerHost: 100,
+    MaxConnsPerHost:     200,  // 硬上限，防止单后端被打爆
+    
+    // 超时控制
+    DialContext: (&net.Dialer{
+        Timeout:   3 * time.Second,  // TCP 握手 3 秒超时
+        KeepAlive: 30 * time.Second, // TCP KeepAlive 探活
+    }).DialContext,
+    
+    ResponseHeaderTimeout: 10 * time.Second, // 等后端响应头最多 10 秒
+    IdleConnTimeout:       90 * time.Second, // 空闲连接 90 秒回收
+    
+    // 政务云 TLS：双向 mTLS
+    TLSClientConfig: &tls.Config{
+        Certificates: []tls.Certificate{clientCert}, // 客户端证书
+        RootCAs:      trustedCAs,                    // 校验后端服务端证书
+    },
+    
+    ForceAttemptHTTP2: true, // 支持 HTTP/2 多路复用
+}
+
+// 创建 ReverseProxy 时注入共享 Transport
+proxy := httputil.NewSingleHostReverseProxy(targetURL)
+proxy.Transport = sharedTransport  // 所有 proxy 共享同一连接池
+```
+
+**为什么必须共享？**  
+如果每个后端都创建一个独立的 `Transport`，每个 `Transport` 内部都有自己的连接池和 goroutine（用于连接健康检查、超时处理）。100 个后端就会产生 100 个连接池，内存暴涨且无法复用连接。共享后，到同一后端的多个请求可以复用同一个 TCP 连接上的 Keep-Alive。
+
+---
+
+##### 2. BufferPool — 零拷贝缓冲区的复用中枢
+
+`ReverseProxy` 在转发 Body 时需要一块临时内存作为拷贝桥梁。默认行为是**每次请求都 `make([]byte, 32KB)`**，高并发下 GC 压力巨大。
+
+```go
+type ReverseProxy struct {
+    BufferPool BufferPool  // 缓冲池接口
+    // ...
+}
+
+// 标准库定义的接口，极其简单
+type BufferPool interface {
+    Get() []byte
+    Put([]byte)
+}
+```
+
+**本项目实践：`sync.Pool` 实现 `BufferPool`**
+
+```go
+// byteBufferPool 复用 32KB 缓冲区
+type byteBufferPool struct {
+    pool sync.Pool
+}
+
+func newByteBufferPool() *byteBufferPool {
+    return &byteBufferPool{
+        pool: sync.Pool{
+            New: func() interface{} {
+                // 统一分配 32KB，覆盖绝大多数 HTTP Body 场景
+                b := make([]byte, 32*1024)
+                return &b  // 返回指针，避免接口转换时拷贝
+            },
+        },
+    }
+}
+
+// Get 取出缓冲区
+func (p *byteBufferPool) Get() []byte {
+    return *(p.pool.Get().(*[]byte))
+}
+
+// Put 归还缓冲区
+func (p *byteBufferPool) Put(b []byte) {
+    // 防御性检查：只回收长度匹配的，防止超大 Body 污染池子
+    if cap(b) == 32*1024 {
+        p.pool.Put(&b)
+    }
+    // 不匹配的直接丢弃，由 GC 回收
+}
+
+// 全局单例
+var sharedBufferPool = newByteBufferPool()
+
+// 创建代理时注入
+proxy.BufferPool = sharedBufferPool
+```
+
+**内部调用时机：**  
+当 `ReverseProxy` 执行 `io.CopyBuffer` 转发响应 Body 时，会调用 `BufferPool.Get()` 获取缓冲区；拷贝完成后调用 `Put()` 归还。因为 `sync.Pool` 的复用机制，同一块 32KB 内存可以在毫秒级被下一个请求复用，**分配次数趋近于零**。
+
+---
+
+##### 3. ErrorHandler — 后端故障时的兜底策略
+
+当 `Transport.RoundTrip` 返回错误（如连接拒绝、超时、TLS 握手失败），或后端返回的响应需要被拦截时，`ReverseProxy` 会调用 `ErrorHandler`，而不是直接 panic 或返回空响应。
+
+```go
+type ReverseProxy struct {
+    ErrorHandler func(http.ResponseWriter, *http.Request, error)
+    // ...
+}
+```
+
+**默认行为（未设置时）**：返回 `502 Bad Gateway`，Body 为空，对客户端极不友好。
+
+**本项目实践：政务云精细化错误处理**
+
+```go
+proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+    // 1. 记录结构化日志，便于后续链路追踪
+    logger.Error("proxy_error",
+        zap.String("path", r.URL.Path),
+        zap.String("backend", r.URL.Host),
+        zap.Error(err),
+    )
+    
+    // 2. 根据错误类型映射到不同 HTTP 状态码，便于前端/调用方区分重试策略
+    var status int
+    var msg string
+    
+    switch {
+    case os.IsTimeout(err), errors.Is(err, context.DeadlineExceeded):
+        status = http.StatusGatewayTimeout  // 504
+        msg = "后端服务响应超时，请稍后重试"
+        
+    case errors.Is(err, context.Canceled):
+        status = http.StatusServiceUnavailable  // 503
+        msg = "请求已被取消"
+        
+    default:
+        // 连接拒绝、DNS 失败、TLS 错误等
+        status = http.StatusBadGateway  // 502
+        msg = "后端服务暂不可用"
+    }
+    
+    // 3. 清理已写入的部分 Header，重新写入错误响应
+    // 注意：此时 w 可能已写入部分数据，需确保不会触发 http: superfluous response.WriteHeader call
+    w.Header().Set("Content-Type", "application/json; charset=utf-8")
+    w.WriteHeader(status)
+    json.NewEncoder(w).Encode(map[string]interface{}{
+        "error":   msg,
+        "status":  status,
+        "path":    r.URL.Path,
+        "trace_id": r.Header.Get("X-Trace-ID"),  // 政务云审计要求
+    })
+    
+    // 4. 触发熔断器计数（如果配置了的话）
+    if cb, ok := r.Context().Value("circuit_breaker").(*CircuitBreaker); ok {
+        cb.RecordFailure()
+    }
+}
+```
+
+**关键点：**
+- `ErrorHandler` 中收到的 `error` 是 `Transport.RoundTrip` 的原始错误，可能是 `net/url.Error`、`tls.CertificateVerificationError`、`context.DeadlineExceeded` 等，需要类型断言或 `errors.Is` 区分。
+- 一旦进入 `ErrorHandler`，说明**后端完全没有返回有效响应**（连 HTTP Header 都没收到），因此必须自己构造完整的 HTTP 响应给客户端。
+
+---
+
+#### 三、完整配置示例：政务云网关中的 ReverseProxy
+
+```go
+package main
+
+import (
+    "net/http"
+    "net/http/httputil"
+    "net/url"
+    "time"
+)
+
+// GatewayBackend 封装一个后端及其代理
+type GatewayBackend struct {
+    target *url.URL
+    proxy  *httputil.ReverseProxy
+}
+
+func NewGatewayBackend(rawURL string) (*GatewayBackend, error) {
+    target, err := url.Parse(rawURL)
+    if err != nil {
+        return nil, err
+    }
+    
+    proxy := httputil.NewSingleHostReverseProxy(target)
+    
+    // 1. 共享连接池：所有后端共用，避免连接爆炸
+    proxy.Transport = sharedTransport
+    
+    // 2. 共享缓冲池：32KB 复用，降低 GC
+    proxy.BufferPool = sharedBufferPool
+    
+    // 3. 自定义错误处理：政务云要求结构化错误 + 审计日志
+    proxy.ErrorHandler = sharedErrorHandler
+    
+    // 4. 修改请求：注入政务云必需的审计头
+    originalDirector := proxy.Director
+    proxy.Director = func(req *http.Request) {
+        originalDirector(req)  // 先执行默认行为（重写 Host、Scheme 等）
+        
+        // 追加政务云审计头
+        req.Header.Set("X-Forwarded-For", getClientIP(req))
+        req.Header.Set("X-Gateway-Time", time.Now().UTC().Format(time.RFC3339))
+        req.Header.Set("X-Request-ID", generateRequestID())
+        
+        // 剥离客户端传来的敏感头（防止伪造内网身份）
+        req.Header.Del("X-Internal-Token")
+    }
+    
+    return &GatewayBackend{
+        target: target,
+        proxy:  proxy,
+    }, nil
+}
+
+// ServeHTTP 实现 http.Handler 接口
+func (gb *GatewayBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+    gb.proxy.ServeHTTP(w, r)
+}
+```
+
+---
+
+#### 四、性能与资源控制全景
+
+| 组件 | 不优化的后果 | 本项目的优化手段 |
+|------|-------------|----------------|
+| **Transport** | 每次请求新建 TCP 连接，后端 SYN Flood，延迟 3 次握手 | 全局共享连接池 + Keep-Alive + 超时控制 |
+| **BufferPool** | 每次请求 `make([]byte, 32KB)`，1万 QPS 时 GC 每秒扫描几百 MB 临时内存 | `sync.Pool` 复用，分配趋近于零 |
+| **ErrorHandler** | 后端故障时返回空白 502，客户端无法区分"超时"和"宕机"，疯狂重试压垮网关 | 精细化错误分类 + 结构化 JSON + 触发熔断 |
+
+---
+
+#### 五、一句话总结
+
+> `httputil.ReverseProxy` 是 Go 的**"HTTP 流量泵"**：  
+> `Transport` 决定**"怎么连后端"**（连接池是命脉），  
+> `BufferPool` 决定**"怎么搬数据"**（复用缓冲区是性能关键），  
+> `ErrorHandler` 决定**"后端挂了怎么办"**（政务云要求优雅降级而非裸奔 502）。  
+> 三者全部共享全局实例，是支撑 `service-hub` 万级并发、毫秒延迟的底层基石。
 
 ### P2：gRPC 流式通信模型
 
@@ -2806,7 +3109,7 @@ type JWTManager struct {
 
 ## 第 5 章：Day 5 可观测性 Review（日志、指标、追踪）
 
-### 3.1 审查文件清单
+### 5.1 审查文件清单
 
 | 文件路径 | 行数 | 核心职责 |
 |---|:---:|---|
@@ -2819,9 +3122,9 @@ type JWTManager struct {
 | `engine-go/internal/observability/gateway_metrics.go` | 137 | GatewayMetrics（InFlight/EWMA/熔断器/转发计数） |
 | `pkg/middleware/trace.go` | 53 | 追踪中间件兼容别名（下沉至 pkg/observability） |
 
-### 3.2 核心知识点详解
+### 5.2 核心知识点详解
 
-#### 3.2.1 Prometheus RED 指标体系
+#### 5.2.1 Prometheus RED 指标体系
 
 **源码位置**：`pkg/observability/metrics.go` (L22-125)
 
@@ -3111,21 +3414,21 @@ func TraceMiddleware() gin.HandlerFunc {
 3. 入站 `X-Request-ID` 请求头
 4. 即时生成新 ID
 
-### 3.3 Day 5 Review 方法
+### 5.3 Day 5 Review 方法
 
 1. **指标暴露验证**：启动 engine-go，`curl localhost:8079/metrics`，确认所有指标名称和标签正确
 2. **追踪链路验证**：配置 `OTEL_EXPORTER_OTLP_ENDPOINT`，发送请求后检查 Jaeger 是否看到 Span
 3. **日志格式验证**：确认 JSON 格式日志包含所有必需字段（request_id, method, path, status, latency_ms）
 
-### 3.4 Day 5 关注问题
+### 5.4 Day 5 关注问题
 
 - 追踪模块当前为薄封装，`OTelTracer.StartSpan()` 实际是 no-op — 引擎内部（分类漏斗各阶段）未创建独立 Span
 - 审计关键事件（分类命中 LLM、熔断器状态变更、mTLS 证书即将过期）是否输出标准化日志
 - 缺少 Prometheus 告警规则定义（`deploy/prometheus/rules/`）— 需要补充 P99 延迟、错误率、熔断器状态等告警
 
-### 3.5 可观测性深度分析
+### 5.5 可观测性深度分析
 
-#### 3.5.1 独立 Registry 的设计动机
+#### 5.5.1 独立 Registry 的设计动机
 
 ```
 Prometheus 默认注册表 (prometheus.DefaultRegisterer)
@@ -3155,7 +3458,7 @@ func NewREDMetrics() *REDMetrics {
 2. 不同服务可以按需组合指标（如 Gateway 不需要 Engine 的业务指标）
 3. `/metrics` 端点只暴露本服务的指标
 
-#### 3.5.2 TraceID 生成算法分析
+#### 5.5.2 TraceID 生成算法分析
 
 ```go
 // pkg/observability/trace.go L52-59
@@ -3183,7 +3486,7 @@ func GenerateRequestID() string {
 - 即使在同一纳秒内发出 1000 个请求，碰撞概率也极低
 - 使用 `crypto/rand` 而非 `math/rand`，确保随机性不可预测
 
-#### 3.5.3 结构化日志最佳实践
+#### 5.5.3 结构化日志最佳实践
 
 **JSON 格式日志的优势**：
 - 机器可解析：直接接入 ELK/Loki 等日志系统
@@ -3211,7 +3514,7 @@ func GenerateRequestID() string {
 | WARN | 可恢复的异常 | 后端超时重试、证书即将过期 |
 | ERROR | 不可恢复的错误 | 数据库连接失败、配置加载失败 |
 
-#### 3.5.4 PrometheusMiddleware 的 /metrics 自引用问题
+#### 5.5.4 PrometheusMiddleware 的 /metrics 自引用问题
 
 ```go
 // pkg/observability/metrics.go L92-109
@@ -3242,7 +3545,7 @@ func (m *REDMetrics) PrometheusMiddleware() gin.HandlerFunc {
 
 ---
 
-## 代码走读指南
+## 第 6 章：代码走读指南
 
 ### 推荐读码顺序
 
@@ -3307,7 +3610,7 @@ func (m *REDMetrics) PrometheusMiddleware() gin.HandlerFunc {
 
 ---
 
-## 常见问题与排查指南
+## 第 7 章：常见问题与排查指南
 
 ### Q1: 网关返回 503 SERVICE_UNAVAILABLE
 
@@ -3390,7 +3693,7 @@ curl -H "Authorization: Bearer <admin-key>" http://localhost:8082/api/hub/dispat
 
 ---
 
-## 术语表
+## 第 8 章：术语表
 
 | 术语 | 英文 | 说明 |
 |---|---|---|
@@ -3424,7 +3727,7 @@ curl -H "Authorization: Bearer <admin-key>" http://localhost:8082/api/hub/dispat
 
 ---
 
-## 第 6 章：Engine-go 启动流程与配置加载链路深度分析
+## 第 9章：Engine-go 启动流程与配置加载链路深度分析
 
 理解进程启动流程是 Review 的基础——它揭示了各组件的初始化顺序、依赖关系和故障模式。
 
@@ -3660,7 +3963,7 @@ K8s 的 Endpoints 更新和 iptables 规则传播有延迟（通常 1-3 秒）�
 
 ---
 
-## 第 7 章：gRPC 透明代理完整代码走读
+## 第 10 章：gRPC 透明代理完整代码走读
 
 gRPC 透明代理是网关中最复杂的组件（310 行），理解它需要掌握 gRPC 底层流式通信模型。
 
@@ -3809,7 +4112,7 @@ func isConnReady(conn *grpc.ClientConn) bool {
 
 ---
 
-## 第 8 章：网关部署拓扑与运维指南
+## 第 11 章：网关部署拓扑与运维指南
 
 ### Docker Compose 部署拓扑
 
@@ -3962,7 +4265,7 @@ go tool pprof block.prof
 
 ---
 
-## Review 检查清单详细版
+## 第 12 章：Review 检查清单详细版
 
 以下清单为每个模块的具体检查点，Review 时逐项确认。
 
@@ -4066,7 +4369,7 @@ go tool pprof block.prof
 
 ---
 
-## 周交付物清单
+## 第 13 章：周交付物清单
 
 ### 交付物 1：engine-go 网关与安全模块 Review 笔记
 

@@ -73,6 +73,7 @@ func main() {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	middleware.ConfigureTrustedProxies(r, middleware.TrustedProxiesFromEnv()) // G-02
+	r.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv()))           // IP access control
 	r.Use(gin.Recovery())
 	r.Use(middleware.WAF(slog.Default())) // 三级等保 G-12：Web 攻击载荷检测
 	r.Use(observability.RequestLogger())

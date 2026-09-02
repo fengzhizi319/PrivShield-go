@@ -68,6 +68,9 @@ func TestValidateFailClosed(t *testing.T) {
 	t.Run("missing encryption key on remote bind fails", func(t *testing.T) {
 		req := base
 		req.Hosts = []string{"0.0.0.0"}
+		req.AuthEnabled = true
+		req.TLSEnabled = true
+		req.MTLSWhitelistFile = "mtls.yaml"
 		req.RequireEncryptionKey = true
 		if err := ValidateFailClosed(req); !errors.Is(err, ErrEncryptionKeyRequired) {
 			t.Fatalf("expected ErrEncryptionKeyRequired, got %v", err)

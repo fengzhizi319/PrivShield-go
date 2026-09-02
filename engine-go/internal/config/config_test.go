@@ -104,6 +104,10 @@ func TestAgentFailClosedGate(t *testing.T) {
 				"PRIVACY_GRPC_HOST":              "0.0.0.0",
 				"PRIVACY_AUTH_ENABLED":           "true",
 				"PRIVACY_AUTH_INTERNAL_API_KEYS": "tok:hub:privacy:mask",
+				"PRIVACY_TLS_ENABLED":            "true",
+				"PRIVACY_TLS_CERT_FILE":          "__CERT__",
+				"PRIVACY_TLS_KEY_FILE":           "__KEY__",
+				"PRIVACY_AUTH_MTLS_WHITELIST_FILE": "__WHITELIST__",
 			},
 		},
 		{

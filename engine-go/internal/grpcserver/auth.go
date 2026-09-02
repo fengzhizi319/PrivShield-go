@@ -10,8 +10,8 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/security"
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 )
 
 // authUnaryInterceptor 为 gRPC 请求提供 API Key 认证与 Scope 权限校验。

@@ -253,12 +253,12 @@ func TestParseAPIKeysEnv(t *testing.T) {
 			},
 		},
 		{
-			name:    "no scopes defaults to wildcard",
+			name:    "no scopes defaults to empty",
 			raw:     "tok1:svc-a",
 			wantLen: 1,
 			check: func(t *testing.T, keys map[string]*KeyConfig) {
-				if len(keys["tok1"].Scopes) != 1 || keys["tok1"].Scopes[0] != "*" {
-					t.Errorf("scopes = %v, want [*]", keys["tok1"].Scopes)
+				if len(keys["tok1"].Scopes) != 0 {
+					t.Errorf("scopes = %v, want [] (empty, no permissions)", keys["tok1"].Scopes)
 				}
 			},
 		},

@@ -363,7 +363,8 @@ func InitAuditTables(db *sql.DB) error {
 			error_message TEXT,
 			security_level TEXT,
 			prev_hash TEXT DEFAULT '',
-			integrity_hash TEXT DEFAULT ''
+			integrity_hash TEXT DEFAULT '',
+			sm2_signature TEXT DEFAULT ''
 		);
 		CREATE TABLE IF NOT EXISTS snapshots (
 			id TEXT PRIMARY KEY,
@@ -375,6 +376,7 @@ func InitAuditTables(db *sql.DB) error {
 			parameters_json TEXT,
 			integrity_hash TEXT,
 			prev_hash TEXT DEFAULT '',
+			sm2_signature TEXT DEFAULT ''
 			FOREIGN KEY(audit_log_id) REFERENCES audit_logs(id)
 		);
 		CREATE INDEX IF NOT EXISTS idx_audit_logs_ts ON audit_logs(timestamp);
@@ -433,6 +435,11 @@ func InitAuditTables(db *sql.DB) error {
 			return err
 		}
 	}
+	if !columns["sm2_signature"] {
+		if _, err := db.Exec("ALTER TABLE audit_logs ADD COLUMN sm2_signature TEXT DEFAULT ''"); err != nil {
+			return err
+		}
+	}
 	// P1 fix: monotonic sequence column for deterministic chain verification order.
 	if !columns["seq"] {
 		if _, err := db.Exec("ALTER TABLE audit_logs ADD COLUMN seq INTEGER"); err != nil {
@@ -482,6 +489,11 @@ func InitAuditTables(db *sql.DB) error {
 	}
 	if !snapColumns["integrity_hash"] {
 		if _, err := db.Exec("ALTER TABLE snapshots ADD COLUMN integrity_hash TEXT DEFAULT ''"); err != nil {
+			return err
+		}
+	}
+	if !snapColumns["sm2_signature"] {
+		if _, err := db.Exec("ALTER TABLE snapshots ADD COLUMN sm2_signature TEXT DEFAULT ''"); err != nil {
 			return err
 		}
 	}

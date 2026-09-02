@@ -65,8 +65,8 @@ var weakPasswords = []string{
 type UserStore struct {
 	mu             sync.RWMutex
 	users          map[string]*User
-	failedAttempts map[string]int         // username -> consecutive failures
-	lockedUntil    map[string]time.Time   // username -> lockout expiry
+	failedAttempts map[string]int       // username -> consecutive failures
+	lockedUntil    map[string]time.Time // username -> lockout expiry
 }
 
 // NewUserStore 创建用户存储实例。

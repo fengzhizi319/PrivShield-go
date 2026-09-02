@@ -121,6 +121,7 @@ func main() {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv()) // G-02
+	router.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv()))           // IP access control
 	router.Use(gin.Recovery())
 	router.Use(middleware.TraceMiddleware()) // 全链路分布式追踪 (X-Request-ID + X-Trace-ID)
 	router.Use(security.SecurityHeadersMiddleware())

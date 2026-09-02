@@ -5,7 +5,7 @@ package handlers
 // 覆盖三类断言：
 //  1. 原始数据旁路（/records、/sample、/api/v1/yibao|kangyang|mock3|mock4）一律 403；
 //  2. 控制台真实需要的只读元数据 / 统计 / 调度端点仍然放行；
-//  3. ".."、重复斜杠与 %2e%2e 编码穿越无法绕过白名单。
+//  3. ".."、重复斜杠与 %2e%2e 编码穿越在到达白名单前即被 WAF 拦截（G-12）。
 
 import (
 	"bytes"
@@ -235,10 +235,7 @@ func TestMicroserviceProxy_RawDataBypassDenied(t *testing.T) {
 		{"raw kangyang", http.MethodGet, "/api/datasource/api/v1/kangyang"},
 		{"raw mock3", http.MethodGet, "/api/datasource/api/v1/mock3"},
 		{"raw mock4", http.MethodGet, "/api/datasource/api/v1/mock4"},
-		{"traversal into records", http.MethodGet, "/api/datasource/api/datasources/ds_yibao/metadata/../records"},
-		{"encoded traversal", http.MethodGet, "/api/datasource/%2e%2e/api/datasource/api/datasources/ds_yibao/records"},
 		{"method not allowlisted", http.MethodDelete, "/api/datasource/api/datasources"},
-		{"audit raw passthrough", http.MethodGet, "/api/audit/api/audit/../../../../etc/passwd"},
 	}
 
 	for _, tc := range cases {
@@ -266,6 +263,49 @@ func TestMicroserviceProxy_RawDataBypassDenied(t *testing.T) {
 			}
 			if !strings.Contains(logged, `"request_id":"req-p0-7"`) {
 				t.Errorf("proxy log line is missing the request id, got: %s", logged)
+			}
+			atomic.StoreInt64(env.upstreamHits, 0)
+		})
+	}
+}
+
+// TestMicroserviceProxy_TraversalBlockedByWAF 断言路径穿越请求在 WAF 层即被拦截，
+// 不会到达上游，也不会绕过微服务代理白名单。
+func TestMicroserviceProxy_TraversalBlockedByWAF(t *testing.T) {
+	env := newProxyTestEnv(t)
+
+	cases := []struct {
+		name   string
+		method string
+		target string
+	}{
+		{"traversal into records", http.MethodGet, "/api/datasource/api/datasources/ds_yibao/metadata/../records"},
+		{"encoded traversal", http.MethodGet, "/api/datasource/%2e%2e/api/datasource/api/datasources/ds_yibao/records"},
+		{"audit raw passthrough", http.MethodGet, "/api/audit/api/audit/../../../../etc/passwd"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env.resetLogs()
+			code, body := env.serve(t, tc.method, tc.target, "")
+			if code != http.StatusForbidden {
+				t.Errorf("%s %s = %d, want 403 (body=%s)", tc.method, tc.target, code, body)
+			}
+			if got := envelopeCode(t, body); got != "WAF_BLOCKED" {
+				t.Errorf("error code = %q, want WAF_BLOCKED", got)
+			}
+			if h := atomic.LoadInt64(env.upstreamHits); h != 0 {
+				t.Errorf("upstream was called %d times for a WAF-blocked request, want 0", h)
+			}
+			logged := env.logs.String()
+			if !strings.Contains(logged, "WAF attack detected") {
+				t.Errorf("missing WAF detection log, got: %s", logged)
+			}
+			if !strings.Contains(logged, `"category":"PATH_TRAVERSAL"`) {
+				t.Errorf("WAF log missing PATH_TRAVERSAL category, got: %s", logged)
+			}
+			if !strings.Contains(logged, `"request_id":"req-p0-7"`) {
+				t.Errorf("WAF log missing request id, got: %s", logged)
 			}
 			atomic.StoreInt64(env.upstreamHits, 0)
 		})

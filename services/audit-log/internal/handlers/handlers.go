@@ -67,7 +67,7 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 	r.Use(pkgobs.RequestLoggerWithModule("audit-log"))
 	r.Use(middleware.Recovery(s.logger, "audit-log"))
 	r.Use(middleware.SecurityHeaders())
-	r.Use(middleware.WAF(s.logger)) // 三级等保 G-12：Web 攻击载荷检测
+	r.Use(middleware.WAF(s.logger))         // 三级等保 G-12：Web 攻击载荷检测
 	r.Use(middleware.MaxBodySize(32 << 20)) // 32 MiB max payload protection
 	r.Use(middleware.MaxConcurrent(1000))   // 并发在途请求上限，超限返回 503
 	if s.cfg.RateLimitRPS > 0 {

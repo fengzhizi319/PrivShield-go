@@ -24,11 +24,12 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 
+	pkgcrypto "github.com/fengzhizi319/PrivShield-go/pkg/crypto"
 	pkggrpcserver "github.com/fengzhizi319/PrivShield-go/pkg/grpcserver"
 	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
+	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
 	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
-	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 	"github.com/fengzhizi319/PrivShield-go/pkg/store"
 	"github.com/fengzhizi319/PrivShield-go/pkg/store/flusher"
 	"github.com/fengzhizi319/PrivShield-go/pkg/store/memory"
@@ -50,6 +51,26 @@ func main() {
 	// Validate configuration consistency (fail-fast with clear error messages).
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("invalid configuration: %v", err)
+	}
+
+	// ── Envelope encryption key registry / 信封加密密钥版本注册（G-08）──
+	// 将配置主密钥注册为当前活跃版本，后续 EncryptString/DecryptString 优先读取注册表，
+	// 支持多版本密钥轮换过渡期解密旧版本数据。
+	if cfg.EncryptionKey != "" {
+		pkgcrypto.RegisterKeyVersion("v1", []byte(cfg.EncryptionKey), true)
+		log.Printf("envelope encryption key registered (version=v1, active=true)")
+	}
+
+	// ── SM2 审计存证签名器/验签器注册（G-10 不可否认性）──
+	if cfg.SM2PrivateKey != "" || cfg.SM2PublicKey != "" {
+		sv, err := pkgcrypto.NewSM2SignerVerifierFromHex(cfg.SM2PrivateKey, cfg.SM2PublicKey)
+		if err != nil {
+			log.Fatalf("failed to load SM2 signing key: %v", err)
+		}
+		store.SetSM2Signer(sv)
+		store.SetSM2Verifier(sv)
+		log.Printf("audit SM2 signer/verifier registered (has_private=%v, has_public=%v)",
+			cfg.SM2PrivateKey != "", cfg.SM2PublicKey != "")
 	}
 
 	// ── Structured logger / 结构化日志 ────────────────────────
@@ -104,6 +125,7 @@ func main() {
 	server := handlers.New(agentClient, cfg, auditStore, logger, mc)
 	router := gin.New()
 	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv()) // G-02
+	router.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv()))           // IP access control
 	server.RegisterRoutes(router)
 
 	httpSrv := &http.Server{
@@ -163,6 +185,14 @@ func main() {
 			WithStreamInterceptor(streamInterceptor)
 		logger.Info("gRPC server configured with mTLS CN whitelist",
 			"path", cfg.MTLSWhitelistFile,
+		)
+	}
+
+	// G-17: 应用层 API Key 鉴权拦截器（与 mTLS 叠加，形成双层鉴权）。
+	grpcServer = grpcServer.WithUnaryInterceptor(grpcserver.AuthUnaryInterceptor(cfg.APIKey, cfg.ScopeKeys))
+	if cfg.APIKey != "" || len(cfg.ScopeKeys) > 0 {
+		logger.Info("gRPC server configured with API Key auth",
+			"scope_keys", len(cfg.ScopeKeys),
 		)
 	}
 

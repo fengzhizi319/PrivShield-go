@@ -247,6 +247,7 @@ func (b *BufferedAuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *
 		log.ID, log.PrevHash, log.Timestamp, log.Algorithm,
 		log.InputHash, log.OutputHash, log.User, log.SecurityLevel, log.ParametersJSON,
 	)
+	log.SM2Signature = store.SignAuditRecord(log.IntegrityHash)
 
 	logCopy := *log
 	var snap *store.SnapshotRecord
@@ -262,6 +263,7 @@ func (b *BufferedAuditStore) SaveLogWithSnapshot(log *store.AuditLog, snapshot *
 			s.ID, s.AuditLogID, s.PrevHash, s.Timestamp, s.Algorithm,
 			s.InputSample, s.OutputSample, s.ParametersJSON,
 		)
+		s.SM2Signature = store.SignAuditRecord(s.IntegrityHash)
 		snap = &s
 		*snapshot = s // Sync back to caller's snapshot pointer
 	}
@@ -335,6 +337,17 @@ func (b *BufferedAuditStore) SaveLogsBatch(logs []store.AuditLog, snapshots []st
 	}
 
 	if !pairSnapshots && len(snapshots) > 0 {
+		for i := range snapshots {
+			if snapshots[i].IntegrityHash == "" {
+				snapshots[i].IntegrityHash = store.ComputeSnapshotIntegrityHash(
+					snapshots[i].ID, snapshots[i].AuditLogID, snapshots[i].PrevHash, snapshots[i].Timestamp, snapshots[i].Algorithm,
+					snapshots[i].InputSample, snapshots[i].OutputSample, snapshots[i].ParametersJSON,
+				)
+			}
+			if snapshots[i].SM2Signature == "" {
+				snapshots[i].SM2Signature = store.SignAuditRecord(snapshots[i].IntegrityHash)
+			}
+		}
 		if err := b.underlying.SaveLogsBatch(nil, snapshots); err != nil && firstErr == nil {
 			firstErr = err
 		}

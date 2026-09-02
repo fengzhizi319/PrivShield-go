@@ -4,6 +4,7 @@
 package auth
 
 import (
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -229,7 +230,9 @@ func ParseAPIKeysEnv(raw string) map[string]*KeyConfig {
 			}
 		}
 		if len(scopes) == 0 {
-			scopes = []string{"*"}
+			slog.Warn("ParseAPIKeysEnv: key has no scopes, defaulting to empty (no permissions)",
+				"key_name", name, "token_prefix", tokenPrefix(token))
+			scopes = []string{}
 		}
 		keys[token] = &KeyConfig{Name: name, Scopes: scopes, ExpiresAt: expiresAt}
 	}
@@ -255,6 +258,14 @@ func findExpirySeparator(s string) int {
 // LoadAPIKeysFromEnv 从环境变量加载 API Key 映射。
 func LoadAPIKeysFromEnv(envKey string) map[string]*KeyConfig {
 	return ParseAPIKeysEnv(os.Getenv(envKey))
+}
+
+// tokenPrefix 返回 token 的前 4 个字符用于日志标识，避免在日志中泄露完整密钥。
+func tokenPrefix(token string) string {
+	if len(token) <= 4 {
+		return "***"
+	}
+	return token[:4] + "***"
 }
 
 // ServiceHubPermissionForPath 将 service-hub 路由映射为所需权限字符串。

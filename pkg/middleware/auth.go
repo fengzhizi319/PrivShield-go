@@ -19,6 +19,7 @@ package middleware
 
 import (
 	"crypto/subtle"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -47,6 +48,9 @@ import (
 //   - 不一致：立即响应 401 UNAUTHORIZED 错误信封并阻断后续调用；
 //   - 一致：调用 c.Next() 继续处理业务。
 func Auth(apiKey string) gin.HandlerFunc {
+	if apiKey == "" {
+		slog.Warn("middleware.Auth: empty API key, all requests will pass through unauthenticated; set API key for production deployments")
+	}
 	return func(c *gin.Context) {
 		// apiKey 为空 → 跳过鉴权（开发模式）
 		if apiKey == "" {

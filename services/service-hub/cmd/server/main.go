@@ -57,9 +57,9 @@ import (
 	"google.golang.org/grpc/keepalive"
 
 	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
+	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
 	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
-	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 	"github.com/fengzhizi319/PrivShield-go/pkg/store"
 	"github.com/fengzhizi319/PrivShield-go/pkg/store/memory"
 	"github.com/fengzhizi319/PrivShield-go/pkg/store/postgres"
@@ -88,6 +88,9 @@ func main() {
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("invalid configuration: %v", err)
 	}
+
+	// 三级等保/密评 G-17：初始化 gRPC API Key + Scope 应用层鉴权配置。
+	grpcserver.InitAuthSettings(cfg)
 
 	// =========================================================================
 	// 2. Structured Logger Setup / 结构化日志系统初始化
@@ -198,6 +201,7 @@ func main() {
 	server := handlers.New(agentClient, dsClient, cfg, taskStore, logger, mc)
 	router := gin.New()
 	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv()) // G-02
+	router.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv()))           // IP access control
 	server.RegisterRoutes(router)
 
 	httpSrv := &http.Server{
@@ -267,22 +271,24 @@ func main() {
 		}),
 	}
 
-	// mTLS CN whitelist authorization for inbound gRPC connections.
-	// 为入站 gRPC 连接配置 mTLS CN 白名单 method-scope 鉴权拦截器。
+	// 三级等保/密评 G-17：挂载 gRPC 应用层 API Key + Scope 鉴权拦截器，
+	// 并与 mTLS CN 白名单拦截器链式组合（避免单独使用 grpc.UnaryInterceptor 相互覆盖）。
+	unaryInterceptors := []grpc.UnaryServerInterceptor{grpcserver.AuthUnaryInterceptor()}
+	streamInterceptors := []grpc.StreamServerInterceptor{grpcserver.AuthStreamInterceptor()}
 	if cfg.MTLSWhitelistFile != "" {
 		unaryInterceptor, streamInterceptor, dw, err := tlsutil.NewWhitelistInterceptor(cfg.MTLSWhitelistFile)
 		if err != nil {
 			log.Fatalf("failed to load mTLS whitelist: %v", err)
 		}
 		defer dw.Close()
-		grpcServerOpts = append(grpcServerOpts,
-			grpc.UnaryInterceptor(unaryInterceptor),
-			grpc.StreamInterceptor(streamInterceptor),
-		)
+		unaryInterceptors = append(unaryInterceptors, unaryInterceptor)
+		streamInterceptors = append(streamInterceptors, streamInterceptor)
 		logger.Info("gRPC server configured with mTLS CN whitelist",
 			"path", cfg.MTLSWhitelistFile,
 		)
 	}
+	grpcServerOpts = append(grpcServerOpts, grpc.ChainUnaryInterceptor(unaryInterceptors...))
+	grpcServerOpts = append(grpcServerOpts, grpc.ChainStreamInterceptor(streamInterceptors...))
 
 	if cfg.TLSEnabled {
 		creds, credErr := grpcserver.BuildServerCredentials(cfg)

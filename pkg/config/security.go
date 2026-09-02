@@ -16,8 +16,14 @@ var (
 	// ErrAPIKeyRequired 表示监听地址可被远端访问但未配置入站 API Key（原实现为空即放行）。
 	ErrAPIKeyRequired = errors.New("inbound API key must not be empty when listening on a non-loopback address")
 
+	// ErrAuthRequired 表示监听地址可被远端访问但未启用身份认证（AUTH_ENABLED=false）。
+	ErrAuthRequired = errors.New("authentication must be enabled when listening on a non-loopback address (set *_AUTH_ENABLED=true)")
+
 	// ErrTLSRequired 表示部署方声明必须启用 TLS，但 TLS 开关处于关闭状态。
 	ErrTLSRequired = errors.New("TLS is required by configuration but not enabled")
+
+	// ErrTLSRequiredForRemote 表示监听地址可被远端访问但未启用 TLS。
+	ErrTLSRequiredForRemote = errors.New("TLS must be enabled when listening on a non-loopback address (set *_TLS_ENABLED=true)")
 
 	// ErrMTLSWhitelistRequired 表示已启用 gRPC TLS 但未注入客户端证书 CN 白名单文件；
 	// 此时白名单拦截器不会被注册，任何通过 CA 校验的客户端都可调用全部方法。
@@ -39,10 +45,14 @@ type SecurityRequirements struct {
 	Hosts []string
 	// APIKey 是入站鉴权密钥（各服务前缀变量）。
 	APIKey string
+	// AuthEnabled 表示身份认证是否已启用。
+	AuthEnabled bool
 	// TLSEnabled 表示服务端 TLS 是否已启用。
 	TLSEnabled bool
 	// RequireTLS 由部署方显式置真（生产编排），此时 TLSEnabled 必须为真。
 	RequireTLS bool
+	// SkipTLSForRemote 为真时跳过非环回 TLS 强制校验（用于不终止 TLS 的反向代理网关）。
+	SkipTLSForRemote bool
 	// GRPCEnabled 表示本进程是否监听 gRPC 端口。
 	GRPCEnabled bool
 	// MTLSWhitelistFile 是客户端证书 CN 白名单文件路径（空即拦截器不注册）。
@@ -83,6 +93,14 @@ func ValidateFailClosed(req SecurityRequirements) error {
 		if remoteExposed {
 			return fmt.Errorf("%s: %w (set the service *_API_KEY variable; bind to 127.0.0.1 for local development)", name, ErrAPIKeyRequired)
 		}
+	}
+
+	if !req.AuthEnabled && remoteExposed {
+		return fmt.Errorf("%s: %w", name, ErrAuthRequired)
+	}
+
+	if !req.SkipTLSForRemote && !req.TLSEnabled && remoteExposed {
+		return fmt.Errorf("%s: %w", name, ErrTLSRequiredForRemote)
 	}
 
 	if req.RequireTLS && !req.TLSEnabled {

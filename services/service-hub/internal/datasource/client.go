@@ -473,10 +473,13 @@ func (c *Client) getGRPCClient(ctx context.Context) (dspb.DataSourceManagerServi
 	return c.grpcClient, nil
 }
 
-// wrapGRPCContext injects X-Request-ID and X-Trace-ID to outgoing gRPC metadata if present.
+// wrapGRPCContext injects X-Request-ID, X-Trace-ID and outbound API Key to gRPC metadata if present.
 func (c *Client) wrapGRPCContext(ctx context.Context) context.Context {
 	if rid := pkgobs.RequestIDFromContext(ctx); rid != "" {
-		return metadata.AppendToOutgoingContext(ctx, "x-request-id", rid, "x-trace-id", rid)
+		ctx = metadata.AppendToOutgoingContext(ctx, "x-request-id", rid, "x-trace-id", rid)
+	}
+	if c.cfg != nil && c.cfg.DatasourceAPIKey != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.cfg.DatasourceAPIKey)
 	}
 	return ctx
 }
