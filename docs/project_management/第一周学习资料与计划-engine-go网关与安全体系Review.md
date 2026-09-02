@@ -1301,9 +1301,9 @@ func (sh *bucketShard) allow() bool {
 **源码位置**：`pkg/gateway/balancer.go` `selectP2C()` (L186-222)
 
 **算法原理**：
-1. **Power of Two Choices (P2C)**：随机选取两个节点，选择负载较轻的那个。相比简单轮询（Round-Robin），P2C 在异构负载场景下能将最大负载降低到 \(O(\log \log n)\)，且无需全局状态同步。
-2. **EWMA (Exponentially Weighted Moving Average)**：指数移动加权平均延迟，公式为 \(\text{EWMA}_{new} = \alpha \times \text{latency} + (1 - \alpha) \times \text{EWMA}_{old}\)，其中 \(\alpha\) 为平滑系数（HTTP 代理用 0.3，gRPC 代理用 0.2）。
-3. **负载评分**：\(\text{score} = (\text{InFlight} + 1) \times \max(\text{EWMA}, 0.001)\)。InFlight+1 防止零除，EWMA 下限 0.001 防止首次请求即获得极端优势。
+1. **Power of Two Choices (P2C)**：随机选取两个节点，选择负载较轻的那个。相比简单轮询（Round-Robin），P2C 在异构负载场景下能将最大负载降低到 $O(\log \log n)$，且无需全局状态同步。
+2. **EWMA (Exponentially Weighted Moving Average)**：指数移动加权平均延迟，公式为 $ \text{EWMA}_{new} = \alpha \times \text{latency} + (1 - \alpha) \times \text{EWMA}_{old} $，其中 $ \alpha $ 为平滑系数（HTTP 代理用 0.3，gRPC 代理用 0.2）。
+3. **负载评分**：$\text{score} = (\text{InFlight} + 1) \times \max(\text{EWMA}, 0.001)$。InFlight+1 防止零除，EWMA 下限 0.001 防止首次请求即获得极端优势。
 
 **为何选择 P2C 而非简单轮询**：
 - 轮询假设所有后端性能一致，实际中各节点 CPU/内存/网络延迟差异显著
