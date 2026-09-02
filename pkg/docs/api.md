@@ -10,6 +10,7 @@
 - [一、密码与信封加密体系 (`pkg/crypto`)](#一密码与信封加密体系-pkgcrypto)
 - [二、持久化与微批存储引擎 (`pkg/store` & `pkg/store/flusher`)](#二持久化与微批存储引擎-pkgstore--pkgstoreflusher)
 - [三、纵深防御中间件与信封协议 (`pkg/middleware`)](#三纵深防御中间件与信封协议-pkgmiddleware)
+- [三（附）、Scope-based 身份认证与权限映射 (`pkg/auth`)](#三附scope-based-身份认证与权限映射-pkgauth)
 - [四、上游 Agent 客户端与熔断器 (`pkg/agent`)](#四上游-agent-客户端与熔断器-pkgagent)
 - [五、全链路可观测性与指标采集 (`pkg/metrics`)](#五全链路可观测性与指标采集-pkgmetrics)
 - [六、国密 mTLS 与 CN 白名单 (`pkg/tlsutil`)](#六国密-mtls-与-cn-白名单-pkgtlsutil)
@@ -819,6 +820,80 @@ router.Use(middleware.MaxConcurrent(1000))
 router.Use(middleware.RateLimit(100, 200))
 router.Use(middleware.CORS([]string{"http://localhost:3000"}))
 router.Use(middleware.Auth(cfg.APIKey))
+```
+
+---
+
+## 三（附）、Scope-based 身份认证与权限映射 (`pkg/auth`)
+
+`pkg/auth` 提供统一的 Scope-based 身份认证、路径→权限映射与 API Key 解析能力，供 `engine-go`、`service-hub` 及各微服务共享。
+
+```go
+import "github.com/fengzhizi319/PrivShield-go/pkg/auth"
+```
+
+### 类型定义
+
+```go
+// Identity 表示已认证的调用者身份。
+type Identity struct {
+    ServiceType string   // "internal"（高信任内部服务）或 "external"（外部/公共客户端）
+    Name        string   // 服务或账户名称
+    Scopes      []string // 已授予的权限列表。["*"] 表示完全访问。
+}
+
+// KeyConfig 表示单个 API Key 配置。
+type KeyConfig struct {
+    Name   string
+    Scopes []string
+}
+
+// Settings 保存认证中间件所需的共享安全配置。
+type Settings struct {
+    AuthEnabled  bool
+    TLSEnabled   bool
+    HealthNoAuth bool
+    InternalKeys map[string]*KeyConfig
+    ExternalKeys map[string]*KeyConfig
+}
+```
+
+### 核心函数
+
+| 函数 | 签名 | 说明 |
+|---|---|---|
+| `HasPermission` | `(id *Identity) HasPermission(permission string) bool` | 通配符 `"*"` 授予所有权限，否则精确匹配 |
+| `PermissionForRESTPath` | `PermissionForRESTPath(path string) string` | 将 REST 路径映射为权限字符串，支持 `/v1/*` 与 `/api/v1/*` 双前缀归一化 |
+| `ServiceHubPermissionForPath` | `ServiceHubPermissionForPath(path string) string` | 将 service-hub 路由映射为权限字符串（`hub:read` / `hub:dispatch`） |
+| `PermissionForGRPCMethod` | `PermissionForGRPCMethod(method string) string` | 将 gRPC 全限定方法名映射为权限字符串 |
+| `ParseAPIKeysEnv` | `ParseAPIKeysEnv(raw string) map[string]*KeyConfig` | 解析 `"token:name:scope1,scope2;..."` 格式 |
+| `LoadAPIKeysFromEnv` | `LoadAPIKeysFromEnv(envKey string) map[string]*KeyConfig` | 从环境变量加载 API Key 映射 |
+| `AuthMiddleware` | `AuthMiddleware(settings *Settings) gin.HandlerFunc` | Gin 中间件：Bearer Token 认证 + Scope 权限校验 |
+| `RequirePermission` | `RequirePermission(permission string) gin.HandlerFunc` | Gin 中间件：要求指定权限 |
+| `ExtractBearerToken` | `ExtractBearerToken(header string) string` | 从 `Authorization: Bearer <token>` 提取 token |
+| `ConstantTimeLookup` | `ConstantTimeLookup(keys map[string]*KeyConfig, token string) *KeyConfig` | 常量时间 token 查找，防止计时攻击 |
+
+### 权限映射清单
+
+**Engine（`PermissionForRESTPath`）**：支持 `/v1/*` 与 `/api/v1/*` 双前缀归一化，以及根路径直调别名（`/agent/process` 等）。未映射路径返回空串（对所有已认证身份开放）。
+
+**service-hub（`ServiceHubPermissionForPath`）**：
+
+| 路径 | 权限 |
+|---|---|
+| `/api/hub/status`, `/api/hub/tasks*`, `/api/hub/pipeline` | `hub:read` |
+| `/api/hub/dispatch`, `/api/hub/classify` | `hub:dispatch` |
+| `/health`, `/readyz`, `/metrics` | 无需特定权限 |
+
+### 集成示例
+
+```go
+// service-hub 中使用 Scope-based 鉴权
+keys := pkgauth.LoadAPIKeysFromEnv("SERVICE_HUB_API_KEYS")
+if len(keys) > 0 {
+    // Scope-based 模式：细粒度权限校验
+    // 环境变量格式：tok1:reader:hub:read;tok2:admin:*
+}
 ```
 
 ---

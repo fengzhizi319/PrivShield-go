@@ -398,9 +398,9 @@ func TestAuthMiddleware(t *testing.T) {
 
 	// 场景 2：认证启用 + 无令牌 → 401
 	cfg2 := &config.Config{
-		RateLimitRPS: 0,
-		AuthEnabled:  true,
-		JWTSecret:    "test-jwt-secret-key-minimum-32-chars!!",
+		RateLimitRPS:   0,
+		AuthEnabled:    true,
+		JWTSecret:      "test-jwt-secret-key-minimum-32-chars!!",
 		JWTExpiryHours: 24,
 	}
 	pool2 := clients.NewClientPool(cfg2)

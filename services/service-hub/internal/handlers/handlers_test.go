@@ -17,6 +17,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield-go/pkg/store"
 	"github.com/fengzhizi319/PrivShield-go/pkg/store/memory"
@@ -936,6 +937,70 @@ func TestAuthMiddleware_Protection(t *testing.T) {
 			t.Fatalf("expected 200 for health exempt from auth, got %d", w.Code)
 		}
 	})
+}
+
+// TestScopeAuthMiddleware_AccessControl 验证 service-hub Scope-based 鉴权的细粒度权限控制，
+// 包括不同 Scope Key 的允许/拒绝以及带尾部斜杠路径不会被绕过。
+func TestScopeAuthMiddleware_AccessControl(t *testing.T) {
+	cfg := &config.Config{
+		Host:          "127.0.0.1",
+		Port:          0,
+		AgentRESTHost: "127.0.0.1",
+		AgentRESTPort: 19999,
+		ScopeKeys: map[string]*pkgauth.KeyConfig{
+			"read-only-token":   {Name: "reader", Scopes: []string{"hub:read"}},
+			"dispatch-token":    {Name: "dispatcher", Scopes: []string{"hub:dispatch"}},
+			"full-access-token": {Name: "admin", Scopes: []string{"*"}},
+		},
+	}
+	d := newTestDeps()
+	ag := agent.New(cfg, d.mc)
+	ds := datasource.New(cfg)
+	s := New(ag, ds, cfg, d.tasks, d.logger, d.mc)
+
+	r := gin.New()
+	s.RegisterRoutes(r)
+
+	cases := []struct {
+		name       string
+		token      string
+		path       string
+		method     string
+		wantStatus int
+	}{
+		{"reader can read tasks", "read-only-token", "/api/hub/tasks", "GET", http.StatusOK},
+		{"reader cannot dispatch", "read-only-token", "/api/hub/dispatch", "POST", http.StatusForbidden},
+		{"dispatcher can dispatch", "dispatch-token", "/api/hub/dispatch", "POST", http.StatusAccepted},
+		{"dispatcher cannot read", "dispatch-token", "/api/hub/tasks", "GET", http.StatusForbidden},
+		{"admin can do both", "full-access-token", "/api/hub/tasks", "GET", http.StatusOK},
+		{"admin can dispatch", "full-access-token", "/api/hub/dispatch", "POST", http.StatusAccepted},
+		{"invalid token rejected", "bad-token", "/api/hub/tasks", "GET", http.StatusUnauthorized},
+		{"missing token rejected", "", "/api/hub/tasks", "GET", http.StatusUnauthorized},
+		{"health exempt", "", "/health", "GET", http.StatusOK},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var body *strings.Reader
+			if tc.method == "POST" {
+				body = strings.NewReader(`{"api_code":"api1_yibao","payload":{"records":[{"name":"test"}]}}`)
+			} else {
+				body = strings.NewReader("")
+			}
+			req, _ := http.NewRequest(tc.method, tc.path, body)
+			if tc.method == "POST" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			if tc.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.token)
+			}
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if w.Code != tc.wantStatus {
+				t.Fatalf("expected %d, got %d: %s", tc.wantStatus, w.Code, w.Body.String())
+			}
+		})
+	}
 }
 
 // TestServer_ShutdownGraceful tests graceful shutdown execution without panic.

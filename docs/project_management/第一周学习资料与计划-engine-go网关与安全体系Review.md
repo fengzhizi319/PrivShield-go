@@ -931,11 +931,11 @@ sharedTransport = &http.Transport{
 
 | 文件路径 | 行数 | 核心职责 |
 |---|:---:|---|
-| `engine-go/internal/security/config.go` | 143 | 安全配置加载（环境变量 → Settings 单例） |
+| `engine-go/internal/security/config.go` | 143 | 安全配置加载（环境变量 → Settings 单例），使用共享 `LoadAPIKeysFromEnv` |
 | `engine-go/internal/security/auth.go` | 76 | 认证中间件桥接 + 安全头 + 限流中间件 |
 | `engine-go/internal/security/identity.go` | 28 | 身份类型别名 + 权限映射函数 |
 | `engine-go/internal/security/whitelist.go` | 226 | mTLS CN 白名单管理器（YAML 热重载） |
-| `pkg/auth/identity.go` | 127 | Identity 模型 + Scope 权限模型 + REST/gRPC 权限映射 |
+| `pkg/auth/identity.go` | 237 | Identity 模型 + Scope 权限模型 + REST/gRPC 权限映射 + `ParseAPIKeysEnv` + `ServiceHubPermissionForPath` |
 | `pkg/auth/middleware.go` | 178 | API Key 认证中间件 + 常量时间查找 |
 | `pkg/auth/settings.go` | ~30 | KeyConfig + Settings 数据结构 |
 | `pkg/tlsutil/whitelist.go` | 271 | 动态 mTLS CN 白名单（5s 轮询热重载 + Scope 匹配） |
@@ -943,6 +943,7 @@ sharedTransport = &http.Transport{
 | `pkg/middleware/ratelimit.go` | 314 | 32 分片令牌桶限流 + DDoS 防护 |
 | `pkg/middleware/auth.go` | 192 | 基础 API Key 认证 + AuthWithRoles 读写分离 |
 | `pkg/middleware/trace.go` | 53 | 分布式追踪上下文传播中间件 |
+| `services/service-hub/internal/handlers/handlers.go` | ~300 | `scopeAuthMiddleware` 双模式鉴权 + `constantTimeLookupKeys` |
 
 ### 2.2 核心知识点详解
 
@@ -1072,7 +1073,7 @@ AuthMiddleware(settings)
 
 #### 2.2.3 Scope-based 权限模型
 
-**源码位置**：`pkg/auth/identity.go` (L9-127)
+**源码位置**：`pkg/auth/identity.go` (L1-236)
 
 **Identity 结构**：
 ```go
@@ -1096,24 +1097,48 @@ func (id *Identity) HasPermission(permission string) bool {
 }
 ```
 
-**REST 路径 → 权限映射**（`PermissionForRESTPath` L46-88）：
-| 路径前缀 | 权限字符串 |
-|---|---|
-| `/health`, `/livez`, `/readyz` | `health:read` |
-| `/v1/privacy/mask*` | `privacy:mask` |
-| `/v1/privacy/dp/*`, `/v1/privacy/ldp/*` | `privacy:dp` |
-| `/v1/privacy/k_anonymize*` | `privacy:kano` |
-| `/v1/privacy/qol/*` | `privacy:qol` |
-| `/v1/privacy/classify/*` | `classification:read` |
-| `/v1/dynclassification/profiles/reload` | `dynclassification:write` |
-| `/v1/agent*` | `agent:process` |
-| `/v1/medical*` | `medical:process` |
-| `/v1/ops/*` | `ops:diagnostics` |
-| `/debug/pprof*` | `ops:admin` |
+**REST 路径 → 权限映射**（`PermissionForRESTPath`）：
 
-**gRPC 方法 → 权限映射**（`PermissionForGRPCMethod` L91-126）：
+> **关键设计**：函数入口处执行路径归一化 `/api/v1/*` → `/v1/*`，确保别名路由与主路由共享同一权限映射，避免重复 case 分支。
+
+| 路径前缀（归一化后） | 权限字符串 | 说明 |
+|---|---|---|
+| `/health`, `/livez`, `/readyz`, `/readyz/llm` | `health:read` | 健康探针 |
+| `/v1/privacy/mask*` | `privacy:mask` | 掩码原语 |
+| `/v1/privacy/hash` | `privacy:hash` | 国密哈希 |
+| `/v1/privacy/dp/*`, `/v1/privacy/ldp/*` | `privacy:dp` | 差分隐私 / 本地 DP |
+| `/v1/privacy/k_anonymize*` | `privacy:kano` | K-匿名 |
+| `/v1/privacy/qol/*` | `privacy:qol` | 查询混淆 |
+| `/v1/privacy/budget`, `/v1/privacy/budget/reset` | `privacy:budget` | 隐私预算查询与重置 |
+| `/v1/privacy/profile/recommend` | `privacy:profile` | Profile 推荐 |
+| `/v1/privacy/process_file` | `privacy:mask` | 文件脱敏 |
+| `/v1/privacy/classify/*` | `classification:read` | 静态分类 |
+| `/v1/dynclassification/profiles/reload` | `dynclassification:write` | 动态分类 Profile 重载 |
+| `/v1/dynclassification/generate_profile` | `dynclassification:write` | 动态分类 Profile 生成 |
+| `/v1/dynclassification*`（其他） | `dynclassification:read` | 动态分类读取（默认） |
+| `/v1/agent*` | `agent:process` | Agent 流水线 |
+| `/v1/medical*` | `medical:process` | 医疗数据管线 |
+| `/v1/pipeline*` | `pipeline:process` | 通用管线 |
+| `/v1/ops/*` | `ops:diagnostics` | 运维诊断 |
+| `/debug/pprof*` | `ops:admin` | pprof 性能分析 |
+| **根路径别名**（归一化后） | | |
+| `/agent/process` | `agent:process` | 根路径直调别名 |
+| `/medical/process` | `medical:process` | 根路径直调别名 |
+| `/ops/diagnostics` | `ops:diagnostics` | 根路径直调别名 |
+| `/privacy/process_file` | `privacy:mask` | 根路径直调别名 |
+| **快捷别名路由**（`/api/v1/*` 归一化后去掉 `/privacy/` 段） | | |
+| `/v1/mask*` | `privacy:mask` | 快捷别名 |
+| `/v1/dp/*` | `privacy:dp` | 快捷别名 |
+| `/v1/kano/*` | `privacy:kano` | 快捷别名 |
+| `/v1/qol/*` | `privacy:qol` | 快捷别名 |
+| `/v1/ldp/*` | `privacy:dp` | 快捷别名 |
+| `/v1/classify`, `/v1/classify/batch` | `classification:read` | 快捷别名 |
+| `/v1/hash/hmac` | `privacy:hash` | 快捷别名 |
+| `/v1/budget`, `/v1/budget/reset` | `privacy:budget` | 快捷别名 |
+
+**gRPC 方法 → 权限映射**（`PermissionForGRPCMethod` L132-168）：
 ```go
-// pkg/auth/identity.go L99-121
+// pkg/auth/identity.go L141-163
 mapping := map[string]string{
     "Mask": "privacy:mask", "MaskRecord": "privacy:mask",
     "MaskBatch": "privacy:mask", "MaskDataFrame": "privacy:mask",
@@ -1127,6 +1152,503 @@ mapping := map[string]string{
     // ... 共覆盖 44 个隐私原语
 }
 ```
+
+#### 2.2.3.1 Scope-based 鉴权完整请求生命周期（深度解析）
+
+本节以一个具体请求为例，逐步拆解 Scope-based 鉴权从「环境变量配置」到「请求放行/拒绝」的 7 个阶段。理解这条完整链路是掌握 PrivShield 安全体系的核心。
+
+##### 阶段总览
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    Scope-based 鉴权 7 阶段模型                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ① 配置解析（启动时）                                                    │
+│     ParseAPIKeysEnv("sk-abc:hub:hub:read;sk-xyz:admin:*")              │
+│       → map[sk-abc]{Name:"hub",Scopes:["hub:read"]}                    │
+│       → map[sk-xyz]{Name:"admin",Scopes:["*"]}                         │
+│                                                                         │
+│  ② Token 提取（每次请求）                                                │
+│     Authorization: Bearer sk-abc  →  "sk-abc"                          │
+│                                                                         │
+│  ③ 常量时间查找（防时序攻击）                                             │
+│     ConstantTimeLookup(keys, "sk-abc")  →  KeyConfig{Name:"hub",...}   │
+│                                                                         │
+│  ④ Identity 构造                                                        │
+│     → Identity{ServiceType:"internal", Name:"hub", Scopes:["hub:read"]} │
+│                                                                         │
+│  ⑤ 路径 → 权限映射（含归一化）                                           │
+│     PermissionForRESTPath("/api/v1/privacy/mask")                       │
+│       → 归一化: "/api/v1/privacy/mask" → "/v1/privacy/mask"            │
+│       → 匹配: HasPrefix("/v1/privacy/mask") → "privacy:mask"           │
+│                                                                         │
+│  ⑥ Scope 校验                                                          │
+│     Identity.HasPermission("privacy:mask")                              │
+│       → Scopes=["hub:read"] 中无 "*" 也无 "privacy:mask"               │
+│       → false → 403 FORBIDDEN                                          │
+│                                                                         │
+│  ⑦ 上下文注入（放行时）                                                  │
+│     c.Set("security_identity", identity) → c.Next()                    │
+│       → 下游 Handler 可通过 GetIdentity(c) 获取身份做业务逻辑            │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+##### 阶段 ①：配置解析 — `ParseAPIKeysEnv`
+
+**触发时机**：进程启动时，`loadSettings()` 从环境变量读取并解析一次。
+
+**输入格式**：`token:name:scope1,scope2;token2:name2:scope3`
+
+```
+环境变量原始值:
+  "sk-abc123:service-hub:hub:read,hub:dispatch;sk-readonly:monitor:hub:read;sk-admin:bff-go:*"
+
+                        ↓ ParseAPIKeysEnv()
+
+解析结果 (map[string]*KeyConfig):
+  ┌────────────┬─────────────────┬──────────────────────────────┐
+  │ Token      │ Name            │ Scopes                       │
+  ├────────────┼─────────────────┼──────────────────────────────┤
+  │ sk-abc123  │ service-hub     │ ["hub:read", "hub:dispatch"] │
+  │ sk-readonly│ monitor         │ ["hub:read"]                 │
+  │ sk-admin   │ bff-go          │ ["*"]                        │
+  └────────────┴─────────────────┴──────────────────────────────┘
+```
+
+**解析管线**（5 步）：
+
+```go
+// 步骤 1：按 ";" 分割多 Key 条目
+entries := strings.Split(raw, ";")
+// ["sk-abc123:service-hub:hub:read,hub:dispatch", "sk-readonly:monitor:hub:read", "sk-admin:bff-go:*"]
+
+// 步骤 2：每条按 ":" 分割为 token:name:scopes（SplitN 限制为 3 段，
+//         因为 scope 值本身包含 ":"，如 "hub:read"）
+parts := strings.SplitN(entry, ":", 3)
+// ["sk-abc123", "service-hub", "hub:read,hub:dispatch"]
+
+// 步骤 3：TrimSpace 防环境变量中的前后空格
+token := strings.TrimSpace(parts[0])  // "sk-abc123"
+name  := strings.TrimSpace(parts[1])  // "service-hub"
+
+// 步骤 4：scopes 按 "," 分割
+scopes := strings.Split(parts[2], ",")  // ["hub:read", "hub:dispatch"]
+
+// 步骤 5：缺少 scopes 时默认 ["*"]（全部权限）
+if len(scopes) == 0 { scopes = []string{"*"} }
+```
+
+> **关键细节**：`SplitN(entry, ":", 3)` 的 `3` 是刻意设计。因为 Scope 值本身包含冒号（如 `hub:read`），如果用 `Split(entry, ":")` 会把 `hub:read` 错误地拆成两段。`SplitN` 限制最多拆为 3 段，第三段保留完整的 `hub:read,hub:dispatch`。
+
+**安全增强**：
+- 空 token 丢弃：`if token == "" { continue }` — 防止 `":name:scope"` 这样的畸形条目注册空字符串 Key
+- 空 name 丢弃：`if name == "" { continue }` — 防止无标识 Key 混入
+
+##### 阶段 ②：Token 提取 — `ExtractBearerToken`
+
+**触发时机**：每次 HTTP 请求到达 AuthMiddleware。
+
+```go
+// pkg/auth/middleware.go L44-50
+func ExtractBearerToken(header string) string {
+    parts := strings.Fields(header)
+    // strings.Fields 按空白字符分割，自动处理多余空格
+    if len(parts) == 2 && strings.EqualFold(parts[0], "bearer") {
+        return parts[1]
+    }
+    return ""
+}
+```
+
+**输入输出示例**：
+
+| Authorization Header | 提取结果 | 说明 |
+|---|---|---|
+| `Bearer sk-abc123` | `sk-abc123` | 标准格式 |
+| `bearer sk-abc123` | `sk-abc123` | `EqualFold` 大小写不敏感 |
+| `Bearer  sk-abc123` | `sk-abc123` | `Fields` 自动处理多余空格 |
+| `Basic dXNlcjpwYXNz` | `""` | 非 Bearer 方案，返回空 |
+| `""` (空) | `""` | 无 Header |
+| `Bearer` | `""` | 只有方案无 Token |
+
+##### 阶段 ③：常量时间查找 — `ConstantTimeLookup`
+
+**触发时机**：Token 提取成功后，在 Key 映射中查找匹配。
+
+**为何不能用 `map[token]` 直接查找？**
+
+```go
+// ❌ 不安全：map 直接查找存在时序侧信道
+func insecureLookup(keys map[string]*KeyConfig, token string) *KeyConfig {
+    if k, ok := keys[token]; ok {  // 找到即返回，不同 Key 的响应时间不同
+        return k
+    }
+    return nil
+}
+
+// 攻击者可以通过测量响应时间逐字符猜测 Token：
+//   尝试 "a..." → 100ns（第一个字符就不匹配任何 Key）
+//   尝试 "s..." → 150ns（第一个字符匹配了 "sk-..." 的 Key）
+//   尝试 "sk-..." → 200ns（前 3 个字符匹配）
+//   ...最终破解完整 Token
+```
+
+**安全实现**：
+
+```go
+// pkg/auth/middleware.go L55-75
+func ConstantTimeLookup(keys map[string]*KeyConfig, token string) *KeyConfig {
+    // 1. 排序 key：Go map 迭代顺序随机，排序消除时序差异
+    sortedKeys := make([]string, 0, len(keys))
+    for k := range keys { sortedKeys = append(sortedKeys, k) }
+    sort.Strings(sortedKeys)
+
+    // 2. 遍历全部 key，不提前 break
+    tokenBytes := []byte(token)
+    var matched *KeyConfig
+    for _, key := range sortedKeys {
+        // subtle.ConstantTimeCompare：无论在第几个字节不同，耗时都相同
+        if subtle.ConstantTimeCompare([]byte(key), tokenBytes) == 1 {
+            matched = keys[key]  // 记录但不 break，继续比较剩余 key
+        }
+    }
+    return matched
+    // 总耗时 = len(sortedKeys) × constant_time_compare
+    // 无论 Token 是否匹配、匹配第几个 Key，耗时完全相同
+}
+```
+
+**时序对比**：
+
+```
+不安全的 map 查找：
+  Token 匹配第 1 个 Key → 比较 1 次 → 100ns → 返回
+  Token 匹配第 3 个 Key → 比较 3 次 → 300ns → 返回
+  Token 不匹配          → 比较 3 次 → 300ns → 返回 nil
+  ↑ 攻击者可以区分「匹配」和「不匹配」
+
+ConstantTimeLookup：
+  Token 匹配第 1 个 Key → 比较 3 次（不提前 break）→ 300ns → 返回
+  Token 匹配第 3 个 Key → 比较 3 次                 → 300ns → 返回
+  Token 不匹配          → 比较 3 次                 → 300ns → 返回 nil
+  ↑ 三种情况耗时完全相同，攻击者无法获取任何信息
+```
+
+##### 阶段 ④：Identity 构造 — `authenticateAPIKey`
+
+**触发时机**：`ConstantTimeLookup` 返回匹配的 KeyConfig 后。
+
+```go
+// pkg/auth/middleware.go L78-86
+func authenticateAPIKey(settings *Settings, token string) *Identity {
+    // 先查 internal keys（高信任内部服务）
+    if internal := ConstantTimeLookup(settings.InternalKeys, token); internal != nil {
+        return &Identity{
+            ServiceType: "internal",         // 标记为内部服务
+            Name:        internal.Name,      // 如 "service-hub"
+            Scopes:      internal.Scopes,    // 如 ["hub:read", "hub:dispatch"]
+        }
+    }
+    // 再查 external keys（外部客户端）
+    if external := ConstantTimeLookup(settings.ExternalKeys, token); external != nil {
+        return &Identity{
+            ServiceType: "external",         // 标记为外部客户端
+            Name:        external.Name,
+            Scopes:      external.Scopes,
+        }
+    }
+    return nil  // 两个 Key 池都未命中 → 认证失败
+}
+```
+
+**构造出的 Identity 示例**：
+
+```
+输入 Token: "sk-abc123"（配置在 InternalKeys 中）
+
+→ Identity{
+    ServiceType: "internal",
+    Name:        "service-hub",
+    Scopes:      ["hub:read", "hub:dispatch"],
+  }
+
+该 Identity 携带了：
+  - 谁在调用？ → "service-hub"（内部服务）
+  - 允许做什么？ → 只能执行 hub:read 和 hub:dispatch 权限的操作
+```
+
+##### 阶段 ⑤：路径 → 权限映射 — `PermissionForRESTPath`
+
+**触发时机**：Identity 构造成功后，根据请求路径确定所需权限。
+
+**路径归一化是核心**：
+
+```
+输入路径: "/api/v1/privacy/mask"
+
+步骤 1：去除尾部斜杠
+  "/api/v1/privacy/mask" → "/api/v1/privacy/mask"（无尾部斜杠，不变）
+
+步骤 2：前缀归一化 /api/v1/* → /v1/*
+  "/api/v1/privacy/mask" → "/v1/privacy/mask"
+  （去掉 "/api" 前缀，使别名路由与主路由共享同一权限映射）
+
+步骤 3：switch-case 匹配
+  HasPrefix("/v1/privacy/mask", "/v1/privacy/mask") → true
+  → 返回 "privacy:mask"
+```
+
+**归一化解决了什么问题？**
+
+```
+修复前（只有 /v1/* 匹配）：
+  /v1/privacy/mask        → "privacy:mask" ✓ 有权限保护
+  /api/v1/privacy/mask    → ""             ✗ 无权限保护（绕过！）
+  /agent/process          → ""             ✗ 无权限保护（绕过！）
+
+修复后（归一化 + 全量 case）：
+  /v1/privacy/mask        → 归一化 → /v1/privacy/mask  → "privacy:mask" ✓
+  /api/v1/privacy/mask    → 归一化 → /v1/privacy/mask  → "privacy:mask" ✓
+  /agent/process          → 归一化 → /agent/process     → "agent:process" ✓
+```
+
+**更多归一化示例**：
+
+| 原始路径 | 归一化后 | 匹配 case | 权限字符串 |
+|---|---|---|---|
+| `/api/v1/privacy/dp/count` | `/v1/privacy/dp/count` | `HasPrefix("/v1/privacy/dp/")` | `privacy:dp` |
+| `/api/v1/mask` | `/v1/mask` | `HasPrefix("/v1/mask")` | `privacy:mask` |
+| `/api/v1/ldp/randomized_response` | `/v1/ldp/randomized_response` | `HasPrefix("/v1/ldp/")` | `privacy:dp` |
+| `/v1/dynclassification/profiles/reload` | 不变 | `== ".../profiles/reload"` | `dynclassification:write` |
+| `/v1/dynclassification` | 不变 | `HasPrefix("/v1/dynclassification")` 默认 | `dynclassification:read` |
+| `/api/hub/dispatch/` | `/api/hub/dispatch` | service-hub 单独处理 | `hub:dispatch` |
+
+##### 阶段 ⑥：Scope 校验 — `HasPermission`
+
+**触发时机**：路径映射返回所需权限后，与 Identity 的 Scopes 比对。
+
+```go
+// pkg/auth/identity.go L26-33
+func (id *Identity) HasPermission(permission string) bool {
+    for _, s := range id.Scopes {
+        if s == "*" || s == permission {
+            return true
+        }
+    }
+    return false
+}
+```
+
+**判定逻辑**：
+1. 遍历 Identity 的 Scopes 列表
+2. 如果遇到 `"*"` → 通配符，授予所有权限，立即返回 `true`
+3. 如果遇到精确匹配 → 返回 `true`
+4. 遍历完毕无匹配 → 返回 `false`
+
+**具体场景演示**：
+
+```
+场景 A：service-hub 调用 engine-go 的掩码接口
+  Identity: {Name: "service-hub", Scopes: ["privacy:mask", "privacy:dp"]}
+  路径: POST /api/v1/privacy/mask
+  所需权限: "privacy:mask"
+  校验: "privacy:mask" ∈ ["privacy:mask", "privacy:dp"] → true → 200 OK ✓
+
+场景 B：monitor 尝试调用差分隐私接口
+  Identity: {Name: "monitor", Scopes: ["hub:read"]}
+  路径: POST /api/v1/privacy/dp/count
+  所需权限: "privacy:dp"
+  校验: "privacy:dp" ∉ ["hub:read"] → false → 403 FORBIDDEN ✗
+
+场景 C：admin（通配符）调用任意接口
+  Identity: {Name: "bff-go", Scopes: ["*"]}
+  路径: POST /api/v1/dynclassification/profiles/reload
+  所需权限: "dynclassification:write"
+  校验: "*" 匹配一切 → true → 200 OK ✓
+
+场景 D：未映射路径（新端点忘记配权限）
+  Identity: {Name: "client", Scopes: ["privacy:mask"]}
+  路径: POST /v1/new_endpoint
+  所需权限: ""（未映射，返回空串）
+  校验: requiredPerm == "" → 跳过权限检查 → 200 OK
+  ⚠️ 设计决策：未映射路径对所有已认证身份开放（需 Code Review 保障）
+```
+
+##### 阶段 ⑦：上下文注入与下游使用
+
+**触发时机**：鉴权通过后，将 Identity 注入 Gin Context。
+
+```go
+// pkg/auth/middleware.go L127-128
+c.Set(IdentityContextKey, identity)  // 存入 Context
+c.Next()                              // 放行到下一层中间件/Handler
+```
+
+**下游使用方式**：
+
+```go
+// 在 Handler 中获取当前请求的 Identity
+identity := auth.GetIdentity(c)
+
+// 用途 1：日志记录（谁在调用）
+slog.Info("mask request", "caller", identity.Name, "type", identity.ServiceType)
+
+// 用途 2：限流 key 构造（按身份分片）
+rateLimitKey := identity.ServiceType + ":" + identity.Name + ":" + path
+
+// 用途 3：业务逻辑分支（内部服务 vs 外部客户端）
+if identity.ServiceType == "internal" {
+    // 内部服务可以访问更多诊断信息
+}
+```
+
+##### 完整请求链路时序图
+
+```
+客户端                    AuthMiddleware                   PermissionForRESTPath
+  │                            │                                  │
+  │── POST /api/v1/privacy/mask ──▶│                              │
+  │   Authorization: Bearer sk-abc │                              │
+  │                            │                                  │
+  │                     ① ExtractBearerToken                      │
+  │                        → "sk-abc"                            │
+  │                            │                                  │
+  │                     ② ConstantTimeLookup(InternalKeys)        │
+  │                        → KeyConfig{Name:"hub",               │
+  │                           Scopes:["hub:read"]}               │
+  │                            │                                  │
+  │                     ③ 构造 Identity                           │
+  │                        → {internal, "hub", ["hub:read"]}     │
+  │                            │                                  │
+  │                            │── "/api/v1/privacy/mask" ──────▶│
+  │                            │                                  │ 归一化: /api/v1/ → /v1/
+  │                            │                                  │ 匹配: → "privacy:mask"
+  │                            │◀──── "privacy:mask" ────────────│
+  │                            │                                  │
+  │                     ④ HasPermission("privacy:mask")           │
+  │                        ["hub:read"] 中无 "privacy:mask"      │
+  │                        → false                               │
+  │                            │                                  │
+  │◀── 403 FORBIDDEN ────────│                                   │
+  │    {"code":"FORBIDDEN",   │                                   │
+  │     "message":"..."}      │                                   │
+```
+
+##### 安全属性总结
+
+| 安全属性 | 实现机制 | 防御目标 |
+|---|---|---|
+| **防时序攻击** | `ConstantTimeLookup`：排序 key + 全量遍历 + `subtle.ConstantTimeCompare` | 逐字符猜测 Token |
+| **防别名绕过** | `PermissionForRESTPath` 入口路径归一化 `/api/v1/*` → `/v1/*` | 通过别名路径跳过权限校验 |
+| **防尾部斜杠绕过** | 去除尾部斜杠后再匹配 | `/api/hub/dispatch/` 绕过 `== "/api/hub/dispatch"` |
+| **防空 Key 注入** | `ParseAPIKeysEnv` 丢弃空 token/name 条目 | 畸形环境变量注册空字符串 Key |
+| **最小权限** | 每个 Key 独立配置 Scopes 列表 | 按服务/角色精确授权 |
+| **通配符降级** | `"*"` Scope 授予所有权限 | 管理员/网关全量访问场景 |
+| **身份隔离** | InternalKeys 和 ExternalKeys 分别存储、分别查找 | 内部服务与外部客户端权限域隔离 |
+| **Fail-open 透明** | 认证未启用时注入 `AnonymousIdentity{Scopes:["*"]}` | 开发环境零配置可用 |
+| **Fail-closed 审计** | 认证启用后，无效 Token 一律 401 | 生产环境裸奔检测 |
+
+##### engine-go vs service-hub 鉴权差异对比
+
+| 维度 | engine-go (`AuthMiddleware`) | service-hub (`scopeAuthMiddleware`) |
+|---|---|---|
+| **路径映射函数** | `PermissionForRESTPath()` | `ServiceHubPermissionForPath()` |
+| **Key 存储** | `InternalKeys` + `ExternalKeys` 双池 | `ScopeKeys` 单池 |
+| **权限空间** | `privacy:*`, `classification:*`, `ops:*` 等 | `hub:read`, `hub:dispatch` |
+| **回退模式** | 无（仅 Scope-based） | 有（`SERVICE_HUB_API_KEY` 单密钥回退） |
+| **健康端点** | `IsHealthPathOrMethod` + `HealthNoAuth` 配置 | 路径映射返回 `""` 直接放行 |
+| **gRPC 鉴权** | mTLS CN 白名单拦截器 | 无 gRPC 端口 |
+| **匿名模式** | `AuthEnabled=false` → `AnonymousIdentity` | 无匿名模式（必须认证） |
+
+#### 2.2.3.2 service-hub 对外接口 Scope-based 权限控制
+
+**背景**：service-hub 是整个 PrivShield 微服务群中**唯一对外网提供服务**的组件（其他服务如 datasource-mgr、audit-log 均部署在政务云内网 VPC），其鉴权强度直接关系到整个政务云数据流通链路的安全性。
+
+**双模式鉴权中间件**（`scopeAuthMiddleware`）：
+
+service-hub 实现了向后兼容的双模式鉴权，优先使用 Scope-based 细粒度权限，回退到单 API Key 简单模式：
+
+```go
+// services/service-hub/internal/handlers/handlers.go
+func (s *Server) scopeAuthMiddleware() gin.HandlerFunc {
+    // 模式 1：Scope-based 模式（SERVICE_HUB_API_KEYS 已配置）
+    if len(s.cfg.ScopeKeys) > 0 {
+        return func(c *gin.Context) {
+            token := extractBearerToken(c)
+            if token == "" {
+                AbortWithError(c, 401, "UNAUTHENTICATED", ...)
+                return
+            }
+            identity := constantTimeLookupKeys(s.cfg.ScopeKeys, token)
+            if identity == nil {
+                AbortWithError(c, 401, "UNAUTHENTICATED", ...)
+                return
+            }
+            // 路径 → 所需权限映射
+            requiredPerm := pkgauth.ServiceHubPermissionForPath(c.Request.URL.Path)
+            if requiredPerm != "" && !identity.HasPermission(requiredPerm) {
+                AbortWithError(c, 403, "FORBIDDEN", ...)
+                return
+            }
+            c.Set("identity", identity)
+            c.Next()
+        }
+    }
+    // 模式 2：单 API Key 兼容模式（SERVICE_HUB_API_KEY）
+    return middleware.Auth(s.cfg.APIKey)
+}
+```
+
+**service-hub 路径 → 权限映射**（`ServiceHubPermissionForPath`）：
+
+| 路径 | 权限字符串 | 说明 |
+|---|---|---|
+| `/health`, `/readyz`, `/api/health` | `""` (开放) | 健康探针，无需特定权限 |
+| `/metrics` | `""` (开放) | Prometheus 指标导出 |
+| `/api/hub/status` | `hub:read` | 调度中枢状态查询 |
+| `/api/hub/tasks`, `/api/hub/tasks/:id` | `hub:read` | 任务列表/详情查询 |
+| `/api/hub/pipeline` | `hub:read` | 流水线监控遥测 |
+| `/api/hub/dispatch` | `hub:dispatch` | 核心：分发隐私处理任务 |
+| `/api/hub/classify` | `hub:dispatch` | 分类+分发 |
+
+**设计要点**：
+- `hub:dispatch` 权限仅授予需要触发数据流通流水线的调用方（如 BFF 网关），只读查询用 `hub:read`
+- 尾部斜杠归一化防止 `/api/hub/dispatch/` 绕过权限映射
+- `constantTimeLookupKeys` 与 `pkg/auth` 的 `ConstantTimeLookup` 原理一致：排序 key + 全量遍历 + `subtle.ConstantTimeCompare`
+
+**API Key 环境变量格式**：
+
+```bash
+# SERVICE_HUB_API_KEYS 格式：token:name:scope1,scope2;token2:name2:scope3
+SERVICE_HUB_API_KEYS="sk-hub-abc:service-hub:hub:read,hub:dispatch;sk-readonly:monitor:hub:read"
+
+# 向后兼容：SERVICE_HUB_API_KEY 单密钥模式（所有已认证请求获得同等权限）
+SERVICE_HUB_API_KEY="sk-simple-key"
+```
+
+**`ParseAPIKeysEnv` 共享解析器**（`pkg/auth/identity.go`）：
+
+```go
+// pkg/auth/identity.go L175-209
+func ParseAPIKeysEnv(raw string) map[string]*KeyConfig {
+    // 按 ";" 分割多 Key → 按 ":" 分割 token:name:scopes → 按 "," 分割 scopes
+    // 安全增强：TrimSpace 防前后空格、丢弃空 token 防注册空字符串 Key
+    // 缺少 scopes 时默认 ["*"]（全部权限）
+}
+```
+
+该解析器被 engine-go（`PRIVACY_AUTH_INTERNAL_API_KEYS`）和 service-hub（`SERVICE_HUB_API_KEYS`）共享，确保全项目密钥解析逻辑一致。
+
+**环境变量速查**：
+
+| 环境变量 | 所属服务 | 说明 |
+|---|---|---|
+| `SERVICE_HUB_API_KEYS` | service-hub | Scope-based 多密钥配置（推荐） |
+| `SERVICE_HUB_API_KEY` | service-hub | 单密钥兼容模式（回退） |
+| `PRIVACY_AUTH_INTERNAL_API_KEYS` | engine-go | 内部服务 Scope-based 多密钥 |
+| `PRIVACY_AUTH_EXTERNAL_API_KEYS` | engine-go | 外部客户端 Scope-based 多密钥 |
 
 **internal/external 身份分离的设计意图**：
 - `internal` 身份：由内部服务（service-hub、bff-go）持有，通常授予更宽泛的 scope
@@ -1268,10 +1790,13 @@ unaryInt, streamInt, whitelist, err := tlsutil.NewWhitelistInterceptor(path)
 2. **追踪认证链路**：HTTP 请求 → `AuthMiddleware` → `ExtractBearerToken` → `ConstantTimeLookup` → `authenticateAPIKey` → `PermissionForRESTPath` → `HasPermission`
 3. **对比两套白名单**：engine-go `WhitelistManager` vs pkg `DynamicWhitelist`，理解设计差异与适用场景
 4. **安全审计清单**：
+   - [x] ~~REST 路径到权限的映射是否有遗漏~~ → **已修复**：路径归一化 `/api/v1/*` → `/v1/*` + 根路径别名 + 快捷别名路由全覆盖（50+ 测试用例）。含 SEC-12（`dynclassification:write` 读写区分）和 SEC-13（`budget/reset` 映射补充）两个子项
+   - [x] ~~service-hub 对外接口是否具备独立 Scope 鉴权~~ → **已修复**：`scopeAuthMiddleware` 双模式鉴权 + `ServiceHubPermissionForPath` 路径映射
+   - [x] ~~API Key 解析逻辑是否在各服务间一致~~ → **已修复**：`ParseAPIKeysEnv` 共享解析器下沉到 `pkg/auth`，engine-go 与 service-hub 统一使用
    - [ ] mTLS CN 白名单是否已接入 Gin 主中间件链
-   - [ ] REST 路径到权限的映射是否有遗漏
    - [ ] API Key 无过期机制，生产环境需要轮转能力
    - [ ] 限流完全基于内存，多实例部署时无法共享限流状态
+   - [ ] 新增端点时是否同步添加权限映射（需代码 Review 流程保障，防止 SEC-09/12/13 类问题复发）
 
 ### 2.4 安全体系纵深分析
 
@@ -1359,13 +1884,24 @@ func ConstantTimeLookup(keys map[string]*KeyConfig, token string) *KeyConfig {
 2. 每个 API Key 的权限需求明确且固定
 3. 减少配置层次，降低出错概率
 
-**权限映射的 fail-closed 设计**：
+**权限映射的路径归一化与 fail-closed 设计**：
 
 ```go
-// pkg/auth/identity.go L46-88
+// pkg/auth/identity.go L50-61
 func PermissionForRESTPath(path string) string {
+    // 去除尾部斜杠
+    if len(path) > 1 && path[len(path)-1] == '/' {
+        path = path[:len(path)-1]
+    }
+    // 归一化：/api/v1/* → /v1/*，确保别名路由与主路由共享同一权限映射。
+    normalized := path
+    if strings.HasPrefix(normalized, "/api/v1/") {
+        normalized = "/v1/" + normalized[len("/api/v1/"):]
+    } else if normalized == "/api/v1" {
+        normalized = "/v1"
+    }
     switch {
-    case strings.HasPrefix(path, "/v1/privacy/mask"):
+    case strings.HasPrefix(normalized, "/v1/privacy/mask"):
         return "privacy:mask"
     // ... 其他已知路径
     }
@@ -1373,10 +1909,12 @@ func PermissionForRESTPath(path string) string {
 }
 ```
 
+> **已修复的安全漏洞**：早期版本只匹配 `/v1/*` 前缀，但 Gin 路由同时注册了 `/api/v1/*` 别名路由和根路径（`/agent/process` 等），导致 40+ 路由完全绕过权限校验。修复方案是在函数入口统一归一化路径前缀，而非为每条别名路由重复 case 分支。
+
 注意：未映射的路径返回空串，表示对所有已认证身份开放。这是一个设计决策：
 - 优点：新端点不会因为忘记配权限映射而导致 403
 - 风险：如果某个端点需要权限保护但忘记添加映射，会被意外开放
-- 缓解：通过代码 Review 和测试用例确保所有敏感端点都有映射
+- 缓解：通过代码 Review 和测试用例（50+ 路径覆盖）确保所有敏感端点都有映射
 
 #### 2.4.3 32 分片限流器性能分析
 
@@ -1491,6 +2029,58 @@ func MaxConcurrent(limit int) gin.HandlerFunc {
 - Channel 天然支持阻塞/非阻塞语义（`select` + `default`）
 - 无需手动管理计数器的增减
 - Go runtime 对 Channel 有高度优化
+
+---
+
+### 2.5 接口权限控制漏洞修复案例（SEC-09 ~ SEC-13）
+
+以下漏洞在安全 Review 中发现并已修复，作为权限控制学习的实战案例。
+
+#### SEC-09：`PermissionForRESTPath` 别名路由权限绕过（Critical）
+
+**漏洞描述**：`PermissionForRESTPath()` 仅匹配 `/v1/*` 前缀，但 Gin 路由同时注册了 `/api/v1/*` 别名路由（如 `/api/v1/privacy/mask`）和根路径别名（如 `/agent/process`），导致 40+ 路由完全绕过 Scope 权限校验。任何持有有效 API Key 的调用方可访问任意未映射路径。
+
+**影响范围**：engine-go REST API 全部别名路由
+
+**修复方案**：在 `PermissionForRESTPath()` 入口统一执行路径归一化 `/api/v1/*` → `/v1/*`，并补充根路径别名和快捷别名的 case 分支。
+
+**修复文件**：`pkg/auth/identity.go`
+
+**测试覆盖**：`pkg/auth/identity_test.go` 新增 50+ 路径映射测试用例
+
+#### SEC-10：service-hub 缺少 Scope-based 细粒度鉴权（High）
+
+**漏洞描述**：service-hub 作为唯一对外网提供服务的微服务，仅支持单 API Key 认证（`SERVICE_HUB_API_KEY`），所有已认证请求具有同等权限，无法区分只读查询（`hub:read`）和任务分发（`hub:dispatch`）。
+
+**影响范围**：`services/service-hub/` 全部 API 端点
+
+**修复方案**：
+1. 新增 `SERVICE_HUB_API_KEYS` 环境变量支持 Scope-based 多密钥配置
+2. 实现 `scopeAuthMiddleware()` 双模式鉴权中间件
+3. 新增 `ServiceHubPermissionForPath()` 路径→权限映射
+4. 共享 `ParseAPIKeysEnv()` 解析器到 `pkg/auth`
+
+**修复文件**：`services/service-hub/internal/handlers/handlers.go`、`services/service-hub/internal/config/config.go`、`pkg/auth/identity.go`
+
+#### SEC-11：engine-go `parseAPIKeys` 重复实现导致逻辑漂移（Medium）
+
+**漏洞描述**：engine-go 的 `internal/security/config.go` 和 service-hub 各自实现了 `parseAPIKeys()` 函数，逻辑不完全一致（如空 token 处理、TrimSpace），存在安全语义漂移风险。
+
+**修复方案**：将 `parseAPIKeys` 提取为 `pkg/auth.ParseAPIKeysEnv()`，增加安全增强（TrimSpace、丢弃空 token），engine-go 和 service-hub 统一调用共享实现。
+
+**修复文件**：`pkg/auth/identity.go`（新增）、`engine-go/internal/security/config.go`（删除私有实现）
+
+#### SEC-12：动态分类分级读写权限未区分（Medium）
+
+**漏洞描述**：`/v1/dynclassification/profiles/reload`（写操作：重载分类 Profile）和 `/v1/dynclassification`（读操作：执行分类）共享同一权限映射，任何具有 `dynclassification:read` 权限的调用方可触发 Profile 重载。
+
+**修复方案**：区分 `dynclassification:write`（reload/generate_profile）和 `dynclassification:read`（其他动态分类路径），写操作默认不映射到读权限。
+
+#### SEC-13：`/v1/privacy/budget/reset` 权限映射缺失（Medium）
+
+**漏洞描述**：隐私预算重置端点 `/v1/privacy/budget/reset` 未被 `PermissionForRESTPath()` 映射，任何已认证调用方可重置隐私预算，绕过预算耗尽限制。
+
+**修复方案**：新增 `budget/reset` 映射到 `privacy:budget` 权限。
 
 ---
 
@@ -1939,20 +2529,24 @@ func (m *REDMetrics) PrometheusMiddleware() gin.HandlerFunc {
 按照以下顺序阅读代码，可以建立从浅到深的理解：
 
 ```
-第 1 步：数据结构（理解“是什么”）
+第 1 步：数据结构（理解”是什么”）
 ├── pkg/circuitbreaker/circuitbreaker.go     → 熔断器状态机
 ├── pkg/gateway/balancer.go (L26-87)         → BackendNode + BufferPool
-└── pkg/auth/identity.go (L9-30)             → Identity + HasPermission
+├── pkg/auth/identity.go (L9-30)             → Identity + HasPermission
+├── pkg/auth/identity.go (L50-130)           → PermissionForRESTPath 路径归一化与映射
+└── pkg/auth/identity.go (L216-236)          → ServiceHubPermissionForPath
 
-第 2 步：核心算法（理解“怎么做”）
+第 2 步：核心算法（理解”怎么做”）
 ├── pkg/gateway/balancer.go (L186-222)       → P2C-EWMA 选择算法
 ├── pkg/gateway/balancer.go (L265-289)       → Nginx SWRR 算法
-└── pkg/auth/middleware.go (L55-75)          → 常量时间查找
+├── pkg/auth/middleware.go (L55-75)          → 常量时间查找
+└── pkg/auth/identity.go (L175-209)          → ParseAPIKeysEnv 共享解析器
 
-第 3 步：集成层（理解“如何连接”）
+第 3 步：集成层（理解”如何连接”）
 ├── engine-go/internal/gateway/http_proxy.go → HTTP 代理完整流程
 ├── engine-go/internal/gateway/grpc_proxy.go → gRPC 代理双向流
-└── pkg/middleware/ratelimit.go              → 32 分片限流完整实现
+├── pkg/middleware/ratelimit.go              → 32 分片限流完整实现
+└── services/service-hub/internal/handlers/handlers.go → scopeAuthMiddleware 双模式鉴权
 
 第 4 步：可观测性（理解“如何监控”）
 ├── pkg/observability/metrics.go             → RED 指标定义与埋点
@@ -1980,6 +2574,16 @@ func (m *REDMetrics) PrometheusMiddleware() gin.HandlerFunc {
 - A: `internal:service-hub:/v1/privacy/mask`
 - B: `external:client-1:/v1/privacy/dp/count`
 - C: `anonymous:10.0.0.1:/v1/privacy/mask`
+
+**练习 4：追踪别名路由的权限校验链路**
+
+分别追踪以下 3 个请求的权限校验过程，说明路径归一化如何确保它们映射到相同的权限字符串：
+1. `POST /api/v1/privacy/mask` → 归一化为 `/v1/privacy/mask` → `privacy:mask`
+2. `POST /api/v1/mask` → 归一化为 `/v1/mask` → `privacy:mask`
+3. `POST /v1/privacy/mask` → 无需归一化 → `privacy:mask`
+
+再追踪一个 service-hub 请求：
+4. `POST /api/hub/dispatch` → `ServiceHubPermissionForPath` → `hub:dispatch`，持有 `hub:read` scope 的调用方应被拒绝（403）
 
 ---
 
@@ -2043,6 +2647,27 @@ curl http://localhost:8079/metrics | grep privshield_
 cat deploy/prometheus/prometheus.yml
 ```
 
+### Q5: 请求返回 403 FORBIDDEN
+
+**可能原因**：
+1. API Key 的 Scope 不包含该路径所需的权限字符串
+2. 使用了别名路由（`/api/v1/*`）但权限映射未覆盖（已修复）
+3. service-hub 持 `hub:read` scope 的 Key 调用了 `/api/hub/dispatch`（需要 `hub:dispatch`）
+
+**排查步骤**：
+```bash
+# 1. 确认 Key 的 Scope 配置
+echo $SERVICE_HUB_API_KEYS
+# 格式：token:name:scope1,scope2
+
+# 2. 确认路径映射的所需权限
+# 查看 pkg/auth/identity.go PermissionForRESTPath()
+# 或 services/service-hub/ ServiceHubPermissionForPath()
+
+# 3. 测试：使用带 "*" scope 的 Key 排除 Scope 不足问题
+curl -H "Authorization: Bearer <admin-key>" http://localhost:8082/api/hub/dispatch
+```
+
 ---
 
 ## 术语表
@@ -2067,9 +2692,15 @@ cat deploy/prometheus/prometheus.yml
 | RawCodec | Raw Codec | gRPC 原始编解码器（字节透传） |
 | UnknownServiceHandler | Unknown Service Handler | gRPC 未注册方法拦截器 |
 | NoOp | No Operation | 空操作占位实现 |
-| Sidecar | Sidecar Pattern | 边车模式（伴随主服务部署） |
 | Fail-safe | Fail Safe | 故障安全（优雅降级） |
 | P0-1 | Priority 0-1 | 零信任默认态门禁 |
+| Scope-based Auth | Scope-based Authorization | 基于权限字符串的接口级授权模型（非 RBAC），Identity 携带 Scopes 列表，权限校验通过精确匹配或通配符 `"*"` |
+| 路径归一化 | Path Normalization | `/api/v1/*` → `/v1/*` 别名路由统一映射，防止别名路径绕过权限校验 |
+| 别名路由 | Alias Route | 与主路由功能等价但路径前缀不同的注册路由（如 `/api/v1/mask` 是 `/v1/privacy/mask` 的别名） |
+| 常量时间比较 | Constant-time Comparison | `subtle.ConstantTimeCompare` 防时序侧信道，排序 key + 全量遍历不提前 break |
+| 双模式鉴权 | Dual-mode Authentication | Scope-based 优先 + 单 Key 兼容回退（`scopeAuthMiddleware`） |
+| 共享解析器 | Shared Parser (`ParseAPIKeysEnv`) | `pkg/auth` 中统一的 API Key 解析函数，engine-go 与 service-hub 共享，含 TrimSpace + 空 token 丢弃 |
+| 权限绕过 | Authorization Bypass | 因路径映射遗漏导致某些路由跳过 Scope 校验的安全漏洞（SEC-09 的核心问题） |
 
 ---
 
@@ -2662,10 +3293,15 @@ go tool pprof block.prof
 
 #### 权限模型 (`pkg/auth/identity.go`)
 
-- [ ] `PermissionForRESTPath()` 路径到权限的映射完整性
-- [ ] `PermissionForGRPCMethod()` 方法到权限的映射完整性
-- [ ] `HasPermission()` 支持 `"*"` 通配符
-- [ ] `admin` scope 拥有所有权限
+- [x] `PermissionForRESTPath()` 路径归一化：`/api/v1/*` → `/v1/*`，尾部斜杠去除
+- [x] `PermissionForRESTPath()` 别名路由全覆盖：根路径别名 + 快捷别名（`/v1/mask*`、`/v1/dp/*` 等）
+- [x] `PermissionForRESTPath()` 动态分类读写区分：`dynclassification:write` vs `dynclassification:read`
+- [x] `PermissionForRESTPath()` `budget/reset` 映射到 `privacy:budget`
+- [x] `PermissionForGRPCMethod()` 方法到权限的映射完整性（44 个隐私原语）
+- [x] `ServiceHubPermissionForPath()` service-hub 专属路径映射（`hub:read` / `hub:dispatch`）
+- [x] `ParseAPIKeysEnv()` 共享解析器：TrimSpace + 空 token 丢弃 + 默认 `["*"]`
+- [x] `HasPermission()` 支持 `"*"` 通配符
+- [x] `admin` scope 拥有所有权限
 
 #### 限流器 (`pkg/middleware/ratelimit.go`)
 
@@ -2724,15 +3360,20 @@ go tool pprof block.prof
 
 ### 交付物 2：发现的问题清单与改进建议
 
-| 优先级 | 问题 | 位置 | 建议 |
-|---|---|---|---|
-| P1 | `OTelTracer.StartSpan()` 为 no-op | `pkg/observability/tracing.go:32` | 引入 OTel SDK 实现真实 Span 创建 |
-| P1 | 缺少 Prometheus 告警规则 | `deploy/prometheus/` | 补充 P99/错误率/熔断器/证书过期告警 |
-| P2 | gRPC 代理使用 `insecure` 凭证 | `grpc_proxy.go:114` | 升级为 mTLS 回源 |
-| P2 | 熔断器 `halfOpenMax` 硬编码 | `circuitbreaker.go:62` | 配置化 |
-| P2 | 两套 mTLS 白名单实现语义漂移 | `security/whitelist.go` vs `tlsutil/whitelist.go` | 收敛为统一实现 |
-| P3 | API Key 无过期/轮转机制 | `pkg/auth/middleware.go` | 生产环境需要 Key 轮转能力 |
-| P3 | 限流状态纯内存，多实例不共享 | `pkg/middleware/ratelimit.go` | 评估 Redis 共享限流需求 |
+| 优先级 | 问题 | 位置 | 状态 | 建议 |
+|---|---|---|---|---|
+| **P0** | **SEC-09**: `PermissionForRESTPath` 别名路由权限绕过（40+ 路由） | `pkg/auth/identity.go` | **已修复** | 路径归一化 + 全量 case 覆盖 |
+| **P0** | **SEC-10**: service-hub 缺少 Scope-based 细粒度鉴权 | `services/service-hub/` | **已修复** | `scopeAuthMiddleware` 双模式 + `ServiceHubPermissionForPath` |
+| **P1** | **SEC-11**: `parseAPIKeys` 重复实现逻辑漂移 | `engine-go/internal/security/config.go` | **已修复** | 共享 `ParseAPIKeysEnv` 到 `pkg/auth` |
+| **P1** | **SEC-12**: 动态分类分级读写权限未区分 | `pkg/auth/identity.go` | **已修复** | `dynclassification:write` vs `dynclassification:read` |
+| **P1** | **SEC-13**: `/v1/privacy/budget/reset` 权限映射缺失 | `pkg/auth/identity.go` | **已修复** | 新增 `privacy:budget` 映射 |
+| P1 | `OTelTracer.StartSpan()` 为 no-op | `pkg/observability/tracing.go:32` | 待修复 | 引入 OTel SDK 实现真实 Span 创建 |
+| P1 | 缺少 Prometheus 告警规则 | `deploy/prometheus/` | 待修复 | 补充 P99/错误率/熔断器/证书过期告警 |
+| P2 | gRPC 代理使用 `insecure` 凭证 | `grpc_proxy.go:114` | 待修复 | 升级为 mTLS 回源 |
+| P2 | 熔断器 `halfOpenMax` 硬编码 | `circuitbreaker.go:62` | 待修复 | 配置化 |
+| P2 | 两套 mTLS 白名单实现语义漂移 | `security/whitelist.go` vs `tlsutil/whitelist.go` | 待修复 | 收敛为统一实现 |
+| P3 | API Key 无过期/轮转机制 | `pkg/auth/middleware.go` | 待修复 | 生产环境需要 Key 轮转能力 |
+| P3 | 限流状态纯内存，多实例不共享 | `pkg/middleware/ratelimit.go` | 待评估 | 评估 Redis 共享限流需求 |
 
 ### 交付物 3：可观测性改进方案
 
@@ -2754,6 +3395,8 @@ go tool pprof block.prof
 | `PRIVACY_AUTH_MTLS_ALLOWED_CNS` | — | security | 静态 CN 白名单（逗号分隔） |
 | `PRIVACY_AUTH_INTERNAL_API_KEYS` | — | security | 内部 API Key（格式 `key:name:scope1,scope2`） |
 | `PRIVACY_AUTH_EXTERNAL_API_KEYS` | — | security | 外部 API Key |
+| `SERVICE_HUB_API_KEYS` | — | service-hub | Scope-based 多密钥（格式 `key:name:scope1,scope2`） |
+| `SERVICE_HUB_API_KEY` | — | service-hub | 单密钥兼容模式（回退） |
 | `PRIVACY_RATE_LIMIT_ENABLED` | `false` | security | 启用 32 分片限流 |
 | `PRIVACY_RATE_LIMIT_DEFAULT_RPS` | `100` | security | 默认每秒请求数 |
 | `PRIVACY_RATE_LIMIT_DEFAULT_BURST` | `200` | security | 默认突发容量 |
@@ -2880,3 +3523,12 @@ go tool pprof block.prof
 | mTLS 原理 | [Mutual TLS Authentication](https://www.cloudflare.com/learning/access-control/what-is-mutual-tls/) | Cloudflare 的 mTLS 入门指南 |
 | Go TLS 配置 | [crypto/tls](https://pkg.go.dev/crypto/tls) | tls.Config 各字段含义 |
 | 证书链验证 | [x509 证书验证](https://pkg.go.dev/crypto/x509#CertPool) | RootCAs 与 VerifiedChains 的工作原理 |
+
+### API 授权与安全
+
+| 主题 | 资料 | 说明 |
+|---|---|---|
+| Scope-based vs RBAC | [OAuth 2.0 Scopes](https://oauth.net/2/scope/) | OAuth 2.0 Scope 模型的设计哲学，与本项目的 Scope-based 权限模型一脉相承 |
+| 时序攻击防御 | [crypto/subtle](https://pkg.go.dev/crypto/subtle) | Go 标准库常量时间比较的密码学基础 |
+| 路径归一化安全 | [OWASP Path Traversal](https://owasp.org/www-community/attacks/Path_Traversal) | 路径归一化不当导致的安全绕过（本项目的 `/api/v1/*` → `/v1/*` 归一化是正向应用） |
+| 最小权限原则 | [Principle of Least Privilege](https://en.wikipedia.org/wiki/Principle_of_least_privilege) | `hub:read` vs `hub:dispatch` 分离设计的理论基础 |

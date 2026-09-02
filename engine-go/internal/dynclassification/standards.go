@@ -27,16 +27,16 @@ type StandardLevelMapping struct {
 
 // StandardDef 描述一个标准映射文件的完整内容。
 type StandardDef struct {
-	StandardID   string `yaml:"standard_id"`
-	Description  string `yaml:"description"`
-	Taxonomy     string `yaml:"taxonomy"`
+	StandardID   string   `yaml:"standard_id"`
+	Description  string   `yaml:"description"`
+	Taxonomy     string   `yaml:"taxonomy"`
 	Domains      []string `yaml:"domains"`
 	GlobalParams struct {
 		DefaultLevel string `yaml:"default_level"`
 	} `yaml:"global_params"`
-	Levels            map[string]StandardLevelMapping `yaml:"levels"`
-	ExtraRules        []RuleDef                       `yaml:"extra_rules"`
-	ExtraDowngradeRules []RuleDef                     `yaml:"extra_downgrade_rules"`
+	Levels              map[string]StandardLevelMapping `yaml:"levels"`
+	ExtraRules          []RuleDef                       `yaml:"extra_rules"`
+	ExtraDowngradeRules []RuleDef                       `yaml:"extra_downgrade_rules"`
 }
 
 // LoadStandardsFromDir 读取目录下所有 .yaml/.yml 文件并解析为 StandardDef 列表。

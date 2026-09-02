@@ -53,7 +53,7 @@ func ResetSettings() {
 }
 
 func loadSettings() *Settings {
-	internalKeys := parseAPIKeys("PRIVACY_AUTH_INTERNAL_API_KEYS")
+	internalKeys := pkgauth.LoadAPIKeysFromEnv("PRIVACY_AUTH_INTERNAL_API_KEYS")
 	if internalKeys == nil {
 		internalKeys = make(map[string]*KeyConfig)
 	}
@@ -63,11 +63,11 @@ func loadSettings() *Settings {
 		}
 	}
 
-	externalKeys := parseAPIKeys("PRIVACY_AUTH_EXTERNAL_API_KEYS")
+	externalKeys := pkgauth.LoadAPIKeysFromEnv("PRIVACY_AUTH_EXTERNAL_API_KEYS")
 	if externalKeys == nil {
 		externalKeys = make(map[string]*KeyConfig)
 	}
-	if ext := parseAPIKeys("PRIVACY_AUTH_STATIC_API_KEYS"); ext != nil {
+	if ext := pkgauth.LoadAPIKeysFromEnv("PRIVACY_AUTH_STATIC_API_KEYS"); ext != nil {
 		for k, v := range ext {
 			externalKeys[k] = v
 		}
@@ -91,35 +91,6 @@ func loadSettings() *Settings {
 		MTLSAllowedCNs:        parseStringList(pkgconfig.EnvString("PRIVACY_AUTH_MTLS_ALLOWED_CNS", "")),
 	}
 	return s
-}
-
-// parseAPIKeys 解析 "key1:name1:scope1,scope2;key2:name2:scope3" 格式。
-func parseAPIKeys(envKey string) map[string]*KeyConfig {
-	raw := os.Getenv(envKey)
-	if raw == "" {
-		return nil
-	}
-	keys := make(map[string]*KeyConfig)
-	for _, entry := range strings.Split(raw, ";") {
-		entry = strings.TrimSpace(entry)
-		if entry == "" {
-			continue
-		}
-		parts := strings.SplitN(entry, ":", 3)
-		if len(parts) < 2 {
-			continue
-		}
-		token := parts[0]
-		name := parts[1]
-		var scopes []string
-		if len(parts) == 3 && parts[2] != "" {
-			scopes = strings.Split(parts[2], ",")
-		} else {
-			scopes = []string{"*"}
-		}
-		keys[token] = &KeyConfig{Name: name, Scopes: scopes}
-	}
-	return keys
 }
 
 func parseStringList(s string) []string {

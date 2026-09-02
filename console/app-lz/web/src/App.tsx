@@ -21,6 +21,10 @@
  *   - AuthProvider 包裹整个应用，管理用户认证与角色
  *   - 未登录 → 显示 LoginPage
  *   - 已登录 → 左侧固定 Sidebar 导航（按角色过滤） + 右侧面板
+ *
+ * Hooks 规则：
+ *   - 所有 useState / useCallback / useEffect 必须在条件返回之前声明
+ *   - 条件返回（isLoading / !isAuthenticated）放在 hooks 之后、JSX 之前
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import { api } from './api/client';
@@ -79,26 +83,7 @@ const AppContent: React.FC = () => {
   const [loadingAudit, setLoadingAudit] = useState(false);
   const [loadingMetrics, setLoadingMetrics] = useState(false);
 
-  // ── 认证加载状态：正在检查令牌有效性时显示加载屏 ──
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-12 h-12 mx-auto rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-amber-500 flex items-center justify-center text-white font-bold text-xl mb-4 animate-pulse">
-            LZ
-          </div>
-          <p className="text-slate-400 text-sm">Loading...</p>
-        </div>
-      </div>
-    );
-  }
-
-  // ── 未登录：显示登录页面 ──
-  if (!isAuthenticated) {
-    return <LoginPage />;
-  }
-
-  // ── 数据拉取函数 ──────────────────────────────────────────────────
+  // ── 数据拉取函数（必须在条件返回之前声明，遵守 React Hooks 规则）──────────
 
   // 1. 拉取服务拓扑（支持协议切换，含 4 服务 fallback 兆底）
   const fetchTopology = useCallback(async (proto?: ProtocolType) => {
@@ -108,7 +93,6 @@ const AppContent: React.FC = () => {
       const res = await api.getTopology(p);
       setTopology(res);
     } catch {
-      // BFF 不可达时，前端构造合成的“全部 ready”拓扑（演示模式）
       setTopology({
         status: 'healthy',
         active_protocol: p,
@@ -133,7 +117,6 @@ const AppContent: React.FC = () => {
       setTasks(tRes.tasks || []);
       setLeases(lRes);
     } catch {
-      // BFF 不可达时，前端构造 2 条示例任务（演示模式，已全部处于终态）
       setTasks([
         {
           id: 'task-1787554500-eabf3934',
@@ -215,7 +198,6 @@ const AppContent: React.FC = () => {
       const res = await api.getDataApiDefinitions();
       setDataApiDefs(res.apis || []);
     } catch {
-      // BFF 不可达时，前端构造 4 个默认 API 定义（演示模式）
       setDataApiDefs([
         { id: 1, name: '医保结算数据 API', datasource_id: 'ds_yibao', category: 'medical', description: '城镇职工基本医疗保险结算数据', fields: ['record_id', 'patient_name', 'id_card', 'phone', 'diagnosis'], status: 'active' },
         { id: 2, name: '康养体征数据 API', datasource_id: 'ds_kangyang', category: 'healthcare', description: '智慧养老健康监护与体征数据', fields: ['elder_id', 'name', 'age', 'heart_rate', 'blood_pressure'], status: 'active' },
@@ -231,7 +213,6 @@ const AppContent: React.FC = () => {
     try {
       return await api.invokeDataApi(apiId, limit);
     } catch (err: any) {
-      // 调用失败时返回合成的失败响应（确保前端能正常展示错误信息）
       return {
         session_id: `session-${apiId}-fallback`,
         api_id: apiId,
@@ -248,7 +229,7 @@ const AppContent: React.FC = () => {
     }
   }, [dataApiDefs]);
 
-  // ── 初始化：组件挂载时并发拉取所有数据 ─────────────────────────
+  // ── 初始化：组件挂载时并发拉取所有数据 ────────────────────────
   useEffect(() => {
     fetchTopology();
     fetchTasksAndLeases();
@@ -257,18 +238,16 @@ const AppContent: React.FC = () => {
     fetchMetrics();
     fetchDataApiDefs();
 
-    // 拓扑每 15 秒自动刷新（其他数据不自动刷新，需手动触发）
     const timer = setInterval(() => {
       fetchTopology();
     }, 15000);
-    return () => clearInterval(timer);  // 组件卸载时清理定时器
+    return () => clearInterval(timer);
   }, [fetchTopology, fetchTasksAndLeases, fetchSuites, fetchAuditLogs, fetchMetrics, fetchDataApiDefs]);
 
   // ── 任务与租约自动轮询：处于任务标签页或存在 running/pending 任务时动态刷新 ──
   const hasActiveTasks = tasks.some(t => t.status === 'running' || t.status === 'pending');
   useEffect(() => {
     if (currentTab === 'tasks' || hasActiveTasks) {
-      // 存在正在执行的任务时 1.5s 轮询，否则 4s 轮询
       const intervalMs = hasActiveTasks ? 1500 : 4000;
       const timer = setInterval(() => {
         fetchTasksAndLeases();
@@ -276,6 +255,25 @@ const AppContent: React.FC = () => {
       return () => clearInterval(timer);
     }
   }, [currentTab, hasActiveTasks, fetchTasksAndLeases]);
+
+  // ── 条件渲染：加载态 / 未登录 / 主界面（所有 hooks 已声明完毕）──────────
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-12 h-12 mx-auto rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-amber-500 flex items-center justify-center text-white font-bold text-xl mb-4 animate-pulse">
+            LZ
+          </div>
+          <p className="text-slate-400 text-sm">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <LoginPage />;
+  }
 
   // ── 渲染：左侧导航 + 右侧面板 ────────────────────────────────────
   return (

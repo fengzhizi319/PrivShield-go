@@ -56,9 +56,11 @@ func TestPermissionForRESTPath(t *testing.T) {
 		path string
 		want string
 	}{
+		// 健康探活
 		{"/health", "health:read"},
 		{"/livez", "health:read"},
 		{"/readyz", "health:read"},
+		// /v1/* 主路由
 		{"/v1/privacy/mask", "privacy:mask"},
 		{"/v1/privacy/mask/record", "privacy:mask"},
 		{"/v1/privacy/dp/count", "privacy:dp"},
@@ -66,11 +68,47 @@ func TestPermissionForRESTPath(t *testing.T) {
 		{"/v1/privacy/k_anonymize", "privacy:kano"},
 		{"/v1/privacy/qol/obfuscate", "privacy:qol"},
 		{"/v1/privacy/budget", "privacy:budget"},
+		{"/v1/privacy/budget/reset", "privacy:budget"},
+		{"/v1/privacy/hash", "privacy:hash"},
+		{"/v1/privacy/profile/recommend", "privacy:profile"},
+		{"/v1/privacy/process_file", "privacy:mask"},
+		{"/v1/privacy/classify/field", "classification:read"},
 		{"/v1/agent/process", "agent:process"},
+		{"/v1/medical/process", "medical:process"},
 		{"/v1/ops/diagnostics", "ops:diagnostics"},
+		{"/v1/dynclassification/classify", "dynclassification:read"},
+		{"/v1/dynclassification/classify/batch", "dynclassification:read"},
+		{"/v1/dynclassification/eval_record", "dynclassification:read"},
+		{"/v1/dynclassification/profiles/reload", "dynclassification:write"},
+		// 根路径直调别名
+		{"/agent/process", "agent:process"},
+		{"/medical/process", "medical:process"},
+		{"/ops/diagnostics", "ops:diagnostics"},
+		{"/privacy/process_file", "privacy:mask"},
+		// /api/v1/* 别名路由
+		{"/api/v1/mask", "privacy:mask"},
+		{"/api/v1/dp/count", "privacy:dp"},
+		{"/api/v1/kano/anonymize", "privacy:kano"},
+		{"/api/v1/kano/table", "privacy:kano"},
+		{"/api/v1/qol/obfuscate", "privacy:qol"},
+		{"/api/v1/classify", "classification:read"},
+		{"/api/v1/classify/batch", "classification:read"},
+		{"/api/v1/hash/hmac", "privacy:hash"},
+		{"/api/v1/budget", "privacy:budget"},
+		{"/api/v1/budget/reset", "privacy:budget"},
+		{"/api/v1/agent/process", "agent:process"},
+		{"/api/v1/medical/process", "medical:process"},
+		{"/api/v1/medical/sanitize", "medical:process"},
+		{"/api/v1/ops/diagnostics", "ops:diagnostics"},
+		{"/api/v1/dynclassification/eval_record", "dynclassification:read"},
+		{"/api/v1/privacy/process_file", "privacy:mask"},
+		{"/api/v1/ldp/randomized_response", "privacy:dp"},
+		// pprof
 		{"/debug/pprof", "ops:admin"},
 		{"/debug/pprof/heap", "ops:admin"},
+		// 未知路径
 		{"/unknown", ""},
+		{"/api/v2/something", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
@@ -130,6 +168,141 @@ func TestIsHealthPathOrMethod(t *testing.T) {
 		t.Run(tt.path, func(t *testing.T) {
 			if got := IsHealthPathOrMethod(tt.path); got != tt.want {
 				t.Errorf("IsHealthPathOrMethod(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+// ──────────────────────────────────────────────
+// 5. service-hub 路由→权限映射测试
+// ──────────────────────────────────────────────
+
+func TestServiceHubPermissionForPath(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"/health", ""},
+		{"/readyz", ""},
+		{"/api/health", ""},
+		{"/metrics", ""},
+		{"/api/hub/status", "hub:read"},
+		{"/api/hub/tasks", "hub:read"},
+		{"/api/hub/tasks/abc-123", "hub:read"},
+		{"/api/hub/pipeline", "hub:read"},
+		{"/api/hub/dispatch", "hub:dispatch"},
+		{"/api/hub/dispatch/", "hub:dispatch"}, // 尾部斜杠不应绕过 Scope 校验
+		{"/api/hub/classify", "hub:dispatch"},
+		{"/api/hub/classify/", "hub:dispatch"}, // 尾部斜杠不应绕过 Scope 校验
+		{"/api/hub/tasks/", "hub:read"},        // 尾部斜杠归一化
+		{"/unknown", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			if got := ServiceHubPermissionForPath(tt.path); got != tt.want {
+				t.Errorf("ServiceHubPermissionForPath(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+// ──────────────────────────────────────────────
+// 6. API Key 解析测试
+// ──────────────────────────────────────────────
+
+func TestParseAPIKeysEnv(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		wantLen int
+		check   func(t *testing.T, keys map[string]*KeyConfig)
+	}{
+		{
+			name:    "empty",
+			raw:     "",
+			wantLen: 0,
+		},
+		{
+			name:    "single key with scopes",
+			raw:     "tok1:svc-a:privacy:mask,privacy:dp",
+			wantLen: 1,
+			check: func(t *testing.T, keys map[string]*KeyConfig) {
+				k := keys["tok1"]
+				if k == nil {
+					t.Fatal("expected tok1")
+				}
+				if k.Name != "svc-a" {
+					t.Errorf("name = %q, want svc-a", k.Name)
+				}
+				if len(k.Scopes) != 2 || k.Scopes[0] != "privacy:mask" || k.Scopes[1] != "privacy:dp" {
+					t.Errorf("scopes = %v, want [privacy:mask, privacy:dp]", k.Scopes)
+				}
+			},
+		},
+		{
+			name:    "multiple keys",
+			raw:     "tok1:a:*;tok2:b:health:read",
+			wantLen: 2,
+			check: func(t *testing.T, keys map[string]*KeyConfig) {
+				if keys["tok1"].Scopes[0] != "*" {
+					t.Errorf("tok1 scopes = %v, want [*]", keys["tok1"].Scopes)
+				}
+				if keys["tok2"].Name != "b" {
+					t.Errorf("tok2 name = %q, want b", keys["tok2"].Name)
+				}
+			},
+		},
+		{
+			name:    "no scopes defaults to wildcard",
+			raw:     "tok1:svc-a",
+			wantLen: 1,
+			check: func(t *testing.T, keys map[string]*KeyConfig) {
+				if len(keys["tok1"].Scopes) != 1 || keys["tok1"].Scopes[0] != "*" {
+					t.Errorf("scopes = %v, want [*]", keys["tok1"].Scopes)
+				}
+			},
+		},
+		{
+			name:    "trims spaces around token name and scopes",
+			raw:     " tok1 : svc-a : privacy:mask , health:read ; tok2 : svc-b : hub:read ",
+			wantLen: 2,
+			check: func(t *testing.T, keys map[string]*KeyConfig) {
+				k1 := keys["tok1"]
+				if k1 == nil || k1.Name != "svc-a" || len(k1.Scopes) != 2 || k1.Scopes[0] != "privacy:mask" || k1.Scopes[1] != "health:read" {
+					t.Errorf("tok1 config = %+v, want svc-a with [privacy:mask health:read]", k1)
+				}
+				k2 := keys["tok2"]
+				if k2 == nil || k2.Name != "svc-b" || len(k2.Scopes) != 1 || k2.Scopes[0] != "hub:read" {
+					t.Errorf("tok2 config = %+v, want svc-b with [hub:read]", k2)
+				}
+			},
+		},
+		{
+			name:    "drops empty token or empty name entries",
+			raw:     ":svc-a:health:read;tok1::privacy:mask;tok2:svc-b:hub:read",
+			wantLen: 1,
+			check: func(t *testing.T, keys map[string]*KeyConfig) {
+				k := keys["tok2"]
+				if k == nil || k.Name != "svc-b" || k.Scopes[0] != "hub:read" {
+					t.Errorf("tok2 config = %+v, want svc-b with [hub:read]", k)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keys := ParseAPIKeysEnv(tt.raw)
+			if tt.wantLen == 0 {
+				if keys != nil {
+					t.Errorf("expected nil, got %v", keys)
+				}
+				return
+			}
+			if len(keys) != tt.wantLen {
+				t.Fatalf("len = %d, want %d", len(keys), tt.wantLen)
+			}
+			if tt.check != nil {
+				tt.check(t, keys)
 			}
 		})
 	}

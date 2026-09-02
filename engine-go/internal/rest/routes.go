@@ -206,7 +206,12 @@ func RegisterRoutes(r *gin.Engine, svc *service.PrivacyService) {
 		apiV1.POST("/qol/obfuscate/batch", obfuscateBatchHandler(svc))
 		apiV1.POST("/classify", classifyHandler(svc))
 		apiV1.POST("/classify/batch", classifyBatchHandler(svc))
+		// 动态分类分级别名路由（SEC-09/SEC-11 完整覆盖）
+		apiV1.POST("/dynclassification/classify", classifyHandler(svc))
+		apiV1.POST("/dynclassification/classify/batch", classifyBatchHandler(svc))
 		apiV1.POST("/dynclassification/eval_record", evalRecordHandler(svc))
+		apiV1.POST("/dynclassification/profiles/reload", dynProfilesReloadHandler(svc))
+		apiV1.GET("/privacy/profile/recommend", profileRecommendHandler(svc))
 		apiV1.POST("/medical/sanitize", medicalSanitizeHandler(svc))
 		apiV1.POST("/medical/sanitize/batch", medicalBatchHandler(svc))
 		apiV1.POST("/hash/hmac", hashHMACHanlder(svc))

@@ -433,6 +433,36 @@ func TestClassify(t *testing.T) {
 	}
 }
 
+// TestClassify_AliasRoutes 验证 /api/v1/dynclassification/* 别名路由已注册并可正常访问（SEC-09/SEC-11 完整覆盖）。
+func TestClassify_AliasRoutes(t *testing.T) {
+	r, _ := setupRouter(t)
+	cases := []struct {
+		path   string
+		method string
+		body   any
+	}{
+		{"/api/v1/dynclassification/classify", "POST", map[string]any{"field": "phone", "value": "13812345678"}},
+		{"/api/v1/dynclassification/classify/batch", "POST", map[string]any{"records": []map[string]any{{"phone": "13812345678"}}}},
+		{"/api/v1/dynclassification/eval_record", "POST", map[string]any{"record": map[string]any{"phone": "13812345678"}}},
+		{"/api/v1/dynclassification/profiles/reload", "POST", nil},
+	}
+	for _, tc := range cases {
+		w := doJSON(r, tc.method, tc.path, tc.body)
+		if w.Code != http.StatusOK {
+			t.Fatalf("[%s] expected 200, got %d: %s", tc.path, w.Code, w.Body.String())
+		}
+	}
+}
+
+// TestProfileRecommend_AliasRoute 验证 /api/v1/privacy/profile/recommend 别名路由已注册（SEC-09 完整覆盖）。
+func TestProfileRecommend_AliasRoute(t *testing.T) {
+	r, _ := setupRouter(t)
+	w := doJSON(r, "GET", "/api/v1/privacy/profile/recommend", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 // ──────────────────────────────────────────────
 // Profile 推荐端点
 // ──────────────────────────────────────────────

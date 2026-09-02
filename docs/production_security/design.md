@@ -179,14 +179,35 @@ class Identity:
         return "*" in self.scopes or permission in self.scopes
 ```
 
+#### Engine 权限映射（`PermissionForRESTPath`）
+
+支持 `/v1/*` 与 `/api/v1/*` 双前缀（别名路由归一化后统一匹配），以及根路径直调别名。
+
 | REST 路径 / gRPC 方法 | 对应权限 Scope |
 |---|---|
-| `/v1/privacy/mask` / `Mask` | `privacy:mask` |
-| `/v1/privacy/dp/*` / `DPCount` / `DPSum` / `DPMean` | `privacy:dp` |
-| `/v1/privacy/k_anonymize/*` / `KAnonymizeRecord` | `privacy:kano` |
-| `/v1/privacy/qol/*` / `ObfuscateQuery` | `privacy:qol` |
-| `/v1/privacy/budget` | `privacy:budget` |
-| `/v1/dynclassification/*` / `ClassifyField` / `ClassifyTable` | `classification:read` |
+| `/health`, `/livez`, `/readyz` / `Health` | `health:read` |
+| `/v1/privacy/mask*`, `/api/v1/mask*`, `/privacy/process_file` / `Mask`, `MaskRecord` | `privacy:mask` |
+| `/v1/privacy/hash`, `/api/v1/hash/hmac` / `Hash` | `privacy:hash` |
+| `/v1/privacy/dp/*`, `/v1/privacy/ldp/*`, `/api/v1/dp/*`, `/api/v1/ldp/*` / `DPCount`, `DPSum`, `DPMean` | `privacy:dp` |
+| `/v1/privacy/k_anonymize*`, `/api/v1/kano/*` / `KAnonymizeRecord` | `privacy:kano` |
+| `/v1/privacy/qol/*`, `/api/v1/qol/*` / `ObfuscateQuery` | `privacy:qol` |
+| `/v1/privacy/budget`, `/v1/privacy/budget/reset`, `/api/v1/budget`, `/api/v1/budget/reset` | `privacy:budget` |
+| `/v1/privacy/profile/recommend` | `privacy:profile` |
+| `/v1/privacy/classify/*`, `/api/v1/classify*` | `classification:read` |
+| `/v1/dynclassification/classify*`, `/v1/dynclassification/eval_record`, `/api/v1/dynclassification/*` | `dynclassification:read` |
+| `/v1/dynclassification/profiles/reload`, `/v1/dynclassification/generate_profile` | `dynclassification:write` |
+| `/v1/agent/process`, `/api/v1/agent/process`, `/agent/process` | `agent:process` |
+| `/v1/medical/*`, `/api/v1/medical/*`, `/medical/process` | `medical:process` |
+| `/v1/ops/*`, `/api/v1/ops/*`, `/ops/diagnostics` | `ops:diagnostics` |
+| `/debug/pprof*` | `ops:admin` |
+
+#### service-hub 权限映射（`ServiceHubPermissionForPath`）
+
+| REST 路径 | 对应权限 Scope |
+|---|---|
+| `/api/hub/status`, `/api/hub/tasks`, `/api/hub/tasks/:id`, `/api/hub/pipeline` | `hub:read` |
+| `/api/hub/dispatch`, `/api/hub/classify` | `hub:dispatch` |
+| `/health`, `/readyz`, `/api/health`, `/metrics` | 无需特定权限（已认证即可） |
 
 ### 5.4 认证与鉴权依赖 (`security/auth.py`)
 

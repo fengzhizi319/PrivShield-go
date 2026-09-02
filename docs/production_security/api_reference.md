@@ -53,6 +53,17 @@
 | `PRIVACY_AUTH_MTLS_WHITELIST_FILE` | — | 否 | mTLS CN 白名单 YAML 配置文件路径。设置后启用 per-CN scope 控制与热重载。 |
 | `PRIVACY_AUTH_MTLS_ALLOWED_CNS` | `[]` | 否 | mTLS 客户端证书 CN 静态白名单（JSON 数组或逗号分隔）。当 WHITELIST_FILE 未设置时使用，所有 CN 获得 `["*"]` 全权限。 |
 
+**Scope-based API Key 格式**（`PRIVACY_AUTH_INTERNAL_API_KEYS` / `PRIVACY_AUTH_EXTERNAL_API_KEYS` / `SERVICE_HUB_API_KEYS`）：
+```text
+token1:name1:scope1,scope2;token2:name2:scope3
+```
+未指定 scope 时默认 `["*"]`（全权限）。
+
+| 变量 | 默认值 | 必填 | 说明 |
+|---|---|---|---|
+| `SERVICE_HUB_API_KEY` | — | 否 | service-hub 单 Key 入站鉴权（向后兼容，无 Scope 粒度）。 |
+| `SERVICE_HUB_API_KEYS` | — | 否 | service-hub Scope-based API Key 映射（优先于 `SERVICE_HUB_API_KEY`），格式同上。 |
+
 JSON 格式示例：
 ```json
 {
@@ -143,16 +154,35 @@ class Identity:
     def has_permission(self, permission: str) -> bool: ...
 ```
 
+#### Engine 权限映射（`PermissionForRESTPath`）
+
+支持 `/v1/*` 与 `/api/v1/*` 双前缀归一化匹配，以及根路径直调别名。
+
 | REST 路径 / gRPC 方法 | 对应权限 Scope |
 |---|---|
 | `/health`, `/livez`, `/readyz` / `Health` | `health:read` |
-| `/v1/privacy/mask`, `/v1/privacy/mask_record` / `Mask`, `MaskRecord` | `privacy:mask` |
-| `/v1/privacy/hash` / `Hash` | `privacy:hash` |
-| `/v1/privacy/dp/*` / `DPCount`, `DPSum`, `DPMean` | `privacy:dp` |
-| `/v1/privacy/k_anonymize/record` / `KAnonymizeRecord` | `privacy:kano` |
-| `/v1/privacy/qol/obfuscate` / `ObfuscateQuery` | `privacy:qol` |
-| `/v1/privacy/budget` | `privacy:budget` |
-| `/v1/dynclassification/*` / `ClassifyField`, `ClassifyTable` | `classification:read` |
+| `/v1/privacy/mask*`, `/api/v1/mask*`, `/privacy/process_file` / `Mask`, `MaskRecord` | `privacy:mask` |
+| `/v1/privacy/hash`, `/api/v1/hash/hmac` / `Hash` | `privacy:hash` |
+| `/v1/privacy/dp/*`, `/v1/privacy/ldp/*`, `/api/v1/dp/*`, `/api/v1/ldp/*` / `DPCount`, `DPSum`, `DPMean` | `privacy:dp` |
+| `/v1/privacy/k_anonymize*`, `/api/v1/kano/*` / `KAnonymizeRecord` | `privacy:kano` |
+| `/v1/privacy/qol/*`, `/api/v1/qol/*` / `ObfuscateQuery` | `privacy:qol` |
+| `/v1/privacy/budget`, `/v1/privacy/budget/reset`, `/api/v1/budget*` | `privacy:budget` |
+| `/v1/privacy/profile/recommend` | `privacy:profile` |
+| `/v1/privacy/classify/*`, `/api/v1/classify*` | `classification:read` |
+| `/v1/dynclassification/classify*`, `/v1/dynclassification/eval_record` | `dynclassification:read` |
+| `/v1/dynclassification/profiles/reload`, `/v1/dynclassification/generate_profile` | `dynclassification:write` |
+| `/v1/agent/process`, `/api/v1/agent/process`, `/agent/process` | `agent:process` |
+| `/v1/medical/*`, `/api/v1/medical/*`, `/medical/process` | `medical:process` |
+| `/v1/ops/*`, `/api/v1/ops/*`, `/ops/diagnostics` | `ops:diagnostics` |
+| `/debug/pprof*` | `ops:admin` |
+
+#### service-hub 权限映射（`ServiceHubPermissionForPath`）
+
+| REST 路径 | 对应权限 Scope |
+|---|---|
+| `/api/hub/status`, `/api/hub/tasks`, `/api/hub/tasks/:id`, `/api/hub/pipeline` | `hub:read` |
+| `/api/hub/dispatch`, `/api/hub/classify` | `hub:dispatch` |
+| `/health`, `/readyz`, `/api/health`, `/metrics` | 无需特定权限（已认证即可） |
 
 ### 2.4 认证与鉴权依赖 (`security/auth.py`)
 

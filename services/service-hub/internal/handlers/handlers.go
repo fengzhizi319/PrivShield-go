@@ -26,16 +26,19 @@ package handlers
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 	naming "github.com/fengzhizi319/PrivShield-go/pkg/naming"
@@ -214,7 +217,7 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 		r.Use(middleware.RateLimit(s.cfg.RateLimitRPS, s.cfg.RateLimitBurst)) // 每客户端 IP 令牌桶限流
 	}
 	r.Use(middleware.CORS(s.cfg.CORSOrigins))
-	r.Use(middleware.Auth(s.cfg.APIKey))
+	r.Use(s.scopeAuthMiddleware())
 
 	// 基础健康检查与服务概览
 	r.GET("/health", s.Health)     // Liveness probe / 存活探针
@@ -233,6 +236,64 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 
 	// Prometheus 监控指标导出
 	r.GET("/metrics", s.mc.Handler())
+}
+
+// scopeAuthMiddleware 返回 Gin 中间件，优先使用 Scope-based 鉴权（SERVICE_HUB_API_KEYS），
+// 向后兼容单 APIKey 模式（SERVICE_HUB_API_KEY）。
+// Scope-based 模式下，每个 Key 携带 Name 与 Scopes，按路径映射所需权限进行细粒度校验。
+func (s *Server) scopeAuthMiddleware() gin.HandlerFunc {
+	// Scope-based 模式：SERVICE_HUB_API_KEYS 已配置
+	if len(s.cfg.ScopeKeys) > 0 {
+		return func(c *gin.Context) {
+			path := c.Request.URL.Path
+			if path == "/health" || path == "/readyz" || path == "/api/health" {
+				c.Next()
+				return
+			}
+			token := pkgauth.ExtractBearerToken(c.GetHeader("Authorization"))
+			if token == "" {
+				middleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: missing credentials", nil)
+				return
+			}
+			identity := constantTimeLookupKeys(s.cfg.ScopeKeys, token)
+			if identity == nil {
+				middleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: invalid credentials", nil)
+				return
+			}
+			requiredPerm := pkgauth.ServiceHubPermissionForPath(path)
+			if requiredPerm != "" && !identity.HasPermission(requiredPerm) {
+				middleware.AbortWithError(c, http.StatusForbidden, "FORBIDDEN", "Forbidden: insufficient scope", nil)
+				return
+			}
+			c.Set(pkgauth.IdentityContextKey, identity)
+			c.Next()
+		}
+	}
+	// 向后兼容：单 APIKey 模式
+	return middleware.Auth(s.cfg.APIKey)
+}
+
+// constantTimeLookupKeys 在排序后的 key 集合上执行常量时间 token 查找，防止时序攻击。
+func constantTimeLookupKeys(keys map[string]*pkgauth.KeyConfig, token string) *pkgauth.Identity {
+	if len(keys) == 0 {
+		return nil
+	}
+	sortedKeys := make([]string, 0, len(keys))
+	for k := range keys {
+		sortedKeys = append(sortedKeys, k)
+	}
+	sort.Strings(sortedKeys)
+	tokenBytes := []byte(token)
+	var matched *pkgauth.KeyConfig
+	for _, key := range sortedKeys {
+		if subtle.ConstantTimeCompare([]byte(key), tokenBytes) == 1 {
+			matched = keys[key]
+		}
+	}
+	if matched == nil {
+		return nil
+	}
+	return &pkgauth.Identity{ServiceType: "external", Name: matched.Name, Scopes: matched.Scopes}
 }
 
 // Health is a liveness probe — returns 200 if the process is alive.

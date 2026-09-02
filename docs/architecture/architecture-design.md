@@ -45,7 +45,8 @@
   - [6.1 Prometheus 指标与 Grafana 看板](#61-prometheus-指标与-grafana-看板)
   - [6.2 9 层统一中间件栈与纵深防御](#62-9-层统一中间件栈与纵深防御)
   - [6.3 TLS 1.3 双向 mTLS 与 CN 白名单动态热重载](#63-tls-13-双向-mtls-与-cn-白名单动态热重载)
-  - [6.4 国家法律法规与行业标准合规对照表](#64-国家法律法规与行业标准合规对照表)
+  - [6.4 Scope-based 接口权限控制体系](#64-scope-based-接口权限控制体系)
+  - [6.5 国家法律法规与行业标准合规对照表](#65-国家法律法规与行业标准合规对照表)
 - [七、技术选型总表](#七技术选型总表)
 
 ---
@@ -528,7 +529,64 @@ TraceMiddleware → StructuredLogger → Recovery → SecurityHeaders → MaxBod
 * **证书 CN 白名单动态热重载**：服务端提取客户端证书中的 `Common Name (CN)`，根据 [`config/mtls-whitelist.yaml`](file:///home/charles/code/PrivShield/config/mtls-whitelist.yaml) 进行方法级权限鉴权，文件修改后 **5 秒内自动热重载生效，无需中断业务**；
 * **Go gRPC 服务端拦截器全量注册**：`service-hub`（`:50052`）、`datasource-mgr`（`:50053`）、`audit-log`（`:50054`）及 `bff-go`（`:50055`）均已注册一元/流式 mTLS CN 白名单拦截器（`pkg/tlsutil/grpc_interceptor.go`），与 Python Agent 共享同一白名单事实源。
 
-### 6.4 国家法律法规与行业标准合规对照表
+### 6.4 Scope-based 接口权限控制体系
+
+所有对外暴露的 REST/gRPC 接口均实施基于 Scope 的细粒度权限控制，由 `pkg/auth` 统一提供身份认证与路径→权限映射能力。
+
+#### 6.4.1 身份模型
+
+每个已认证的调用方持有一个 `Identity`，包含服务类型（`internal`/`external`）、名称与 Scope 列表。Scope `"*"` 为全权限通配符，否则执行精确匹配。
+
+```text
+Identity { ServiceType: "external", Name: "portal", Scopes: ["privacy:mask", "classification:read"] }
+```
+
+#### 6.4.2 REST 路径→权限映射（`PermissionForRESTPath`）
+
+支持 `/v1/*` 与 `/api/v1/*` 双前缀归一化——别名路由 `/api/v1/*` 自动剥离 `/api` 前缀后与主路由共享同一权限映射，杜绝因路径前缀差异导致的权限绕过。同时覆盖根路径直调别名（`/agent/process`、`/medical/process` 等）。
+
+| 权限 Scope | 覆盖路由（含 `/v1/*` 与 `/api/v1/*` 双前缀） |
+|---|---|
+| `privacy:mask` | `/mask*`、`/privacy/process_file`、`/privacy/process_file` |
+| `privacy:hash` | `/privacy/hash`、`/hash/hmac` |
+| `privacy:dp` | `/dp/*`、`/ldp/*` |
+| `privacy:kano` | `/k_anonymize*`、`/kano/*` |
+| `privacy:qol` | `/qol/*` |
+| `privacy:budget` | `/budget`、`/budget/reset` |
+| `privacy:profile` | `/profile/recommend` |
+| `classification:read` | `/classify/*` |
+| `dynclassification:read` | `/dynclassification/classify*`、`/dynclassification/eval_record` |
+| `dynclassification:write` | `/dynclassification/profiles/reload`、`/dynclassification/generate_profile` |
+| `agent:process` | `/agent/process` |
+| `medical:process` | `/medical/*` |
+| `ops:diagnostics` | `/ops/*` |
+| `ops:admin` | `/debug/pprof*` |
+
+#### 6.4.3 service-hub 对外接口权限映射（`ServiceHubPermissionForPath`）
+
+`service-hub` 是唯一对外网提供服务的微服务，实施独立的 Scope 权限体系，区分只读查询与任务分发两类操作：
+
+| 权限 Scope | 覆盖路由 | 说明 |
+|---|---|---|
+| `hub:read` | `/api/hub/status`、`/api/hub/tasks`、`/api/hub/tasks/:id`、`/api/hub/pipeline` | 只读查询：状态概览、任务列表/详情、流水线监控 |
+| `hub:dispatch` | `/api/hub/dispatch`、`/api/hub/classify` | 写操作：任务分发与分类调度 |
+| *（无需特定权限）* | `/health`、`/readyz`、`/api/health`、`/metrics` | 健康探针与监控指标（已认证即可访问） |
+
+**双模式鉴权**：
+- **Scope-based 模式**（`SERVICE_HUB_API_KEYS` 已配置时启用）：支持多 Key 多 Scope 细粒度鉴权，格式 `token1:reader:hub:read;token2:admin:*`；
+- **单 Key 兼容模式**（`SERVICE_HUB_API_KEY`）：向后兼容的简单 Bearer Token 校验。
+
+#### 6.4.4 gRPC 方法→权限映射（`PermissionForGRPCMethod`）
+
+gRPC 侧通过 mTLS CN 白名单拦截器实现等价权限控制，从客户端证书提取 CN 后与白名单中配置的 `allowed_scopes` 进行匹配，支持 5 秒级文件热重载。
+
+#### 6.4.5 安全设计要点
+
+- **恒定时间比较**：所有 API Key 校验使用 `crypto/subtle.ConstantTimeCompare`，遍历全部已排序 Key 后返回结果，防止时序攻击泄漏密钥信息；
+- **Fail-Closed 语义**：未映射路径返回空权限字符串（对所有已认证身份开放），但所有业务路由均已显式映射，未知路径仅包括真正无需权限控制的端点；
+- **零信任启动门禁**：`ValidateFailClosed` 在非环回监听时强制要求 API Key + TLS 配置，空配置直接拒绝启动。
+
+### 6.5 国家法律法规与行业标准合规对照表
 
 | 法律法规与标准条款 | 法规核心要求 | 本架构落地防护措施 | 合规判定 |
 |---|---|---|:---:|

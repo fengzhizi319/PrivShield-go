@@ -342,14 +342,14 @@ func main() {
 
 	// Emit a prominent security warning when all protections are disabled.
 	// 当所有安全功能均未启用时输出醒目警告，防止生产环境意外裸奔。
-	if !cfg.TLSEnabled && cfg.APIKey == "" {
+	if !cfg.TLSEnabled && cfg.APIKey == "" && len(cfg.ScopeKeys) == 0 {
 		logger.Warn("========================================================================\n" +
 			"  SECURITY WARNING: All security features are DISABLED.\n" +
 			"  TLS=off  Auth=off\n" +
 			"  All endpoints are exposed without encryption or authentication.\n" +
 			"  For production deployments, set:\n" +
 			"    SERVICE_HUB_TLS_ENABLED=true\n" +
-			"    SERVICE_HUB_API_KEY=<your-key>\n" +
+			"    SERVICE_HUB_API_KEYS=<token:name:scope1,scope2;...>\n" +
 			"  See docs/production_security/ops.md for details.\n" +
 			"========================================================================")
 	}

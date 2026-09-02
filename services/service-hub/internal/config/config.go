@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 )
 
@@ -76,11 +77,12 @@ type Config struct {
 	TLSPinnedPubKeyFile string // 固定的客户端 RSA 公钥 PEM 文件路径
 
 	// 生产安全加固与持久化配置
-	APIKey      string   // 本模块对外暴露接口的入站鉴权 API Key（为空表示免密）
-	CORSOrigins []string // 允许跨域访问的 Origin 来源白名单
-	DBPath      string   // SQLite 任务数据库文件物理路径（为空表示使用进程内内存存储）
-	LogFormat   string   // 日志输出格式："json"（生产推荐）或 "text"（开发可读）
-	LogLevel    string   // 日志输出级别："debug", "info", "warn", "error"
+	APIKey      string                        // 本模块对外暴露接口的入站鉴权 API Key（为空表示免密）
+	ScopeKeys   map[string]*pkgauth.KeyConfig // Scope-based API Key 映射（SERVICE_HUB_API_KEYS），优先于 APIKey
+	CORSOrigins []string                      // 允许跨域访问的 Origin 来源白名单
+	DBPath      string                        // SQLite 任务数据库文件物理路径（为空表示使用进程内内存存储）
+	LogFormat   string                        // 日志输出格式："json"（生产推荐）或 "text"（开发可读）
+	LogLevel    string                        // 日志输出级别："debug", "info", "warn", "error"
 
 	// StrictStorage 严格存储模式（P0-4 禁静音降级）：为真时，已配置 SERVICE_HUB_PG_DSN
 	// 却探测失败的进程**拒绝启动**，而不是静默回退到 SQLite/内存 —— 后者会让多副本 Hub
@@ -163,6 +165,7 @@ func Load() *Config {
 
 		// 生产鉴权、跨域与存储参数
 		APIKey:      pkgconfig.EnvString("SERVICE_HUB_API_KEY", ""),
+		ScopeKeys:   pkgauth.LoadAPIKeysFromEnv("SERVICE_HUB_API_KEYS"),
 		CORSOrigins: pkgconfig.EnvStringSlice("SERVICE_HUB_CORS_ORIGINS"),
 		DBPath:      pkgconfig.EnvString("SERVICE_HUB_DB_PATH", ""),
 		LogFormat:   pkgconfig.EnvString("SERVICE_HUB_LOG_FORMAT", "json"),

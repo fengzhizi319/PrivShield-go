@@ -43,10 +43,10 @@ pkg/
 ├── agent/                  # 上游 PrivShield Agent REST API 多端点客户端封装
 │   ├── client.go           # Client（多端点独立熔断器、原子轮询、重试、鉴权头注入、64MiB 响应保护）
 │   └── client_test.go      # 基础请求、鉴权、熔断器状态流转、端点选择单测
-├── auth/                   # Bearer 令牌提取与认证基础设施
-│   ├── identity.go         # 身份标识解析
-│   ├── middleware.go        # HTTP 认证中间件基础
-│   └── settings.go         # 认证配置常量
+├── auth/                   # Scope-based 身份认证与权限映射基础设施
+│   ├── identity.go         # Identity 结构、PermissionForRESTPath（/v1/* + /api/v1/* 归一化）、ServiceHubPermissionForPath、ParseAPIKeysEnv
+│   ├── middleware.go        # AuthMiddleware（Gin）、RequirePermission、ConstantTimeLookup
+│   └── settings.go         # KeyConfig / Settings 认证配置
 ├── circuitbreaker/         # 三态熔断器内核（Closed → Open → HalfOpen）
 │   └── circuitbreaker.go   # Breaker 独立实现，供 agent 多端点复用
 ├── config/                 # 集中化环境变量解析、结构化日志与安全门禁

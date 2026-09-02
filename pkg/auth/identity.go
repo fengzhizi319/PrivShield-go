@@ -3,7 +3,10 @@
 // 从 engine-go/internal/security 下沉到 pkg/auth，供 services、console 及 engine-go 统一使用。
 package auth
 
-import "strings"
+import (
+	"os"
+	"strings"
+)
 
 // Identity 表示已认证的调用者身份。
 type Identity struct {
@@ -43,46 +46,85 @@ func IsHealthPathOrMethod(pathOrMethod string) bool {
 }
 
 // PermissionForRESTPath 将 REST 路径映射为所需权限字符串。
+// 支持 /v1/* 与 /api/v1/* 双前缀（别名路由归一化后统一匹配）。
 func PermissionForRESTPath(path string) string {
 	// 去除尾部斜杠
 	if len(path) > 1 && path[len(path)-1] == '/' {
 		path = path[:len(path)-1]
 	}
+	// 归一化：/api/v1/* → /v1/*，确保别名路由与主路由共享同一权限映射。
+	normalized := path
+	if strings.HasPrefix(normalized, "/api/v1/") {
+		normalized = "/v1/" + normalized[len("/api/v1/"):]
+	} else if normalized == "/api/v1" {
+		normalized = "/v1"
+	}
 	switch {
-	case path == "/health" || path == "/livez" || path == "/readyz" || path == "/readyz/llm":
+	case normalized == "/health" || normalized == "/livez" || normalized == "/readyz" || normalized == "/readyz/llm":
 		return "health:read"
-	case strings.HasPrefix(path, "/v1/privacy/mask"):
+	// 根路径直调别名（/agent/process, /medical/process 等）
+	case normalized == "/agent/process":
+		return "agent:process"
+	case normalized == "/medical/process":
+		return "medical:process"
+	case normalized == "/ops/diagnostics":
+		return "ops:diagnostics"
+	case normalized == "/privacy/process_file":
 		return "privacy:mask"
-	case path == "/v1/privacy/hash":
+	case strings.HasPrefix(normalized, "/v1/privacy/mask"):
+		return "privacy:mask"
+	case normalized == "/v1/privacy/hash":
 		return "privacy:hash"
-	case strings.HasPrefix(path, "/v1/privacy/dp/") || strings.HasPrefix(path, "/v1/privacy/ldp/"):
+	case strings.HasPrefix(normalized, "/v1/privacy/dp/") || strings.HasPrefix(normalized, "/v1/privacy/ldp/"):
 		return "privacy:dp"
-	case strings.HasPrefix(path, "/v1/privacy/k_anonymize"):
+	case strings.HasPrefix(normalized, "/v1/privacy/k_anonymize"):
 		return "privacy:kano"
-	case strings.HasPrefix(path, "/v1/privacy/qol/"):
+	case strings.HasPrefix(normalized, "/v1/privacy/qol/"):
 		return "privacy:qol"
-	case path == "/v1/privacy/budget":
+	case normalized == "/v1/privacy/budget":
 		return "privacy:budget"
-	case path == "/v1/privacy/profile/recommend":
+	case normalized == "/v1/privacy/budget/reset":
+		return "privacy:budget"
+	case normalized == "/v1/privacy/profile/recommend":
 		return "privacy:profile"
-	case path == "/v1/privacy/process_file":
+	case normalized == "/v1/privacy/process_file":
 		return "privacy:mask"
-	case strings.HasPrefix(path, "/v1/privacy/classify/"):
+	case strings.HasPrefix(normalized, "/v1/privacy/classify/"):
 		return "classification:read"
-	case strings.HasPrefix(path, "/v1/dynclassification"):
-		if path == "/v1/dynclassification/profiles/reload" || path == "/v1/dynclassification/generate_profile" {
+	case strings.HasPrefix(normalized, "/v1/dynclassification"):
+		if normalized == "/v1/dynclassification/profiles/reload" || normalized == "/v1/dynclassification/generate_profile" {
 			return "dynclassification:write"
 		}
-	case strings.HasPrefix(path, "/v1/agent"):
+		return "dynclassification:read"
+	case strings.HasPrefix(normalized, "/v1/agent"):
 		return "agent:process"
-	case strings.HasPrefix(path, "/v1/medical"):
+	case strings.HasPrefix(normalized, "/v1/medical"):
 		return "medical:process"
-	case strings.HasPrefix(path, "/v1/pipeline"):
+	case strings.HasPrefix(normalized, "/v1/pipeline"):
 		return "pipeline:process"
-	case strings.HasPrefix(path, "/v1/ops/"):
+	case strings.HasPrefix(normalized, "/v1/ops/"):
 		return "ops:diagnostics"
-	case strings.HasPrefix(path, "/debug/pprof"):
+	case strings.HasPrefix(normalized, "/debug/pprof"):
 		return "ops:admin"
+	// /api/v1/* 别名路由中 kano/classify/hash/budget 等子路径
+	case strings.HasPrefix(normalized, "/v1/mask"):
+		return "privacy:mask"
+	case strings.HasPrefix(normalized, "/v1/dp/"):
+		return "privacy:dp"
+	case strings.HasPrefix(normalized, "/v1/kano/"):
+		return "privacy:kano"
+	case normalized == "/v1/classify" || normalized == "/v1/classify/batch":
+		return "classification:read"
+	case normalized == "/v1/hash/hmac":
+		return "privacy:hash"
+	case normalized == "/v1/budget":
+		return "privacy:budget"
+	case normalized == "/v1/budget/reset":
+		return "privacy:budget"
+	case strings.HasPrefix(normalized, "/v1/qol/"):
+		return "privacy:qol"
+	case strings.HasPrefix(normalized, "/v1/ldp/"):
+		return "privacy:dp"
 	}
 	return ""
 }
@@ -121,6 +163,74 @@ func PermissionForGRPCMethod(method string) string {
 	}
 	if p, ok := mapping[short]; ok {
 		return p
+	}
+	return ""
+}
+
+// ParseAPIKeysEnv 解析 "token:name:scope1,scope2;token2:name2:scope3" 格式的 API Key 配置。
+// 供 engine-go 与各微服务共享统一的密钥解析逻辑。
+// 安全增强：
+//  1. 对 token、name、scope 做 TrimSpace，避免环境变量中的前后空格导致 Key 无法命中或生成脏名称；
+//  2. 丢弃空 token 的条目，防止空字符串作为合法 Key 被注册。
+func ParseAPIKeysEnv(raw string) map[string]*KeyConfig {
+	if raw == "" {
+		return nil
+	}
+	keys := make(map[string]*KeyConfig)
+	for _, entry := range strings.Split(raw, ";") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		parts := strings.SplitN(entry, ":", 3)
+		if len(parts) < 2 {
+			continue
+		}
+		token := strings.TrimSpace(parts[0])
+		name := strings.TrimSpace(parts[1])
+		if token == "" || name == "" {
+			continue
+		}
+		var scopes []string
+		if len(parts) == 3 && strings.TrimSpace(parts[2]) != "" {
+			for _, s := range strings.Split(parts[2], ",") {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					scopes = append(scopes, s)
+				}
+			}
+		}
+		if len(scopes) == 0 {
+			scopes = []string{"*"}
+		}
+		keys[token] = &KeyConfig{Name: name, Scopes: scopes}
+	}
+	return keys
+}
+
+// LoadAPIKeysFromEnv 从环境变量加载 API Key 映射。
+func LoadAPIKeysFromEnv(envKey string) map[string]*KeyConfig {
+	return ParseAPIKeysEnv(os.Getenv(envKey))
+}
+
+// ServiceHubPermissionForPath 将 service-hub 路由映射为所需权限字符串。
+// 对路径进行尾部斜杠归一化，防止 "/api/hub/dispatch/" 等带斜杠路径绕过 Scope 校验。
+func ServiceHubPermissionForPath(path string) string {
+	// 归一化尾部斜杠：Gin 在部分场景下会保留尾部斜杠，统一去除后匹配。
+	if len(path) > 1 && path[len(path)-1] == '/' {
+		path = path[:len(path)-1]
+	}
+	switch {
+	case path == "/health" || path == "/readyz" || path == "/api/health":
+		return ""
+	case path == "/metrics":
+		return ""
+	case path == "/api/hub/status" || path == "/api/hub/tasks" ||
+		strings.HasPrefix(path, "/api/hub/tasks/") ||
+		path == "/api/hub/pipeline":
+		return "hub:read"
+	case path == "/api/hub/dispatch" || path == "/api/hub/classify":
+		return "hub:dispatch"
 	}
 	return ""
 }
