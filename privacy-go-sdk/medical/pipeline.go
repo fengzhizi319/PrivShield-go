@@ -227,6 +227,15 @@ func (p *Pipeline) ProcessRecords(records []map[string]string) *MedicalPipelineR
 
 	elapsed := time.Since(start).Seconds()
 
+	leakedFields := 0
+	for _, rec := range sanitizedData {
+		for _, v := range rec {
+			if ContainsHighRiskText(v) {
+				leakedFields++
+			}
+		}
+	}
+
 	return &MedicalPipelineResult{
 		ClassificationReport: reports,
 		SanitizedData:        sanitizedData,
@@ -236,13 +245,13 @@ func (p *Pipeline) ProcessRecords(records []map[string]string) *MedicalPipelineR
 			"level_counts":     levelCounts,
 			"duration_seconds": elapsed,
 			"status":           "success",
-			// P0-2 可审计性回显：本批次生效的默认拒绝策略与矩阵登记规模。
-			"compliance_guaranteed": true,
-			"spec_field_count":      p.FieldCount(),
-			"unlisted_field_policy": string(p.UnlistedFieldPolicy()),
-			"unlisted_policy_name":  UnlistedFieldPolicyName,
-			"unlisted_min_level":    UnlistedFieldLevel,
-			"unlisted_default":      "deny",
+			"compliance_guaranteed":            leakedFields == 0,
+			"leaked_fields_post_sanitize":      leakedFields,
+			"spec_field_count":                 p.FieldCount(),
+			"unlisted_field_policy":            string(p.UnlistedFieldPolicy()),
+			"unlisted_policy_name":             UnlistedFieldPolicyName,
+			"unlisted_min_level":               UnlistedFieldLevel,
+			"unlisted_default":                 "deny",
 		},
 	}
 }
@@ -304,6 +313,12 @@ func (p *Pipeline) ClassifyAndSanitizeField(fieldName, value string) *FieldClass
 		sanVal = redactClinicalText(sanVal)
 	}
 
+	// 诊断字段特殊治理：若原始值含高敏词且脱敏后仍非空（部分脱敏），整值清空，
+	// 防止部分脱敏残留的文本碎片泄露病种归属信息。
+	if isDiagnosisField(fieldName) && sanVal != "" && sanVal != value && ContainsHighRiskText(value) {
+		sanVal = ""
+	}
+
 	levelStr := fmt.Sprintf("L%d", level)
 	desc := res.description()
 
@@ -329,6 +344,38 @@ func contentLevel(value string) int {
 		return 5
 	}
 	return 4
+}
+
+// diagnosisField 诊断/临床字段名集合（归一化后匹配）。
+var diagnosisFields = map[string]bool{
+	"diagnosis":          true,
+	"diagnosis_name":     true,
+	"icd10_code":         true,
+	"icd10":              true,
+	"icd_code":           true,
+	"chief_complaint":    true,
+	"present_illness":    true,
+	"past_history":       true,
+	"progress_note":      true,
+	"admission_condition": true,
+	"诊断":               true,
+	"诊断名称":             true,
+	"诊断编码":             true,
+	"主诉":               true,
+	"现病史":              true,
+	"既往史":              true,
+	"病程记录":             true,
+	"入院病情":             true,
+}
+
+// isDiagnosisField 判定字段名是否为诊断/临床字段。
+func isDiagnosisField(fieldName string) bool {
+	key := normalizeFieldName(fieldName)
+	if diagnosisFields[key] {
+		return true
+	}
+	canon := CanonicalizePIIField(key)
+	return diagnosisFields[canon]
 }
 
 // containsL5Term 快速检测文本是否包含 L5 极高敏词汇。

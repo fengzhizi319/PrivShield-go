@@ -190,12 +190,18 @@ start_engine() {
 
 start_service_hub() {
     local port=8082 pid_file="$PIDS_DIR/service-hub.pid"
-    _start_upstream_if_needed "Service Hub" "$port" "http://127.0.0.1:$port/health"
-    curl -sf -o /dev/null "http://127.0.0.1:$port/health" 2>/dev/null && return
 
-    echo "🔄 编译并启动 Service Hub (:$port)..."
+    echo "🔨 编译 Service Hub..."
     cd "${PROJECT_ROOT}/services/service-hub"
     "$GO_BIN" build -o bin/service-hub ./cmd/server
+
+    # 总是重启以确保加载最新编译的二进制
+    if _is_port_in_use "$port"; then
+        echo "🔄 停止旧 Service Hub 进程..."
+        _kill_port "$port"
+    fi
+
+    echo "🔄 启动 Service Hub (:$port)..."
     if [[ "$MTLS_MODE" == "true" ]]; then
         SERVICE_HUB_HOST=127.0.0.1 SERVICE_HUB_PORT="$port" \
         SERVICE_HUB_AGENT_REST_HOST=127.0.0.1 SERVICE_HUB_AGENT_REST_PORT=8079 \
@@ -220,12 +226,18 @@ start_service_hub() {
 
 start_datasource_mgr() {
     local port=8083 pid_file="$PIDS_DIR/datasource-mgr.pid"
-    _start_upstream_if_needed "Datasource Mgr" "$port" "http://127.0.0.1:$port/health"
-    curl -sf -o /dev/null "http://127.0.0.1:$port/health" 2>/dev/null && return
 
-    echo "🔄 编译并启动 Datasource Mgr (:$port)..."
+    echo "🔨 编译 Datasource Mgr..."
     cd "${PROJECT_ROOT}/services/datasource-mgr"
     "$GO_BIN" build -o bin/datasource-mgr ./cmd/server
+
+    # 总是重启以确保加载最新编译的二进制
+    if _is_port_in_use "$port"; then
+        echo "🔄 停止旧 Datasource Mgr 进程..."
+        _kill_port "$port"
+    fi
+
+    echo "🔄 启动 Datasource Mgr (:$port)..."
     if [[ "$MTLS_MODE" == "true" ]]; then
         DATASOURCE_MGR_HOST=127.0.0.1 DATASOURCE_MGR_PORT="$port" \
         DATASOURCE_MGR_AGENT_REST_HOST=127.0.0.1 DATASOURCE_MGR_AGENT_REST_PORT=8079 \
@@ -248,12 +260,18 @@ start_datasource_mgr() {
 
 start_audit_log() {
     local port=8084 pid_file="$PIDS_DIR/audit-log.pid"
-    _start_upstream_if_needed "Audit Log" "$port" "http://127.0.0.1:$port/health"
-    curl -sf -o /dev/null "http://127.0.0.1:$port/health" 2>/dev/null && return
 
-    echo "🔄 编译并启动 Audit Log (:$port)..."
+    echo "🔨 编译 Audit Log..."
     cd "${PROJECT_ROOT}/services/audit-log"
     "$GO_BIN" build -o bin/audit-log ./cmd/server
+
+    # 总是重启以确保加载最新编译的二进制
+    if _is_port_in_use "$port"; then
+        echo "🔄 停止旧 Audit Log 进程..."
+        _kill_port "$port"
+    fi
+
+    echo "🔄 启动 Audit Log (:$port)..."
     if [[ "$MTLS_MODE" == "true" ]]; then
         AUDIT_LOG_HOST=127.0.0.1 AUDIT_LOG_PORT="$port" \
         AUDIT_LOG_AGENT_REST_HOST=127.0.0.1 AUDIT_LOG_AGENT_REST_PORT=8079 \

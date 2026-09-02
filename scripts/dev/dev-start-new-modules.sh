@@ -101,17 +101,18 @@ start_service_hub() {
     local port="${SERVICE_HUB_PORT:-8082}"
     local pid_file="${PIDS_DIR}/service-hub.pid"
 
-    _ensure_port_free "$port" "service-hub"
-
-    if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
-        log_warn "service-hub already running (PID $(cat "$pid_file"))"
-        return
-    fi
-
     log_info "Building service-hub..."
     cd "${PROJECT_ROOT}/services/service-hub"
     SERVICE_HUB_HOST=127.0.0.1 SERVICE_HUB_PORT="$port" \
         "$GO_BIN" build -o bin/service-hub ./cmd/server
+
+    # 总是重启以确保加载最新编译的二进制
+    if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+        log_warn "停止旧 service-hub 进程 (PID $(cat "$pid_file"))..."
+        kill "$(cat "$pid_file")" 2>/dev/null || true
+        sleep 0.5
+    fi
+    _ensure_port_free "$port" "service-hub"
 
     log_info "Starting service-hub on :${port}..."
     SERVICE_HUB_HOST=127.0.0.1 SERVICE_HUB_PORT="$port" \
@@ -127,17 +128,18 @@ start_datasource_mgr() {
     local port="${DATASOURCE_MGR_PORT:-8083}"
     local pid_file="${PIDS_DIR}/datasource-mgr.pid"
 
-    _ensure_port_free "$port" "datasource-mgr"
-
-    if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
-        log_warn "datasource-mgr already running (PID $(cat "$pid_file"))"
-        return
-    fi
-
     log_info "Building datasource-mgr..."
     cd "${PROJECT_ROOT}/services/datasource-mgr"
     DATASOURCE_MGR_HOST=127.0.0.1 DATASOURCE_MGR_PORT="$port" \
         "$GO_BIN" build -o bin/datasource-mgr ./cmd/server
+
+    # 总是重启以确保加载最新编译的二进制
+    if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+        log_warn "停止旧 datasource-mgr 进程 (PID $(cat "$pid_file"))..."
+        kill "$(cat "$pid_file")" 2>/dev/null || true
+        sleep 0.5
+    fi
+    _ensure_port_free "$port" "datasource-mgr"
 
     log_info "Starting datasource-mgr on :${port}..."
     DATASOURCE_MGR_HOST=127.0.0.1 DATASOURCE_MGR_PORT="$port" \
@@ -153,17 +155,18 @@ start_audit_log() {
     local port="${AUDIT_LOG_PORT:-8084}"
     local pid_file="${PIDS_DIR}/audit-log.pid"
 
-    _ensure_port_free "$port" "audit-log"
-
-    if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
-        log_warn "audit-log already running (PID $(cat "$pid_file"))"
-        return
-    fi
-
     log_info "Building audit-log..."
     cd "${PROJECT_ROOT}/services/audit-log"
     AUDIT_LOG_HOST=127.0.0.1 AUDIT_LOG_PORT="$port" \
         "$GO_BIN" build -o bin/audit-log ./cmd/server
+
+    # 总是重启以确保加载最新编译的二进制
+    if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+        log_warn "停止旧 audit-log 进程 (PID $(cat "$pid_file"))..."
+        kill "$(cat "$pid_file")" 2>/dev/null || true
+        sleep 0.5
+    fi
+    _ensure_port_free "$port" "audit-log"
 
     log_info "Starting audit-log on :${port}..."
     AUDIT_LOG_HOST=127.0.0.1 AUDIT_LOG_PORT="$port" \
