@@ -120,9 +120,11 @@ func main() {
 	// ── REST API (Gin) ──
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
+	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv()) // G-02
 	router.Use(gin.Recovery())
 	router.Use(middleware.TraceMiddleware()) // 全链路分布式追踪 (X-Request-ID + X-Trace-ID)
 	router.Use(security.SecurityHeadersMiddleware())
+	router.Use(middleware.WAF(slog.Default())) // 三级等保 G-12：Web 攻击载荷检测
 	router.Use(security.AuthMiddleware())
 	router.Use(security.RateLimitMiddleware())
 

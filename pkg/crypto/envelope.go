@@ -219,34 +219,42 @@ func hkdfExpand(prk, info []byte, length int) []byte {
 //  4. 输出 `enc:v2:<Base64(salt || nonce || ciphertext || tag)>`。
 func EncryptString(plaintext, secret string) (string, error) {
 	if secret == "" {
+		auditCrypto("sm4_encrypt", "", len(plaintext), false, ErrEmptyKey)
 		return "", ErrEmptyKey
 	}
 	if plaintext == "" {
+		auditCrypto("sm4_encrypt", "", 0, true, nil)
 		return "", nil
 	}
 
 	salt := make([]byte, saltSize)
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		auditCrypto("sm4_encrypt", "", len(plaintext), false, err)
 		return "", fmt.Errorf("generate salt: %w", err)
 	}
 
 	block, err := NewCipher(DeriveKeyHKDF(secret, salt))
 	if err != nil {
+		auditCrypto("sm4_encrypt", "", len(plaintext), false, err)
 		return "", fmt.Errorf("create sm4 cipher: %w", err)
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
+		auditCrypto("sm4_encrypt", "", len(plaintext), false, err)
 		return "", fmt.Errorf("create sm4-gcm: %w", err)
 	}
 
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		auditCrypto("sm4_encrypt", "", len(plaintext), false, err)
 		return "", fmt.Errorf("generate nonce: %w", err)
 	}
 
 	sealed := gcm.Seal(nonce, nonce, []byte(plaintext), []byte(EncryptedPrefixV2))
-	return EncryptedPrefixV2 + base64.StdEncoding.EncodeToString(append(salt, sealed...)), nil
+	enc := EncryptedPrefixV2 + base64.StdEncoding.EncodeToString(append(salt, sealed...))
+	auditCrypto("sm4_encrypt", "", len(plaintext), true, nil)
+	return enc, nil
 }
 
 // DecryptString decrypts an envelope-encrypted value produced by this package.
@@ -261,60 +269,77 @@ func EncryptString(plaintext, secret string) (string, error) {
 func DecryptString(ciphertext, secret string) (string, error) {
 	switch {
 	case ciphertext == "":
+		auditCrypto("sm4_decrypt", "", 0, true, nil)
 		return "", nil
 	case strings.HasPrefix(ciphertext, EncryptedPrefixV2):
 		return decryptV2(ciphertext, secret)
 	case strings.HasPrefix(ciphertext, EncryptedPrefix):
 		return decryptV1(ciphertext, secret)
 	default:
+		auditCrypto("sm4_decrypt", "", len(ciphertext), false, ErrUnencryptedValue)
 		return "", ErrUnencryptedValue
 	}
 }
 
 func decryptV2(ciphertext, secret string) (string, error) {
 	if secret == "" {
+		auditCrypto("sm4_decrypt", "", len(ciphertext), false, ErrEmptyKey)
 		return "", ErrEmptyKey
 	}
 	data, err := decodeEnvelope(ciphertext, EncryptedPrefixV2)
 	if err != nil {
+		auditCrypto("sm4_decrypt", "", len(ciphertext), false, err)
 		return "", err
 	}
 	if len(data) < saltSize+NonceSize {
-		return "", errors.New("ciphertext too short")
+		e := errors.New("ciphertext too short")
+		auditCrypto("sm4_decrypt", "", len(ciphertext), false, e)
+		return "", e
 	}
 	salt, rest := data[:saltSize], data[saltSize:]
 
 	gcm, err := newGCM(DeriveKeyHKDF(secret, salt))
 	if err != nil {
+		auditCrypto("sm4_decrypt", "", len(ciphertext), false, err)
 		return "", err
 	}
 	plaintext, err := gcm.Open(nil, rest[:NonceSize], rest[NonceSize:], []byte(EncryptedPrefixV2))
 	if err != nil {
+		auditCrypto("sm4_decrypt", "", len(ciphertext), false, err)
 		return "", fmt.Errorf("sm4-gcm decrypt failed (invalid key or tampered data): %w", err)
 	}
+	auditCrypto("sm4_decrypt", "", len(plaintext), true, nil)
 	return string(plaintext), nil
 }
 
 func decryptV1(ciphertext, secret string) (string, error) {
 	if secret == "" {
-		return "", fmt.Errorf("cannot decrypt legacy envelope: %w", ErrEmptyKey)
+		e := fmt.Errorf("cannot decrypt legacy envelope: %w", ErrEmptyKey)
+		auditCrypto("sm4_decrypt", "v1", len(ciphertext), false, e)
+		return "", e
 	}
 	data, err := decodeEnvelope(ciphertext, EncryptedPrefix)
 	if err != nil {
+		auditCrypto("sm4_decrypt", "v1", len(ciphertext), false, err)
 		return "", err
 	}
 	gcm, err := newGCM(DeriveKey(secret))
 	if err != nil {
+		auditCrypto("sm4_decrypt", "v1", len(ciphertext), false, err)
 		return "", err
 	}
 	if len(data) < gcm.NonceSize() {
-		return "", errors.New("ciphertext too short")
+		e := errors.New("ciphertext too short")
+		auditCrypto("sm4_decrypt", "v1", len(ciphertext), false, e)
+		return "", e
 	}
 	nonce, body := data[:gcm.NonceSize()], data[gcm.NonceSize():]
 	plaintext, err := gcm.Open(nil, nonce, body, nil)
 	if err != nil {
+		auditCrypto("sm4_decrypt", "v1", len(ciphertext), false, err)
 		return "", fmt.Errorf("sm4-gcm decrypt failed (invalid key or tampered data): %w", err)
 	}
+	auditCrypto("sm4_decrypt", "v1", len(plaintext), true, nil)
 	return string(plaintext), nil
 }
 

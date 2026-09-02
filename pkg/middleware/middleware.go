@@ -20,6 +20,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 )
 
@@ -160,6 +161,12 @@ func SecurityHeadersTo(w http.ResponseWriter) {
 // 传入 nil 表示不信任任何代理（直接连接模式），传入空 slice 恢复 Gin 默认行为。
 func ConfigureTrustedProxies(r *gin.Engine, trustedProxies []string) {
 	_ = r.SetTrustedProxies(trustedProxies)
+}
+
+// TrustedProxiesFromEnv 从 PRIVACY_TRUSTED_PROXIES 环境变量解析可信代理列表。
+// 未配置时返回 nil，表示不信任任何代理，避免 X-Forwarded-For 伪造攻击。
+func TrustedProxiesFromEnv() []string {
+	return pkgconfig.EnvStringSlice("PRIVACY_TRUSTED_PROXIES")
 }
 
 // RealClientIP 从请求中提取真实客户端 IP（三级等保 G-02）。

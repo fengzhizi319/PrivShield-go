@@ -59,6 +59,7 @@ import (
 	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
 	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
+	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 	"github.com/fengzhizi319/PrivShield-go/pkg/store"
 	"github.com/fengzhizi319/PrivShield-go/pkg/store/memory"
 	"github.com/fengzhizi319/PrivShield-go/pkg/store/postgres"
@@ -196,6 +197,7 @@ func main() {
 	gin.SetMode(gin.ReleaseMode)
 	server := handlers.New(agentClient, dsClient, cfg, taskStore, logger, mc)
 	router := gin.New()
+	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv()) // G-02
 	server.RegisterRoutes(router)
 
 	httpSrv := &http.Server{

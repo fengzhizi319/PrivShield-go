@@ -78,8 +78,8 @@ func ConstantTimeLookup(keys map[string]*KeyConfig, token string) *KeyConfig {
 	return matched
 }
 
-// authenticateAPIKey 在内部和外部 key 存储中查找 token。
-func authenticateAPIKey(settings *Settings, token string) *Identity {
+// AuthenticateAPIKey 在内部和外部 key 存储中查找 token。
+func AuthenticateAPIKey(settings *Settings, token string) *Identity {
 	if internal := ConstantTimeLookup(settings.InternalKeys, token); internal != nil {
 		return &Identity{ServiceType: "internal", Name: internal.Name, Scopes: internal.Scopes}
 	}
@@ -114,7 +114,7 @@ func AuthMiddleware(settings *Settings) gin.HandlerFunc {
 			return
 		}
 
-		identity := authenticateAPIKey(settings, token)
+		identity := AuthenticateAPIKey(settings, token)
 		if identity == nil {
 			abortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: invalid credentials", nil)
 			return

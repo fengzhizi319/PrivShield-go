@@ -20,7 +20,9 @@ package handlers
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -89,9 +91,11 @@ func NewHandler(cfg *config.Config, pool *clients.ClientPool, runner *runner.Tes
 func SetupRouter(h *Handler) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode) // 生产模式，关闭 Gin 调试日志
 	r := gin.New()
+	middleware.ConfigureTrustedProxies(r, middleware.TrustedProxiesFromEnv()) // G-02
 	r.Use(middleware.TraceMiddleware())             // 分布式追踪 ID 自动注入与双头下发
 	r.Use(pkgobs.RequestLoggerWithModule("app-lz")) // 每请求结构化日志（method/path/status/latency）
 	r.Use(middleware.Recovery(h.logger, "app-lz"))  // 全局 panic 恢复中间件
+	r.Use(middleware.WAF(h.logger)) // 三级等保 G-12：Web 攻击载荷检测
 	r.Use(gzipResponse())                           // gzip 响应压缩（JSON 文本压缩率 ~70-80%）
 	r.Use(middleware.SecurityHeaders())             // 安全响应头 (CSP/HSTS/X-Frame-Options)
 	r.Use(middleware.MaxBodySize(32 << 20))         // 32 MiB 请求体最大保护
@@ -113,8 +117,16 @@ func SetupRouter(h *Handler) *gin.Engine {
 	if jwtMgr != nil {
 		r.Use(auth.JWTAuthMiddleware(jwtMgr, true))
 	} else {
-		// 认证未启用时使用空 JWT manager + authEnabled=false 放行
-		dummyMgr, _ := auth.NewJWTManager("development-only-secret-key-32chars!!", 24)
+		// 认证未启用时仍挂载中间件以统一鉴权上下文，但使用每次启动随机生成的密钥，
+		// 防止硬编码开发密钥被用于伪造令牌（三级等保/密评密钥管理要求）。
+		randSecret := make([]byte, 32)
+		if _, err := rand.Read(randSecret); err != nil {
+			h.logger.Error("failed to generate random JWT secret", "error", err.Error())
+			// 回退：使用高熵时间随机串，绝不会使用硬编码密钥。
+			fallback := fmt.Sprintf("%d-", time.Now().UnixNano())
+			copy(randSecret, fallback)
+		}
+		dummyMgr, _ := auth.NewJWTManager(base64.RawURLEncoding.EncodeToString(randSecret), 24)
 		r.Use(auth.JWTAuthMiddleware(dummyMgr, false))
 	}
 

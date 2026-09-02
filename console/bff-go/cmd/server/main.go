@@ -32,6 +32,7 @@ import (
 
 	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
+	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 	"github.com/fengzhizi319/PrivShield-go/pkg/tlsutil"
 
@@ -94,6 +95,7 @@ func main() {
 	server := handlers.New(client, cfg, logger, mc)
 	// 创建一个新的 Gin 引擎实例（包含默认的 Logger + Recovery 中间件）
 	router := gin.New()
+	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv()) // G-02
 	// 将所有 REST 代理路由与可选的静态 UI 托管路由注册到 Gin 引擎
 	// 包括 CORS 中间件、健康检查、代理转发、批量测试、静态文件服务等
 	server.RegisterRoutes(router)

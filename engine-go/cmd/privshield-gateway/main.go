@@ -34,6 +34,7 @@ import (
 	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/gateway"
 	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/observability"
 	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
+	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 )
 
 var (
@@ -71,7 +72,9 @@ func main() {
 	// ── HTTP 反向代理 ──
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	middleware.ConfigureTrustedProxies(r, middleware.TrustedProxiesFromEnv()) // G-02
 	r.Use(gin.Recovery())
+	r.Use(middleware.WAF(slog.Default())) // 三级等保 G-12：Web 攻击载荷检测
 	r.Use(observability.RequestLogger())
 	r.Use(gwMetrics.PrometheusMiddleware()) // 网关转发指标
 

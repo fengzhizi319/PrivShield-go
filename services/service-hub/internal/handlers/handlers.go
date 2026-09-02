@@ -210,6 +210,7 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 	r.Use(middleware.TraceMiddleware())
 	r.Use(pkgobs.RequestLoggerWithModule("service-hub"))
 	r.Use(middleware.Recovery(s.logger, "service-hub"))
+	r.Use(middleware.WAF(s.logger)) // 三级等保 G-12：Web 攻击载荷检测
 	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.MaxBodySize(32 << 20)) // 32 MiB 请求体最大保护
 	r.Use(middleware.MaxConcurrent(1000))   // 并发在途请求上限，超限返回 503
@@ -291,6 +292,10 @@ func constantTimeLookupKeys(keys map[string]*pkgauth.KeyConfig, token string) *p
 		}
 	}
 	if matched == nil {
+		return nil
+	}
+	// G-14：过期 Key 不得继续用于认证，避免过期凭证长期有效。
+	if matched.IsExpired() {
 		return nil
 	}
 	return &pkgauth.Identity{ServiceType: "external", Name: matched.Name, Scopes: matched.Scopes}

@@ -319,7 +319,8 @@ func FpeEncryptNumeric(value, secretKey string) string {
 		return value
 	}
 	if secretKey == "" {
-		secretKey = "privshield-default-fpe-key"
+		// 安全合规：禁止回退到硬编码默认密钥，防止跨部署可预测输出。
+		return ""
 	}
 	h := hmac.New(sm3.New, []byte(secretKey))
 	h.Write([]byte(value))

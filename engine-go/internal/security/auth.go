@@ -65,7 +65,7 @@ func RateLimitMiddleware() gin.HandlerFunc {
 		normalizedPath := pkgmiddleware.NormalizeRateLimitPath(path)
 		key := identity.ServiceType + ":" + identity.Name + ":" + normalizedPath
 		if identity.Name == "anonymous" {
-			clientIP := c.ClientIP()
+			clientIP := pkgmiddleware.RealClientIP(c)
 			if clientIP != "" {
 				key += ":" + clientIP
 			}

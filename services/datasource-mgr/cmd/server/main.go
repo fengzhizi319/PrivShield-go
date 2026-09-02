@@ -51,6 +51,7 @@ import (
 	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
 	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
+	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 	"github.com/fengzhizi319/PrivShield-go/pkg/tlsutil"
 	"github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/internal/config"
 	"github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/internal/grpcserver"
@@ -106,6 +107,7 @@ func main() {
 	naming.SetObserver(mc)
 	server := handlers.New(cfg, logger, mc)
 	router := gin.New()
+	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv()) // G-02
 	server.RegisterRoutes(router)
 
 	// 4) 显式配置 http.Server 网络超时参数，防范 Slowloris 慢连接拒绝服务攻击与连接泄露：

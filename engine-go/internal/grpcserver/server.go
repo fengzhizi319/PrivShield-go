@@ -51,6 +51,7 @@ func (s *Server) Serve(lis net.Listener) error {
 		grpc.MaxRecvMsgSize(64 * 1024 * 1024), // 64MB 接收上限，防止 OOM
 		grpc.MaxSendMsgSize(64 * 1024 * 1024), // 64MB 发送上限
 		grpc.MaxConcurrentStreams(250),        // 并发流限制
+		grpc.UnaryInterceptor(authUnaryInterceptor), // 三级等保/密评：gRPC 应用层鉴权
 	}
 	s.WithOptions(builtinOpts...)
 	if s.metrics != nil {
