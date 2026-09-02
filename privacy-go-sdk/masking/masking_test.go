@@ -231,9 +231,9 @@ func TestHashHMAC(t *testing.T) {
 	if HashHMAC("hello", "other") == result {
 		t.Errorf("HashHMAC with different salt should produce different result")
 	}
-	// 精确值与 Python hash_value("hello", "salt") 对齐
-	expected := "hqgcMCMTbl75WlVF"
+	// 精确值校验（G-07 合规修复：HMAC 底层杂凑已从 SHA-256 迁移至 SM3）
+	expected := "SKTdBFvNvKAtTphi"
 	if result != expected {
-		t.Errorf("HashHMAC(hello, salt) = %q, want %q (Python baseline)", result, expected)
+		t.Errorf("HashHMAC(hello, salt) = %q, want %q (SM3 baseline)", result, expected)
 	}
 }

@@ -128,10 +128,10 @@ func TestAlignPython_MaskDefault(t *testing.T) {
 // ──────────────────────────────────────────────
 
 func TestAlignPython_HashHMAC(t *testing.T) {
-	// Python: hash_value("hello", "salt") == "hqgcMCMTbl75WlVF"
-	// 实现：HMAC-SHA256(key=salt, msg=value) → base64 → 前16字符
-	if got := masking.HashHMAC("hello", "salt"); got != "hqgcMCMTbl75WlVF" {
-		t.Errorf("HashHMAC(hello, salt) = %q, want Python baseline %q", got, "hqgcMCMTbl75WlVF")
+	// G-07 合规修复：HMAC 底层杂凑已从 SHA-256 迁移至国密 SM3，不再与 Python SHA-256 基线对齐
+	// 实现：HMAC-SM3(key=salt, msg=value) → base64 → 前16字符
+	if got := masking.HashHMAC("hello", "salt"); got != "SKTdBFvNvKAtTphi" {
+		t.Errorf("HashHMAC(hello, salt) = %q, want SM3 baseline %q", got, "SKTdBFvNvKAtTphi")
 	}
 	// 长度验证：Python hash_value 固定返回 16 字符
 	if got := masking.HashHMAC("test", "key"); len(got) != 16 {

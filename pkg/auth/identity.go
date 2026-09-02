@@ -171,7 +171,7 @@ func PermissionForGRPCMethod(method string) string {
 // ParseAPIKeysEnv 解析 "token:name:scope1,scope2;token2:name2:scope3:2025-12-31T23:59:59Z" 格式的 API Key 配置。
 // 供 engine-go 与各微服务共享统一的密钥解析逻辑。
 // 安全增强（三级等保 G-14）：
-//  1. 支持第 4 字段为 ISO 8601 过期时间
+//  1. 支持末尾追加 ISO 8601 过期时间（以最后一个冒号分隔）
 //  2. 对 token、name、scope 做 TrimSpace
 //  3. 丢弃空 token 的条目
 func ParseAPIKeysEnv(raw string) map[string]*KeyConfig {
@@ -184,7 +184,8 @@ func ParseAPIKeysEnv(raw string) map[string]*KeyConfig {
 		if entry == "" {
 			continue
 		}
-		parts := strings.SplitN(entry, ":", 4)
+		// 先用 SplitN(, 3) 拆出 token、name、rest
+		parts := strings.SplitN(entry, ":", 3)
 		if len(parts) < 2 {
 			continue
 		}
@@ -193,9 +194,34 @@ func ParseAPIKeysEnv(raw string) map[string]*KeyConfig {
 		if token == "" || name == "" {
 			continue
 		}
+
+		rest := ""
+		if len(parts) == 3 {
+			rest = strings.TrimSpace(parts[2])
+		}
+
+		// rest 可能是 "scopes" 或 "scopes:expires_at"
+		// 检测末尾是否有 RFC3339 时间戳（含 T 和冒号，长度 >= 20）
+		var scopesStr string
+		var expiresAt *time.Time
+		if rest != "" {
+			// 尝试从 rest 末尾提取时间戳：找最后一个能解析为 RFC3339 的尾部
+			if idx := findExpirySeparator(rest); idx >= 0 {
+				scopesStr = rest[:idx]
+				if t, err := time.Parse(time.RFC3339, rest[idx+1:]); err == nil {
+					expiresAt = &t
+				} else {
+					// 解析失败，整体当作 scopes
+					scopesStr = rest
+				}
+			} else {
+				scopesStr = rest
+			}
+		}
+
 		var scopes []string
-		if len(parts) >= 3 && strings.TrimSpace(parts[2]) != "" {
-			for _, s := range strings.Split(parts[2], ",") {
+		if scopesStr != "" {
+			for _, s := range strings.Split(scopesStr, ",") {
 				s = strings.TrimSpace(s)
 				if s != "" {
 					scopes = append(scopes, s)
@@ -205,15 +231,25 @@ func ParseAPIKeysEnv(raw string) map[string]*KeyConfig {
 		if len(scopes) == 0 {
 			scopes = []string{"*"}
 		}
-		kc := &KeyConfig{Name: name, Scopes: scopes}
-		if len(parts) == 4 && strings.TrimSpace(parts[3]) != "" {
-			if t, err := time.Parse(time.RFC3339, strings.TrimSpace(parts[3])); err == nil {
-				kc.ExpiresAt = &t
-			}
-		}
-		keys[token] = kc
+		keys[token] = &KeyConfig{Name: name, Scopes: scopes, ExpiresAt: expiresAt}
 	}
 	return keys
+}
+
+// findExpirySeparator 在 s 中查找过期时间的分隔冒号位置。
+// 过期时间格式为 RFC3339（如 2025-12-31T23:59:59Z），从末尾回溯查找。
+func findExpirySeparator(s string) int {
+	// RFC3339 最短格式 "2006-01-02T15:04:05Z" = 20 字符
+	// 从末尾往前找，尝试每个冒号位置
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == ':' {
+			candidate := s[i+1:]
+			if _, err := time.Parse(time.RFC3339, candidate); err == nil {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 // LoadAPIKeysFromEnv 从环境变量加载 API Key 映射。
