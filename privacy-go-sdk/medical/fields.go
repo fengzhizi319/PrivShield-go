@@ -481,7 +481,7 @@ var YibaoContractFields = []string{
 	"admission_date", "discharge_date", "length_of_stay", "admission_dept",
 	"discharge_dept", "hospital_code", "medical_category", "discharge_mode",
 	"settlement_seq_no", "diagnosis_seq", "diagnosis_type", "icd10_code",
-	"diagnosis_name", "admission_condition",
+	"diagnosis_name", "admission_condition", "id_card_no",
 }
 
 // KangyangContractFields 康养示范数据源（ds_kangyang / api2_kangyang）契约字段名，
@@ -497,18 +497,18 @@ var KangyangContractFields = []string{
 }
 
 // ──────────────────────────────────────────────
-// 医保 18 字段规格矩阵（ds_yibao / api1_yibao）
+// 医保 19 字段规格矩阵（ds_yibao / api1_yibao）
 // ──────────────────────────────────────────────
 
 // YibaoFields 医保结算数据集逐字段规格矩阵。
 //
-// 覆盖口径为「示范数据源契约 18 字段 ∪ 历史 SDK 规格名」的并集：
+// 覆盖口径为「示范数据源契约 19 字段 ∪ 历史 SDK 规格名」的并集：
 //   - 契约字段名取自 services/datasource-mgr/docs/api.md §5.1 与 docs/architecture
 //     设计文档 §5.4 表 1（权威等级列）；
 //   - 历史规格名（name / id_card_no / total_cost / diagnosis 等）保留以兼容既有调用方，
 //     整改前二者字段名不匹配是 P0-2 的直接成因（设计文档 §5.4 矩阵级差异 1）。
 var YibaoFields = []FieldSpec{
-	// ── 契约 18 字段（ds_yibao）──
+	// ── 契约 19 字段（ds_yibao）──
 	{Name: "insurance_settlement_id", Category: CategoryFinancial, Level: 3, Treatment: TreatmentMaskPartial},
 	{Name: "person_id", Category: CategoryIdentity, Level: 4, Treatment: TreatmentHashID},
 	{Name: "gender", Category: CategoryIdentity, Level: 1, Treatment: TreatmentKeep},
@@ -528,6 +528,7 @@ var YibaoFields = []FieldSpec{
 	{Name: "icd10_code", Category: CategoryMedical, Level: 4, Treatment: TreatmentICD10},
 	{Name: "diagnosis_name", Category: CategoryMedical, Level: 4, Treatment: TreatmentDiseaseGeneralize},
 	{Name: "admission_condition", Category: CategoryMedical, Level: 2, Treatment: TreatmentKeep},
+	// id_card_no 已在下方历史规格名区登记（Level 5 / TreatmentMaskIdCard），此处不重复。
 	// ── 历史规格名（保留向后兼容，均已显式登记处置算子）──
 	{Name: "name", Category: CategoryIdentity, Level: 4, Treatment: TreatmentMaskName},
 	{Name: "id_card_no", Category: CategoryIdentity, Level: 5, Treatment: TreatmentMaskIdCard},

@@ -36,7 +36,7 @@ graph TD
         B1["ClientPool & Upstream\n(双协议探针/规范路由/SSOT 归一化)"]
         B2["TestRunner\n(TS-01~TS-03 真实执行引擎)"]
         B3["Fallback Generator\n(显式 fallback 标记数据)"]
-        B4["Schema Catalog\n(医保 18 字段 / 康养 27 字段)"]
+        B4["Schema Catalog\n(医保 19 字段 / 康养 27 字段)"]
     end
 
     subgraph Services["PrivShield 微服务集群"]
@@ -83,7 +83,7 @@ graph TD
 | 阶段实时状态 (idle/processing) | **L1 实时** | BFF `GetPipelineStatus()` → `service-hub /api/hub/pipeline` | `clients.go` `GetPipelineStatus` |
 | Agent 连通状态 | **L1 实时** | 上游 `pipeline` 接口返回的 `agent_ok` 运行状态 | `clients.go` `GetPipelineStatus` |
 | QPS 实时数值 | **L1 实时** | BFF `GetPipelineStatus()` 从 Prometheus 指标动态计算 | `clients.go` `parsePrometheusMetrics` |
-| 医保预设样本数据 | **L3 前端** | 前端 `sampleYibao` 对象（张三 / 510101199001011234 等） | `PipelineVisualizer.tsx` |
+| 医保预设样本数据 | **L3 前端** | 前端 `sampleYibao` 对象（张三 / 110101196809171010 等） | `PipelineVisualizer.tsx` |
 | 康养预设样本数据 | **L3 前端** | 前端 `sampleKangyang` 对象（李建国 / KY-8802 等） | `PipelineVisualizer.tsx` |
 | 脱敏后治理对比数据 | **L1 实时** | BFF `InvokeDataApi()` 调用 `engine /v1/agent/process`（兼容 `/v1/medical/process`）真实脱敏，失败时 fallback 本地掩码 | `handlers.go` `InvokeDataApi` |
 | 任务分发结果 | **L1 实时** | BFF `DispatchTask()` → `service-hub /api/hub/dispatch` | `clients.go` `DispatchTask` |
@@ -145,7 +145,7 @@ graph TD
 
 | 数据源 ID | 字段数 | 核心字段列举 | 兜底生成规范 |
 |---|---|---|---|
-| `ds_yibao` (医保) | 18 | `insurance_settlement_id`, `person_id`, `gender`, `birth_date`, `admission_date`, `discharge_date`, `admission_dept`, `icd10_code`, `diagnosis_name` 等 | `YB202601XXXX` / `PID1000XXXX` / 2型糖尿病 / E11.900 / 住院 |
+| `ds_yibao` (医保) | 19 | `insurance_settlement_id`, `person_id`, `gender`, `birth_date`, `admission_date`, `discharge_date`, `admission_dept`, `icd10_code`, `diagnosis_name` 等 | `YB202601XXXX` / `PID1000XXXX` / 2型糖尿病 / E11.900 / 住院 |
 | `ds_kangyang` (康养) | 27 | `name`, `id_card_no`, `age`, `gender`, `height`, `weight`, `diagnosis_name`, `chief_complaint`, `assess_score`, `registered_address`, `medical_insurance_no` 等 | `张老X` / `510101195...` / 70+岁 / 老年人能力评估 / 真实四川地址 |
 
 **生命周期**：
@@ -328,7 +328,7 @@ curl -s -X POST http://localhost:8085/api/lz/suites/run \
   -H "Content-Type: application/json" \
   -d '{"suite_ids": []}' | jq .
 
-# 5. 探查数据源真实切片采样数据（医保 18 字段）
+# 5. 探查数据源真实切片采样数据（医保 19 字段）
 curl -s "http://localhost:8083/api/datasources/ds_yibao/records?limit=5" | jq .
 
 # 6. 探查数据源真实切片采样数据（康养 27 字段）
@@ -337,7 +337,7 @@ curl -s "http://localhost:8083/api/datasources/ds_kangyang/records?limit=5" | jq
 # 7. 调用通用合规脱敏流水线接口
 curl -s -X POST http://localhost:8079/v1/agent/process \
   -H "Content-Type: application/json" \
-  -d '{"records": [{"name": "张三", "id_card": "510101199001011234", "diagnosis": "原发性高血压"}]}' | jq .
+  -d '{"records": [{"name": "张三", "id_card": "110101196809171010", "diagnosis": "原发性高血压"}]}' | jq .
 
 # 8. 查看当前任务列表与租约数据
 curl -s http://localhost:8085/api/lz/tasks | jq .

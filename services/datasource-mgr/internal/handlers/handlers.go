@@ -9,6 +9,7 @@ package handlers
 
 import (
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -101,6 +102,7 @@ func DatasourceMgrPermissionForPath(path string) string {
 		path == "/api/datasources" || path == "/api/datasources/:id" ||
 		strings.HasPrefix(path, "/api/datasources/") && strings.HasSuffix(path, "/records") ||
 		strings.HasPrefix(path, "/api/datasources/") && strings.HasSuffix(path, "/sample") ||
+		strings.HasPrefix(path, "/api/datasources/") && strings.HasSuffix(path, "/record-by-id") ||
 		strings.HasPrefix(path, "/api/datasources/") && strings.HasSuffix(path, "/metadata") ||
 		strings.HasPrefix(path, "/api/datasources/") && strings.HasSuffix(path, "/audit"):
 		return "datasource:read"
@@ -219,14 +221,15 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 	r.GET("/api/v1/mock4", s.GetMock4Data)       // API 4: 预留政务数据源 4
 
 	// 通用数据源资产与采样端点
-	r.GET("/api/datasources", s.ListDataSources)                  // 数据源目录列表
-	r.GET("/api/datasources/:id", s.GetDataSource)                // 单个数据源详情
-	r.GET("/api/datasources/:id/records", s.GetDataSourceRecords) // 动态分页查询记录
-	r.GET("/api/datasources/:id/sample", s.GetDataSourceRecords)  // 兼容样本数据接口别名
-	r.POST("/api/datasources/:id/test", s.TestConnection)         // 数据源连通性测试
-	r.GET("/api/datasources/:id/metadata", s.GetMetadata)         // Schema 元数据查询
-	r.GET("/api/datasources/:id/audit", s.GetAccessAudit)         // 数据访问审计日志查询
-	r.POST("/api/datasources/seed", s.SeedDataSourcesEndpoint)    // 初始化/重置模拟数据源
+	r.GET("/api/datasources", s.ListDataSources)                          // 数据源目录列表
+	r.GET("/api/datasources/:id", s.GetDataSource)                        // 单个数据源详情
+	r.GET("/api/datasources/:id/records", s.GetDataSourceRecords)         // 动态分页查询记录
+	r.GET("/api/datasources/:id/sample", s.GetDataSourceRecords)          // 兼容样本数据接口别名
+	r.GET("/api/datasources/:id/record-by-id", s.GetDataSourceRecordByID) // 按身份证号查询单条记录
+	r.POST("/api/datasources/:id/test", s.TestConnection)                 // 数据源连通性测试
+	r.GET("/api/datasources/:id/metadata", s.GetMetadata)                 // Schema 元数据查询
+	r.GET("/api/datasources/:id/audit", s.GetAccessAudit)                 // 数据访问审计日志查询
+	r.POST("/api/datasources/seed", s.SeedDataSourcesEndpoint)            // 初始化/重置模拟数据源
 }
 
 // parsePagination parses limit and offset query parameters with safety bounds.
@@ -431,6 +434,55 @@ func (s *Server) GetDataSourceRecords(c *gin.Context) {
 		"offset":        offset,
 		"records":       records,
 		"via":           moduleVia,
+	})
+}
+
+// GetDataSourceRecordByID returns a single record from a datasource by ID card number.
+// GetDataSourceRecordByID 根据身份证号从指定数据源中查询单条记录。
+// Query 参数: id_card_no (必填，18 位身份证号)
+func (s *Server) GetDataSourceRecordByID(c *gin.Context) {
+	id := c.Param("id")
+	idCardNo := c.Query("id_card_no")
+
+	// 校验必填参数
+	if idCardNo == "" {
+		middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "query parameter id_card_no is required", nil)
+		return
+	}
+
+	// 校验身份证号格式（18 位，前 17 位数字，最后 1 位数字或 X）
+	if len(idCardNo) != 18 {
+		middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "id_card_no must be 18 characters", nil)
+		return
+	}
+
+	canonID, _ := naming.NormalizeDataSourceID(id)
+	if canonID == "" {
+		canonID = id
+	}
+
+	record, _, err := GetRecordByIDCard(id, idCardNo)
+	if err != nil {
+		s.recordDatasourceRequest(canonID, "error")
+		if errors.Is(err, ErrRecordNotFound) {
+			c.JSON(http.StatusOK, models.SingleRecordResponse{
+				DatasourceID: canonID,
+				Record:       nil,
+				Found:        false,
+				Via:          moduleVia,
+			})
+			return
+		}
+		middleware.AbortWithError(c, http.StatusNotFound, "NOT_FOUND", err.Error(), nil)
+		return
+	}
+	s.recordDatasourceRequest(canonID, "success")
+
+	c.JSON(http.StatusOK, models.SingleRecordResponse{
+		DatasourceID: canonID,
+		Record:       record,
+		Found:        true,
+		Via:          moduleVia,
 	})
 }
 

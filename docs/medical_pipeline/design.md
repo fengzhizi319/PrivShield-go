@@ -120,7 +120,7 @@ engine/medical_pipeline/
 ├── rules.py             # 医疗专属分级规则、PII 别名、L4/L5 关键词字典与 ICD-10 高危编码段治理
 ├── samples/
 │   ├── kangyang.csv        # 自动生成的 27 字段仿真医疗数据集
-│   └── yibao.csv        # 自动生成的 18 字段医保结算仿真数据集
+│   └── yibao.csv        # 自动生成的 19 字段医保结算仿真数据集
 ```
 
 #### Pipeline 处理逻辑流程：

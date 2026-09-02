@@ -967,8 +967,8 @@ flowchart LR
 ```
 
 #### 典型业务负载特征
-1. **数据源 1: `ds_yibao` (城镇职工基本医疗保险结算数据，18 字段)**
-   - 单条记录字段数：18 字段（`insurance_settlement_id`、`person_id`、`gender`、`birth_date`、`hospital_code`、`icd10_code`、`diagnosis_name` 等）
+1. **数据源 1: `ds_yibao` (城镇职工基本医疗保险结算数据，19 字段)**
+   - 单条记录字段数：19 字段（`insurance_settlement_id`、`person_id`、`gender`、`birth_date`、`hospital_code`、`icd10_code`、`diagnosis_name`、`id_card_no` 等）
    - 单条原始 JSON 体积：$\approx 450 \sim 650 \text{ 字节}$
    - 处理链路：PII 敏感字段国密 HMAC-SM3 散列（`person_id`）+ 中段掩码 + 临床诊断与 ICD-10 敏感病种类目泛化 + DB51 分类分级定级 + 9 要素国密 SM3 哈希链与 SM4-GCM 加密快照。
 2. **数据源 2: `ds_kangyang` (智慧康养健康监护与体征数据，27 字段)**

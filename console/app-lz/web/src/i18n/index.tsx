@@ -53,10 +53,10 @@ const translations: Record<Language, Record<string, string>> = {
 
     // Benchmark & Stress Test
     'bench.title': '全栈微服务性能与吞吐量基准压测工作台',
-    'bench.desc': '支持医保 (18字段) 与康养 (27字段) 全流程进行多协程并发压测，实时度量 QPS、TPS、5阶段耗时瀑布流与 P50/P90/P99 延迟 SLA。',
+    'bench.desc': '支持医保 (19字段) 与康养 (27字段) 全流程进行多协程并发压测，实时度量 QPS、TPS、5阶段耗时瀑布流与 P50/P90/P99 延迟 SLA。',
     'bench.presetTitle': '压测场景与预设套件',
-    'bench.presetYibao': '医保结算全流程 (api1_yibao · 18字段)',
-    'bench.presetYibaoDesc': '涵盖医保卡号、身份证号、医疗险别、自付金额等 18 字段，测试高敏剥离与自适应掩码全流程。',
+    'bench.presetYibao': '医保结算全流程 (api1_yibao · 19字段)',
+    'bench.presetYibaoDesc': '涵盖医保卡号、身份证号、医疗险别、自付金额等 19 字段，测试高敏剥离与自适应掩码全流程。',
     'bench.presetKangyang': '康养慢病全流程 (api2_kangyang · 27字段)',
     'bench.presetKangyangDesc': '涵盖心率、收缩压、血糖、病史体征等 27 字段，测试密集分类评级与隐私脱敏全流程。',
     'bench.presetBurst': '高并发突发脉冲测试 (Burst 50 并发)',

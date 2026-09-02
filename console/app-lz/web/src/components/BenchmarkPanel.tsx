@@ -2,7 +2,7 @@
  * BenchmarkPanel — 全栈微服务性能与吞吐量基准压测工作台组件。
  *
  * 功能特性：
- *  1. 场景预设：医保结算 (18字段) / 康养慢病 (27字段) / 50并发突发脉冲 / 自定义多阶梯压测
+ *  1. 场景预设：医保结算 (19字段) / 康养慢病 (27字段) / 50并发突发脉冲 / 自定义多阶梯压测
  *  2. 实时并发调度池：动态控制并发协程数 (Concurrency 1~50)，精准计算每笔请求往返时间与阶段耗时
  *  3. 4 大核心 KPI 仪表盘：实时 QPS、中位数延迟 (P50)、尾延迟 (P99)、全流程成功率与 429 限流保护计数
  *  4. 5 阶段耗时瀑布流：实时拆解 Ingest、Fetch、Classify/Desensitize、Return、Audit 各阶段平均耗时与占比
@@ -185,7 +185,7 @@ export const BenchmarkPanel: React.FC<BenchmarkPanelProps> = ({ apis }) => {
         const reqStart = performance.now();
 
         try {
-          const resp: DataApiSessionResponse = await api.invokeDataApi(targetApiId, batchLimit, true);
+          const resp: DataApiSessionResponse = await api.invokeDataApi(targetApiId, '110101196809171010', true);
           const reqDuration = performance.now() - reqStart;
 
           completedCount++;
@@ -437,7 +437,7 @@ export const BenchmarkPanel: React.FC<BenchmarkPanelProps> = ({ apis }) => {
           >
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-indigo-400">⚡ 医保结算</span>
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">18 字段</span>
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">19 字段</span>
             </div>
             <div className="text-xs font-semibold text-slate-100 mt-1">api1_yibao 全流程</div>
             <p className="text-[11px] text-slate-400 mt-1 line-clamp-2 leading-relaxed">
@@ -556,7 +556,7 @@ export const BenchmarkPanel: React.FC<BenchmarkPanelProps> = ({ apis }) => {
                   onChange={e => setCustomApiCode(e.target.value)}
                   className="px-2.5 py-1 text-xs bg-slate-950 border border-slate-700 rounded-lg text-slate-100 focus:outline-none"
                 >
-                  <option value="api1_yibao">api1_yibao (医保 18字段)</option>
+                  <option value="api1_yibao">api1_yibao (医保 19字段)</option>
                   <option value="api2_kangyang">api2_kangyang (康养 27字段)</option>
                 </select>
               </div>

@@ -336,6 +336,50 @@ func GetDataBySource(sourceID string, limit, offset int) ([]map[string]any, int,
 	}
 }
 
+// ErrRecordNotFound is returned when no record matches the given ID card number.
+// ErrRecordNotFound 表示按身份证号查询时未找到匹配记录。
+var ErrRecordNotFound = fmt.Errorf("record not found")
+
+// GetRecordByIDCard queries a single record from the specified datasource by ID card number.
+// GetRecordByIDCard 根据身份证号从指定数据源中查找单条记录。
+// ds_yibao 和 ds_kangyang 均按 id_card_no 字段匹配。
+// 返回值为：匹配的记录、数据源规范 ID、错误（未找到时为 ErrRecordNotFound）。
+func GetRecordByIDCard(sourceID, idCardNo string) (map[string]any, string, error) {
+	normID, err := naming.NormalizeDataSourceID(sourceID)
+	if err != nil {
+		return nil, "", fmt.Errorf("unknown mock source: %s", sourceID)
+	}
+
+	// 确定要加载的数据文件和源名称
+	var csvFile string
+	switch normID {
+	case naming.DSYibao:
+		csvFile = "yibao.csv"
+	case naming.DSKangyang:
+		csvFile = "kangyang.csv"
+	default:
+		return nil, normID, fmt.Errorf("datasource %s does not support ID card lookup", normID)
+	}
+
+	// 加载全部数据（limit 足够大以覆盖全部行）
+	rows, _, err := LoadCSVRecords(csvFile, 10000, 0)
+	if err != nil {
+		return nil, normID, fmt.Errorf("load csv records: %w", err)
+	}
+
+	// 遍历查找 id_card_no 匹配的行
+	for _, row := range rows {
+		if val, ok := row["id_card_no"]; ok {
+			valStr := fmt.Sprintf("%v", val)
+			if valStr == idCardNo {
+				return row, normID, nil
+			}
+		}
+	}
+
+	return nil, normID, ErrRecordNotFound
+}
+
 // paginateSlice applies offset and limit pagination on an in-memory row slice.
 // paginateSlice 对内存切片执行安全的分页截取计算，防止越界 panic。
 func paginateSlice(rows []map[string]any, limit, offset int) []map[string]any {
@@ -391,6 +435,7 @@ func GetMetadata(sourceID string) (*models.MetadataResponse, error) {
 			{Name: "icd10_code", Type: "string"},
 			{Name: "diagnosis_name", Type: "string"},
 			{Name: "admission_condition", Type: "string"},
+			{Name: "id_card_no", Type: "string"},
 		}
 	} else if ds.ID == naming.DSKangyang {
 		// kangyang.csv 27 字段

@@ -35,14 +35,15 @@
     - [3.3.3 康养体检与慢病数据抽取 (GET /api/v1/kangyang) 【API 2 专用端点】](#333-康养体检与慢病数据抽取-get-apiv1kangyang-api-2-专用端点)
     - [3.3.4 预留政务数据源 3 抽取 (GET /api/v1/mock3) 【API 3 专用端点】](#334-预留政务数据源-3-抽取-get-apiv1mock3-api-3-专用端点)
     - [3.3.5 预留企业数据源 4 抽取 (GET /api/v1/mock4) 【API 4 专用端点】](#335-预留企业数据源-4-抽取-get-apiv1mock4-api-4-专用端点)
-    - [3.3.6 完整 HTTP 请求-响应示例（端到端）](#336-完整-http-请求-响应示例端到端)
+    - [3.3.6 按身份证号查询单条记录 (GET /api/datasources/:id/record-by-id)](#336-按身份证号查询单条记录-get-apidatasourcesidrecord-by-id)
+    - [3.3.7 按身份证号查询与完整 HTTP 请求-响应示例（端到端）](#337-按身份证号查询与完整-http-请求-响应示例端到端)
 - [4. gRPC API 规范与 Protobuf 定义](#4-grpc-api-规范与-protobuf-定义)
   - [4.1 Protobuf 契约文件 (datasourcemgr.proto)](#41-protobuf-契约文件-datasourcemgrproto)
   - [4.2 gRPC 服务接口与方法规约](#42-grpc-服务接口与方法规约)
   - [4.3 gRPC 消息结构体字段详细定义](#43-grpc-消息结构体字段详细定义)
   - [4.4 gRPC Metadata 上下文传递约定](#44-grpc-metadata-上下文传递约定)
 - [5. 核心业务数据集标准与字段字典](#5-核心业务数据集标准与字段字典)
-  - [5.1 数据集 1：医保就医与费用结算数据集 (ds_yibao / API 1 · 18 字段)](#51-数据集-1医保就医与费用结算数据集-ds_yibao--api-1--18-字段)
+  - [5.1 数据集 1：医保就医与费用结算数据集 (ds_yibao / API 1 · 19 字段)](#51-数据集-1医保就医与费用结算数据集-ds_yibao--api-1--19-字段)
   - [5.2 数据集 2：康养体检与慢病健康档案数据集 (ds_kangyang / API 2 · 27 字段)](#52-数据集-2康养体检与慢病健康档案数据集-ds_kangyang--api-2--27-字段)
   - [5.3 数据集 3 & 4：预留政务与企业扩展数据集 (ds_mock3, ds_mock4)](#53-数据集-3--4预留政务与企业扩展数据集-ds_mock3-ds_mock4)
 - [6. 统一错误码与异常处理规范](#6-统一错误码与异常处理规范)
@@ -104,7 +105,7 @@ flowchart LR
 
 | 数据源序号 | 规范数据源标识 (`datasource_id`) | 业务 API 代码 (`api_code`) | 中文业务名称 | 字段数 | 对应业务实体 / 标准规范 |
 |---|---|---|---|---|---|
-| **1** | `ds_yibao` | `api1_yibao` | 医保就医与结算数据源 | **18** | 医院门诊住院结算、病案诊断（DB51/T 2989—2023） |
+| **1** | `ds_yibao` | `api1_yibao` | 医保就医与结算数据源 | **19** | 医院门诊住院结算、病案诊断（DB51/T 2989—2023） |
 | **2** | `ds_kangyang` | `api2_kangyang` | 康养体检与慢病数据源 | **27** | 康养中心体检随访、体征指标、残疾评定（DB51/T 2989—2023） |
 | **3** | `ds_mock3` | `(预留)` | 预留政务数据源 3 | 动态 | 跨部门政务服务审批流水、电子证照流水 |
 | **4** | `ds_mock4` | `(预留)` | 预留企业/金融数据源 4 | 动态 | 季度税收财务报表、企业信用统计数据 |
@@ -517,7 +518,7 @@ flowchart LR
 
 #### 3.3.2 医保就医与结算数据抽取 (GET /api/v1/yibao) 【API 1 专用端点】
 
-- **功能说明**：专门针对医保就医与费用结算数据集的读取端点（API 1，18 字段）。
+- **功能说明**：专门针对医保就医与费用结算数据集的读取端点（API 1，19 字段）。
 - **请求方法**：`GET`
 - **请求路径**：`/api/v1/yibao`
 - **弃用过渡期响应头 (Deprecation Headers)**：
@@ -669,11 +670,80 @@ flowchart LR
 
 ---
 
-#### 3.3.6 完整 HTTP 请求-响应示例（端到端）
+#### 3.3.6 按身份证号查询单条记录 (GET /api/datasources/:id/record-by-id)
 
-> 本节提供 `ds_yibao`（医保）和 `ds_kangyang`（康养）两个核心数据集的**完整 HTTP 请求与响应报文示例**，涵盖推荐规范路径与历史专用端点，便于数据局开发团队直接对照联调。
+- **功能说明**：根据身份证号从指定数据源中精确查询单条记录。支持 `ds_yibao` 和 `ds_kangyang` 两个核心数据源，均按 `id_card_no` 字段匹配。
+- **请求方法**：`GET`
+- **请求路径**：`/api/datasources/:id/record-by-id`
+- **Path 参数**：
 
-##### 示例 1：ds_yibao 规范通用路径（推荐）
+  | 参数名 | 类型 | 必填 | 说明 |
+  |---|---|---|---|
+  | `id` | string | 是 | 规范数据源标识符，如 `ds_yibao`、`ds_kangyang` |
+
+- **Query 参数**：
+
+  | 参数名 | 类型 | 必填 | 说明 |
+  |---|---|---|---|
+  | `id_card_no` | string | 是 | 18 位中国居民身份证号码 |
+
+- **成功响应**：`HTTP 200 OK`（找到记录）
+  ```json
+  {
+    "datasource_id": "ds_yibao",
+    "record": {
+      "insurance_settlement_id": "YB202511040001",
+      "person_id": "PID66453983",
+      "gender": "男",
+      "birth_date": "1968-09-17",
+      "admission_date": "2025-11-04",
+      "discharge_date": "2025-11-13",
+      "length_of_stay": "9",
+      "admission_dept": "急诊科",
+      "discharge_dept": "急诊科",
+      "hospital_code": "H4201020015",
+      "medical_category": "日间手术",
+      "discharge_mode": "医嘱转院",
+      "settlement_seq_no": "MX202511049975",
+      "diagnosis_seq": "1",
+      "diagnosis_type": "主要诊断",
+      "icd10_code": "A51.000",
+      "diagnosis_name": "硬下疳伴TPPA滴度1:64阳性(早期梅毒)",
+      "admission_condition": "一般",
+      "id_card_no": "510101199001011234"
+    },
+    "found": true,
+    "via": "datasource-mgr"
+  }
+  ```
+- **未找到响应**：`HTTP 200 OK`（未找到匹配记录）
+  ```json
+  {
+    "datasource_id": "ds_yibao",
+    "record": null,
+    "found": false,
+    "via": "datasource-mgr"
+  }
+  ```
+- **错误响应**：`HTTP 400 Bad Request`（缺少或非法 `id_card_no` 参数）
+- **响应字段说明**：
+
+  | 字段名 | 类型 | 说明 |
+  |---|---|---|
+  | `datasource_id` | string | 规范数据源标识符 |
+  | `record` | object \| null | 匹配的单条数据记录，未找到时为 null |
+  | `found` | boolean | 是否找到匹配记录 |
+  | `via` | string | 服务节点标识符 |
+
+---
+
+#### 3.3.7 按身份证号查询与完整 HTTP 请求-响应示例（端到端）
+
+> 本节提供 `ds_yibao`（医保）和 `ds_kangyang`（康养）两个核心数据集的**完整 HTTP 请求与响应报文示例**。
+> 当前数盾调度流水线已切换为**按身份证号查询单条记录**模式（参见 §3.3.6），调度中枢 (`service-hub`) 通过 `/api/datasources/:id/record-by-id?id_card_no=xxx` 按身份证号精确抽取单条记录，而非旧版的 `limit/offset` 分页批量抽取。
+> 历史分页端点仍可用但已标记弃用，详见 [历史分页端点示例（已弃用）](#历史分页端点示例已弃用)。
+
+##### 示例 1：ds_yibao 按身份证号查询单条记录（推荐）
 
 **curl 命令**：
 
@@ -681,18 +751,18 @@ flowchart LR
 curl -s -i \
   -H "Authorization: Bearer sec_privshield_token_2026" \
   -H "Accept: application/json" \
-  -H "X-Request-ID: req-20260902-yibao-a1b2c3" \
-  "http://127.0.0.1:8083/api/datasources/ds_yibao/records?limit=3&offset=0"
+  -H "X-Request-ID: req-20260902-yibao-id-a1b2c3" \
+  "http://127.0.0.1:8083/api/datasources/ds_yibao/record-by-id?id_card_no=110101196809171010"
 ```
 
 **完整 HTTP 请求报文**：
 
 ```http
-GET /api/datasources/ds_yibao/records?limit=3&offset=0 HTTP/1.1
+GET /api/datasources/ds_yibao/record-by-id?id_card_no=110101196809171010 HTTP/1.1
 Host: 127.0.0.1:8083
 Authorization: Bearer sec_privshield_token_2026
 Accept: application/json
-X-Request-ID: req-20260902-yibao-a1b2c3
+X-Request-ID: req-20260902-yibao-id-a1b2c3
 User-Agent: service-hub/1.0
 ```
 
@@ -701,9 +771,181 @@ User-Agent: service-hub/1.0
 ```http
 HTTP/1.1 200 OK
 Content-Type: application/json; charset=utf-8
-X-Request-ID: req-20260902-yibao-a1b2c3
-X-Trace-ID: req-20260902-yibao-a1b2c3
+X-Request-ID: req-20260902-yibao-id-a1b2c3
+X-Trace-ID: req-20260902-yibao-id-a1b2c3
 Date: Tue, 02 Sep 2026 08:30:00 GMT
+Content-Length: 1284
+
+{
+  "datasource_id": "ds_yibao",
+  "record": {
+    "insurance_settlement_id": "YB202511040001",
+    "person_id": "PID66453983",
+    "gender": "男",
+    "birth_date": "1968-09-17",
+    "admission_date": "2025-11-04",
+    "discharge_date": "2025-11-13",
+    "length_of_stay": "9",
+    "admission_dept": "急诊科",
+    "discharge_dept": "急诊科",
+    "hospital_code": "H4201020015",
+    "medical_category": "日间手术",
+    "discharge_mode": "医嘱转院",
+    "settlement_seq_no": "MX202511049975",
+    "diagnosis_seq": "1",
+    "diagnosis_type": "主要诊断",
+    "icd10_code": "A51.000",
+    "diagnosis_name": "硬下疳伴TPPA滴度1:64阳性(早期梅毒)",
+    "admission_condition": "一般",
+    "id_card_no": "110101196809171010"
+  },
+  "found": true,
+  "via": "datasource-mgr"
+}
+```
+
+> **要点说明**：
+> - 端点 `/api/datasources/:id/record-by-id` 为**当前推荐规范**，通过 `id_card_no` 查询参数按身份证号精确查询单条记录（参见 §3.3.6）；
+> - 响应中 `found` 字段标识是否找到匹配记录，`record` 为匹配的单条完整数据对象（19 字段）或 `null`；
+> - 响应固定包含 `datasource_id`（规范数据源标识符）。
+
+---
+
+##### 示例 2：ds_kangyang 按身份证号查询单条记录（推荐）
+
+**curl 命令**：
+
+```bash
+curl -s -i \
+  -H "Authorization: Bearer sec_privshield_token_2026" \
+  -H "Accept: application/json" \
+  -H "X-Request-ID: req-20260902-ky-id-g7h8i9" \
+  "http://127.0.0.1:8083/api/datasources/ds_kangyang/record-by-id?id_card_no=110105198402151071"
+```
+
+**完整 HTTP 请求报文**：
+
+```http
+GET /api/datasources/ds_kangyang/record-by-id?id_card_no=110105198402151071 HTTP/1.1
+Host: 127.0.0.1:8083
+Authorization: Bearer sec_privshield_token_2026
+Accept: application/json
+X-Request-ID: req-20260902-ky-id-g7h8i9
+User-Agent: service-hub/1.0
+```
+
+**完整 HTTP 响应报文**：
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+X-Request-ID: req-20260902-ky-id-g7h8i9
+X-Trace-ID: req-20260902-ky-id-g7h8i9
+Date: Tue, 02 Sep 2026 08:32:00 GMT
+Content-Length: 3156
+
+{
+  "datasource_id": "ds_kangyang",
+  "record": {
+    "gender": "男",
+    "age": "45",
+    "diagnosis_name": "急性心肌梗死",
+    "chief_complaint": "反复胸闷胸痛半年，加重2小时",
+    "present_illness": "患者2小时前突发胸骨后剧烈压榨样疼痛，向左肩背部放射，伴大汗及濒死感。心电图示V1-V5导联ST段抬高0.3-0.5mV。急诊行冠脉造影提示前降支100%闭塞，予行PCI术及支架植入术。",
+    "past_history": "高脂血症病史5年，口服阿托伐他汀20mg qn。高血压病史3年，最高160/100mmHg。",
+    "personal_history": "吸烟20年，每日20支(20包年)。饮酒15年。",
+    "is_smoking": "是",
+    "smoking_duration": "20年",
+    "family_history": "父亲因'恶性肿瘤'去世(65岁)，母亲健在。一弟患'重度精神分裂症'、'2型糖尿病'。否认其他家族遗传病史。",
+    "allergic_history": "青霉素过敏(皮疹)。",
+    "department": "心内科",
+    "height": "175",
+    "weight": "78",
+    "disability_category": "肢体残疾",
+    "disability_level": "二级",
+    "assess_type_name": "心功能综合评估",
+    "assess_result_name": "需辅助工具与护理",
+    "assess_score": "65",
+    "assess_time": "2025-01-10",
+    "progress_note": "今日查房：患者神志清楚，心前区无不适。查体：BP 125/80mmHg，HR 72次/分，律齐。继续予双抗及他汀治疗。",
+    "progress_note_time": "2025-01-10 10:30:00",
+    "name": "萧志明_1",
+    "id_card_no": "110105198402151071",
+    "registered_address": "北京市东城区景山前街4号",
+    "disability_cert_no": "11010119800512123401",
+    "medical_insurance_no": "3301030127183297"
+  },
+  "found": true,
+  "via": "datasource-mgr"
+}
+```
+
+> **要点说明**：
+> - `ds_kangyang` 严格输出 **27 个字段**，与 §5.2 字段字典完全一致；
+> - 允许部分字段为空字符串（如 `smoking_duration` 不吸烟时、`disability_cert_no` 无残疾时），但**字段 Key 必须完整保留**，不得省略；
+> - 长文本字段（`present_illness`、`past_history`、`family_history`、`progress_note`）保留原始换行与标点，调用方需自行处理展示。
+
+---
+
+##### 示例 3：按身份证号查询未找到记录
+
+**curl 命令**：
+
+```bash
+curl -s -i \
+  -H "Authorization: Bearer sec_privshield_token_2026" \
+  -H "Accept: application/json" \
+  -H "X-Request-ID: req-20260902-yibao-nf-x1y2z3" \
+  "http://127.0.0.1:8083/api/datasources/ds_yibao/record-by-id?id_card_no=000000000000000000"
+```
+
+**完整 HTTP 响应报文**：
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+X-Request-ID: req-20260902-yibao-nf-x1y2z3
+X-Trace-ID: req-20260902-yibao-nf-x1y2z3
+Date: Tue, 02 Sep 2026 08:31:00 GMT
+Content-Length: 98
+
+{
+  "datasource_id": "ds_yibao",
+  "record": null,
+  "found": false,
+  "via": "datasource-mgr"
+}
+```
+
+> **要点说明**：
+> - 身份证号格式合法（18 位）但在数据源中未找到匹配记录时，仍返回 `HTTP 200 OK`；
+> - `found` 为 `false`，`record` 为 `null`，调用方应据此判断是否需要降级处理。
+
+---
+
+##### 历史分页端点示例（已弃用）
+
+> **弃用说明**：以下 `/api/datasources/:id/records` 与 `/api/v1/*` 分页端点仍可使用，但已标记为弃用（Sunset: 2027-02-01）。
+> 当前数盾调度流水线已切换为按身份证号查询单条记录模式（`/api/datasources/:id/record-by-id`），请数据局开发团队优先对接新端点。
+
+**curl 命令**（ds_yibao 规范分页路径）：
+
+```bash
+curl -s -i \
+  -H "Authorization: Bearer sec_privshield_token_2026" \
+  -H "Accept: application/json" \
+  -H "X-Request-ID: req-20260902-yibao-legacy-d4e5f6" \
+  "http://127.0.0.1:8083/api/datasources/ds_yibao/records?limit=3&offset=0"
+```
+
+**完整 HTTP 响应报文**（摘要）：
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+X-Request-ID: req-20260902-yibao-legacy-d4e5f6
+X-Trace-ID: req-20260902-yibao-legacy-d4e5f6
+Date: Tue, 02 Sep 2026 08:33:00 GMT
 Content-Length: 2847
 
 {
@@ -734,328 +976,16 @@ Content-Length: 2847
       "diagnosis_name": "硬下疳伴TPPA滴度1:64阳性(早期梅毒)",
       "admission_condition": "一般"
     },
-    {
-      "insurance_settlement_id": "YB202511040002",
-      "person_id": "PID77234501",
-      "gender": "女",
-      "birth_date": "1975-03-22",
-      "admission_date": "2025-11-05",
-      "discharge_date": "2025-11-10",
-      "length_of_stay": "5",
-      "admission_dept": "心血管内科",
-      "discharge_dept": "心血管内科",
-      "hospital_code": "H4201020018",
-      "medical_category": "住院",
-      "discharge_mode": "医嘱离院",
-      "settlement_seq_no": "MX202511050012",
-      "diagnosis_seq": "1",
-      "diagnosis_type": "主要诊断",
-      "icd10_code": "I21.900",
-      "diagnosis_name": "急性心肌梗死",
-      "admission_condition": "危"
-    },
-    {
-      "insurance_settlement_id": "YB202511040003",
-      "person_id": "PID88102347",
-      "gender": "男",
-      "birth_date": "1952-07-08",
-      "admission_date": "2025-11-06",
-      "discharge_date": "2025-11-06",
-      "length_of_stay": "0",
-      "admission_dept": "呼吸内科",
-      "discharge_dept": "呼吸内科",
-      "hospital_code": "H4201020015",
-      "medical_category": "普通门诊",
-      "discharge_mode": "医嘱离院",
-      "settlement_seq_no": "MX202511060034",
-      "diagnosis_seq": "1",
-      "diagnosis_type": "主要诊断",
-      "icd10_code": "J18.900",
-      "diagnosis_name": "肺炎",
-      "admission_condition": "一般"
-    }
+    ...
   ],
   "via": "datasource-mgr"
 }
 ```
 
 > **要点说明**：
-> - 数值型字段（`length_of_stay`、`diagnosis_seq`）在 REST JSON 中以**字符串**形式返回，与 gRPC `DataRowProto.fields` map 的 `string` 值类型保持一致；
-> - 响应头中原样回传 `X-Request-ID`，并额外注入 `X-Trace-ID` 用于全链路追踪；
-> - 每次响应固定包含 `datasource_id`（规范 ID）和 `source_id`（兼容字段，同值）。
-
----
-
-##### 示例 2：ds_yibao 专用端点（含 Deprecation 响应头）
-
-**curl 命令**：
-
-```bash
-curl -s -i \
-  -H "Authorization: Bearer sec_privshield_token_2026" \
-  -H "Accept: application/json" \
-  -H "X-Request-ID: req-20260902-yibao-legacy-d4e5f6" \
-  "http://127.0.0.1:8083/api/v1/yibao?limit=2&offset=0"
-```
-
-**完整 HTTP 响应报文**：
-
-```http
-HTTP/1.1 200 OK
-Content-Type: application/json; charset=utf-8
-X-Request-ID: req-20260902-yibao-legacy-d4e5f6
-X-Trace-ID: req-20260902-yibao-legacy-d4e5f6
-Deprecation: true
-Sunset: Mon, 01 Feb 2027 00:00:00 GMT
-Link: </api/datasources/ds_yibao/records>; rel="successor-version"
-X-PrivShield-Canonical-Path: /api/datasources/ds_yibao/records
-X-PrivShield-Canonical-Source: ds_yibao
-Date: Tue, 02 Sep 2026 08:31:00 GMT
-Content-Length: 1932
-
-{
-  "datasource_id": "ds_yibao",
-  "source_id": "ds_yibao",
-  "source_name": "医保就医与结算模拟数据库 (yibao.csv)",
-  "total": 50,
-  "limit": 2,
-  "offset": 0,
-  "records": [
-    {
-      "insurance_settlement_id": "YB202511040001",
-      "person_id": "PID66453983",
-      "gender": "男",
-      "birth_date": "1968-09-17",
-      "admission_date": "2025-11-04",
-      "discharge_date": "2025-11-13",
-      "length_of_stay": "9",
-      "admission_dept": "急诊科",
-      "discharge_dept": "急诊科",
-      "hospital_code": "H4201020015",
-      "medical_category": "日间手术",
-      "discharge_mode": "医嘱转院",
-      "settlement_seq_no": "MX202511049975",
-      "diagnosis_seq": "1",
-      "diagnosis_type": "主要诊断",
-      "icd10_code": "A51.000",
-      "diagnosis_name": "硬下疳伴TPPA滴度1:64阳性(早期梅毒)",
-      "admission_condition": "一般"
-    },
-    {
-      "insurance_settlement_id": "YB202511040002",
-      "person_id": "PID77234501",
-      "gender": "女",
-      "birth_date": "1975-03-22",
-      "admission_date": "2025-11-05",
-      "discharge_date": "2025-11-10",
-      "length_of_stay": "5",
-      "admission_dept": "心血管内科",
-      "discharge_dept": "心血管内科",
-      "hospital_code": "H4201020018",
-      "medical_category": "住院",
-      "discharge_mode": "医嘱离院",
-      "settlement_seq_no": "MX202511050012",
-      "diagnosis_seq": "1",
-      "diagnosis_type": "主要诊断",
-      "icd10_code": "I21.900",
-      "diagnosis_name": "急性心肌梗死",
-      "admission_condition": "危"
-    }
-  ],
-  "via": "datasource-mgr"
-}
-```
-
-> **要点说明**：
-> - 专用端点 `/api/v1/yibao` 返回的响应体与规范路径**完全一致**，但额外注入 `Deprecation: true` 等迁移引导头；
-> - `Link` 头中的 `rel="successor-version"` 指明替代路径为 `/api/datasources/ds_yibao/records`；
-> - `Sunset` 头标注该专用端点将于 **2027-02-01** 正式下线，请数据局尽快迁移至规范路径。
-
----
-
-##### 示例 3：ds_kangyang 规范通用路径（推荐）
-
-**curl 命令**：
-
-```bash
-curl -s -i \
-  -H "Authorization: Bearer sec_privshield_token_2026" \
-  -H "Accept: application/json" \
-  -H "X-Request-ID: req-20260902-ky-g7h8i9" \
-  "http://127.0.0.1:8083/api/datasources/ds_kangyang/records?limit=2&offset=0"
-```
-
-**完整 HTTP 请求报文**：
-
-```http
-GET /api/datasources/ds_kangyang/records?limit=2&offset=0 HTTP/1.1
-Host: 127.0.0.1:8083
-Authorization: Bearer sec_privshield_token_2026
-Accept: application/json
-X-Request-ID: req-20260902-ky-g7h8i9
-User-Agent: service-hub/1.0
-```
-
-**完整 HTTP 响应报文**：
-
-```http
-HTTP/1.1 200 OK
-Content-Type: application/json; charset=utf-8
-X-Request-ID: req-20260902-ky-g7h8i9
-X-Trace-ID: req-20260902-ky-g7h8i9
-Date: Tue, 02 Sep 2026 08:32:00 GMT
-Content-Length: 4215
-
-{
-  "datasource_id": "ds_kangyang",
-  "source_id": "ds_kangyang",
-  "source_name": "康养体检与慢病模拟数据库 (kangyang.csv)",
-  "total": 50,
-  "limit": 2,
-  "offset": 0,
-  "records": [
-    {
-      "gender": "男",
-      "age": "45",
-      "diagnosis_name": "急性心肌梗死",
-      "chief_complaint": "反复胸闷胸痛半年，加重2小时",
-      "present_illness": "患者2小时前突发胸骨后剧烈压榨样疼痛，向左肩背部放射，伴大汗及濒死感。心电图示V1-V5导联ST段抬高0.3-0.5mV。急诊行冠脉造影提示前降支100%闭塞，予行PCI术及支架植入术。",
-      "past_history": "高脂血症病史5年，口服阿托伐他汀20mg qn。高血压病史3年，最高160/100mmHg。",
-      "personal_history": "吸烟20年，每日20支(20包年)。饮酒15年。",
-      "is_smoking": "是",
-      "smoking_duration": "20年",
-      "family_history": "父亲因'恶性肿瘤'去世(65岁)，母亲健在。一弟患'重度精神分裂症'、'2型糖尿病'。否认其他家族遗传病史。",
-      "allergic_history": "青霉素过敏(皮疹)。",
-      "department": "心内科",
-      "height": "175",
-      "weight": "78",
-      "disability_category": "肢体残疾",
-      "disability_level": "二级",
-      "assess_type_name": "心功能综合评估",
-      "assess_result_name": "需辅助工具与护理",
-      "assess_score": "65",
-      "assess_time": "2025-01-10",
-      "progress_note": "今日查房：患者神志清楚，心前区无不适。查体：BP 125/80mmHg，HR 72次/分，律齐。继续予双抗及他汀治疗。",
-      "progress_note_time": "2025-01-10 10:30:00",
-      "name": "萧志明_1",
-      "id_card_no": "110105198402151071",
-      "registered_address": "北京市东城区景山前街4号",
-      "disability_cert_no": "11010119800512123401",
-      "medical_insurance_no": "3301030127183297"
-    },
-    {
-      "gender": "女",
-      "age": "68",
-      "diagnosis_name": "2型糖尿病",
-      "chief_complaint": "多饮多尿伴体重下降3个月",
-      "present_illness": "患者3个月前无明显诱因出现口渴、多饮，日饮水量约2500ml，伴多尿、夜尿3-4次。近3个月体重下降约5kg。自行监测空腹血糖12.3mmol/L。",
-      "past_history": "高血压病史10年，口服氨氯地平5mg qd。高血脂病史5年。否认冠心病、脑卒中病史。",
-      "personal_history": "退休教师。否认吸烟饮酒史。规律作息。",
-      "is_smoking": "否",
-      "smoking_duration": "",
-      "family_history": "母亲患'2型糖尿病'（72岁确诊），一兄患'高血压'。否认其他家族遗传病史。",
-      "allergic_history": "否认药物及食物过敏史。",
-      "department": "内分泌科",
-      "height": "158",
-      "weight": "62",
-      "disability_category": "无残疾",
-      "disability_level": "无",
-      "assess_type_name": "糖尿病综合管理评估",
-      "assess_result_name": "需药物调整与饮食指导",
-      "assess_score": "72",
-      "assess_time": "2025-01-12",
-      "progress_note": "今日随访：患者神志清楚，精神可。空腹血糖8.7mmol/L，餐后2h血糖13.2mmol/L，HbA1c 8.1%。调整二甲双胍剂量至1000mg bid，加用达格列净10mg qd。",
-      "progress_note_time": "2025-01-12 14:15:00",
-      "name": "王秀英_2",
-      "id_card_no": "310101195703122028",
-      "registered_address": "上海市黄浦区南京东路100号",
-      "disability_cert_no": "",
-      "medical_insurance_no": "2101050123456789"
-    }
-  ],
-  "via": "datasource-mgr"
-}
-```
-
-> **要点说明**：
-> - `ds_kangyang` 严格输出 **27 个字段**，与 §5.2 字段字典完全一致；
-> - 允许部分字段为空字符串（如 `smoking_duration` 不吸烟时、`disability_cert_no` 无残疾时），但**字段 Key 必须完整保留**，不得省略；
-> - 长文本字段（`present_illness`、`past_history`、`family_history`、`progress_note`）保留原始换行与标点，调用方需自行处理展示。
-
----
-
-##### 示例 4：ds_kangyang 专用端点（含 Deprecation 响应头）
-
-**curl 命令**：
-
-```bash
-curl -s -i \
-  -H "Authorization: Bearer sec_privshield_token_2026" \
-  -H "Accept: application/json" \
-  -H "X-Request-ID: req-20260902-ky-legacy-j0k1l2" \
-  "http://127.0.0.1:8083/api/v1/kangyang?limit=1&offset=0"
-```
-
-**完整 HTTP 响应报文**：
-
-```http
-HTTP/1.1 200 OK
-Content-Type: application/json; charset=utf-8
-X-Request-ID: req-20260902-ky-legacy-j0k1l2
-X-Trace-ID: req-20260902-ky-legacy-j0k1l2
-Deprecation: true
-Sunset: Mon, 01 Feb 2027 00:00:00 GMT
-Link: </api/datasources/ds_kangyang/records>; rel="successor-version"
-X-PrivShield-Canonical-Path: /api/datasources/ds_kangyang/records
-X-PrivShield-Canonical-Source: ds_kangyang
-Date: Tue, 02 Sep 2026 08:33:00 GMT
-Content-Length: 2156
-
-{
-  "datasource_id": "ds_kangyang",
-  "source_id": "ds_kangyang",
-  "source_name": "康养体检与慢病模拟数据库 (kangyang.csv)",
-  "total": 50,
-  "limit": 1,
-  "offset": 0,
-  "records": [
-    {
-      "gender": "男",
-      "age": "45",
-      "diagnosis_name": "急性心肌梗死",
-      "chief_complaint": "反复胸闷胸痛半年，加重2小时",
-      "present_illness": "患者2小时前突发胸骨后剧烈压榨样疼痛，向左肩背部放射，伴大汗及濒死感。心电图示V1-V5导联ST段抬高0.3-0.5mV。急诊行冠脉造影提示前降支100%闭塞，予行PCI术及支架植入术。",
-      "past_history": "高脂血症病史5年，口服阿托伐他汀20mg qn。高血压病史3年，最高160/100mmHg。",
-      "personal_history": "吸烟20年，每日20支(20包年)。饮酒15年。",
-      "is_smoking": "是",
-      "smoking_duration": "20年",
-      "family_history": "父亲因'恶性肿瘤'去世(65岁)，母亲健在。一弟患'重度精神分裂症'、'2型糖尿病'。否认其他家族遗传病史。",
-      "allergic_history": "青霉素过敏(皮疹)。",
-      "department": "心内科",
-      "height": "175",
-      "weight": "78",
-      "disability_category": "肢体残疾",
-      "disability_level": "二级",
-      "assess_type_name": "心功能综合评估",
-      "assess_result_name": "需辅助工具与护理",
-      "assess_score": "65",
-      "assess_time": "2025-01-10",
-      "progress_note": "今日查房：患者神志清楚，心前区无不适。查体：BP 125/80mmHg，HR 72次/分，律齐。继续予双抗及他汀治疗。",
-      "progress_note_time": "2025-01-10 10:30:00",
-      "name": "萧志明_1",
-      "id_card_no": "110105198402151071",
-      "registered_address": "北京市东城区景山前街4号",
-      "disability_cert_no": "11010119800512123401",
-      "medical_insurance_no": "3301030127183297"
-    }
-  ],
-  "via": "datasource-mgr"
-}
-```
-
-> **要点说明**：
-> - 与示例 2 同理，专用端点 `/api/v1/kangyang` 响应体与规范路径一致，额外注入 Deprecation 迁移引导头；
-> - 数据局开发时应优先使用 `/api/datasources/ds_kangyang/records` 规范路径。
+> - 分页端点 `/api/datasources/:id/records` 与 `/api/v1/yibao`、`/api/v1/kangyang` 等专用端点仍返回分页数据结构（`total`/`limit`/`offset`/`records`）；
+> - 专用端点响应头中额外注入 `Deprecation: true`、`Sunset`、`Link` 等迁移引导头（参见 §3.3.2 / §3.3.3）；
+> - 数据局应优先迁移至 `/api/datasources/:id/record-by-id` 按身份证号查询端点。
 
 ---
 
@@ -1068,7 +998,7 @@ curl -s -i \
   -H "Authorization: Bearer sec_privshield_token_2026" \
   -H "Accept: application/json" \
   -H "X-Request-ID: req-20260902-err-m3n4o5" \
-  "http://127.0.0.1:8083/api/datasources/ds_unknown/records?limit=5"
+  "http://127.0.0.1:8083/api/datasources/ds_unknown/record-by-id?id_card_no=110101196809171010"
 ```
 
 ```http
@@ -1088,59 +1018,55 @@ Content-Length: 186
 }
 ```
 
-**场景：未携带认证令牌**
+**场景：缺少身份证号参数**
 
 ```bash
 curl -s -i \
+  -H "Authorization: Bearer sec_privshield_token_2026" \
   -H "Accept: application/json" \
-  "http://127.0.0.1:8083/api/datasources/ds_yibao/records?limit=5"
+  "http://127.0.0.1:8083/api/datasources/ds_yibao/record-by-id"
 ```
 
 ```http
-HTTP/1.1 401 Unauthorized
+HTTP/1.1 400 Bad Request
 Content-Type: application/json; charset=utf-8
 Date: Tue, 02 Sep 2026 08:35:00 GMT
-Content-Length: 162
+Content-Length: 178
 
 {
-  "code": "UNAUTHORIZED",
-  "message": "missing or invalid authorization token",
+  "code": "INVALID_ARGUMENT",
+  "message": "query parameter id_card_no is required",
   "detail": null,
   "trace_id": "req-20260902-err-p6q7r8",
   "timestamp": "2026-09-02T08:35:00.654321000Z"
 }
 ```
 
-**场景：分页参数超限**
+**场景：身份证号格式非法**
 
 ```bash
 curl -s -i \
   -H "Authorization: Bearer sec_privshield_token_2026" \
   -H "Accept: application/json" \
-  "http://127.0.0.1:8083/api/datasources/ds_yibao/records?limit=1000"
+  "http://127.0.0.1:8083/api/datasources/ds_yibao/record-by-id?id_card_no=12345"
 ```
 
 ```http
-HTTP/1.1 200 OK
+HTTP/1.1 400 Bad Request
 Content-Type: application/json; charset=utf-8
-X-Request-ID: req-20260902-limit-s9t0u1
-X-Trace-ID: req-20260902-limit-s9t0u1
 Date: Tue, 02 Sep 2026 08:36:00 GMT
-Content-Length: 512
+Content-Length: 168
 
 {
-  "datasource_id": "ds_yibao",
-  "source_id": "ds_yibao",
-  "source_name": "医保就医与结算模拟数据库 (yibao.csv)",
-  "total": 50,
-  "limit": 500,
-  "offset": 0,
-  "records": [ ... ],
-  "via": "datasource-mgr"
+  "code": "INVALID_ARGUMENT",
+  "message": "id_card_no must be 18 characters",
+  "detail": null,
+  "trace_id": "req-20260902-err-s9t0u1",
+  "timestamp": "2026-09-02T08:36:00.123456789Z"
 }
 ```
 
-> **注意**：`limit=1000` 超过上限 500 时，服务端**自动截断为 500** 并正常返回 200（不报错），响应中 `limit` 字段反映实际生效值。
+> **注意**：`record-by-id` 端点对 `id_card_no` 参数进行严格校验：必填且必须为 18 位，不合法时返回 `HTTP 400 Bad Request` 及标准 5 字段错误信封。
 
 ---
 
@@ -1178,10 +1104,13 @@ service DataSourceManagerService {
   // TestConnection 连通性与响应延迟探测
   rpc TestConnection(TestConnectionRequest) returns (TestConnectionResponse);
 
+  // GetRecordByIDCard 按身份证号查询单条记录
+  rpc GetRecordByIDCard(GetRecordByIDCardRequest) returns (SingleRecordResponse);
+
   // ─────────────────────────────────────────────────────────────
   // 业务专用/历史兼容 RPC 方法 (Sunset: 2027-02-01)
   // ─────────────────────────────────────────────────────────────
-  // GetYibaoData API 1 医保就医结算数据抽取 (18 字段)
+  // GetYibaoData API 1 医保就医结算数据抽取 (19 字段)
   rpc GetYibaoData(DataQueryRequest) returns (DataQueryResponse) { option deprecated = true; }
 
   // GetKangyangData API 2 康养体检慢病数据抽取 (27 字段)
@@ -1266,6 +1195,18 @@ message TestConnectionResponse {
   int64 latency_ms = 3;               // 网络与握手耗时（毫秒）
   string via = 4;                     // 服务节点标识
 }
+
+message GetRecordByIDCardRequest {
+  string source_id = 1;              // 数据源标识，如 "ds_yibao", "ds_kangyang"
+  string id_card_no = 2;             // 18 位中国居民身份证号码
+}
+
+message SingleRecordResponse {
+  string datasource_id = 1;          // 规范数据源标识符
+  DataRowProto record = 2;           // 匹配的单条数据记录，未找到时为 nil
+  bool found = 3;                    // 是否找到匹配记录
+  string via = 4;                    // 服务节点标识
+}
 ```
 
 ### 4.2 gRPC 服务接口与方法规约
@@ -1278,6 +1219,7 @@ message TestConnectionResponse {
 | `GetDataBySource` | `SourceDataQueryRequest` | `DataQueryResponse` | `service-hub` | `GetData` 兼容别名方法 |
 | `GetDataSource` | `GetDataSourceRequest` | `DataSourceProto` | `service-hub` | 查询指定数据源元数据 |
 | `TestConnection` | `TestConnectionRequest` | `TestConnectionResponse` | `service-hub` 连通性检测 | 执行真实数据源连通性测试 |
+| `GetRecordByIDCard` | `GetRecordByIDCardRequest` | `SingleRecordResponse` | `service-hub` 调度流水线 | **【规范推荐】** 按身份证号查询单条记录 |
 | `GetYibaoData` | `DataQueryRequest` | `DataQueryResponse` | `service-hub` 专用流水线 (过渡) | 医保数据源专有抽取 RPC |
 | `GetKangyangData` | `DataQueryRequest` | `DataQueryResponse` | `service-hub` 专用流水线 (过渡) | 康养数据源专有抽取 RPC |
 | `GetMockData3` | `DataQueryRequest` | `DataQueryResponse` | `service-hub` 联合调试 | 预留政务数据源 3 抽取 RPC |
@@ -1302,11 +1244,11 @@ message TestConnectionResponse {
 
 根据四川省地方标准 **DB51/T 2989—2023（健康医疗大数据应用安全与隐私保护指南）** 及国家卫健委、国家医保局相关数据元标准，以下为数据局端应支持的两个核心高敏数据集的字段字典规范。
 
-### 5.1 数据集 1：医保就医与费用结算数据集 (ds_yibao / API 1 · 18 字段)
+### 5.1 数据集 1：医保就医与费用结算数据集 (ds_yibao / API 1 · 19 字段)
 
 - **数据集标识**：`ds_yibao`
 - **业务场景**：医疗保险结算、门诊慢特病审核、住院就医行为分析、异地就医合规核查。
-- **字段总数**：**18 个**
+- **字段总数**：**19 个**
 
 | 序号 | 字段英文名 (物理名) | 字段中文名 | 数据类型 | 必填 |  取值范围 / 样例数据 | 业务含义与说明 |
 |---|---|---|---|---|---|---|
@@ -1328,6 +1270,7 @@ message TestConnectionResponse {
 | 16 | `icd10_code` | ICD-10 疾病编码 | `string` | 是 | `A51.000`, `I21.900`, `C34.900` | 国际疾病分类标准编码 ICD-10，属于极度高敏健康生理诊断特征 |
 | 17 | `diagnosis_name` | 临床诊断中文名称 | `string` | 是 | `硬下疳伴TPPA滴度1:64阳性(早期梅毒)`, `原发性高血压` | 医生书写的临床疾病确诊中文全称 |
 | 18 | `admission_condition` | 入院病情评估 | `string` | 是 | `一般`, `急`, `重`, `危` | 入院时患者病情严重程度评级 |
+| 19 | `id_card_no` | 公民身份证号 | `string` | 是 | `510101199001011234` | 18 位中国居民身份证号码（极高敏身份核验要素），用于按身份证号精确查询单条记录 |
 
 ---
 
@@ -1503,7 +1446,7 @@ curl -s http://127.0.0.1:8083/api/datasources | jq .
 # 3. 测试医保数据源连通性
 curl -s -X POST http://127.0.0.1:8083/api/datasources/ds_yibao/test | jq .
 
-# 4. 探查医保数据源 Schema 结构 (必须包含 18 字段)
+# 4. 探查医保数据源 Schema 结构 (必须包含 19 字段)
 curl -s http://127.0.0.1:8083/api/datasources/ds_yibao/metadata | jq .
 
 # 5. 抽取医保数据源前 5 条记录 (规范路径)
@@ -1535,7 +1478,7 @@ grpcurl -plaintext 127.0.0.1:50053 datasourcemgr.DataSourceManagerService/ListDa
 - [ ] **双协议支持**：HTTP REST (:8083) 与 gRPC (:50053) 均能正常连通与响应；
 - [ ] **唯一直接调用方对齐**：仅接收来自 `service-hub`（调度中枢）的请求，支持 CN 为 `service-hub` 的 mTLS 认证；
 - [ ] **核心数据集字段对齐**：
-  - [ ] 医保数据集 (`ds_yibao`) 严格输出本规范第 5.1 节定义的 **18 个字段**，字段名与含义完全一致；
+  - [ ] 医保数据集 (`ds_yibao`) 严格输出本规范第 5.1 节定义的 **19 个字段**，字段名与含义完全一致；
   - [ ] 康养数据集 (`ds_kangyang`) 严格输出本规范第 5.2 节定义的 **27 个字段**，字段名与含义完全一致；
 - [ ] **分页边界防崩**：`limit=0`、`limit=1000`、`offset=99999` 等边界输入测试通过，无 panic 或无界查询；
 - [ ] **统一错误信封**：所有 HTTP 4xx/5xx 错误均返回包含 `code`, `message`, `detail`, `trace_id`, `timestamp` 的标准 JSON；

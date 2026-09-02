@@ -19,7 +19,7 @@
 
 | 测试文件 | 测试用例 | 验证重点 |
 |---|---|---|
-| [`pipeline_test.go`](../../privacy-go-sdk/medical/pipeline_test.go) | `TestProcessMedicalData` | 验证全套医保 18 / 康养 27 字段分类、分级报告与脱敏输出 |
+| [`pipeline_test.go`](../../privacy-go-sdk/medical/pipeline_test.go) | `TestProcessMedicalData` | 验证全套医保 19 / 康养 27 字段分类、分级报告与脱敏输出 |
 | | `TestProcessMedicalBatchChunked` | 验证多核分块并发计算与单核处理结果严格一致性 |
 | | `TestSanitizeMedicalRecord` | 验证单条医疗记录脱敏映射 |
 | [`rules_test.go`](../../privacy-go-sdk/medical/rules_test.go) | `TestRedactMedicalText_ZeroLeakage` | 验证 HIV、肿瘤、精神分裂等 40+ 敏感词绝对无明文残留 |

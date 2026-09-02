@@ -383,9 +383,10 @@ type DataApiDef struct {
 type DataApiInvokeRequest struct {
 	APICode      string `json:"api_code"`
 	DatasourceID string `json:"datasource_id"`
-	ApiID        int    `json:"api_id"` // DEPRECATED: 请改用 api_code
-	Limit        int    `json:"limit"`
-	Lean         bool   `json:"lean"` // 轻量模式：跳过 raw_records/sanitized_data 序列化（压测/监控专用）
+	ApiID        int    `json:"api_id"`     // DEPRECATED: 请改用 api_code
+	IDCardNo     string `json:"id_card_no"` // 公民身份证号（必填，18 位），按身份证号查询单条记录
+	Limit        int    `json:"limit"`      // DEPRECATED: 不再支持批量拉取，保留用于向后兼容
+	Lean         bool   `json:"lean"`       // 轻量模式：跳过 raw_records/sanitized_data 序列化（压测/监控专用）
 }
 
 // DataApiSessionStage 记录完整会话生命周期中的一个步骤。
@@ -411,8 +412,8 @@ type DataApiSessionResponse struct {
 	ApiID         int                   `json:"api_id"`        // DEPRECATED: 等于 seq
 	ApiName       string                `json:"api_name"`
 	Status        string                `json:"status"`                   // 整体状态："completed" | "partial" | "failed"
-	RawRecords    []map[string]any      `json:"raw_records,omitempty"`    // 从数据源获取的原始记录
-	SanitizedData []map[string]any      `json:"sanitized_data,omitempty"` // 脱敏后的记录
+	RawRecords    []map[string]any      `json:"raw_records"`              // 从数据源获取的原始记录（始终返回数组）
+	SanitizedData []map[string]any      `json:"sanitized_data"`           // 脱敏后的记录（始终返回数组）
 	Stages        []DataApiSessionStage `json:"stages"`                   // 各阶段执行详情
 	AuditEntryID  string                `json:"audit_entry_id,omitempty"` // 写入审计日志的条目 ID
 	TotalDuration int64                 `json:"total_duration_ms"`        // 会话总耗时（毫秒）

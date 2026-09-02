@@ -563,6 +563,65 @@ func (c *ClientPool) GetDatasourceSlice(ctx context.Context, rawID string, limit
 	}, nil
 }
 
+// GetDatasourceRecordByIDCard 按身份证号从 datasource-mgr 查询单条记录。
+//
+// canonical 调用路径：GET {DatasourceURL}/api/datasources/{id}/record-by-id?id_card_no=xxx
+//
+// 入站 rawID 允许任意注册表表现（canonical / slug / 文件名 / 中文名 / api_code），
+// 在服务边界归一化一次。返回结果包装为 DatasourceSliceResponse（Records 只有 1 条或 0 条）。
+func (c *ClientPool) GetDatasourceRecordByIDCard(ctx context.Context, rawID, idCardNo string) (models.DatasourceSliceResponse, error) {
+	datasourceID, err := ResolveDatasourceID(rawID)
+	if err != nil {
+		return models.DatasourceSliceResponse{}, err
+	}
+
+	url := fmt.Sprintf("%s/api/datasources/%s/record-by-id?id_card_no=%s",
+		strings.TrimRight(c.cfg.DatasourceURL, "/"), datasourceID, idCardNo)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	c.setHeaders(req, "datasource", "")
+	if err != nil {
+		return models.DatasourceSliceResponse{}, err
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return models.DatasourceSliceResponse{}, fmt.Errorf("datasource-mgr unreachable: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return models.DatasourceSliceResponse{}, fmt.Errorf("datasource-mgr returned HTTP %d", resp.StatusCode)
+	}
+
+	var result struct {
+		DatasourceID string         `json:"datasource_id"`
+		Record       map[string]any `json:"record"`
+		Found        bool           `json:"found"`
+		Via          string         `json:"via"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return models.DatasourceSliceResponse{}, fmt.Errorf("failed to decode record: %v", err)
+	}
+
+	records := make([]map[string]any, 0, 1)
+	if result.Found && result.Record != nil {
+		records = append(records, result.Record)
+	}
+
+	returnedID := result.DatasourceID
+	if returnedID == "" {
+		returnedID = datasourceID
+	}
+
+	return models.DatasourceSliceResponse{
+		DatasourceID: returnedID,
+		Count:        len(records),
+		Total:        len(records),
+		Records:      records,
+		Source:       "datasource-mgr",
+	}, nil
+}
+
 // fallbackSlice 构造带降级标记的本地样本切片。
 func fallbackSlice(datasourceID string, limit int, detail string) models.DatasourceSliceResponse {
 	slice := generateSampleSlice(datasourceID, limit)
@@ -597,7 +656,7 @@ func generateSampleSlice(datasourceID string, limit int) models.DatasourceSliceR
 	}
 }
 
-// sampleYibaoRecord 构造一条医保结算样本记录（18 字段，与 catalog.Fields(naming.DSYibao) 同序）。
+// sampleYibaoRecord 构造一条医保结算样本记录（19 字段，与 catalog.Fields(naming.DSYibao) 同序）。
 func sampleYibaoRecord(i int) map[string]any {
 	return map[string]any{
 		"insurance_settlement_id": fmt.Sprintf("YB202601%04d", i),
@@ -618,6 +677,7 @@ func sampleYibaoRecord(i int) map[string]any {
 		"icd10_code":              "E11.900",
 		"diagnosis_name":          "2型糖尿病",
 		"admission_condition":     "一般",
+		"id_card_no":              fmt.Sprintf("51010119%02d0615123%d", 50+i%40, i%10),
 	}
 }
 

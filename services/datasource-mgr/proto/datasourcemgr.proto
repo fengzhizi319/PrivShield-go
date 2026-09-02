@@ -25,6 +25,9 @@ service DataSourceManagerService {
   // 模拟数据源连通性测试
   rpc TestConnection(TestConnectionRequest) returns (TestConnectionResponse);
 
+  // 按身份证号查询单条记录
+  rpc GetRecordByIDCard(GetRecordByIDCardRequest) returns (SingleRecordResponse);
+
   // DEPRECATED RPCs (Sunset: 2027-02-01)
   rpc GetYibaoData(DataQueryRequest) returns (DataQueryResponse) { option deprecated = true; }
   rpc GetKangyangData(DataQueryRequest) returns (DataQueryResponse) { option deprecated = true; }
@@ -101,4 +104,16 @@ message TestConnectionResponse {
   bool success = 2;
   int64 latency_ms = 3;
   string via = 4;
+}
+
+message GetRecordByIDCardRequest {
+  string source_id = 1;    // 数据源标识，如 "ds_yibao", "ds_kangyang"
+  string id_card_no = 2;   // 18 位公民身份证号
+}
+
+message SingleRecordResponse {
+  string datasource_id = 1;  // 规范数据源标识符
+  DataRowProto record = 2;   // 查询到的单条记录
+  bool found = 3;            // 是否找到匹配记录
+  string via = 4;            // 服务节点标识
 }

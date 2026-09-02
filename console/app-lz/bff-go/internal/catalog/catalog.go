@@ -30,7 +30,7 @@ var schemas = map[string]schema{
 		NameZh: "医保结算数据 API",
 		NameEn: "Medical Insurance Settlement API",
 		Description: fmt.Sprintf(
-			"城镇职工基本医疗保险结算数据 (%s 18 字段)，包含结算流水号、人员标识、性别、出生日期、入院/出院日期、住院天数、科室、医院编码、医疗类别、离院方式、ICD-10 诊断编码、诊断名称、入院病情等敏感字段。",
+			"城镇职工基本医疗保险结算数据 (%s 19 字段)，包含结算流水号、人员标识、性别、出生日期、入院/出院日期、住院天数、科室、医院编码、医疗类别、离院方式、ICD-10 诊断编码、诊断名称、入院病情、身份证号等敏感字段。",
 			fileNameOf(naming.DSYibao)),
 		Fields: []string{
 			"insurance_settlement_id", "person_id", "gender", "birth_date",
@@ -38,7 +38,7 @@ var schemas = map[string]schema{
 			"admission_dept", "discharge_dept", "hospital_code",
 			"medical_category", "discharge_mode", "settlement_seq_no",
 			"diagnosis_seq", "diagnosis_type", "icd10_code",
-			"diagnosis_name", "admission_condition",
+			"diagnosis_name", "admission_condition", "id_card_no",
 		},
 	},
 	naming.DSKangyang: {

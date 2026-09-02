@@ -867,7 +867,7 @@ clients:
 
 | 序号 | API Code | Datasource ID | 状态 | 领域 | 字段数 | 别名示例 |
 |---|---|---|---|---|---|---|
-| 1 | `api1_yibao` | `ds_yibao` | active | medical | 18 | yibao, 医保, 医保结算 |
+| 1 | `api1_yibao` | `ds_yibao` | active | medical | 19 | yibao, 医保, 医保结算 |
 | 2 | `api2_kangyang` | `ds_kangyang` | active | healthcare | 27 | kangyang, 康养, 康养体检 |
 | 3 | (未绑定) | `ds_mock3` | reserved | reserved | - | mock3, 政务 |
 | 4 | (未绑定) | `ds_mock4` | reserved | reserved | - | mock4, 企业, 金融 |

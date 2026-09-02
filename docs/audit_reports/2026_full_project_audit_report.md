@@ -125,7 +125,7 @@
    * **范畴化泛化 (Generalize)**：对恶性肿瘤 (C00–D49)、病毒性肝炎 (B15–B19)、严重器官衰竭 (I21/J44/N18) 泛化为上位概念（如“消化系统相关疾病”）；
    * **常规慢病零篡改**：高血压、糖尿病等常规慢病原样保留，最大化保留临床与康养业务价值。
 4. **两大核心政务数据资产规约闭环**：
-   * **医保结算数据接口 (`ds_yibao`，18 字段)**：包含 `insurance_settlement_id`、`person_id`、`icd10_code`、`diagnosis_name` 等字段定级与脱敏策略；
+   * **医保结算数据接口 (`ds_yibao`，19 字段)**：包含 `insurance_settlement_id`、`person_id`、`icd10_code`、`diagnosis_name`、`id_card_no` 等字段定级与脱敏策略；
    * **康养体征数据接口 (`ds_kangyang`，27 字段)**：包含患者姓名、身份证、主诉病史、残疾证号及体征拉普拉斯差分加噪（$\varepsilon=1.0$）规约。
 
 ---

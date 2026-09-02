@@ -50,7 +50,7 @@ export const PipelineVisualizer: React.FC<PipelineVisualizerProps> = ({
   const sampleYibao = {
     record_id: 'YB-2026-98124',
     patient_name: '张三',
-    id_card: '510101199001011234',
+    id_card: '110101196809171010',
     phone: '13800138000',
     diagnosis: '高血压合并冠心病 (II级高危)',
     hospital_name: '四川大学华西医院',

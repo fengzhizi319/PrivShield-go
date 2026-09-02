@@ -229,7 +229,7 @@ BFF 从 Prometheus 文本格式中提取：
 
 | ID | 名称 | 数据源 | 字段数 | 状态 |
 |----|------|--------|--------|------|
-| 1 | 医保结算数据 API | ds_yibao | 18 | active |
+| 1 | 医保结算数据 API | ds_yibao | 19 | active |
 | 2 | 康养体征数据 API | ds_kangyang | 27 | active |
 | 3 | 预留数据 API #3 | — | 0 | reserved |
 | 4 | 预留数据 API #4 | — | 0 | reserved |

@@ -63,7 +63,7 @@ export const TaskLifecyclePanel: React.FC<TaskLifecyclePanelProps> = ({
 
   const yibaoPayloadTemplate = {
     patient_name: '张三',
-    id_card: '510101199001011234',
+    id_card: '110101196809171010',
     phone: '13800138000',
     diagnosis: '2型糖尿病',
   };

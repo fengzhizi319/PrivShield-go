@@ -56,7 +56,7 @@ BFF 的预设数据 API 会话（`console/app-lz/bff-go/internal/handlers/handle
 
 | 业务 API | 中文展示名 | 英文展示名 | canonical `api_code` | canonical `datasource_id` | URL slug | 文件名 | 状态 |
 |---|---|---|---|---|---|---|---|
-| API1 | 医保结算数据接口 | Medical Insurance Settlement API | `api1_yibao` | `ds_yibao` | `yibao` | `yibao.csv`（18 字段） | active |
+| API1 | 医保结算数据接口 | Medical Insurance Settlement API | `api1_yibao` | `ds_yibao` | `yibao` | `yibao.csv`（19 字段） | active |
 | API2 | 康养健康档案接口 | Elderly-Care Health Record API | `api2_kangyang` | `ds_kangyang` | `kangyang` | `kangyang.csv`（27 字段） | active |
 | 占位 3 | 预留政务数据源 3 | Reserved Municipal Dataset 3 | — | `ds_mock3` | `mock3` | `mock3.csv` | reserved |
 | 占位 4 | 预留企业/金融数据源 4 | Reserved Enterprise Dataset 4 | — | `ds_mock4` | `mock4` | `mock4.csv` | reserved |

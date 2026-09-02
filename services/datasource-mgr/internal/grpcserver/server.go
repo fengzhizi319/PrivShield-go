@@ -275,6 +275,46 @@ func (s *GRPCServer) TestConnection(ctx context.Context, req *pb.TestConnectionR
 	}, nil
 }
 
+// GetRecordByIDCard implements RPC for querying a single record by ID card number.
+// GetRecordByIDCard 实现按身份证号查询单条记录的 RPC 方法。
+func (s *GRPCServer) GetRecordByIDCard(ctx context.Context, req *pb.GetRecordByIDCardRequest) (*pb.SingleRecordResponse, error) {
+	if strings.TrimSpace(req.SourceId) == "" {
+		return nil, status.Error(codes.InvalidArgument, "source_id is required")
+	}
+	if strings.TrimSpace(req.IdCardNo) == "" {
+		return nil, status.Error(codes.InvalidArgument, "id_card_no is required")
+	}
+	if len(req.IdCardNo) != 18 {
+		return nil, status.Error(codes.InvalidArgument, "id_card_no must be 18 characters")
+	}
+
+	record, canonID, err := handlers.GetRecordByIDCard(req.SourceId, req.IdCardNo)
+	if err != nil {
+		if err == handlers.ErrRecordNotFound {
+			return &pb.SingleRecordResponse{
+				DatasourceId: canonID,
+				Record:       nil,
+				Found:        false,
+				Via:          moduleVia,
+			}, nil
+		}
+		return nil, status.Errorf(codes.NotFound, "%v", err)
+	}
+
+	// Convert map[string]any to proto DataRowProto
+	fieldMap := make(map[string]string, len(record))
+	for k, v := range record {
+		fieldMap[k] = fmt.Sprintf("%v", v)
+	}
+
+	return &pb.SingleRecordResponse{
+		DatasourceId: canonID,
+		Record:       &pb.DataRowProto{Fields: fieldMap},
+		Found:        true,
+		Via:          moduleVia,
+	}, nil
+}
+
 // toDataQueryResponse transforms raw map rows into standard protobuf DataQueryResponse.
 // toDataQueryResponse 将底层的动态键值对数据行（[]map[string]any）转换为强类型的 Protobuf DataQueryResponse 响应对象。
 func toDataQueryResponse(id, name string, total, limit, offset int, rows []map[string]any) *pb.DataQueryResponse {

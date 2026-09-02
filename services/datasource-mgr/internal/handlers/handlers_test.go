@@ -302,6 +302,71 @@ func TestSeedDataSources(t *testing.T) {
 	}
 }
 
+// TestGetRecordByIDCard verifies GET /api/datasources/:id/record-by-id returns a single record.
+// TestGetRecordByIDCard 验证按身份证号查询单条记录端点：
+// 1. 请求 GET /api/datasources/ds_yibao/record-by-id?id_card_no=110101196809171010；
+// 2. 验证响应状态码 200 OK，found=true，且记录包含匹配的 id_card_no；
+// 3. 查询不存在的身份证号时 found=false；
+// 4. 缺少 id_card_no 参数时返回 400。
+func TestGetRecordByIDCard(t *testing.T) {
+	r := newTestRouter()
+
+	// 1. 正常查询：使用 yibao.csv 第一行的身份证号
+	req, _ := http.NewRequest("GET", "/api/datasources/ds_yibao/record-by-id?id_card_no=110101196809171010", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["found"] != true {
+		t.Errorf("expected found=true, got %+v", resp)
+	}
+	if resp["datasource_id"] != "ds_yibao" {
+		t.Errorf("expected datasource_id=ds_yibao, got %+v", resp)
+	}
+	record, ok := resp["record"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected record to be a map, got %T", resp["record"])
+	}
+	// id_card_no 是纯数字字符串，CSV 加载器会推断为 int64，
+	// JSON 反序列化到 map[string]any 时变为 float64，因此用 RawMessage 精确验证。
+	var rawResp map[string]json.RawMessage
+	_ = json.Unmarshal(w.Body.Bytes(), &rawResp)
+	var rawRecord map[string]json.RawMessage
+	_ = json.Unmarshal(rawResp["record"], &rawRecord)
+	idCardRaw := strings.Trim(string(rawRecord["id_card_no"]), `"`)
+	if idCardRaw != "110101196809171010" {
+		t.Errorf("expected record with id_card_no=110101196809171010, got %s (raw record: %+v)", idCardRaw, record)
+	}
+
+	// 2. 查询不存在的身份证号
+	req2, _ := http.NewRequest("GET", "/api/datasources/ds_yibao/record-by-id?id_card_no=000000000000000000", nil)
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected 200 for not-found, got %d", w2.Code)
+	}
+	var resp2 map[string]any
+	_ = json.Unmarshal(w2.Body.Bytes(), &resp2)
+	if resp2["found"] != false {
+		t.Errorf("expected found=false for non-existent id, got %+v", resp2)
+	}
+
+	// 3. 缺少 id_card_no 参数时应返回 400
+	req3, _ := http.NewRequest("GET", "/api/datasources/ds_yibao/record-by-id", nil)
+	w3 := httptest.NewRecorder()
+	r.ServeHTTP(w3, req3)
+
+	if w3.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing id_card_no, got %d", w3.Code)
+	}
+}
+
 func TestLoadCSVRecords_PathTraversal(t *testing.T) {
 	// Absolute path attempts should be rejected by the allow-list / basename logic.
 	malicious := []string{

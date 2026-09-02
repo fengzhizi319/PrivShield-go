@@ -208,10 +208,10 @@ const AppContent: React.FC = () => {
   }, []);
 
   // 7. 调用预设数据 API 会话（前端直接消费，返回完整会话结果）
-  const invokeDataApi = useCallback(async (apiId: number, limit: number): Promise<DataApiSessionResponse> => {
+  const invokeDataApi = useCallback(async (apiId: number, idCardNo: string): Promise<DataApiSessionResponse> => {
     setLoadingDataApi(true);
     try {
-      return await api.invokeDataApi(apiId, limit);
+      return await api.invokeDataApi(apiId, idCardNo);
     } catch (err: any) {
       return {
         session_id: `session-${apiId}-fallback`,

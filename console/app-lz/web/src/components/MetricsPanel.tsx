@@ -90,7 +90,7 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
       if (abortRef.current) return;
       const t0 = performance.now();
       try {
-        await api.invokeDataApi(stressApiId, 3);
+        await api.invokeDataApi(stressApiId, '110101196809171010');
         latencies.push(performance.now() - t0);
         successCount++;
       } catch {

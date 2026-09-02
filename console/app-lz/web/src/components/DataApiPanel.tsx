@@ -8,12 +8,12 @@
  *  4. 手风琴式数据对比视图（DataAccordionView）：支持逐行展开查看字段级脱敏详情
  *
  * 全链路会话流程：
- *  前端 → BFF → Service Hub 调度 → Datasource Mgr 拉取原始数据
- *  → Engine 分类脱敏 → Audit Log 存证 → 前端展示
+ *  前端 → BFF → Service Hub 调度 → Datasource Mgr 按身份证号查询单条记录
+ *  → Engine 分类脱敏 → Audit Log 存证 → 前端展示结果
  *
  * 状态管理：
  *  - selectedApiId: 当前选中的 API
- *  - limit: 采样条数（3/5/10/20）
+ *  - idCardNo: 身份证号输入
  *  - session: 会话结果（含原始数据 + 脱敏数据 + 各阶段状态）
  *  - showRaw: 是否显示原始 JSON（vs 手风琴模式）
  *  - expandedRows: 手风琴模式中展开的行
@@ -36,8 +36,8 @@ import {
 interface DataApiPanelProps {
   /** 预设数据 API 定义列表（4 个） */
   apis: DataApiDef[];
-  /** 调用数据 API 的回调（触发全链路会话） */
-  onInvoke: (apiId: number, limit: number) => Promise<DataApiSessionResponse>;
+  /** 调用数据 API 的回调（触发全链路会话，传入 apiId 和身份证号） */
+  onInvoke: (apiId: number, idCardNo: string) => Promise<DataApiSessionResponse>;
   /** 是否正在加载中 */
   loading: boolean;
 }
@@ -49,7 +49,7 @@ export const DataApiPanel: React.FC<DataApiPanelProps> = ({
 }) => {
   const { t } = useI18n();
   const [selectedApiId, setSelectedApiId] = useState<number | null>(null);
-  const [limit, setLimit] = useState(5);
+  const [idCardNo, setIdCardNo] = useState('');
   const [session, setSession] = useState<DataApiSessionResponse | null>(null);
   const [invoking, setInvoking] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
@@ -57,10 +57,15 @@ export const DataApiPanel: React.FC<DataApiPanelProps> = ({
 
   /** 调用指定 API 的全链路会话 */
   const handleInvoke = async (apiId: number) => {
+    const trimmedId = idCardNo.trim();
+    if (trimmedId.length !== 18) {
+      alert('请输入 18 位身份证号');
+      return;
+    }
     setInvoking(true);
     setSession(null);
     try {
-      const res = await onInvoke(apiId, limit);
+      const res = await onInvoke(apiId, trimmedId);
       setSession(res);
     } catch (err: any) {
       alert(`API 调用失败: ${err.message}`);
@@ -97,17 +102,36 @@ export const DataApiPanel: React.FC<DataApiPanelProps> = ({
 
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 text-xs">
-            <span className="text-slate-400">{t('dataApi.sampleLimit')}:</span>
-            <select
-              value={limit}
-              onChange={(e) => setLimit(Number(e.target.value))}
-              className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-200 font-mono focus:outline-none focus:border-cyan-500"
-            >
-              <option value={3}>3 条</option>
-              <option value={5}>5 条</option>
-              <option value={10}>10 条</option>
-              <option value={20}>20 条</option>
-            </select>
+            <span className="text-slate-400">身份证号:</span>
+            <div className="relative">
+              <input
+                type="text"
+                list="id-card-presets"
+                value={idCardNo}
+                onChange={(e) => setIdCardNo(e.target.value.replace(/[^0-9Xx]/g, '').slice(0, 18))}
+                placeholder="点击选择或输入身份证号"
+                className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-200 font-mono w-56 focus:outline-none focus:border-cyan-500 placeholder:text-slate-600"
+                autoComplete="off"
+              />
+              <datalist id="id-card-presets">
+                <option value="110101196809171010">医保 — 硬下疳(早期梅毒)</option>
+                <option value="51010119940527103X">医保 — HIV抗体阳性</option>
+                <option value="31010119431103106X">医保 — 原发性肺癌</option>
+                <option value="440101195402131086">医保 — 亨廷顿舞蹈病</option>
+                <option value="330101199201231091">医保 — 社区获得性肺炎</option>
+                <option value="420101196909261120">医保 — 急性前壁心肌梗死</option>
+                <option value="500101195603151178">医保 — 急性阑尾炎</option>
+                <option value="110105198402151071">康养 — 急性心肌梗死(萧志明)</option>
+                <option value="110105198303151148">康养 — 重度精神分裂症(郭凯)</option>
+                <option value="110105198204151214">康养 — 梅毒(韩雨泽)</option>
+                <option value="110105198105151286">康养 — HIV感染(刘斌)</option>
+                <option value="110105198006151352">康养 — 遗传性亨廷顿舞蹈病(张丽华)</option>
+                <option value="000000000000000000">⚠ 不存在(反向测试)</option>
+              </datalist>
+            </div>
+            {idCardNo.length === 18 && (
+              <span className="text-emerald-400 text-[10px]">✓</span>
+            )}
           </div>
         </div>
       </div>
@@ -319,7 +343,7 @@ export const DataApiPanel: React.FC<DataApiPanelProps> = ({
           </div>
 
           {/* Data Diff View — Accordion Style */}
-          {session.raw_records.length > 0 && (
+          {(session.raw_records?.length ?? 0) > 0 && (
             <DataAccordionView
               rawRecords={session.raw_records}
               sanitizedData={session.sanitized_data}

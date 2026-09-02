@@ -266,15 +266,16 @@ export const api = {
   },
 
   /**
-   * 调用指定的预设数据 API，执行完整的 4 阶段会话。
+   * 调用指定的预设数据 API，执行完整的 5 阶段会话。
    * @param apiId 数据 API 的 ID（1-4）
-   * @param limit 返回记录数上限，默认 5
+   * @param idCardNo 公民身份证号（18 位），按身份证号查询单条记录
+   * @param lean 轻量模式（可选）
    * @returns 完整会话结果（含原始数据、脱敏后数据、各阶段耗时）
    */
-  async invokeDataApi(apiId: number, limit = 5, lean = false): Promise<DataApiSessionResponse> {
+  async invokeDataApi(apiId: number, idCardNo: string, lean = false): Promise<DataApiSessionResponse> {
     return fetchJSON<DataApiSessionResponse>(`${BASE_URL}/data-api/invoke`, {
       method: 'POST',
-      body: JSON.stringify({ api_id: apiId, limit, lean }),
+      body: JSON.stringify({ api_id: apiId, id_card_no: idCardNo, lean }),
     });
   },
 

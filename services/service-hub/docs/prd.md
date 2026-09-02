@@ -11,7 +11,7 @@
 | gRPC 端口 | `50052` | 默认监听地址 `127.0.0.1:50052`（支持国密 SM2 / TLS 1.3 mTLS 与 CN 白名单） |
 | 开发语言与框架 | Go 1.24+ / Gin / gRPC | 原生协程并发、强类型、高吞吐 |
 | 上游依赖 | PrivShield Agent (`:8079` REST) | 3 层动态分类漏斗与脱敏隐私原语 |
-| 下游数据源依赖 | datasource-mgr (`:8083` REST / `:50053` gRPC) | 医保 (`ds_yibao` 18字段) / 康养 (`ds_kangyang` 27字段) 等仿真模拟数据源 |
+| 下游数据源依赖 | datasource-mgr (`:8083` REST / `:50053` gRPC) | 医保 (`ds_yibao` 19字段) / 康养 (`ds_kangyang` 27字段) 等仿真模拟数据源 |
 | 下游审计依赖 | audit-log (`:8084` REST / `:50054` gRPC) | 国密 SM3 区块链式防篡改存证与 SM4-GCM 快照 |
 | 存储引擎 | PostgreSQL Phase B (多副本原子租约) / SQLite WAL (自愈降级) | 任务持久化、自适应连接池与崩溃恢复 |
 | 行业标准 | 四川省健康医疗大数据应用指南 DB51/T 2989—2023 | L1~L5 五级分级、6 类字段矩阵与四柱强剥离 |

@@ -500,10 +500,22 @@ func (h *Handler) InvokeDataApi(c *gin.Context) {
 		req.Limit = 5
 	}
 
+	// 身份证号必填校验（按身份证号查询单条记录）
+	if strings.TrimSpace(req.IDCardNo) == "" {
+		ue := &clients.UpstreamError{
+			Code:    clients.CodeInvalidRequest,
+			Message: "id_card_no is required for data API invocation",
+			Field:   "id_card_no",
+			Status:  http.StatusBadRequest,
+		}
+		c.JSON(ue.StatusCode(), ue.Body("app-lz-bff"))
+		return
+	}
+
 	sessionID := fmt.Sprintf("session-%s-%d", apiDef.APICode, time.Now().UnixNano())
 	stages := make([]models.DataApiSessionStage, 0, 5)
-	var rawRecords []map[string]any
-	var sanitizedData []map[string]any
+	rawRecords := make([]map[string]any, 0)
+	sanitizedData := make([]map[string]any, 0)
 	overallStatus := "completed"
 
 	// ── 阶段 1：ingest ───────────────────────────────────────────
@@ -517,23 +529,27 @@ func (h *Handler) InvokeDataApi(c *gin.Context) {
 		Detail:     fmt.Sprintf("API 标识 %s (%s) 校验通过", apiDef.APICode, apiDef.DatasourceID),
 	})
 
-	// ── 阶段 2：从 datasource-mgr 拉取原始数据 (fetch) ─────────────
+	// ── 阶段 2：从 datasource-mgr 按身份证号查询单条记录 (fetch) ────────────
 	fetchStart := time.Now()
-	sliceResp, fetchErr := h.pool.GetDatasourceSlice(c.Request.Context(), apiDef.DatasourceID, req.Limit, 0)
+	sliceResp, fetchErr := h.pool.GetDatasourceRecordByIDCard(c.Request.Context(), apiDef.DatasourceID, req.IDCardNo)
 	fetchDuration := time.Since(fetchStart).Milliseconds()
 	if fetchErr != nil {
 		stages = append(stages, models.DataApiSessionStage{
-			Name: "fetch", Title: "数据源原始数据拉取", Status: "error",
+			Name: "fetch", Title: "数据源按身份证号查询", Status: "error",
 			Source: "datasource-mgr", DurationMs: fetchDuration, NetworkMs: fetchDuration,
 			Detail: fetchErr.Error(),
 		})
 		overallStatus = "partial"
 	} else {
 		rawRecords = sliceResp.Records
+		foundText := "未找到"
+		if len(rawRecords) > 0 {
+			foundText = "已找到"
+		}
 		stages = append(stages, models.DataApiSessionStage{
-			Name: "fetch", Title: "数据源原始数据拉取", Status: "success",
+			Name: "fetch", Title: "数据源按身份证号查询", Status: "success",
 			Source: sliceResp.Source, DurationMs: fetchDuration, NetworkMs: fetchDuration,
-			Detail: fmt.Sprintf("从 %s 拉取 %d 条原始记录", apiDef.DatasourceID, len(rawRecords)),
+			Detail: fmt.Sprintf("按身份证号 %s 从 %s 查询记录，%s %d 条", req.IDCardNo, apiDef.DatasourceID, foundText, len(rawRecords)),
 		})
 	}
 

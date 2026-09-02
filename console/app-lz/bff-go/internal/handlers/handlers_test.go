@@ -214,8 +214,9 @@ func TestInvokeDataApiContractAndFailClosed(t *testing.T) {
 
 	// 1. 正常调用 API1
 	invokePayload := models.DataApiInvokeRequest{
-		APICode: "api1_yibao",
-		Limit:   3,
+		APICode:  "api1_yibao",
+		IDCardNo: "510101199001011234",
+		Limit:    3,
 	}
 	data, _ := json.Marshal(invokePayload)
 	w := httptest.NewRecorder()

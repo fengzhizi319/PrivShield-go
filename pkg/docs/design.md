@@ -463,7 +463,7 @@ func IsLoopbackHost(host string) bool
 
 ```go
 var Registry = []Entry{
-    // 1. 医保结算数据接口 (active, 18 字段, 9 别名)
+    // 1. 医保结算数据接口 (active, 19 字段, 9 别名)
     {APICode: "api1_yibao", DataSourceID: "ds_yibao", Status: "active", ...},
     // 2. 康养健康档案接口 (active, 27 字段, 9 别名)
     {APICode: "api2_kangyang", DataSourceID: "ds_kangyang", Status: "active", ...},

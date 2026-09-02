@@ -181,7 +181,7 @@ graph TD
 | **龙城云节点** | 外部业务应用池 | • 康养 APP 业务系统 (`app-lz`)<br/>• 康养业务 Agent 集群 | 位于业务云 VPC，通过国密 VPN 连接政务云网关 | 康养业务运营方 |
 | **云虚拟机主机甲** | 网关算力节点 (ECS) | • 数联数据服务调度中枢 (`service-hub:8082` / `:50052`)<br/>• 隐私计算引擎 PrivShield Agent (`engine-go:8079` / `:50051`，纯 Go) | 仅开放特定 VPN 接入端口，中枢与脱敏引擎使用 `127.0.0.1` 本地环回通信；**域内 TLS/mTLS 需显式开启（默认关闭）** | 数联技术运营方（受局方监管） |
 | **云虚拟机主机乙** | 独立安全审计节点 (ECS) | • 脱敏审计日志服务器 (`audit-log:8084` / `:50054`)<br/>• 审计数据库与链式存证文件（SQLite / PostgreSQL 可选） | 独立审计 VPC 子网，与主机甲安全组单向存证通信（⚠️ 云平台配置项），暴露局方只读核验端点 | **柳州数据局安全监管组专属** |
-| **数据局专区** | 局方核心数据资产底座 | • 柳州数据局内部原始数据库 (`datasource-mgr:8083` / `:50053`)<br/>• 模拟底座由 `samples/*.csv` 文件驱动（医保 18 字段 / 康养 27 字段） | 核心受控 VPC 子网，禁止外网直连，仅响应主机甲的鉴权请求 | **柳州数据局独家持有与管控** |
+| **数据局专区** | 局方核心数据资产底座 | • 柳州数据局内部原始数据库 (`datasource-mgr:8083` / `:50053`)<br/>• 模拟底座由 `samples/*.csv` 文件驱动（医保 19 字段 / 康养 27 字段） | 核心受控 VPC 子网，禁止外网直连，仅响应主机甲的鉴权请求 | **柳州数据局独家持有与管控** |
 
 > **示范工程边界说明**：`datasource-mgr` 在当前交付形态下是**结构与数据同源的真实模拟库**（CSV 文件后备，非生产医保结算系统直连），用于验证定级、脱敏与存证链路的正确性；接入真实局方生产库需额外完成数据源适配、账号最小权限改造与密评（前置条件与门禁见 §11.3，后备存储档位整改见第十二章 **P1-8**）。
 
@@ -197,7 +197,7 @@ graph TD
 
 ### 3.2 局方数据底座：柳州数据局内部原始数据库 (模拟组件: `datasource-mgr`)
 * **实际业务职责**：汇聚柳州市各委办局全量原始高密数据（涵盖城镇职工/居民医保结算流水、慢病健康监护档案等）；
-* **代码组件映射** ✅：由 `services/datasource-mgr`（REST `:8083` / gRPC `:50053`）纳管，内置真实结构模拟库（`samples/yibao.csv` **18 字段 / 50 行**，`samples/kangyang.csv` **27 字段 / 100 行**，字段数与 `pkg/naming/naming.go:86,97` 的 `FieldCount` 声明一致）；后备存储为 **CSV 文件**（`DATASOURCE_MGR_DB_PATH` 在当前 Go 代码中未被读取）；
+* **代码组件映射** ✅：由 `services/datasource-mgr`（REST `:8083` / gRPC `:50053`）纳管，内置真实结构模拟库（`samples/yibao.csv` **19 字段 / 50 行**，`samples/kangyang.csv` **27 字段 / 100 行**，字段数与 `pkg/naming/naming.go:86,97` 的 `FieldCount` 声明一致）；后备存储为 **CSV 文件**（`DATASOURCE_MGR_DB_PATH` 在当前 Go 代码中未被读取）；
 * **受控专区安全防线**：数据库处于政务云最核心的受控 VPC 子网专区，**未脱敏的原始库表权限绝不对外开放**。其能力在代码中的真实接口形态为：
   * 元数据探查（文档中原称 “Probe”）：`GET /api/datasources/:id/metadata`、`POST /api/datasources/:id/test`；
   * 样本切片提取（文档中原称 “Sample Slicing”）：`GET /api/datasources/:id/records?limit=&offset=` 与别名端点 `GET /api/datasources/:id/sample`，gRPC 侧为 `GetData` / `GetDataBySource` / `TestConnection`；
@@ -428,7 +428,7 @@ graph TB
 | K-匿名 | `privacy-go-sdk/kano` | `/v1/privacy/kano/anonymize`、`/kano/table`、`/kano/dataframe` | `k=5`、`l=2`、`t=0.2`、`max_depth=10`（`profile/resolver.go:257`） | `Mondrian` 强制 `k ≥ 2` 且**行数 ≥ k**，否则直接报错返回（`mondrian.go:31-36`）——小样本数据源无法直接产 K-匿名结果 |
 | 查询混淆 | `privacy-go-sdk/qol` | `/v1/privacy/qol/obfuscate`、`/qol/obfuscate/batch` | `num_dummies=3`（`profile/resolver.go:259`） | 仅实现**诱饵注入 + 置乱**，**未实现「谓词泛化」**（原表述需按此口径修正）；诱饵取自固定词池，属**流量意图混淆**而非密码学保障 |
 
-> ⚠️ **重要实现差异（算子路由）**：数据服务中枢在创建任务时按 DB51 等级写入 `operation` 字段（`models.LevelToOperation`：L1→`none`、L2→`mask`、L3→`k_anon`、L4/L5→`dp`，`models/models.go:95-116`），但该字段**当前仅作为任务元数据与审计标签透传**；引擎侧统一流水线 `POST /v1/agent/process` 的实际处置是**按数据源标识路由**——`ds_yibao` 走医保 18 字段专用净化器、`ds_kangyang` 走康养 27 字段净化器、其余走通用 `MaskRecord`（`engine-go/internal/service/service.go:667-674`）。
+> ⚠️ **重要实现差异（算子路由）**：数据服务中枢在创建任务时按 DB51 等级写入 `operation` 字段（`models.LevelToOperation`：L1→`none`、L2→`mask`、L3→`k_anon`、L4/L5→`dp`，`models/models.go:95-116`），但该字段**当前仅作为任务元数据与审计标签透传**；引擎侧统一流水线 `POST /v1/agent/process` 的实际处置是**按数据源标识路由**——`ds_yibao` 走医保 19 字段专用净化器、`ds_kangyang` 走康养 27 字段净化器、其余走通用 `MaskRecord`（`engine-go/internal/service/service.go:667-674`）。
 >
 > 其直接后果是：**「L3→K-匿名、L4/L5→差分隐私」的等级-算子映射在流水线中并未自动生效**，K-匿名与差分隐私只能通过**显式调用各自 REST 原语端点**由业务方或中枢另行编排。同时该流水线返回的 `input_hash`/`output_hash` 使用 **SHA-256**（`service.go:705-712`），与审计存证侧的 SM3 口径并存（见 §6.2、§10）。
 >
@@ -438,11 +438,11 @@ graph TB
 
 针对本次接入的两大核心政务数据资产，方案内置了标准化的分类脱敏策略矩阵（对齐 DB51 规范）。
 
-> **本表为双轨口径**：**「权威等级」列**取自数据源资产管理的字段元数据契约（`services/datasource-mgr/docs/api.md:835-855` 医保 18 字段、`:864-893` 康养 27 字段）；**「引擎实际处置」与「实测输出」列**取自代码实测（`privacy-go-sdk/medical/pipeline.go:414-559`，经 `engine-go/internal/service/service.go:669,671` 调用）。两列不一致处即为**整改对象**，不是实现说明。
+> **本表为双轨口径**：**「权威等级」列**取自数据源资产管理的字段元数据契约（`services/datasource-mgr/docs/api.md:835-855` 医保 19 字段、`:864-893` 康养 27 字段）；**「引擎实际处置」与「实测输出」列**取自代码实测（`privacy-go-sdk/medical/pipeline.go:414-559`，经 `engine-go/internal/service/service.go:669,671` 调用）。两列不一致处即为**整改对象**，不是实现说明。
 
 策略生效顺序（`SanitizeField`，`pipeline.go:414-445`）：① `ICD10FieldNames` 命中 → ICD-10 编码治理；② `DateGeneralizationFields` 命中 → 日期截断至年月（`rules.go:205-214`）；③ **值**中含 L4/L5 高危词 → 临床文本抹平（`ContainsHighRiskText`/`RedactMedicalText`）；④ **字段名**精确命中 `YibaoFields`/`KangyangFields` 规格表 → 按类别处置（`pipeline.go:44-97`）；⑤ 否则走名称启发式 `sanitizeByHeuristic`（`pipeline.go:540-558`，按子串 `id|card` / `phone` / `name` / `mail` / `address` 分派，**全不命中则原样直传**）。
 
-#### 1. 医保结算数据接口 (`ds_yibao` / `api1_yibao`，18 字段)
+#### 1. 医保结算数据接口 (`ds_yibao` / `api1_yibao`，19 字段)
 
 | 字段标识 | 字段业务名称 | 权威等级 | 引擎实际处置（代码实测） | 实测输出示例 | 状态 |
 |---|---|:---:|---|---|:---:|
@@ -496,7 +496,7 @@ graph TB
 
 #### 矩阵级实现差异（须整改）
 
-1. 🔴 **规格表与数据契约字段名不匹配**：`YibaoFields`/`KangyangFields`（`pipeline.go:44-97`）使用的是 `date_of_birth`/`address`/`social_security_no`/`allergies`/`assessment_score`/`chronic_diseases` 等名称，而现场契约实际字段是 `birth_date`/`registered_address`/`medical_insurance_no`/`allergic_history`/`assess_score`/`past_history` 等 —— 按第 4 步「字段名精确命中规格表」统计：**27 个康养字段中仅 `gender`、`age`、`name`、`id_card_no` 四个（4/27）走规格表**，**18 个医保字段中仅 `gender` 一个（1/18）**（`admission_date`/`discharge_date` 虽在规格表内，但已被更早的日期分支拦截），其余全部落到启发式或直传分支。
+1. 🔴 **规格表与数据契约字段名不匹配**：`YibaoFields`/`KangyangFields`（`pipeline.go:44-97`）使用的是 `date_of_birth`/`address`/`social_security_no`/`allergies`/`assessment_score`/`chronic_diseases` 等名称，而现场契约实际字段是 `birth_date`/`registered_address`/`medical_insurance_no`/`allergic_history`/`assess_score`/`past_history` 等 —— 按第 4 步「字段名精确命中规格表」统计：**27 个康养字段中仅 `gender`、`age`、`name`、`id_card_no` 四个（4/27）走规格表**，**19 个医保字段中仅 `gender` 一个（1/19）**（`admission_date`/`discharge_date` 虽在规格表内，但已被更早的日期分支拦截），其余全部落到启发式或直传分支。
 2. 🔴 **10 个 L3/L4 高敏字段明文直传**（康养侧 8 个：`disability_cert_no`、`medical_insurance_no`、`chief_complaint`、`present_illness`、`past_history`、`progress_note`、`disability_category`、`disability_level`；医保侧 2 个：`discharge_mode`、`settlement_seq_no`）：这是本次审查中**最高优先级的隐私失效项**。
 3. 🔴 **差分隐私未参与示范数据处置**：体征数值既不加噪也不泛化；「L4/L5→DP」的等级映射在流水线中不生效（§5.3 算子路由差异）。
 4. 🟡 **「就高原则」未按字段实现**：`compareLevel` 仅用于汇总整条记录的 `MaxLevel`（`pipeline.go:590-593`、`:263`），分类分支命中即**提前返回**，不会把规则层等级与规格表等级取最大值 —— 单字段最终等级取决于**分支命中顺序**而非「就高」。
@@ -834,7 +834,7 @@ flowchart LR
 * **单请求内存开销**：基于 `sync.Pool` 零内存分配 BufferPool 与流式 JSON/gRPC 解析，单请求常驻活跃内存仅 $30\sim 50\ \text{KB}$ —— 🟡 BufferPool 实装于网关转发路径（`engine-go/internal/gateway`，**该组件未部署**，见 §7.2）；agent 侧批量脱敏为 `numWorkers = runtime.GOMAXPROCS(0)` 分块并行 + 结果切片一次性分配（`engine-go/internal/service/service.go:213,380,465,682`），**每请求 30~50KB 无实测支撑**。
 * **双向网络带宽占用公式**：
   $$\text{Bandwidth (Mbps)} = \text{QPS} \times (\text{ReqSize} + \text{RespSize}) \times 8 \div 1024 \approx \text{QPS} \times (1.5\text{ KB} + 3.5\text{ KB}) \times 8 \div 1024 \approx \text{QPS} \times 0.0391\ \text{Mbps}$$
-  —— 公式成立，但 1.5KB/3.5KB 为**假设报文尺寸**；实际医保 18 字段 / 康养 27 字段 JSON 报文（含 §5.4 未脱敏明文长文本字段如 `present_illness`、`progress_note`）显著大于该假设，**压测时须以真实契约样本重测报文尺寸**。
+  —— 公式成立，但 1.5KB/3.5KB 为**假设报文尺寸**；实际医保 19 字段 / 康养 27 字段 JSON 报文（含 §5.4 未脱敏明文长文本字段如 `present_illness`、`progress_note`）显著大于该假设，**压测时须以真实契约样本重测报文尺寸**。
 
 #### 2. 主机乙（独立安全审计节点）存储增长与 I/O 写入模型
 * **单条审计存证载荷大小**：9 要素元数据（180 字节）+ 256 位 SM3 完整性哈希（64 字节）+ SM4-GCM 加密出域快照（$\sim 1.2\ \text{KB}$）+ 索引开销 $\approx \mathbf{1.5\ \text{KB}/\text{条}}$ —— ⚠️ **前提未成立**：快照仅含 `input_sample`/`output_sample` 两列（见 §6.3），且 **`AUDIT_LOG_ENCRYPTION_KEY` 为空时明文直存**（P0-3），实际单条大小随样本裁剪策略与是否配密钥浮动，1.5KB/条须按部署后真实样本重测。
@@ -1127,7 +1127,7 @@ commit_siblings = 10
 
 | 法律法规与标准条款 | 法规与标准核心要求 | 本架构落地防护措施（设计目标） | 实现状态（代码实测） | 合规判定（校正后） |
 |---|---|---|---|:---:|
-| **DB51/T 2989—2023**<br/>四川省健康医疗大数据应用指南 | 建立健康医疗数据 L1~L5 五级分类基准与 6 类字段矩阵，规范敏感病种强剥离与彻底抹平/泛化策略 | 严格五级定级、四柱高敏特征强剥离，对 STD/HIV/重度精神病彻底抹平，恶性肿瘤/肝炎范畴化泛化 | ✅ **已整改（v16.7.0）**：逐字段处置矩阵入库（医保 18 / 康养 27 契约字段 ∪ 历史规格名，`privacy-go-sdk/medical/fields.go:498,548`），长文本走 L4 实体剥离、体征数值走 DP 加噪；未列入字段**默认拒绝**并按 L3 下限处置（`engine-go/internal/service/privacyconfig.go:75-88,306`）；证据见 §12.1.4 P0-2 | ⚠️ **有条件符合**（代码侧已闭环；待 §5.4 真实样本复测与 G-08 签核） |
+| **DB51/T 2989—2023**<br/>四川省健康医疗大数据应用指南 | 建立健康医疗数据 L1~L5 五级分类基准与 6 类字段矩阵，规范敏感病种强剥离与彻底抹平/泛化策略 | 严格五级定级、四柱高敏特征强剥离，对 STD/HIV/重度精神病彻底抹平，恶性肿瘤/肝炎范畴化泛化 | ✅ **已整改（v16.7.0）**：逐字段处置矩阵入库（医保 19 / 康养 27 契约字段 ∪ 历史规格名，`privacy-go-sdk/medical/fields.go:498,548`），长文本走 L4 实体剥离、体征数值走 DP 加噪；未列入字段**默认拒绝**并按 L3 下限处置（`engine-go/internal/service/privacyconfig.go:75-88,306`）；证据见 §12.1.4 P0-2 | ⚠️ **有条件符合**（代码侧已闭环；待 §5.4 真实样本复测与 G-08 签核） |
 | **《密码法》第二十七条** | 关键信息基础设施应使用商用密码保护并开展密码应用安全性评估（密评） | 全链路 SM2 双向认证、SM3 完整性哈希与 HMAC、SM4-GCM 信封加密 | 🟡 **部分实装**：HMAC-SM3 **已实装**（存证链密钥化 `SM3-HMAC:v1`，`pkg/store/audit_hash.go:42,100`）；KDF 已升级 **HKDF-SM3 + 逐记录 salt**（`pkg/crypto/envelope.go:74`）；空密钥明文落盘已消除（`:53`，启动强制要求密钥）；**但 SM2 仍零引用未实装**，`pkg/crypto/sm3、sm4` 为**自实现纯 Go，非商用密码产品认证模块** | 🔴 **不符合**（密码模块认证与密评结论为外部依赖，不可由代码改动替代；P1-2） |
 | **《GB/T 39786-2021》第三级** | 物理和环境、网络和通信、设备和计算、应用和数据四层密码应用要求 | 网络层 SM4 VPN + 传输层 SM2/TLS 1.3 mTLS + 数据层 SM3 哈希链 + 存储层 SM4 加密 | 🟡 **部分实装**：数据层密钥化 SM3 链 ✅、存储层 SM4-GCM（HKDF-SM3 派生 + AEAD）✅ 且**无密钥拒绝落盘**；TLS/mTLS 在**生产编排中默认开启且空 Key/空白名单即启动失败**（`docker-compose.prod.yml:130,141,148,371,449,514` + `pkg/config/security.go:69`）；**但网络层国密 VPN 产品无代码**（属政务云侧能力）、**SM2 未实装**、密码模块未认证 | 🔴 **不符合**（缺认证密码装置与密评结论；默认明文与 fail-open 问题已整改） |
 | **《GB/T 43697-2024》数据分类分级规则** | 建立 1~5 级分类分级规则，明确重要数据与核心数据保护要求 | L1~L5 对齐国标五级（词表级映射见 §5.1 `rules/standards/gbt43697.yaml`），内置规则库驱动的三层漏斗自动分类分级（正则 NER 桩，ONNX 模型未交付）与差异化脱敏 | 🟡 **部分实装**：五级词表已统一为唯一事实源并入 CI 门禁（`scripts/check_taxonomy_consistency.sh` → `make check`）；等级→算子路由**已生效**（REST 不再由调用方自证 `operation`、定级缺失即失败，`handlers.go:581,624`、`grpcserver/server.go:248,585`）；`rules/standards/gbt43697.yaml` 已入库但**尚无引擎加载路径**；🔴 **仍无「重要数据/核心数据」目录建模** | ⚠️ **部分符合**（残余：国标规则集加载链 + 重要数据目录建模；P1-1/P1-5 已闭环） |
@@ -1161,7 +1161,7 @@ commit_siblings = 10
 >    - **P0-8 ✅ 存证留存红线**：`AUDIT_LOG_RETENTION_DAYS` 默认改 **0（不删）**、`>0` 时强制 ≥ **1095 天**且**先归档后删除**（`services/audit-log/internal/config/config.go:161,220,224,227` + `internal/archive/archive.go:108`：SM4-GCM 加密段 + SM3 行链 manifest → 回读验真后才删）；`ON DELETE CASCADE` 连带删快照语义已解除；
 >    - **P0-6 ✅ 出域↔留痕代码级绑定**：`service-hub` 已内建 audit-log 客户端并在 `audit` 阶段提交任务/接口/数据源与输入输出指纹，提交失败按任务失败处理（`internal/handlers/handlers.go:656`、`internal/grpcserver/server.go:686`、`internal/audit/client.go:226`）；
 >    - **P0-1 ✅ 零信任默认态**：六服务 + 两 BFF 统一接入 `ValidateFailClosed`（`pkg/config/security.go:69`），**API Key 为空或 TLS 开启时白名单缺失即启动失败**（不再跳过注册），生产编排 TLS/鉴权/限流默认 `true`；
->    - 其余 **P0-2 ✅**（医保 18 / 康养 27 逐字段矩阵 + 未列入字段默认拒绝 + Safety Floor 默认 `internal`）、**P0-3 ✅**（空密钥拒绝落盘 + `enc:v2:` 消除去前缀降级通道）、**P0-4 ✅**（`STRICT_STORAGE` 默认 `true`、完整性校验失败阻断并禁止自动重建、存证写失败上抛）；
+>    - 其余 **P0-2 ✅**（医保 19 / 康养 27 逐字段矩阵 + 未列入字段默认拒绝 + Safety Floor 默认 `internal`）、**P0-3 ✅**（空密钥拒绝落盘 + `enc:v2:` 消除去前缀降级通道）、**P0-4 ✅**（`STRICT_STORAGE` 默认 `true`、完整性校验失败阻断并禁止自动重建、存证写失败上抛）；
 >    - **P0-5 🟡**：prompt 已改为「字段名 + 不可逆值形态指纹」且明文 `http://` 端点默认拒绝（`llm_client.go:144,573,367`），但**默认端点仍是环回明文 `http://localhost:8000`**，生产必须显式覆盖为 https/mTLS 端点，否则「零接触原数」仅在载荷层成立、传输层不成立。
 >
 > 3. **合规层面：判定上移，仍有 2 项不可申报符合** ⚠️：第十章 12 项条款由 v16.6.0 的 **🔴 5 / ⚠️ 7** 上移为 **🔴 2 / ⚠️ 10**，**0 项**可申报「完全符合」。剩余 2 项 🔴（《密码法》第二十七条、GB/T 39786-2021 第三级）**已不是代码缺口**，而是**自研密码模块未取得商用密码产品认证 + SM2 签名未实装 + 密评结论未出具**，非整改可绕过、亦非代码可替代。本轮同时完成的是**口径失实修正**：HMAC-SM3 已真实存在（存证链 `SM3-HMAC:v1`，`pkg/store/audit_hash.go:42,100`）、KDF 升级为 HKDF-SM3（`pkg/crypto/envelope.go:74`）、无密钥明文落盘通道已消除、「可归责溯源/抗抵赖」表述已统一改为「完整性防篡改」。
@@ -1230,7 +1230,7 @@ commit_siblings = 10
 | 编号 | 差异现象（声明 vs 事实） | 代码/配置证据 | 影响 | 整改动作 | 验收方法 |
 |:---:|---|---|---|---|---|
 | **P0-1** | 声明「全链路零信任、双向 mTLS、多层纵深防御」；事实为**全部安全开关默认关闭**，内置编排亦未开启 | `PRIVACY_TLS_ENABLED` 默认 `false`；`SERVICE_HUB_TLS_ENABLED`（`config.go:106`）、`DATASOURCE_MGR_TLS_ENABLED`（`config.go:70`）、`AUDIT_LOG_TLS_ENABLED`（`config.go:88`）均默认 `false`；API Key 为空即放行（`pkg/middleware/auth.go:23-29`）；CN 白名单拦截器仅在环境变量非空时注册（`services/service-hub/cmd/server/main.go:252-259`、`datasource-mgr/.../main.go:157`、`audit-log/.../main.go:136-137`） | 未脱敏/已脱敏数据在域内与跨机通道上均可**明文、无鉴权**流转；所有「零信任」合规主张当前不成立 | ① 各服务 `*_API_KEY` 为空时**启动失败**（Fail-Closed）；② 内置编排默认置 TLS/Auth/限流为 `true` 并附证书生成脚本；③ 白名单缺失时拒绝启动 gRPC 而非跳过注册 | **G-02、G-03** |
-| **P0-2** | 声明「L1~L5 按级 100% 动态脱敏」；事实为**示范数据源字段级矩阵未闭环**，多数高敏字段明文直传 | §5.4 实测：医保规格表命中 **1/18**、康养 **4/27**，合计 **10 个 L3/L4 字段明文直传**（含 `chief_complaint`/`present_illness`/`progress_note` 长文本与 `settlement_seq_no`；康养 `height`/`weight`/`assessment` 无 DP 加噪） | 「敏感个人信息出域前 100% 脱敏」这一 PIPL 二十八条核心主张被证伪；出域样本可直接重标识 | ① 为两示范库补齐**逐字段规格表**（含长文本实体剥离与数值加噪档位）；② 增加「未列入规格的字段默认按 L3 处理」的白名单反转策略，禁止默认明文；③ CI 断言 27/18 字段全覆盖 | **G-08** + §5.4 复测矩阵 |
+| **P0-2** | 声明「L1~L5 按级 100% 动态脱敏」；事实为**示范数据源字段级矩阵未闭环**，多数高敏字段明文直传 | §5.4 实测：医保规格表命中 **1/19**、康养 **4/27**，合计 **10 个 L3/L4 字段明文直传**（含 `chief_complaint`/`present_illness`/`progress_note` 长文本与 `settlement_seq_no`；康养 `height`/`weight`/`assessment` 无 DP 加噪） | 「敏感个人信息出域前 100% 脱敏」这一 PIPL 二十八条核心主张被证伪；出域样本可直接重标识 | ① 为两示范库补齐**逐字段规格表**（含长文本实体剥离与数值加噪档位）；② 增加「未列入规格的字段默认按 L3 处理」的白名单反转策略，禁止默认明文；③ CI 断言 27/19 字段全覆盖 | **G-08** + §5.4 复测矩阵 |
 | **P0-3** | 声明「快照国密信封加密落盘」；事实为**密钥为空即明文落盘且不可检测降级** | `EncryptString` 空密钥直接返回明文（`pkg/crypto/envelope.go:74-75`）；`DecryptString` 先判 `enc:v1:` 前缀、无前缀按明文原样返回（`:123-126`），**早于**空密钥判错（`:128-130`）；`deploy/` 与 `config/` 中均未设置 `AUDIT_LOG_ENCRYPTION_KEY` | 审计库若被窃，样本以明文暴露；攻击者剥离前缀即可让读取端静默接受被替换内容，**快照取证效力丧失** | ① 空密钥时**拒绝启动**或强制 `strict` 模式；② 启用加密后拒绝任何无前缀值（消除降级通道）；③ 密钥对接 KMS/HSM | **G-04** |
 | **P0-4** | 声明「独立存证节点保证证据不丢」；事实为**存储不可用时静默降级到内存/SQLite 并继续对外返回成功** | `AUDIT_LOG_STRICT_STORAGE`/`STRICT_STORAGE` 默认 `false`（`services/audit-log/internal/config/config.go:121`）；降级分支 `main.go:340-345`（PG→SQLite）、`:357-365`（SQLite→内存）、`:374-381`（内存兜底）仅 `logger.Warn`；SQLite 完整性校验失败时**只告警并重建库**（`main.go:347-350`） | 存证可被**静默丢弃或整库清空**而调用方毫无感知；「抗篡改」在服务层失效 | ① 生产强制 `AUDIT_LOG_STRICT_STORAGE=true`；② 完整性校验失败改为**阻断 + 人工取证**，禁止自动重建；③ 存证写入失败上抛为请求失败 | **G-05、G-06** |
 | **P0-5** | ✅ 声明「大模型零接触政务明文」；**已闭环**：Layer-3 原值不再出网 | `buildPrompt` 只提交字段名 + 值形态指纹（`llm_client.go:144,555`）；出网前原值包含性自检（`:278,779`）；端点强制校验（`:331-369`）；**默认端点已清空**（`DefaultLLMClientConfig` `Endpoint: ""`），生产必须显式配置；**分类响应 `Value` 字段已停止赋值**（`engine.go:287`、`funnel.go:115,155` 三处删除）；Layer-3 默认关闭（`config/privacy.yaml:30`） | 原值不出域，fail-closed 回退 Safety Floor | ① prompt 单元测试断言原值不在请求体；② 出具 https 端点配置 + `transport_secure:true` 证据；③ 出网 ACL 由局方交付 | **G-07** |

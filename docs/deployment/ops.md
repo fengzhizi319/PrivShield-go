@@ -2686,7 +2686,7 @@ helm template privshield ./deploy/helm/PrivShield \
 
 > 📖 **架构设计与容量测算模型**：详见详细设计文档 [docs/deployment/design.md §14](design.md#14-政务云双节点虚拟机拆分部署与多并发场景资源评估-resource-sizing--concurrency-capacity-planning)。
 
-本章节面向基础设施运维工程师与交付团队，提供在**政务云双虚拟机 (ECS) / 独立计算与审计节点拆分部署架构**（服务器 A：`engine` + `services/service-hub`；服务器 B：`services/audit-log`，VPC 子网与安全组逻辑强隔离）下，处理 `ds_yibao`（医保结算，18 字段）与 `ds_kangyang`（康养体征，27 字段）数据流转时的**硬件选型推荐表**与**多并发环境变量调优速查配置**。
+本章节面向基础设施运维工程师与交付团队，提供在**政务云双虚拟机 (ECS) / 独立计算与审计节点拆分部署架构**（服务器 A：`engine` + `services/service-hub`；服务器 B：`services/audit-log`，VPC 子网与安全组逻辑强隔离）下，处理 `ds_yibao`（医保结算，19 字段）与 `ds_kangyang`（康养体征，27 字段）数据流转时的**硬件选型推荐表**与**多并发环境变量调优速查配置**。
 
 ---
 

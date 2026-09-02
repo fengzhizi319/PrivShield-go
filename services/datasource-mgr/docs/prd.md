@@ -22,7 +22,7 @@
 ```
 
 ### 2.2 4 个专用高保真模拟数据源与接口 (对标 DB51/T 2989—2023)
-1. **API 1 医保就医与结算源 (`ds_yibao`)**：包含 18 个字段（`insurance_settlement_id`, `person_id`, `id_card`, `diagnosis_name`, `icd10_code`, `total_amount` 等），用于仿真医保合规结算流通场景；
+1. **API 1 医保就医与结算源 (`ds_yibao`)**：包含 19 个字段（`insurance_settlement_id`, `person_id`, `id_card_no`, `diagnosis_name`, `icd10_code`, `total_amount` 等），用于仿真医保合规结算流通场景；
 2. **API 2 康养体检与慢病源 (`ds_kangyang`)**：包含 27 个字段（`record_id`, `person_id`, `id_card`, `chief_complaint`, `vital_signs_*` 生理体征等），用于仿真健康康养监测场景；
 3. **API 3 预留政务数据源 (`ds_mock3`)**：政务多部门审批流水仿真；
 4. **API 4 预留企业数据源 (`ds_mock4`)**：企业税务与财务经营数据仿真。
@@ -36,7 +36,7 @@
 | 方法/RPC | 路径/方法名 | 协议 | 说明 |
 |---|---|---|---|
 | GET / rpc | `/health`, `/readyz` / `Health` | HTTP/gRPC | 健康检查与模块标识探针 |
-| GET / rpc | `/api/datasources/ds_yibao/records` / `GetYibaoData` | HTTP/gRPC | **API 1** 医保就医与结算模拟数据抽取 (18 字段) |
+| GET / rpc | `/api/datasources/ds_yibao/records` / `GetYibaoData` | HTTP/gRPC | **API 1** 医保就医与结算模拟数据抽取 (19 字段) |
 | GET / rpc | `/api/datasources/ds_kangyang/records` / `GetKangyangData` | HTTP/gRPC | **API 2** 康养体检与慢病模拟数据抽取 (27 字段) |
 | GET / rpc | `/api/datasources/ds_mock3/records` / `GetMockData3` | HTTP/gRPC | **API 3** 预留政务模拟数据源 3 抽取 |
 | GET / rpc | `/api/datasources/ds_mock4/records` / `GetMockData4` | HTTP/gRPC | **API 4** 预留企业模拟数据源 4 抽取 |

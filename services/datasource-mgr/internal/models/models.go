@@ -71,3 +71,12 @@ type ConnectionTestResult struct {
 	LatencyMs    int64  `json:"latency_ms"`    // 探测耗时（毫秒）
 	Via          string `json:"via"`           // 服务标识
 }
+
+// SingleRecordResponse is the response for querying a single record by ID card number.
+// SingleRecordResponse 结构体封装按身份证号查询单条记录的响应。
+type SingleRecordResponse struct {
+	DatasourceID string         `json:"datasource_id"` // canonical 数据源标识符
+	Record       map[string]any `json:"record"`        // 查询到的单条数据记录
+	Found        bool           `json:"found"`         // 是否找到匹配记录
+	Via          string         `json:"via"`           // 服务标识
+}

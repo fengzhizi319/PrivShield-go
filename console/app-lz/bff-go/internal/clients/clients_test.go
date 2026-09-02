@@ -247,6 +247,69 @@ func TestD11_GetDatasourceSliceFailClosed(t *testing.T) {
 	}
 }
 
+// TestGetDatasourceRecordByIDCard 验证按身份证号查询单条记录的新接口：
+// 1. 未知数据源返回 400 INVALID_DATASOURCE_ID
+// 2. 预留数据源返回 409 RESERVED_DATASOURCE
+// 3. 合法数据源别名正确归一化并调用上游 /api/datasources/:id/record-by-id
+func TestGetDatasourceRecordByIDCard(t *testing.T) {
+	requestedPath := ""
+	requestedQuery := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPath = r.URL.Path
+		requestedQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"datasource_id": "ds_yibao",
+			"record":        map[string]any{"id_card_no": "110101196809171010", "gender": "男"},
+			"found":         true,
+			"via":           "datasource-mgr",
+		})
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{DatasourceURL: server.URL}
+	pool := NewClientPool(cfg)
+
+	// 1. 未知 ID 必须 fail-closed
+	for _, unknownID := range []string{"shebao", "ds_unknown"} {
+		_, err := pool.GetDatasourceRecordByIDCard(context.Background(), unknownID, "110101196809171010")
+		if err == nil {
+			t.Fatalf("GetDatasourceRecordByIDCard(%q) must fail closed", unknownID)
+		}
+		ue, ok := err.(*UpstreamError)
+		if !ok || ue.Code != CodeInvalidDatasourceID {
+			t.Errorf("GetDatasourceRecordByIDCard(%q) error = %v, want Code=%s", unknownID, err, CodeInvalidDatasourceID)
+		}
+	}
+
+	// 2. 预留位必须返回 409
+	for _, reservedID := range []string{"mock3", "ds_mock3"} {
+		_, err := pool.GetDatasourceRecordByIDCard(context.Background(), reservedID, "110101196809171010")
+		if err == nil {
+			t.Fatalf("GetDatasourceRecordByIDCard(%q) must reject reserved datasource", reservedID)
+		}
+		ue, ok := err.(*UpstreamError)
+		if !ok || ue.Code != CodeReservedDatasource {
+			t.Errorf("GetDatasourceRecordByIDCard(%q) error = %v, want Code=%s", reservedID, err, CodeReservedDatasource)
+		}
+	}
+
+	// 3. 合法别名正常通过并调用正确路径
+	resp, err := pool.GetDatasourceRecordByIDCard(context.Background(), "yibao", "110101196809171010")
+	if err != nil {
+		t.Fatalf("GetDatasourceRecordByIDCard(yibao) unexpected error: %v", err)
+	}
+	if !strings.Contains(requestedPath, "/record-by-id") {
+		t.Errorf("expected path to contain /record-by-id, got %s", requestedPath)
+	}
+	if requestedQuery != "id_card_no=110101196809171010" {
+		t.Errorf("expected query id_card_no=110101196809171010, got %s", requestedQuery)
+	}
+	if resp.DatasourceID != naming.DSYibao {
+		t.Errorf("expected datasource_id=%s, got %s", naming.DSYibao, resp.DatasourceID)
+	}
+}
+
 // TestD03_RecordAuditRealAndNoForging 验证 D-03 修复：
 // 真实 RecordAudit 会向 POST /api/audit/logs 发送请求并返回真实 ID
 func TestD03_RecordAuditRealAndNoForging(t *testing.T) {
