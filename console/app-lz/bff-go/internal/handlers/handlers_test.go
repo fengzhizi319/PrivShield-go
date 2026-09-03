@@ -204,12 +204,47 @@ func TestGetDataApiDefinitions(t *testing.T) {
 }
 
 // TestInvokeDataApiContractAndFailClosed 验证 InvokeDataApi 会话调用契约与 fail-closed：
-// 1. api_code=api1_yibao 正常产生 6 阶段流水线响应
+// 1. api_code=api1_yibao 正常产生 3 阶段流水线响应（ingest → hub_orchestrate → return）
 // 2. 未知 api_code 返回 400 INVALID_API_CODE
 // 3. 预留 API 返回 409 RESERVED_DATASOURCE
 // 4. api_code 与 datasource_id 冲突返回 400 API_DATASOURCE_MISMATCH
 func TestInvokeDataApiContractAndFailClosed(t *testing.T) {
-	h := setupTestRouter()
+	// 构造 mock service-hub（app-lz BFF 只访问 service-hub，不直连下游）
+	mockHub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/hub/fetch-and-desensitize" && r.Method == http.MethodPost {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"datasource_id": "ds_yibao",
+				"id_card_no":    "510101199001011234",
+				"found":         true,
+				"level":         "L4",
+				"sanitized_data": map[string]any{
+					"name":    "李*",
+					"id_card": "5101***********234",
+				},
+				"classification_report": map[string]any{"max_sensitivity": "L4"},
+				"summary":              map[string]any{"total_fields": 2, "sanitized_fields": 2},
+				"audit_task_id":        "fad-ds_yibao-510101199001011234-1234567890",
+				"via":                  "service-hub",
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer mockHub.Close()
+
+	cfg := &config.Config{
+		Host:          "127.0.0.1",
+		Port:          "8085",
+		HubURL:        mockHub.URL,
+		DatasourceURL: mockHub.URL,
+		AuditURL:      mockHub.URL,
+		AgentURL:      mockHub.URL,
+	}
+	pool := clients.NewClientPool(cfg)
+	testRunner := runner.NewTestRunner(pool)
+	h := NewHandler(cfg, pool, testRunner, nil, nil, nil)
 	router := SetupRouter(h)
 
 	// 1. 正常调用 API1
@@ -235,14 +270,20 @@ func TestInvokeDataApiContractAndFailClosed(t *testing.T) {
 	if resp.APICode != "api1_yibao" || resp.DatasourceID != "ds_yibao" {
 		t.Errorf("expected api1_yibao / ds_yibao, got %s / %s", resp.APICode, resp.DatasourceID)
 	}
-	if len(resp.Stages) != 5 {
-		t.Errorf("expected 5 pipeline stages (ingest->fetch->classify_desensitize->return->audit), got %d", len(resp.Stages))
+	if len(resp.Stages) != 3 {
+		t.Errorf("expected 3 pipeline stages (ingest->hub_orchestrate->return), got %d", len(resp.Stages))
 	}
-	expectedStages := []string{"ingest", "fetch", "classify_desensitize", "return", "audit"}
+	expectedStages := []string{"ingest", "hub_orchestrate", "return"}
 	for i, exp := range expectedStages {
 		if i < len(resp.Stages) && resp.Stages[i].Name != exp {
 			t.Errorf("stage[%d] = %s, want %s", i, resp.Stages[i].Name, exp)
 		}
+	}
+	if resp.AuditEntryID == "" {
+		t.Error("expected non-empty audit_entry_id from service-hub orchestration")
+	}
+	if resp.Status != "completed" {
+		t.Errorf("expected status completed, got %s", resp.Status)
 	}
 
 	// 2. 未知 api_code (shebao)

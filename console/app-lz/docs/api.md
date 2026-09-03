@@ -1,12 +1,10 @@
 # 调度之眼 (Console App-LZ) — API 接口与数据契约规范
 
-> **文档版本**：v1.1.0  
+> **文档版本**：v1.2.0  
 > **服务端口**：HTTP REST `:8085` / gRPC `:50055`  
-> **聚合上游**：
+> **架构原则**：app-lz BFF 是模拟的外部程序，所有数据请求统一通过 `service-hub` 调度中枢编排，不直接访问 datasource-mgr / engine-go / audit-log。  
+> **唯一编排入口**：
 > - `service-hub`: `http://127.0.0.1:8082` (gRPC `127.0.0.1:50052`)
-> - `datasource-mgr`: `http://127.0.0.1:8083` (gRPC `127.0.0.1:50053`)
-> - `audit-log`: `http://127.0.0.1:8084` (gRPC `127.0.0.1:50054`)
-> - `engine Agent`: `http://127.0.0.1:8079` (gRPC `127.0.0.1:50051`)
 
 ---
 
@@ -28,7 +26,7 @@
 | **监控指标** | `GET` | `/api/lz/metrics` | **[转发]** | → `service-hub` `GET /metrics` (Prometheus 原始文本) |
 | | `GET` | `/api/lz/metrics/parsed` | **[本地]** | BFF 解析 Prometheus 文本 → 结构化指标 |
 | **预设数据 API** | `GET` | `/api/lz/data-api/definitions` | 本地 | BFF 内置 4 个预设数据 API 定义 |
-| | `POST` | `/api/lz/data-api/invoke` | **[聚合]** | 编排 4 阶段会话：fetch → classify+desensitize → audit → return |
+| | `POST` | `/api/lz/data-api/invoke` | **[聚合]** | 通过 service-hub 编排 3 阶段会话：ingest → hub_orchestrate → return |
 
 > **[聚合]** = BFF 并发调用多个上游服务并合并结果；**[转发]** = BFF 透传请求到单一上游，附加认证头与 `X-Request-ID`；**[本地]** = BFF 内部直接处理。
 
@@ -410,7 +408,7 @@ SSE 端点通过 URL 查询参数认证：`GET /api/lz/suites/stream/:run_id?tok
 ### 4.7 预设数据 API
 
 - `GET /api/lz/data-api/definitions`：返回 BFF 内置的 4 个预设数据 API 定义。
-- `POST /api/lz/data-api/invoke`：编排完整的 4 阶段会话（fetch → classify+desensitize → audit → return）。
+- `POST /api/lz/data-api/invoke`：通过 service-hub 调度中枢编排完整的 3 阶段会话（ingest → hub_orchestrate → return）。
 
 **请求体**：
 ```json
@@ -418,9 +416,10 @@ SSE 端点通过 URL 查询参数认证：`GET /api/lz/suites/stream/:run_id?tok
 ```
 
 **会话链路**：
-1. **Fetch** — 从 `datasource-mgr` `GET /api/datasources/{id}/records` 拉取原始数据切片
-2. **Classify + Desensitize** — 调用 `engine /v1/agent/process`（兼容 `/v1/medical/process`）执行三层分类分级 + 隐私脱敏；降级时 BFF 本地 `applyMasking()` 字段级掩码
-3. **Audit** — 调用 `audit-log` gRPC / REST 写入不可篡改 SHA-256 审计存证并获取真实存证条目 ID
-4. **Return** — 组装完整会话结果（原始数据 + 脱敏数据 + 各阶段耗时 + 审计条目 ID）
+1. **Ingest** — BFF 接入并校验 API 标识（api_code / datasource_id），委托 service-hub 编排全链路
+2. **Hub Orchestrate** — service-hub 内部编排完整 4 步：② 拉取原始数据 → ③ 分类分级+脱敏 → ④ 审计存证 → ⑤ 返回结果（详见 service-hub api.md §3.5）
+3. **Return** — 组装会话结果（脱敏数据 + 各阶段耗时 + 审计条目 ID）
+
+> app-lz BFF 不直接访问 datasource-mgr / engine-go / audit-log，所有数据操作由 service-hub 统一编排。
 
 > 详细响应结构参见 [frontend_backend_mapping.md](frontend_backend_mapping.md) §8.2。

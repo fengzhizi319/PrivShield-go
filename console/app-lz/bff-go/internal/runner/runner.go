@@ -163,36 +163,32 @@ func (r *TestRunner) executeSingleSuite(ctx context.Context, suiteID string, req
 
 // runTS01 执行 TS-01：全链路审计存证与 Merkle 验真。
 //
-// 测试步骤：
-//  1. 触发脱敏任务并落盘 SHA-256 审计存证（含快照）
-//  2. 验证 SHA-256 审计日志完整性（非空且来自 live audit-log 服务）
-//  3. 验证快照 Merkle 树 / 密码学完整性（merkle_valid=true）
+// 测试步骤（通过 service-hub 统一编排，app-lz 不直接访问下游服务）：
+//  1. 通过 service-hub FetchAndDesensitize 触发完整链路（拉取+脱敏+审计存证）
+//  2. 验证 service-hub 返回 audit_task_id（表明审计存证已完成）
+//  3. 查询审计日志并验证 Merkle Tree 完整性
 func (r *TestRunner) runTS01(ctx context.Context) models.TestSuiteCase {
 	start := time.Now()
 	logs := []string{"[TS-01] 开始执行全链路审计存证与 Merkle 验真测试..."}
 
-	// 1. 触发脱敏任务并落盘真实 SHA-256 审计存证与快照
-	logs = append(logs, "[TS-01] 1. 触发脱敏任务并落盘 SHA-256 审计存证...")
-	recID, errRec := r.pool.RecordAudit(ctx, models.AuditRecordRequest{
-		Datasource:    naming.DSYibao,
-		APICode:       naming.API1Yibao,
-		Operation:     "mask",
-		Algorithm:     "field_mask",
-		User:          "TS-01-TestRunner",
-		Status:        "success",
-		SecurityLevel: "L3",
-		InputSample:   "{\"patient_name\":\"张三\",\"id_card\":\"510101199001011234\"}",
-		OutputSample:  "{\"patient_name\":\"张*\",\"id_card\":\"5101**********1234\"}",
-		Parameters:    map[string]any{"pattern": "id_card"},
-	})
-	if errRec == nil {
-		logs = append(logs, fmt.Sprintf("[TS-01] ✅ 成功写入测试审计存证记录: %s", recID))
+	// 1. 通过 service-hub 触发完整链路（拉取+脱敏+审计存证）
+	logs = append(logs, "[TS-01] 1. 通过 service-hub 触发 FetchAndDesensitize 全链路...")
+	hubResult, errHub := r.pool.FetchAndDesensitizeViaHub(ctx, naming.DSYibao, "510101199001011234")
+	hubAuditOK := false
+	if errHub == nil {
+		auditTaskID, _ := hubResult["audit_task_id"].(string)
+		if auditTaskID != "" {
+			hubAuditOK = true
+			logs = append(logs, fmt.Sprintf("[TS-01] ✅ service-hub 完成全链路编排，审计存证 task_id=%s", auditTaskID))
+		} else {
+			logs = append(logs, "[TS-01] ⚠️ service-hub 返回成功但未包含 audit_task_id")
+		}
 	} else {
-		logs = append(logs, fmt.Sprintf("[TS-01] ⚠️ 写入测试存证 (可能处于只读或降级环境): %v", errRec))
+		logs = append(logs, fmt.Sprintf("[TS-01] ⚠️ service-hub 不可达 (可能处于降级环境): %v", errHub))
 	}
 
-	// 2. 查询 audit-log 审计记录并校验快照
-	logs = append(logs, "[TS-01] 2. 查询 audit-log 审计记录并校验 Merkle Tree 完整性...")
+	// 2. 查询审计日志并校验 Merkle Tree 完整性
+	logs = append(logs, "[TS-01] 2. 查询审计记录并校验 Merkle Tree 完整性...")
 	auditResp, _ := r.pool.GetAuditLogs(ctx, 5, 0, "")
 	verifyResp, _ := r.pool.VerifyAudit(ctx)
 
@@ -203,6 +199,12 @@ func (r *TestRunner) runTS01(ctx context.Context) models.TestSuiteCase {
 		verifyResp.MerkleValid, verifyResp.RootHash, verifyResp.Source, len(auditResp.Logs)))
 
 	assertions := []models.TestSuiteAssertion{
+		{
+			Name:     "Service-Hub Audit Orchestration",
+			Expected: "service-hub returns audit_task_id after full pipeline",
+			Actual:   fmt.Sprintf("hub_audit_ok=%v, logs_count=%d, source=%s", hubAuditOK, len(auditResp.Logs), auditResp.Source),
+			Passed:   hubAuditOK,
+		},
 		{
 			Name:     "SHA-256 Audit Log Integrity",
 			Expected: "Audit trail contains valid records from live audit-log",
@@ -217,7 +219,7 @@ func (r *TestRunner) runTS01(ctx context.Context) models.TestSuiteCase {
 		},
 	}
 
-	allPassed := hasLogs && integrityPassed
+	allPassed := hubAuditOK && hasLogs && integrityPassed
 	status := "passed"
 	if !allPassed {
 		status = "failed"
@@ -227,7 +229,7 @@ func (r *TestRunner) runTS01(ctx context.Context) models.TestSuiteCase {
 	return models.TestSuiteCase{
 		ID:          "TS-01",
 		Title:       "全链路审计存证与 Merkle 验真 (Audit Log & Merkle Verification)",
-		Description: "验证脱敏任务完成后自动生成不可篡改 SHA-256 存证，并执行 Merkle Tree 链式防篡改验真",
+		Description: "验证 service-hub 编排的脱敏全链路自动完成不可篡改 SHA-256 存证，并执行 Merkle Tree 链式防篡改验真",
 		Category:    "Audit & Integrity",
 		Status:      status,
 		DurationMs:  duration,

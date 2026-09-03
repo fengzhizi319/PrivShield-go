@@ -13,18 +13,16 @@
 //  6. 预设数据 API：GET /data-api/definitions, POST /data-api/invoke
 //
 // 关键流程：
-//   - InvokeDataApi: 编排完整的 5 阶段会话（ingest → fetch → classify_desensitize → return → audit）
-//   - applyMasking: 本地降级掩码（当 engine 不可达时使用）
+//   - InvokeDataApi: 通过 service-hub 调度中枢编排完整的 3 阶段会话（ingest → hub_orchestrate → return）
+//     app-lz BFF 不直接访问 datasource-mgr / engine-go / audit-log，所有数据请求统一走 service-hub
+//   - applyMasking: 本地降级掩码（当 service-hub 不可达时使用）
 package handlers
 
 import (
 	"bytes"
 	"compress/gzip"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -461,14 +459,16 @@ func (h *Handler) GetDataApiDefinitions(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"apis": defs, "definitions": defs, "via": "app-lz-bff"})
 }
 
-// InvokeDataApi 编排完整的预设数据 API 会话。
+// InvokeDataApi 通过 service-hub 调度中枢编排完整的预设数据 API 会话。
 //
-// 执行流程（5 阶段）：
+// app-lz BFF 作为外部模拟程序，不直接访问 datasource-mgr / engine-go / audit-log，
+// 所有数据请求统一通过 service-hub 的 POST /api/hub/fetch-and-desensitize 接口编排，
+// 由 service-hub 内部串联 ② 数据拉取 → ③ 分类分级+脱敏 → ④ 审计存证 → ⑤ 结果返回。
+//
+// 执行流程（3 阶段）：
 //  1. Ingest — 请求校验与会话初始化
-//  2. Fetch — 从 datasource-mgr 拉取原始数据
-//  3. Classify & Desensitize — 敏感数据三层漏斗分级与自适应隐私脱敏治理 (合并一体化执行)
-//  4. Return — 结果装配
-//  5. Audit — 向 audit-log 写入审计存证
+//  2. Hub Orchestrate — 委托 service-hub 完成全链路（fetch + classify + desensitize + audit）
+//  3. Return — 结果装配与交付
 func (h *Handler) InvokeDataApi(c *gin.Context) {
 	var req models.DataApiInvokeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -500,7 +500,7 @@ func (h *Handler) InvokeDataApi(c *gin.Context) {
 		req.Limit = 5
 	}
 
-	// 身份证号必填校验（按身份证号查询单条记录）
+	// 身份证号必填校验
 	if strings.TrimSpace(req.IDCardNo) == "" {
 		ue := &clients.UpstreamError{
 			Code:    clients.CodeInvalidRequest,
@@ -513,9 +513,7 @@ func (h *Handler) InvokeDataApi(c *gin.Context) {
 	}
 
 	sessionID := fmt.Sprintf("session-%s-%d", apiDef.APICode, time.Now().UnixNano())
-	stages := make([]models.DataApiSessionStage, 0, 5)
-	rawRecords := make([]map[string]any, 0)
-	sanitizedData := make([]map[string]any, 0)
+	stages := make([]models.DataApiSessionStage, 0, 3)
 	overallStatus := "completed"
 
 	// ── 阶段 1：ingest ───────────────────────────────────────────
@@ -526,73 +524,51 @@ func (h *Handler) InvokeDataApi(c *gin.Context) {
 		Source:     "app-lz-bff",
 		DurationMs: 1,
 		ComputeMs:  1,
-		Detail:     fmt.Sprintf("API 标识 %s (%s) 校验通过", apiDef.APICode, apiDef.DatasourceID),
+		Detail:     fmt.Sprintf("API 标识 %s (%s) 校验通过，委托 service-hub 编排全链路", apiDef.APICode, apiDef.DatasourceID),
 	})
 
-	// ── 阶段 2：从 datasource-mgr 按身份证号查询单条记录 (fetch) ────────────
-	fetchStart := time.Now()
-	sliceResp, fetchErr := h.pool.GetDatasourceRecordByIDCard(c.Request.Context(), apiDef.DatasourceID, req.IDCardNo)
-	fetchDuration := time.Since(fetchStart).Milliseconds()
-	if fetchErr != nil {
-		stages = append(stages, models.DataApiSessionStage{
-			Name: "fetch", Title: "数据源按身份证号查询", Status: "error",
-			Source: "datasource-mgr", DurationMs: fetchDuration, NetworkMs: fetchDuration,
-			Detail: fetchErr.Error(),
-		})
-		overallStatus = "partial"
-	} else {
-		rawRecords = sliceResp.Records
-		foundText := "未找到"
-		if len(rawRecords) > 0 {
-			foundText = "已找到"
-		}
-		stages = append(stages, models.DataApiSessionStage{
-			Name: "fetch", Title: "数据源按身份证号查询", Status: "success",
-			Source: sliceResp.Source, DurationMs: fetchDuration, NetworkMs: fetchDuration,
-			Detail: fmt.Sprintf("按身份证号 %s 从 %s 查询记录，%s %d 条", req.IDCardNo, apiDef.DatasourceID, foundText, len(rawRecords)),
-		})
-	}
+	// ── 阶段 2：委托 service-hub 编排全链路 (fetch + classify + desensitize + audit) ──
+	hubStart := time.Now()
+	hubResult, hubErr := h.pool.FetchAndDesensitizeViaHub(c.Request.Context(), apiDef.DatasourceID, req.IDCardNo)
+	hubDuration := time.Since(hubStart).Milliseconds()
 
-	// ── 阶段 3：三层漏斗评级与隐私脱敏治理 (classify_desensitize) ───
-	desensitizeStart := time.Now()
-	if len(rawRecords) > 0 {
-		medResult, medErr := h.pool.ProcessMedicalRecords(c.Request.Context(), rawRecords)
-		if medErr == nil && medResult != nil && len(medResult.SanitizedData) > 0 {
-			sanitizedData = medResult.SanitizedData
-			desensitizeDuration := time.Since(desensitizeStart).Milliseconds()
-			stages = append(stages, models.DataApiSessionStage{
-				Name: "classify_desensitize", Title: "三层漏斗评级与隐私脱敏治理", Status: "success",
-				Source: "engine", DurationMs: desensitizeDuration, NetworkMs: desensitizeDuration,
-				Detail: fmt.Sprintf("医疗流水线识别 %d 条记录共 %d 个敏感字段，完成三层漏斗评级并执行自适应隐私脱敏 (via engine, L4/L5 高敏剥离)", len(rawRecords), len(apiDef.Fields)),
-			})
-		} else {
-			// 降级兜底：engine 不可达 → 本地字段级掩码
-			overallStatus = "degraded"
-			sanitizedData = make([]map[string]any, 0, len(rawRecords))
-			for _, rec := range rawRecords {
-				sanitized := make(map[string]any)
-				for k, v := range rec {
-					sanitized[k] = applyMasking(k, v)
+	var sanitizedData []map[string]any
+	var rawRecords []map[string]any
+	auditEntryID := ""
+
+	if hubErr != nil {
+		stages = append(stages, models.DataApiSessionStage{
+			Name: "hub_orchestrate", Title: "service-hub 全链路编排", Status: "error",
+			Source: "service-hub", DurationMs: hubDuration, NetworkMs: hubDuration,
+			Detail: hubErr.Error(),
+		})
+		overallStatus = "failed"
+	} else {
+		// 解析 service-hub 返回的脱敏结果
+		if sd, ok := hubResult["sanitized_data"]; ok && sd != nil {
+			switch v := sd.(type) {
+			case map[string]any:
+				sanitizedData = []map[string]any{v}
+			case []any:
+				for _, item := range v {
+					if m, ok := item.(map[string]any); ok {
+						sanitizedData = append(sanitizedData, m)
+					}
 				}
-				sanitizedData = append(sanitizedData, sanitized)
 			}
-			desensitizeDuration := time.Since(desensitizeStart).Milliseconds()
-			stages = append(stages, models.DataApiSessionStage{
-				Name: "classify_desensitize", Title: "三层漏斗评级与隐私脱敏治理", Status: "degraded",
-				Source: "local-fallback", DurationMs: desensitizeDuration, ComputeMs: desensitizeDuration,
-				Detail: fmt.Sprintf("识别 %d 个敏感字段并完成分级，对 %d 条记录执行本地降级掩码 (via local-fallback)", len(apiDef.Fields), len(sanitizedData)),
-			})
 		}
-	} else {
-		desensitizeDuration := time.Since(desensitizeStart).Milliseconds()
+		if auditID, ok := hubResult["audit_task_id"].(string); ok {
+			auditEntryID = auditID
+		}
 		stages = append(stages, models.DataApiSessionStage{
-			Name: "classify_desensitize", Title: "三层漏斗评级与隐私脱敏治理", Status: "skipped",
-			DurationMs: desensitizeDuration, ComputeMs: desensitizeDuration,
-			Detail: "无原始数据可评级与脱敏",
+			Name: "hub_orchestrate", Title: "service-hub 全链路编排", Status: "success",
+			Source: "service-hub", DurationMs: hubDuration, NetworkMs: hubDuration,
+			Detail: fmt.Sprintf("service-hub 完成 ② 数据拉取 → ③ 分类分级+脱敏 → ④ 审计存证 全链路编排 (datasource=%s, id_card=%s)",
+				apiDef.DatasourceID, req.IDCardNo),
 		})
 	}
 
-	// ── 阶段 4：结果装配 (return) ─────────────────────────────────
+	// ── 阶段 3：结果装配 (return) ─────────────────────────────────
 	stages = append(stages, models.DataApiSessionStage{
 		Name:       "return",
 		Title:      "脱敏结果装配与交付",
@@ -602,51 +578,6 @@ func (h *Handler) InvokeDataApi(c *gin.Context) {
 		ComputeMs:  1,
 		Detail:     fmt.Sprintf("装配 %d 条脱敏记录准备返回", len(sanitizedData)),
 	})
-
-	// ── 阶段 5：审计存证 (audit) ───────────────────────────────────
-	auditComputeStart := time.Now()
-	rawBytes, _ := json.Marshal(rawRecords)
-	inputHashBytes := sha256.Sum256(rawBytes)
-	inputHash := hex.EncodeToString(inputHashBytes[:])
-
-	sanitizedBytes, _ := json.Marshal(sanitizedData)
-	outputHashBytes := sha256.Sum256(sanitizedBytes)
-	outputHash := hex.EncodeToString(outputHashBytes[:])
-	auditComputeMs := time.Since(auditComputeStart).Milliseconds()
-
-	auditNetStart := time.Now()
-	auditEntryID := ""
-	entryID, auditErr := h.pool.RecordAudit(c.Request.Context(), models.AuditRecordRequest{
-		Datasource:    apiDef.DatasourceID,
-		APICode:       apiDef.APICode,
-		TaskID:        sessionID,
-		SessionID:     sessionID,
-		InputHash:     inputHash,
-		OutputHash:    outputHash,
-		Operation:     "mask",
-		Algorithm:     "three_layer_funnel",
-		User:          "app-lz-bff",
-		Status:        "success",
-		SecurityLevel: "L3",
-		InputRows:     len(rawRecords),
-		OutputRows:    len(sanitizedData),
-	})
-	auditNetMs := time.Since(auditNetStart).Milliseconds()
-	auditDuration := auditComputeMs + auditNetMs
-	if auditErr != nil {
-		stages = append(stages, models.DataApiSessionStage{
-			Name: "audit", Title: "不可篡改审计存证", Status: "skipped",
-			Source: "audit-log", DurationMs: auditDuration, ComputeMs: auditComputeMs, NetworkMs: auditNetMs,
-			Detail: fmt.Sprintf("审计存证跳过 (上游不可达: %v)", auditErr),
-		})
-	} else {
-		auditEntryID = entryID
-		stages = append(stages, models.DataApiSessionStage{
-			Name: "audit", Title: "不可篡改审计存证", Status: "success",
-			DurationMs: auditDuration, ComputeMs: auditComputeMs, NetworkMs: auditNetMs,
-			Detail: fmt.Sprintf("SHA-256 存证已写入 audit-log (%s)", auditEntryID),
-		})
-	}
 
 	// 计算会话总耗时
 	totalDuration := int64(0)

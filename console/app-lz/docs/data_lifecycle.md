@@ -85,7 +85,7 @@ graph TD
 | QPS 实时数值 | **L1 实时** | BFF `GetPipelineStatus()` 从 Prometheus 指标动态计算 | `clients.go` `parsePrometheusMetrics` |
 | 医保预设样本数据 | **L3 前端** | 前端 `sampleYibao` 对象（张三 / 110101196809171010 等） | `PipelineVisualizer.tsx` |
 | 康养预设样本数据 | **L3 前端** | 前端 `sampleKangyang` 对象（李建国 / KY-8802 等） | `PipelineVisualizer.tsx` |
-| 脱敏后治理对比数据 | **L1 实时** | BFF `InvokeDataApi()` 调用 `engine /v1/agent/process`（兼容 `/v1/medical/process`）真实脱敏，失败时 fallback 本地掩码 | `handlers.go` `InvokeDataApi` |
+| 脱敏后治理对比数据 | **L1 实时** | BFF `InvokeDataApi()` 通过 `service-hub /api/hub/fetch-and-desensitize` 统一编排全链路脱敏，service-hub 内部调用 engine 真实脱敏 | `handlers.go` `InvokeDataApi` |
 | 任务分发结果 | **L1 实时** | BFF `DispatchTask()` → `service-hub /api/hub/dispatch` | `clients.go` `DispatchTask` |
 | 分类调度结果 | **L1 实时** | BFF `ClassifyDispatch()` → `service-hub /api/hub/classify` | `clients.go` `ClassifyDispatch` |
 | 6 阶段流转动画 | **L3 前端** | 前端 `setTimeout` 依次 200ms 间隔推进 `activeStageIndex` 动效 | `PipelineVisualizer.tsx` |
@@ -119,7 +119,7 @@ graph TD
 |---|---|---|---|
 | TS-01~TS-03 用例定义 | **L2 BFF** | BFF `TestRunner.GetAvailableSuites()` 返回 3 个测试套件的元数据 | `runner.go` `GetAvailableSuites` |
 | 测试执行结果 | **L1 实时** | BFF `TestRunner.RunSuites()` 真实调用各微服务执行端到端断言 | `runner.go` `RunSuites` |
-| TS-01 (全链路合规流水线) | **L1 实时** | 实际触发 Dispatch → Classify+Desensitize → 真实存证与 Merkle 验真 (`merkle_valid: true`) | `runner.go` `runTS01` |
+| TS-01 (全链路合规流水线) | **L1 实时** | 通过 service-hub `FetchAndDesensitize` 触发完整链路（拉取+脱敏+审计存证）并执行 Merkle 验真 | `runner.go` `runTS01` |
 | TS-02 (高并发调度与压测) | **L1 实时** | 并发协程池真实调用 `service-hub`，基于实际延迟计算 P50/P90/P95/P99/QPS | `runner.go` `runTS02` |
 | TS-03 (租约争抢与防重复) | **L1 实时** | 5 Worker × 4 Tasks = 20 真实并发 `DispatchTask`，检测 task_id 零重复与零死锁 | `runner.go` `runTS03` |
 | 断言结果 (expected/actual) | **L1 实时** | 全部基于上游真实 HTTP/gRPC 返回值进行比对断言 | `runner.go` 各用例 |
@@ -234,8 +234,8 @@ graph TD
 |---|---|---|---|
 | **拓扑探针数据** | BFF `ProbeNode()` 发起 HTTP/TCP 探测 | 页面加载 + 15s 定时 + 手动刷新 | 超时 800ms 快速失败 |
 | **流水线任务** | 用户通过大屏或测试执行器触发 Dispatch | 用户操作 | `naming.ResolveInbound` 严格校验 |
-| **脱敏治理数据** | `engine /v1/agent/process` 执行 3-Layer 治理 | 流水线调度或 Data API 调用 | 严格合规脱敏 + 敏感词抹平 |
-| **审计存证记录** | 任务执行完毕后调用 `audit-log RecordAudit` 写入 | 会话结算 / 流水线完成 | 真实 SHA-256 计算 + Merkle 追加 |
+| **脱敏治理数据** | 通过 `service-hub` 编排 engine `/v1/agent/process` 执行 3-Layer 治理 | 流水线调度或 Data API 调用 | 严格合规脱敏 + 敏感词抹平 |
+| **审计存证记录** | 通过 `service-hub` 编排 `audit-log RecordAudit` 写入 | service-hub 全链路编排完成 | 真实 SHA-256 计算 + Merkle 追加 |
 | **Prometheus 指标** | `service-hub` 运行时持续采集 | 服务运行期间 | 符合 OpenMetrics 规范 |
 
 ### 阶段 2：传输与路由 (Transmission)
@@ -256,10 +256,10 @@ graph TD
 - **统一入站归一化**：BFF 接收到任意数据源别名时，经 `naming.NormalizeDataSourceID` 统一转换为权威 ID。
 - **严格 Fail-Closed 防护**：遇到未注册数据源返回 `HTTP 400 Bad Request`（`INVALID_DATASOURCE_ID`）；遇到预留数据源返回 `HTTP 409 Conflict`（`RESERVED_DATASOURCE`）。
 - **规范上游调用路由**：
-  - `datasource-mgr`: `GET /api/datasources` 与 `GET /api/datasources/{id}/records`
-  - `engine`: `POST /v1/agent/process`（兼容 `/v1/medical/process`）
-  - `audit-log`: `GET /api/audit/logs` 与 `POST /api/audit/snapshots/verify`
-  - `service-hub`: `POST /api/hub/dispatch`、`POST /api/hub/classify` 与 `GET /api/hub/tasks`
+  - `service-hub`: `POST /api/hub/fetch-and-desensitize`（统一编排入口）、`POST /api/hub/dispatch`、`POST /api/hub/classify` 与 `GET /api/hub/tasks`
+  - `datasource-mgr`: `GET /api/datasources` 与 `GET /api/datasources/{id}/records`（仅数据源探查模块直连）
+  - `engine`: `POST /v1/agent/process`（兼容 `/v1/medical/process`，仅由 service-hub 内部调用）
+  - `audit-log`: `GET /api/audit/logs` 与 `POST /api/audit/snapshots/verify`（仅审计监控模块直连）
 
 ### 阶段 3：消费与渲染 (Presentation)
 

@@ -27,6 +27,7 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -907,6 +908,45 @@ func (s *Server) FetchAndDesensitize(c *gin.Context) {
 		level = audit.MaxSensitivityLevel(result.ClassificationReport)
 	}
 
+	// ③ 审计存证 (P0-6 fail-closed：出域必须留痕，提交失败则整个请求失败)
+	fadTaskID := fmt.Sprintf("fad-%s-%s-%d", normID, req.IDCardNo, time.Now().UnixNano())
+	inputBytes, _ := json.Marshal(record)
+	inputHash := fmt.Sprintf("%x", sha256.Sum256(inputBytes))
+	outputBytes, _ := json.Marshal(result.SanitizedData)
+	outputHash := fmt.Sprintf("%x", sha256.Sum256(outputBytes))
+	// 优先使用引擎侧 SM3 指纹（便于跨服务对账），缺失时以 SHA-256 兜底
+	if engIn, engOut := audit.EngineFingerprints(result.Summary); engIn != "" || engOut != "" {
+		if engIn != "" {
+			inputHash = engIn
+		}
+		if engOut != "" {
+			outputHash = engOut
+		}
+	}
+
+	apiCode := naming.APICodeForDataSource(normID)
+	flow := audit.OutboundFlow{
+		Task: &store.Task{
+			ID:           fadTaskID,
+			APICode:      apiCode,
+			DatasourceID: normID,
+			Source:       normID,
+			Operation:    "mask",
+		},
+		Protocol:      "rest",
+		SecurityLevel: level,
+		Input:         record,
+		Output:        result.SanitizedData,
+		InputHash:     inputHash,
+		OutputHash:    outputHash,
+		Algorithm:     "three_layer_funnel",
+	}
+	if _, err := s.audit.RecordOutbound(ctx, flow); err != nil {
+		middleware.AbortWithError(c, http.StatusBadGateway, "UPSTREAM_UNAVAILABLE",
+			fmt.Sprintf("audit evidence recording failed (P0-6 fail-closed): %v", err), nil)
+		return
+	}
+
 	// 组装同步响应
 	var sanitizedData any
 	if len(result.SanitizedData) == 1 {
@@ -923,6 +963,7 @@ func (s *Server) FetchAndDesensitize(c *gin.Context) {
 		"sanitized_data":        sanitizedData,
 		"classification_report": result.ClassificationReport,
 		"summary":               result.Summary,
+		"audit_task_id":         fadTaskID,
 		"via":                   moduleVia,
 	})
 }

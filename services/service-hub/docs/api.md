@@ -629,11 +629,12 @@ sequenceDiagram
     "sanitized_data": {"name": "李*", "id_card": "5101***********234", "phone": "138****8000"},
     "classification_report": {"layer1_rule_hits": ["PII::ID_CARD"], "max_sensitivity": "L4"},
     "summary": {"total_fields": 4, "sanitized_fields": 3, "input_hash": "sm3:abc...", "output_hash": "sm3:def..."},
+    "audit_task_id": "fad-ds_yibao-510101198503151234-1725345600000000000",
     "via": "service-hub"
   }
   ```
 
-> **说明**：此端点是 service-hub 内部编排 ②③④ 三步的统一入口，调用方无需感知内部链路。
+> **说明**：此端点是 service-hub 内部编排 ②③④ 三步的统一入口，调用方无需感知内部链路。`audit_task_id` 为本次出域存证的唯一标识，可用于后续审计日志查询与 Merkle 验真。
 
 ---
 
@@ -812,9 +813,12 @@ sequenceDiagram
       "input_hash": "sm3:a1b2c3...",
       "output_hash": "sm3:d4e5f6..."
     },
+    "audit_task_id": "fad-ds_yibao-510101198503151234-1725345600000000000",
     "via": "service-hub"
   }
   ```
+- **关键字段说明**：
+  - `audit_task_id`：本次出域存证的唯一标识（格式 `fad-{datasource_id}-{id_card_no}-{nanotime}`），可用于查询审计日志与 Merkle 验真
 
 #### 3.5.3 全链路 curl 端到端示例
 

@@ -240,37 +240,34 @@ BFF 从 Prometheus 文本格式中提取：
 |----|------|
 | **前端** | `api.invokeDataApi(apiId, limit)` |
 | **BFF** | `POST /api/lz/data-api/invoke` → `InvokeDataApi()` |
-| **上游** | 3 阶段编排（见下方详细链路） |
+| **上游** | 通过 service-hub 编排 3 阶段会话（ingest → hub_orchestrate → return） |
 
-#### 全链路 3 阶段编排
+#### 全链路 3 阶段编排（通过 service-hub 统一调度）
 
 ```
 前端 POST /api/lz/data-api/invoke { api_id: 1, limit: 5 }
   │
-  ├─ Stage 1: 数据源原始数据拉取
-  │   BFF → datasource-mgr
-  │   GET :8083/api/datasources/ds_yibao/records?limit=5     (API1 医保)
-  │   GET :8083/api/datasources/ds_kangyang/records?limit=5  (API2 康养)
+  ├─ Stage 1: Ingest — BFF 接入校验
+  │   校验 API 标识（api_code / datasource_id），委托 service-hub 编排全链路
   │
-  ├─ Stage 2: 分类分级 + 脱敏治理 ⭐ 核心
-  │   BFF → engine 通用合规流水线
-  │   POST :8079/v1/agent/process (兼容 /v1/medical/process)
-  │   { records: [...原始记录...] }
+  ├─ Stage 2: Hub Orchestrate — service-hub 全链路编排 ⭐ 核心
+  │   BFF → service-hub
+  │   POST :8082/api/hub/fetch-and-desensitize
+  │   { datasource_id, id_card_no }
   │
-  │   Engine 内部执行：
-  │   ├── 3-Layer 动态分类分级 (Rule → NER → LLM)
-  │   ├── L4/L5 高敏文本剥离 (梅毒/HIV/癌等关键词正则抹平)
-  │   ├── PII 身份字段强掩码 (姓名/身份证/地址/残疾证号/医保编号)
-  │   ├── ICD-10 诊断编码按章节码脱敏
-  │   ├── 日期准标识符泛化 (精确日期 → 年月)
-  │   └── 诊断残留清除 (诊断名称字段整值抹平防泄露)
+  │   service-hub 内部编排 4 步：
+  │   ├── ② 拉取原始数据 → datasource-mgr GET /api/datasources/:id/record-by-id
+  │   ├── ③ 分类分级+脱敏 → engine POST /v1/agent/process
+  │   │     (3-Layer 动态分类分级 + L4/L5 高敏文本剥离 + PII 强掩码 + 诊断残留清除)
+  │   ├── ④ 审计存证 → audit-log POST /api/audit/logs
+  │   │     (不可篡改 SHA-256 存证，P0-6 fail-closed)
+  │   └── ⑤ 返回脱敏结果 → BFF
   │
-  │   降级：engine 不可达 → BFF 本地 applyMasking() 字段级掩码
-  │
-  └─ Stage 3: 审计存证
-      BFF → audit-log
-      POST :8084/api/audit/logs (或 gRPC RecordAudit 写入不可篡改 SHA-256 存证)
+  └─ Stage 3: Return — 装配脱敏结果并返回前端
+      解析 sanitized_data + 提取 audit_task_id + 构建会话响应
 ```
+
+> app-lz BFF 不直接访问 datasource-mgr / engine-go / audit-log，所有数据操作由 service-hub 统一编排。
 
 #### Engine `/v1/medical/process` 响应结构
 
@@ -324,6 +321,7 @@ BFF 从 Prometheus 文本格式中提取：
 | `ListTasks()` | service-hub | `GET /api/hub/tasks` |
 | `GetTask()` | service-hub | `GET /api/hub/tasks/:id` |
 | `GetLeasesFromHub()` | service-hub | `GET /api/hub/tasks?status=running&limit=100` |
+| `FetchAndDesensitizeViaHub()` | **service-hub** | `POST /api/hub/fetch-and-desensitize` |
 | `GetDatasources()` | datasource-mgr | `GET /api/datasources` |
 | `GetDatasourceSlice()` | datasource-mgr | `GET /api/datasources/{id}/records?limit=N` |
 | `GetAuditLogs()` | audit-log | `GET /api/audit/logs` |
@@ -332,6 +330,8 @@ BFF 从 Prometheus 文本格式中提取：
 | `GetParsedMetrics()` | service-hub | `GET /metrics` → BFF 本地解析 |
 | `ProcessAgentRecords()` | **engine** | `POST /v1/agent/process`（兼容 `/v1/medical/process`） |
 | `MaskRecordViaEngine()` | **engine** | `POST /v1/privacy/mask_record` |
+
+> **注意**：`InvokeDataApi` 已重构为通过 `FetchAndDesensitizeViaHub()` 统一编排，不再直接调用 `ProcessAgentRecords()` / `MaskRecordViaEngine()` / 审计直连方法。
 
 ## 附录 B：前端 API Client → BFF 路由速查表
 
@@ -365,6 +365,6 @@ BFF 从 Prometheus 文本格式中提取：
 
 | 层级 | 占比 | 说明 |
 |------|------|------|
-| **L1 实时上游** | ~70% | BFF 调用真实微服务 API（拓扑探测、Prometheus 指标、engine 脱敏、审计验证、并发压测） |
+| **L1 实时上游** | ~70% | BFF 通过 service-hub 统一编排真实微服务 API（拓扑探测、Prometheus 指标、全链路脱敏+审计、并发压测） |
 | **L2 BFF 兜底** | ~20% | 上游不可达时返回硬编码数据（样本数据、默认阶段、静态审计日志） |
 | **L3 前端硬编码** | ~10% | 排列顺序、角色元数据、预设样本展示、动画效果 |

@@ -355,7 +355,7 @@ App-LZ 共划分为 **7 大核心功能工作台**，全方位覆盖 `service-hu
 
 ### 4.5 预设数据 API
 - `GET /api/lz/data-api/definitions`：**[本地]** 返回 4 个预设数据 API 定义（医保/康养/预留×2）。
-- `POST /api/lz/data-api/invoke`：**[聚合]** 编排 4 阶段会话：fetch → classify+desensitize → audit → return。
+- `POST /api/lz/data-api/invoke`：**[聚合]** 通过 service-hub 编排 3 阶段会话：ingest → hub_orchestrate → return。
 
 > **[聚合]** = BFF 并发调用多个上游并合并结果；**[转发]** = BFF 透传请求到单一上游，附加认证头与 RequestID；**[本地]** = BFF 内部直接处理，不调用上游。
 

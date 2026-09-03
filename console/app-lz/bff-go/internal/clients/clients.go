@@ -1398,6 +1398,56 @@ func (c *ClientPool) MaskRecordViaEngine(ctx context.Context, record map[string]
 	return result.Result, nil
 }
 
+// FetchAndDesensitizeViaHub 将按身份证号查询+分类分级+脱敏+审计存证的完整链路
+// 统一委托给 service-hub 的 POST /api/hub/fetch-and-desensitize 同步端到端接口。
+//
+// 调用路径：POST {HubURL}/api/hub/fetch-and-desensitize
+// 请求体：{"datasource_id": "ds_yibao", "id_card_no": "510101198503151234"}
+// 响应体：包含 level / sanitized_data / classification_report / summary / audit_task_id
+//
+// app-lz BFF 作为外部模拟程序，不直接访问 datasource-mgr / engine-go / audit-log，
+// 所有数据请求统一通过 service-hub 调度中枢编排（P0-2 唯一调度入口）。
+func (c *ClientPool) FetchAndDesensitizeViaHub(ctx context.Context, datasourceID, idCardNo string) (map[string]any, error) {
+	url := strings.TrimRight(c.cfg.HubURL, "/") + "/api/hub/fetch-and-desensitize"
+	body, _ := json.Marshal(map[string]string{
+		"datasource_id": datasourceID,
+		"id_card_no":    idCardNo,
+	})
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	c.setHeaders(req, "hub", "")
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, &UpstreamError{
+			Code:    CodeUpstreamUnavailable,
+			Message: fmt.Sprintf("service-hub unreachable: %v", err),
+			Status:  http.StatusBadGateway,
+			Err:     err,
+		}
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if resp.StatusCode != http.StatusOK {
+		return nil, &UpstreamError{
+			Code:    CodeUpstreamUnavailable,
+			Message: fmt.Sprintf("service-hub fetch-and-desensitize returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody))),
+			Status:  resp.StatusCode,
+		}
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to decode hub response: %v", err)
+	}
+	return result, nil
+}
+
 // GetLeasesFromHub 查询 Service Hub 的 running 状态任务，并推导租约信息。
 //
 // 执行流程：

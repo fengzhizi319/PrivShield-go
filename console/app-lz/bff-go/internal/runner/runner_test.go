@@ -28,9 +28,30 @@ func TestGetAvailableSuites(t *testing.T) {
 }
 
 func TestRunSuites_WithMockAuditLog(t *testing.T) {
-	// Mock upstream audit-log server
-	auditSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Mock upstream server：同时模拟 service-hub（唯一编排中枢）和 audit-log（审计存证）
+	// app-lz BFF 只访问 service-hub，service-hub 内部编排 datasource-mgr / engine-go / audit-log
+	mockSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/api/hub/fetch-and-desensitize":
+			if r.Method == http.MethodPost {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"datasource_id": "ds_yibao",
+					"id_card_no":    "510101199001011234",
+					"found":         true,
+					"level":         "L4",
+					"sanitized_data": map[string]any{
+						"name":    "李*",
+						"id_card": "5101***********234",
+					},
+					"classification_report": map[string]any{"max_sensitivity": "L4"},
+					"summary":              map[string]any{"total_fields": 2, "sanitized_fields": 2},
+					"audit_task_id":        "fad-ds_yibao-510101199001011234-mock123",
+					"via":                  "service-hub",
+				})
+				return
+			}
 		case "/api/audit/logs":
 			if r.Method == http.MethodPost {
 				w.WriteHeader(http.StatusCreated)
@@ -86,10 +107,11 @@ func TestRunSuites_WithMockAuditLog(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	}))
-	defer auditSrv.Close()
+	defer mockSrv.Close()
 
 	cfg := &config.Config{
-		AuditURL: auditSrv.URL,
+		HubURL:   mockSrv.URL,
+		AuditURL: mockSrv.URL,
 	}
 	pool := clients.NewClientPool(cfg)
 	runner := NewTestRunner(pool)
