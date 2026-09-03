@@ -497,7 +497,7 @@ RETURNING *;
 ### 5.1 统一 Go BFF 网关架构
 
 * **`bff-go` (:8081 / :50055)**：采用 Go + Gin + gRPC，对外暴露 REST/JSON 接口，内部通过 gRPC 直连 Agent 算力层；内置文件脱敏处理器与滑动窗口限流；
-* **`app-lz/bff-go` (:8085)**：业务专有 BFF，聚合调度微服务流水线，提供动态数据 API 目录并内置 E2E 自动化测试执行器。
+* **`app-lz/bff-go` (:8085)**：业务专有 BFF（模拟外部业务程序），所有数据请求统一通过 service-hub 调度中枢编排，不直接访问 datasource-mgr / engine-go / audit-log；提供动态数据 API 目录并内置 E2E 自动化测试执行器。
 
 ### 5.2 前端 React 18 架构
 

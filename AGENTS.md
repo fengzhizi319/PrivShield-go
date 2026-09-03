@@ -64,11 +64,14 @@ PrivShield/
 │   ├── medical/                   # 医疗数据流水线 (多核并发分块, 医保19 / 康养27)
 │   └── budget/                    # 无锁原子隐私预算会计 (无锁 CAS 循环, 原子回滚)
 ├── services/                      # 企业级数据流通与安全治理中台微服务群 (Go)
-│   ├── service-hub/               # 数联数据服务调度中枢 (流水线调度: :8082)
+│   ├── service-hub/               # 数联数据服务调度中枢 · 唯一编排入口 (流水线调度: :8082)
 │   ├── datasource-mgr/            # 数据源资产管理与敏感特征自动探查 (:8083)
 │   └── audit-log/                 # 脱敏审计日志与不可篡改 SHA-256 / SM3 存证 (:8084)
 ├── console/                       # 统一运维与测试控制台 (Web UI + BFF)
 │   ├── bff-go/                    # Go gRPC/HTTPS 代理网关 / BFF (:8081)
+│   ├── app-lz/                    # 数联调度之眼 (模拟外部业务程序)
+│   │   ├── bff-go/                # 业务专有 BFF (:8085)，所有数据请求统一走 service-hub 编排
+│   │   └── web/                   # 业务流水线控制台前端 (React 18 + TS + Vite)
 │   └── web/                       # React + TypeScript + Vite 前端控制台 (:5173)
 ├── deploy/                        # 全栈集中部署与编排资产 (Compose / Helm / K8s)
 │   ├── docker-compose/            # Docker Compose 全栈编排
@@ -153,3 +156,7 @@ bash ./scripts/dev/dev-bff-agent.sh
 - 隐私原语与数学计算必须是**零状态、纯函数计算**；状态维护统一在 `service` 与 `budget`。
 - 高频批量计算统一采用**无锁分块多核并行模型** (`Chunked Concurrency`)。
 - 所有 REST 错误响应统一通过 `pkg/middleware.AbortWithError` 输出标准 5 字段信封。
+
+## 8. 架构原则
+
+- **service-hub 唯一编排入口**：`app-lz BFF` 是模拟的外部业务程序，所有数据请求统一通过 `service-hub` 调度中枢编排，不直接访问 `datasource-mgr` / `engine-go` / `audit-log`。

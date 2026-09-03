@@ -48,9 +48,12 @@ graph TD
     GoBFF -.->|HTTP fallback| Agent
 
     GoLZBFF -->|HTTP| Hub
-    GoLZBFF -->|HTTP| DSMgr
-    GoLZBFF -->|HTTP| Audit
-    GoLZBFF -->|HTTP| Agent
+    GoLZBFF -.->|HTTP 只读监控| DSMgr
+    GoLZBFF -.->|HTTP 只读监控| Audit
+
+    Hub -->|HTTP| DSMgr
+    Hub -->|HTTP| Agent
+    Hub -->|HTTP| Audit
 ```
 
 ---
@@ -66,7 +69,7 @@ graph TD
 - 📖 [可靠性能力详解](../../console/bff-go/docs/reliability.md)
 
 ### 2.2 业务调度之眼 BFF (`console/app-lz/bff-go:8085`)
-- **5 阶段流通会话编排 (`InvokeDataApi`)**：编排 `ingest` → `fetch` → `classify_desensitize` → `return` → `audit` 业务闭环；
+- **3 阶段流通会话编排 (`InvokeDataApi`)**：通过 service-hub 统一编排 `ingest` → `hub_orchestrate` → `return` 业务闭环；app-lz BFF 不直接访问 datasource-mgr / engine-go / audit-log，所有数据操作由 service-hub 内部编排（拉取 + 脱敏 + 审计存证）；
 - **动态数据 API 目录 (`GET /api/lz/data-api/definitions`)**：彻底废除前端写死 API 列表的逻辑，统一动态拉取数据源卡片；
 - **内置 E2E 自动化测试套件 (`TestRunner`)**：支持在界面一键触发 TS-01 ~ TS-04 自动化测试用例并实时可视化输出；
 - **9 层统一中间件栈**：全量装配 `pkg/middleware`（含 TraceMiddleware、MaxBodySize、MaxConcurrent、RateLimit 与统一错误信封）。
@@ -87,9 +90,9 @@ BFF 网关层提供了面向不同业务场景的聚合路由定义：
 | `/api/privacy/*` | `console/bff-go` | `privshield-agent:50051` | 隐私计算原语（脱敏、DP、K-匿名、查询混淆）gRPC 代理 |
 | `/api/upload` | `console/bff-go` | `privshield-agent:50051` | 文件隐私处理（CSV/JSON 解析与脱敏） |
 | `/api/lb_test` | `console/bff-go` | 可配置 Agent REST 后端 | 负载均衡策略测试（round-robin / random / least-connections） |
-| `/api/lz/data-api/*` | `app-lz/bff-go` | `catalog` / `pkg/naming`（本地 SSOT） | 动态业务数据接口目录与元数据拉取 |
-| `/api/lz/tasks/dispatch` | `app-lz/bff-go` | `service-hub:8082` | 5 阶段流通会话触发与流水线任务派发 |
-| `/api/lz/audit/*` | `app-lz/bff-go` | `audit-log:8084` | 9 要素哈希链存证查询与在线验真 |
+| `/api/lz/data-api/invoke` | `app-lz/bff-go` | `service-hub:8082`（统一编排入口） | 通过 service-hub 编排 3 阶段会话：ingest → hub_orchestrate → return |
+| `/api/lz/tasks/dispatch` | `app-lz/bff-go` | `service-hub:8082` | 流水线任务派发 |
+| `/api/lz/audit/*` | `app-lz/bff-go` | `audit-log:8084`（只读监控） | 9 要素哈希链存证查询与在线验真（仅审计监控模块直连） |
 | `/api/lz/suites` / `/api/lz/suites/run` | `app-lz/bff-go` | 内置 TestRunner | 获取 / 执行 TS-01~TS-04 自动化 E2E 测试套件 |
 
 ---

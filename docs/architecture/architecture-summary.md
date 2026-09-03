@@ -57,7 +57,7 @@ PrivShield/ (Repo Root)
 │   └── audit-log/        → 合规存证与 9 要素哈希链微服务 (:8084 / :50054)
 ├── console/              → 统一管理与测试控制台群
 │   ├── bff-go/           → Go BFF 代理网关 (:8081 / :50055)
-│   ├── app-lz/           → 业务专有 BFF 与 E2E 测试器 (:8085)
+│   ├── app-lz/           → 业务专有 BFF 与 E2E 测试器 (:8085)，数据请求统一走 service-hub 编排
 │   └── web/ & app-lz/web/→ React 18 + TS + Vite 前端单页应用 (:5173)
 ├── pkg/                  → Go 全局共享基础库 (naming, middleware, store, crypto, tlsutil, metrics, validation, agent)
 ├── deploy/               → 云原生部署套件 (Helm, K8s, Compose, Prometheus, Grafana)

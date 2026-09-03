@@ -91,9 +91,9 @@ sequenceDiagram
     DSMgr-->>Hub: 5. 返回 data/xx1.csv 原始记录（JSON Payload）
     Hub->>Engine: 6. POST /v1/agent/process (加载 rules/domains/xx1.yaml)
     Engine-->>Hub: 7. 返回分类分级评级结果 + 脱敏后记录 (Masked Payload)
-    Note over Hub,Audit: audit-log 服务已就绪（:8084/:50054，SM4-GCM 信封加密）。<br/>service-hub 6 阶段流水线当前仅在本地标记 audit 阶段，<br/>自动 RecordAudit 集成属于 Phase 2 待完成项。
+    Note over Hub,Audit: service-hub 全链路编排已集成审计存证（P0-6 fail-closed）。
     Hub-->>BFF: 8. 返回任务终态结果 (TaskCompleted)
-    BFF-->>UI: 9. 动态呈现 5 阶段会话结果与字段手风琴对比
+    BFF-->>UI: 9. 动态呈现 3 阶段会话结果与字段手风琴对比
 ```
 
 > **默认端口、环境变量与 mTLS 说明**：
