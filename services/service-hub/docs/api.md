@@ -30,6 +30,7 @@
     - [3.3.1 手动分发任务 (POST /api/hub/dispatch)](#331-手动分发任务-post-apihubdispatch)
     - [3.3.2 流水线监控遥测 (GET /api/hub/pipeline)](#332-流水线监控遥测-get-apihubpipeline)
   - [3.4 按身份证号查询并脱敏端点 (POST /api/hub/fetch-and-desensitize)](#34-按身份证号查询并脱敏端点-post-apihubfetch-and-desensitize)
+  - [3.5 跨服务完整调用链路：按身份证分级脱敏全链路 API 时序](#35-跨服务完整调用链路按身份证分级脱敏全链路-api-时序)
 - [4. gRPC API 规范与 Protobuf 定义](#4-grpc-api-规范与-protobuf-定义)
   - [4.1 Protobuf 契约文件 (servicehub.proto)](#41-protobuf-契约文件-servicehubproto)
   - [4.2 gRPC 服务接口与方法规约](#42-grpc-服务接口与方法规约)
@@ -572,6 +573,274 @@ flowchart LR
     -d '{"datasource_id":"ds_yibao","id_card_no":"510101198503151234"}' \
     http://127.0.0.1:8082/api/hub/fetch-and-desensitize | jq .
   ```
+
+---
+
+### 3.5 跨服务完整调用链路：按身份证分级脱敏全链路 API 时序
+
+本节描述「前端控制台 / BFF 网关 → 调度中枢 → 数据源服务 → 隐私计算引擎 → 审计存证」的**完整跨服务 API 调用链路**，以「按身份证号查询并分级脱敏」为例，逐步拆解每一跳的精确端点、请求体与响应体。
+
+#### 3.5.1 全链路时序图
+
+```mermaid
+sequenceDiagram
+    participant Client as 前端控制台 / BFF<br/>(app-lz web / bff-go)
+    participant Hub as 调度中枢<br/>service-hub :8082
+    participant DS as 数据源服务<br/>datasource-mgr :8083
+    participant Engine as 隐私计算引擎<br/>engine-go :8079
+    participant Audit as 审计存证<br/>audit-log :8084
+
+    Client->>+Hub: ① POST /api/hub/fetch-and-desensitize<br/>{datasource_id, id_card_no}
+
+    Hub->>+DS: ② GET /api/datasources/:id/record-by-id<br/>?id_card_no=xxx
+    DS-->>-Hub: ② 返回原始记录 {found, record}
+
+    Hub->>+Engine: ③ POST /v1/agent/process<br/>{records, datasource_id, api_code}
+    Engine-->>-Hub: ③ 返回分类分级 + 脱敏结果<br/>{level, sanitized_data, classification_report, summary}
+
+    Hub->>+Audit: ④ POST /api/audit/logs<br/>{task_id, datasource, operation, input_hash, output_hash, security_level}
+    Audit-->>-Hub: ④ 返回存证标识 {id, snapshot_id, integrity_hash}
+
+    Hub-->>-Client: ⑤ 返回脱敏结果<br/>{level, sanitized_data, classification_report, summary}
+```
+
+#### 3.5.2 逐跳 API 详细规范
+
+##### ① 前端 / BFF → 调度中枢 (service-hub)
+
+调用方通过调度中枢的同步端到端入口发起请求，只需提供数据源标识与身份证号，后续拉取、分级、脱敏、存证全部由调度中枢内部编排。
+
+- **端点**：`POST http://service-hub:8082/api/hub/fetch-and-desensitize`
+- **鉴权**：`Authorization: Bearer <SERVICE_HUB_API_KEY>`
+- **请求体**：
+  ```json
+  {
+    "datasource_id": "ds_yibao",
+    "id_card_no": "510101198503151234"
+  }
+  ```
+- **响应体**（`HTTP 200 OK`）：
+  ```json
+  {
+    "datasource_id": "ds_yibao",
+    "id_card_no": "510101198503151234",
+    "found": true,
+    "level": "L4",
+    "sanitized_data": {"name": "李*", "id_card": "5101***********234", "phone": "138****8000"},
+    "classification_report": {"layer1_rule_hits": ["PII::ID_CARD"], "max_sensitivity": "L4"},
+    "summary": {"total_fields": 4, "sanitized_fields": 3, "input_hash": "sm3:abc...", "output_hash": "sm3:def..."},
+    "via": "service-hub"
+  }
+  ```
+
+> **说明**：此端点是 service-hub 内部编排 ②③④ 三步的统一入口，调用方无需感知内部链路。
+
+---
+
+##### ② 调度中枢 → 数据源服务 (datasource-mgr)：拉取原始记录
+
+调度中枢收到请求后，首先归一化 `datasource_id`（支持别名如 `yibao` → `ds_yibao`），然后向 `datasource-mgr` 发起按身份证号精确查询。
+
+- **端点**：`GET http://datasource-mgr:8083/api/datasources/{datasource_id}/record-by-id?id_card_no={id_card_no}`
+- **鉴权**：`Authorization: Bearer <DATASOURCE_MGR_API_KEY>`（内部 mTLS 环境下可省略）
+- **请求头**：`X-Request-ID: <trace-id>`（链路追踪透传）
+- **响应体**（`HTTP 200 OK`）：
+  ```json
+  {
+    "datasource_id": "ds_yibao",
+    "record": {
+      "name": "李明",
+      "id_card_no": "510101198503151234",
+      "phone": "13800138000",
+      "diagnosis": "J18.9 社区获得性肺炎"
+    },
+    "found": true,
+    "via": "datasource-mgr"
+  }
+  ```
+- **错误场景**：
+  - `found=false`：数据源中无该身份证号匹配记录 → 调度中枢返回 `HTTP 404 RECORD_NOT_FOUND`
+  - `HTTP 400 INVALID_ARGUMENT`：`id_card_no` 缺失或长度不为 18
+
+> **gRPC 替代路径**：调度中枢也可通过 gRPC 调用 `datasourcemgr.DataSourceManagerService/GetRecordByIDCard`，消息结构见 `datasource-mgr/proto/datasourcemgr.proto`。
+
+---
+
+##### ③ 调度中枢 → 隐私计算引擎 (engine-go)：分类分级 + 脱敏
+
+拿到原始记录后，调度中枢将其发送至 `engine-go` 的通用处理流水线，**一次 HTTP 调用同时完成 3-Layer 分类分级 + L4/L5 高敏文本剥离 + PII 强掩码 + 诊断残留清除**。
+
+- **端点**：`POST http://engine-go:8079/v1/agent/process`
+- **回退别名**：若返回 404 则自动回退至 `POST /v1/medical/process`
+- **鉴权**：`Authorization: Bearer <PRIVACY_AGENT_API_KEY>`
+- **请求头**：
+  - `X-Request-ID: <trace-id>`
+  - `X-Idempotency-Key: hub-fad-{datasource_id}-{id_card_no}`（幂等键，防止重试导致重复脱敏）
+- **请求体**：
+  ```json
+  {
+    "records": [
+      {
+        "name": "李明",
+        "id_card_no": "510101198503151234",
+        "phone": "13800138000",
+        "diagnosis": "J18.9 社区获得性肺炎"
+      }
+    ],
+    "datasource_id": "ds_yibao",
+    "api_code": "api1_yibao"
+  }
+  ```
+- **响应体**（`HTTP 200 OK`）：
+  ```json
+  {
+    "level": "L4",
+    "classification_report": [
+      {
+        "name": {"level": "L3", "category": "PII", "rule": "PERSON_NAME"},
+        "id_card_no": {"level": "L4", "category": "PII", "rule": "PII::ID_CARD"},
+        "phone": {"level": "L3", "category": "PII", "rule": "PII::PHONE"},
+        "diagnosis": {"level": "L4", "category": "Healthcare", "rule": "ICD10::J18"}
+      }
+    ],
+    "sanitized_data": [
+      {
+        "name": "李*",
+        "id_card_no": "5101***********234",
+        "phone": "138****8000",
+        "diagnosis": "J18.9"
+      }
+    ],
+    "summary": {
+      "total_records": 1,
+      "api_code": "api1_yibao",
+      "datasource_id": "ds_yibao",
+      "engine": "go",
+      "overall_level": "L4",
+      "input_hash": "sm3:a1b2c3...",
+      "output_hash": "sm3:d4e5f6..."
+    }
+  }
+  ```
+- **关键字段语义**：
+  - `level` / `summary.overall_level`：3-Layer 漏斗给出的最高敏感级别（`L1`~`L5`），调度中枢据此决定脱敏算子（P1-1 只允许上调不允许下调）
+  - `summary.input_hash` / `output_hash`：国密 SM3 指纹，供后续 ④ 审计存证对账
+  - `sanitized_data`：脱敏后数据，PII 字段已按字段名 + 数据源领域规格掩码
+
+---
+
+##### ④ 调度中枢 → 审计存证 (audit-log)：写入不可篡改存证
+
+脱敏完成后，调度中枢向独立审计存证节点提交一条出域存证记录，将本次数据流出与不可篡改哈希链绑定（P0-6 fail-closed：提交失败则整个请求失败）。
+
+- **端点**：`POST http://audit-log:8084/api/audit/logs`
+- **鉴权**：`Authorization: Bearer <AUDIT_LOG_API_KEY>`
+- **请求头**：
+  - `X-Request-ID: <trace-id>`
+  - `X-Idempotency-Key: hub-{task_id}-audit-{retry_count}`
+- **请求体**：
+  ```json
+  {
+    "task_id": "task-1787554500-eabf3934",
+    "datasource_id": "ds_yibao",
+    "datasource": "ds_yibao",
+    "api_code": "api1_yibao",
+    "operation": "mask",
+    "security_level": "L4",
+    "input_hash": "sm3:a1b2c3...",
+    "output_hash": "sm3:d4e5f6...",
+    "algorithm": "three_layer_funnel",
+    "parameters": {
+      "service": "service-hub",
+      "stage": "audit",
+      "protocol": "rest",
+      "hub_operation": "mask",
+      "trace_id": "req-20260903-abc123"
+    },
+    "input_rows": 1,
+    "output_rows": 1,
+    "duration_ms": 2345,
+    "user": "service-hub",
+    "status": "success",
+    "timestamp": "2026-09-03T10:00:03.123456789Z"
+  }
+  ```
+- **响应体**（`HTTP 201 Created`）：
+  ```json
+  {
+    "id": "audit-log-20260903-001",
+    "snapshot_id": "snap-20260903-001",
+    "integrity_hash": "sha256:7f8a9b...",
+    "prev_hash": "sha256:3c4d5e...",
+    "via": "audit-log"
+  }
+  ```
+- **关键安全约束**：
+  - `prev_hash` 由 `audit-log` 服务端存储层唯一指派（客户端禁止传入，否则 400）
+  - `input_hash` / `output_hash` 优先取引擎侧 SM3 指纹，缺失时由调度中枢本地 SM3 兜底计算
+  - 存证提交失败（网络不可达 / 4xx / 5xx）→ 整个请求返回失败（P0-6 fail-closed）
+
+---
+
+##### ⑤ 调度中枢 → 前端 / BFF：返回脱敏结果
+
+全部内部链路成功后，调度中枢将最终结果同步返回给调用方。
+
+- **响应体**（`HTTP 200 OK`）：
+  ```json
+  {
+    "datasource_id": "ds_yibao",
+    "id_card_no": "510101198503151234",
+    "found": true,
+    "level": "L4",
+    "sanitized_data": {
+      "name": "李*",
+      "id_card": "5101***********234",
+      "phone": "138****8000",
+      "diagnosis": "J18.9"
+    },
+    "classification_report": {
+      "layer1_rule_hits": ["PII::ID_CARD", "PII::PHONE"],
+      "layer2_ner_entities": ["PER", "TEL"],
+      "layer3_llm_fields": ["diagnosis"],
+      "max_sensitivity": "L4"
+    },
+    "summary": {
+      "total_fields": 4,
+      "sanitized_fields": 3,
+      "entities_detected": 5,
+      "input_hash": "sm3:a1b2c3...",
+      "output_hash": "sm3:d4e5f6..."
+    },
+    "via": "service-hub"
+  }
+  ```
+
+#### 3.5.3 全链路 curl 端到端示例
+
+```bash
+# 完整端到端：前端/BFF → service-hub → datasource-mgr → engine-go → audit-log → 返回脱敏结果
+curl -s -X POST \
+  -H "Authorization: Bearer <SERVICE_HUB_API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"datasource_id":"ds_yibao","id_card_no":"510101198503151234"}' \
+  http://127.0.0.1:8082/api/hub/fetch-and-desensitize | jq .
+```
+
+> 一条 curl 即可触发完整的 5 步跨服务链路：① 接入 → ② 拉取原始数据 → ③ 分类分级+脱敏 → ④ 审计存证 → ⑤ 返回结果。
+
+#### 3.5.4 全链路错误传播矩阵
+
+| 失败环节 | 调度中枢返回 | 错误码 | 说明 |
+|---|---|---|---|
+| ① 参数校验失败 | `400 Bad Request` | `INVALID_ARGUMENT` | `datasource_id` 或 `id_card_no` 缺失/非法 |
+| ① 数据源无法识别 | `400 Bad Request` | `INVALID_DATASOURCE_ID` | `datasource_id` 无法归一化 |
+| ② datasource-mgr 不可达 | `502 Bad Gateway` | `UPSTREAM_UNAVAILABLE` | 熔断器打开或网络超时 |
+| ② 记录未找到 | `404 Not Found` | `RECORD_NOT_FOUND` | 数据源中无该身份证号匹配记录 |
+| ③ engine-go 不可达 | `502 Bad Gateway` | `UPSTREAM_UNAVAILABLE` | 引擎熔断或超时（15 秒） |
+| ③ 引擎未返回级别 | `502 Bad Gateway` | `UPSTREAM_UNAVAILABLE` | 3-Layer 漏斗未产出任何级别（P1-1 fail-closed） |
+| ④ audit-log 不可达 | `502 Bad Gateway` | `UPSTREAM_UNAVAILABLE` | 存证提交失败，P0-6 fail-closed |
+| ④ audit-log 拒绝 | `502 Bad Gateway` | `UPSTREAM_UNAVAILABLE` | 4xx 契约级拒绝，重试无意义 |
 
 ---
 
