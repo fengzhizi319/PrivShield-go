@@ -209,3 +209,29 @@ func TestEnvelopeSaltMakesCiphertextUnique(t *testing.T) {
 		}
 	}
 }
+
+func TestRegisterKeyVersionsFromEnv(t *testing.T) {
+	// 1. 空前缀时返回 0
+	if n := RegisterKeyVersionsFromEnv(""); n != 0 {
+		t.Errorf("expected 0 without prefix, got %d", n)
+	}
+
+	// 2. 传入服务专属前缀时正确注册多版本
+	t.Setenv("TEST_APP_CRYPTO_KEY_V1", "secret-key-1")
+	t.Setenv("TEST_APP_CRYPTO_KEY_V2", "secret-key-2")
+	t.Setenv("TEST_APP_CRYPTO_ACTIVE_VERSION", "V2")
+
+	n := RegisterKeyVersionsFromEnv("TEST_APP_CRYPTO_")
+	if n < 2 {
+		t.Errorf("expected at least 2 versions registered, got %d", n)
+	}
+
+	keyV1, err := LookupKeyVersion("V1")
+	if err != nil || string(keyV1.Key) != "secret-key-1" {
+		t.Errorf("key v1 lookup failed, got %v, err: %v", keyV1, err)
+	}
+	keyV2, err := LookupKeyVersion("V2")
+	if err != nil || string(keyV2.Key) != "secret-key-2" || !keyV2.Active {
+		t.Errorf("key v2 active lookup failed, got %v, err: %v", keyV2, err)
+	}
+}

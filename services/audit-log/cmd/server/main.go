@@ -59,9 +59,9 @@ func main() {
 	// 多版本密钥轮换：从 PRIVACY_CRYPTO_KEY_<VERSION> 环境变量注册所有版本，
 	// PRIVACY_CRYPTO_ACTIVE_VERSION 指定当前活跃版本（用于加密写入）。
 	// 若未配置多版本环境变量，回退到配置主密钥注册为 v1。
-	if n := pkgcrypto.RegisterKeyVersionsFromEnv(); n > 0 {
+	if n := pkgcrypto.RegisterKeyVersionsFromEnv("AUDIT_LOG_CRYPTO_"); n > 0 {
 		log.Printf("envelope encryption key versions registered from env (count=%d, active=%s)",
-			n, os.Getenv("PRIVACY_CRYPTO_ACTIVE_VERSION"))
+			n, os.Getenv("AUDIT_LOG_CRYPTO_ACTIVE_VERSION"))
 	} else if cfg.EncryptionKey != "" {
 		pkgcrypto.RegisterKeyVersion("v1", []byte(cfg.EncryptionKey), true)
 		log.Printf("envelope encryption key registered (version=v1, active=true)")
@@ -143,8 +143,8 @@ func main() {
 	gin.SetMode(gin.ReleaseMode)
 	server := handlers.New(agentClient, cfg, keyStore, auditStore, logger, mc)
 	router := gin.New()
-	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv()) // G-02
-	router.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv()))           // IP access control
+	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv("AUDIT_LOG_TRUSTED_PROXIES")) // G-02
+	router.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv("AUDIT_LOG_ALLOWED_CIDRS")))             // IP access control
 	server.RegisterRoutes(router)
 
 	httpSrv := &http.Server{
@@ -290,8 +290,8 @@ func main() {
 
 	// Start HTTP server / 启动 HTTP 监听
 	go func() {
-		if tlsutil.IsTLCPEnabled() {
-			tlcpCfg := tlsutil.TLCPConfigFromEnv()
+		if tlsutil.IsTLCPEnabled("AUDIT_LOG_TLS_NATIONAL_CIPHER") {
+			tlcpCfg := tlsutil.TLCPConfigFromEnv("AUDIT_LOG_")
 			gmtlsConfig, tlcpErr := tlsutil.BuildTLCPConfig(tlcpCfg)
 			if tlcpErr != nil {
 				log.Fatalf("failed to build TLCP config: %v", tlcpErr)

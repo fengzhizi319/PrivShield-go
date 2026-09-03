@@ -595,18 +595,57 @@ func (r *OperatorRegistry) ListOperators() []OperatorType {
 // 辅助函数
 // ──────────────────────────────────────────────
 
-// matchRegex 使用缓存的正则匹配（线程安全）
-func matchRegex(pattern, text string) bool {
-	re, ok := regexCache.Load(pattern)
-	if !ok {
-		compiled, err := regexp.Compile(pattern)
-		if err != nil {
-			return false
-		}
-		regexCache.Store(pattern, compiled)
-		return compiled.MatchString(text)
-	}
-	return re.(*regexp.Regexp).MatchString(text)
+type boundedRegexCache struct {
+	mu      sync.RWMutex
+	entries map[string]*regexp.Regexp
+	maxSize int
 }
 
-var regexCache sync.Map
+func newBoundedRegexCache(maxSize int) *boundedRegexCache {
+	return &boundedRegexCache{
+		entries: make(map[string]*regexp.Regexp, maxSize),
+		maxSize: maxSize,
+	}
+}
+
+func (c *boundedRegexCache) getOrCompile(pattern string) (*regexp.Regexp, error) {
+	c.mu.RLock()
+	re, ok := c.entries[pattern]
+	c.mu.RUnlock()
+	if ok {
+		return re, nil
+	}
+
+	compiled, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.entries) >= c.maxSize {
+		// 达到上限时清理一半容量，防止无界内存增长
+		count := 0
+		target := c.maxSize / 2
+		for k := range c.entries {
+			delete(c.entries, k)
+			count++
+			if count >= target {
+				break
+			}
+		}
+	}
+	c.entries[pattern] = compiled
+	return compiled, nil
+}
+
+var globalRegexCache = newBoundedRegexCache(1024)
+
+// matchRegex 使用有界缓存的正则匹配（线程安全、防内存泄漏）
+func matchRegex(pattern, text string) bool {
+	re, err := globalRegexCache.getOrCompile(pattern)
+	if err != nil {
+		return false
+	}
+	return re.MatchString(text)
+}

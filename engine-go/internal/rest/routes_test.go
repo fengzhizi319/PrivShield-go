@@ -669,12 +669,12 @@ func TestKAnonymizeDataFrame(t *testing.T) {
 // ──────────────────────────────────────────────
 
 func TestAuth_Enabled_Denied_And_Allowed(t *testing.T) {
-	os.Setenv("PRIVACY_AUTH_ENABLED", "true")
-	os.Setenv("PRIVACY_AUTH_INTERNAL_API_KEYS", "secret-admin-key:admin:*;limited-key:user:privacy:mask")
+	os.Setenv("AGENT_AUTH_ENABLED", "true")
+	os.Setenv("AGENT_AUTH_INTERNAL_API_KEYS", "secret-admin-key:admin:*;limited-key:user:privacy:mask")
 	security.ResetSettings()
 	defer func() {
-		os.Unsetenv("PRIVACY_AUTH_ENABLED")
-		os.Unsetenv("PRIVACY_AUTH_INTERNAL_API_KEYS")
+		os.Unsetenv("AGENT_AUTH_ENABLED")
+		os.Unsetenv("AGENT_AUTH_INTERNAL_API_KEYS")
 		security.ResetSettings()
 	}()
 

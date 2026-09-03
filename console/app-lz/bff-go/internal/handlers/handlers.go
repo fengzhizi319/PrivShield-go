@@ -89,16 +89,16 @@ func NewHandler(cfg *config.Config, pool *clients.ClientPool, runner *runner.Tes
 func SetupRouter(h *Handler) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode) // 生产模式，关闭 Gin 调试日志
 	r := gin.New()
-	middleware.ConfigureTrustedProxies(r, middleware.TrustedProxiesFromEnv()) // G-02
-	r.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv()))           // IP access control
-	r.Use(middleware.TraceMiddleware())                                       // 分布式追踪 ID 自动注入与双头下发
-	r.Use(pkgobs.RequestLoggerWithModule("app-lz"))                           // 每请求结构化日志（method/path/status/latency）
-	r.Use(middleware.Recovery(h.logger, "app-lz"))                            // 全局 panic 恢复中间件
-	r.Use(middleware.WAF(h.logger))                                           // 三级等保 G-12：Web 攻击载荷检测
-	r.Use(gzipResponse())                                                     // gzip 响应压缩（JSON 文本压缩率 ~70-80%）
-	r.Use(middleware.SecurityHeaders())                                       // 安全响应头 (CSP/HSTS/X-Frame-Options)
-	r.Use(middleware.MaxBodySize(32 << 20))                                   // 32 MiB 请求体最大保护
-	r.Use(middleware.MaxConcurrent(1000))                                     // 并发在途请求上限，超限返回 503
+	middleware.ConfigureTrustedProxies(r, middleware.TrustedProxiesFromEnv("APP_LZ_TRUSTED_PROXIES")) // G-02
+	r.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv("APP_LZ_ALLOWED_CIDRS")))             // IP access control
+	r.Use(middleware.TraceMiddleware())                                                               // 分布式追踪 ID 自动注入与双头下发
+	r.Use(pkgobs.RequestLoggerWithModule("app-lz"))                                                   // 每请求结构化日志（method/path/status/latency）
+	r.Use(middleware.Recovery(h.logger, "app-lz"))                                                    // 全局 panic 恢复中间件
+	r.Use(middleware.WAF(h.logger))                                                                   // 三级等保 G-12：Web 攻击载荷检测
+	r.Use(gzipResponse())                                                                             // gzip 响应压缩（JSON 文本压缩率 ~70-80%）
+	r.Use(middleware.SecurityHeaders())                                                               // 安全响应头 (CSP/HSTS/X-Frame-Options)
+	r.Use(middleware.MaxBodySize(32 << 20))                                                           // 32 MiB 请求体最大保护
+	r.Use(middleware.MaxConcurrent(1000))                                                             // 并发在途请求上限，超限返回 503
 	if h.cfg.RateLimitRPS > 0 {
 		r.Use(middleware.RateLimit(h.cfg.RateLimitRPS, h.cfg.RateLimitBurst)) // 每客户端 IP 令牌桶限流
 	}

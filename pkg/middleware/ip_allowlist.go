@@ -75,7 +75,14 @@ func IPAllowlist(allowedCIDRs []string) gin.HandlerFunc {
 	}
 }
 
-// AllowedCIDRsFromEnv 从 PRIVACY_ALLOWED_CIDRS 环境变量解析允许的 CIDR 列表。
-func AllowedCIDRsFromEnv() []string {
-	return pkgconfig.EnvStringSlice("PRIVACY_ALLOWED_CIDRS")
+// AllowedCIDRsFromEnv 从调用方指定的环境变量名中解析允许的 CIDR 列表。
+//
+// 机制与策略完全分离：pkg 基础包不硬编码任何具体业务环境变量，不维护次级兼容兜底。
+// 调用方必须显式传入专属环境变量名（例如 "GATEWAY_ALLOWED_CIDRS"、"AGENT_ALLOWED_CIDRS"）。
+// 若 envKey 为空或未配置，则返回 nil（表示不启用白名单拦截，全量放行）。
+func AllowedCIDRsFromEnv(envKey string) []string {
+	if envKey == "" {
+		return nil
+	}
+	return pkgconfig.EnvStringSlice(envKey)
 }

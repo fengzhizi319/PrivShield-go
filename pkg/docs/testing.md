@@ -165,6 +165,17 @@
 * `TestMaxConcurrent`：并发超限返回 503 Service Unavailable；
 * `TestRateLimit_AllowsUnderBurstAndRejectsOver`：IP 维度令牌桶超出 RPS/Burst 后的 429 拦截。
 
+**网络准入与受信任代理纯函数单测**（`ip_allowlist_test.go` & `middleware_test.go`）：
+* `TestIPAllowlist_AllowsMatchingCIDR` / `TestIPAllowlist_BlocksNonMatching`：CIDR 白名单精准放行与非法源 IP 403 阻断；
+* `TestAllowedCIDRsFromEnv`：验证空键返回 `nil`、专属变量精准读取与切片解析；
+* `TestTrustedProxiesFromEnv`：验证空键返回 `nil`、专属变量精准读取与切片解析；
+* `TestRealClientIP_UntrustedProxyIgnored`：非可信反向代理上送的 `X-Forwarded-For` 严格丢弃，消除伪造攻击。
+
+**国密 TLCP 与多版本密钥轮换单测**（`tlcp_test.go` & `envelope_test.go`）：
+* `TestIsTLCPEnabled`：验证空键安全返回 `false`、按参数显式检测特定变量；
+* `TestTLCPConfigFromEnv`：验证空前缀传参返回空结构体、传入业务前缀后解析国密双证书配置；
+* `TestRegisterKeyVersionsFromEnv`：验证空前缀安全返回 0，传入专属服务前缀后正确挂载多版本 SM4 密钥。
+
 ### 2.5 安全门禁 Fail-Closed 前置校验测试 (`pkg/config`)
 
 `config.ValidateFailClosed` 在服务启动前执行零信任安全门禁校验，任何一项不满足即拒绝启动（`security_test.go`）：

@@ -174,8 +174,8 @@ func TestWhitelistManager_Singleton(t *testing.T) {
 		ResetSettings()
 	}()
 
-	os.Unsetenv("PRIVACY_AUTH_MTLS_WHITELIST_FILE")
-	os.Unsetenv("PRIVACY_AUTH_MTLS_ALLOWED_CNS")
+	os.Unsetenv("AGENT_AUTH_MTLS_WHITELIST_FILE")
+	os.Unsetenv("AGENT_AUTH_MTLS_ALLOWED_CNS")
 
 	m1 := GetWhitelistManager()
 	m2 := GetWhitelistManager()

@@ -288,7 +288,8 @@ for log in raw.Logs():
        }
    }
    ```
-3. 在 `pkg/middleware/middleware_test.go` 中编写对应测试用例。
+3. **架构铁律（机制与策略解耦）**：`pkg/` 中台基础包严禁直接硬编码或隐式赋值具体服务的环境变量字符串（如写死 `"SERVICE_NAME_XXX"`），也不维护多级次级变量兼容。若需要从环境读取辅助配置，必须设计为参数驱动，由入参接收 `envKey string` 或配置前缀，未配置或传入空键时安全返回空/`nil`，业务层在服务入口显式传入其专属变量名；
+4. 在 `pkg/middleware/middleware_test.go` 中编写对应测试用例（覆盖空键、专属键与格式解析等场景）。
 
 ### SOP-2：如何实现一个新的存储后端 (如 MySQL / TiDB)
 

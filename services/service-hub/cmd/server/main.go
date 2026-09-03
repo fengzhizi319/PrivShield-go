@@ -211,8 +211,8 @@ func main() {
 	gin.SetMode(gin.ReleaseMode)
 	server := handlers.New(agentClient, dsClient, cfg, keyStore, taskStore, logger, mc)
 	router := gin.New()
-	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv()) // G-02
-	router.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv()))           // IP access control
+	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv("SERVICE_HUB_TRUSTED_PROXIES")) // G-02
+	router.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv("SERVICE_HUB_ALLOWED_CIDRS")))             // IP access control
 	server.RegisterRoutes(router)
 
 	httpSrv := &http.Server{
@@ -398,8 +398,8 @@ func main() {
 
 	// 2) 启动 HTTP REST 服务并在后台独立协程中监听请求
 	go func() {
-		if tlsutil.IsTLCPEnabled() {
-			tlcpCfg := tlsutil.TLCPConfigFromEnv()
+		if tlsutil.IsTLCPEnabled("SERVICE_HUB_TLS_NATIONAL_CIPHER") {
+			tlcpCfg := tlsutil.TLCPConfigFromEnv("SERVICE_HUB_")
 			gmtlsConfig, tlcpErr := tlsutil.BuildTLCPConfig(tlcpCfg)
 			if tlcpErr != nil {
 				log.Fatalf("failed to build TLCP config: %v", tlcpErr)

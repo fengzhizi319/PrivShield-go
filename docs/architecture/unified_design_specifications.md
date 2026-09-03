@@ -86,11 +86,8 @@ flowchart TD
 | service-hub | `services/service-hub` | `127.0.0.1:8082` | `127.0.0.1:50052` | 数据服务调度中枢 |
 | datasource-mgr | `services/datasource-mgr` | `127.0.0.1:8083` | `127.0.0.1:50053` | 数据源资产管理 |
 | audit-log | `services/audit-log` | `127.0.0.1:8084` | `127.0.0.1:50054` | 审计存证服务 |
-| bff-go / console | `console/bff-go` | `127.0.0.1:8081` | `127.0.0.1:50055`（可选） | 控制台 BFF 网关 |
-| service-hub | `services/service-hub` | `127.0.0.1:8082` | `127.0.0.1:50052` | 数据服务调度中枢 |
-| datasource-mgr | `services/datasource-mgr` | `127.0.0.1:8083` | `127.0.0.1:50053` | 数据源资产管理 |
-| audit-log | `services/audit-log` | `127.0.0.1:8084` | `127.0.0.1:50054` | 审计存证服务 |
-| bff-go / console | `console/bff-go` | `127.0.0.1:8081` | `127.0.0.1:50055`（可选） | 控制台 BFF 网关 |
+| bff-go / console | `console/bff-go` | `127.0.0.1:8081` | `127.0.0.1:50055`（可选） | 统一管理控制台 BFF 网关 |
+| app-lz / bff-go | `console/app-lz/bff-go` | `127.0.0.1:8085` | — | 调度之眼业务 BFF（统一走 service-hub 编排） |
 
 > 生产环境请通过对应的环境变量显式设置监听地址；默认回环地址仅用于本地开发。各服务具体的环境变量名见 [7. 统一配置管理](#7-统一配置管理与环境级联覆盖机制-configuration-hierarchy)。
 
@@ -352,11 +349,13 @@ classDiagram
 - `AUDIT_LOG_*`：审计存证服务
 - `PRIVACY_CONSOLE_*` / `CONSOLE_*`：BFF 控制台
 
-跨服务共享配置使用 `PRIVACY_*` 前缀，例如：
-
-- `PRIVACY_AUTH_MTLS_WHITELIST_FILE`：所有 Go gRPC 服务端共享的 mTLS CN 白名单文件
-- `PRIVACY_AGENT_*`：上游 Go Agent 连接参数（`PRIVACY_AGENT_REST_HOST`、`PRIVACY_AGENT_API_KEY` 等）
-- `PRIVACY_REST_PORT` / `PRIVACY_GRPC_PORT`：Go Agent 监听端口
+跨服务共享与安全中间件采用**「机制与策略分离」**设计模式（`pkg/middleware`、`pkg/crypto`）：
+- 公共中台包支持显式传入服务专属环境变量（如 `GATEWAY_ALLOWED_CIDRS`、`AGENT_ALLOWED_CIDRS`、`GATEWAY_TRUSTED_PROXIES`）；
+- 未指定或未配置专属变量时，安全平滑回退至全局 `PRIVACY_*`，兼顾各服务网络安全隔离与老旧编排兼容性；
+- 全局共享配置示例：
+  - `PRIVACY_AUTH_MTLS_WHITELIST_FILE`：所有 Go gRPC 服务端共享的 mTLS CN 白名单文件
+  - `PRIVACY_AGENT_*`：上游 Go Agent 连接参数（`PRIVACY_AGENT_REST_HOST`、`PRIVACY_AGENT_API_KEY` 等）
+  - `PRIVACY_REST_PORT` / `PRIVACY_GRPC_PORT`：Go Agent 监听端口
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -372,9 +371,10 @@ classDiagram
 
 ### 7.1 动态热重载规范 (Zero-Downtime Reload)
 以下配置项支持在**不重启微服务进程**的情况下动态重载生效：
-1. **动态分类分级规则库 (`rules/domains/*.yaml`、`rules/taxonomies/*.yaml`)**：由 `engine-go/internal/dynclassification/funnel.go` 实现三层漏斗（规则 → 可选 Small-NER → 可选外部 LLM 仲裁）；调用 `POST /v1/dynclassification/profiles/reload` 触发引擎无锁重载；
-2. **mTLS CN 访问控制白名单 (`config/mtls-whitelist.yaml`)**：Go 端 `pkg/tlsutil/whitelist.go` 内置文件 mtime 轮询监听器（5 秒间隔）在文件变更时自动热更新内存白名单；
-3. **数据源定义与别名注册 (`pkg/naming`)**：作为静态事实源编译固化，保证分布式集群间的一致性。
+1. **动态分类分级规则库 (`rules/domains/*.yaml`、`rules/taxonomies/*.yaml`)**：由 `engine-go/internal/dynclassification/funnel.go` 实现三层漏斗（规则 → 可选 Small-NER → 可选外部 LLM 仲裁）；调用 `POST /v1/dynclassification/profiles/reload` 或 `/ops/reload` 触发引擎无锁重载；
+2. **医疗流水线字段规格矩阵与别名字典 (`rules/domains/medical.yaml`)**：支持声明式配置 `field_specs`（脱敏算子/分箱步长/差分隐私上下界）与 `aliases`（上游更名字段映射），通过 5s mtime 检测或 reload 端点自动动态装配至统一 `medicalPipeline`，无需修改代码；
+3. **mTLS CN 访问控制白名单 (`config/mtls-whitelist.yaml`)**：Go 端 `pkg/tlsutil/whitelist.go` 与 `engine-go/internal/security/whitelist.go` 内置文件 mtime 轮询监听器（5 秒间隔）在文件变更时自动热更新内存白名单；
+4. **数据源定义与别名注册 (`pkg/naming`)**：作为静态事实源编译固化，保证分布式集群间的一致性。
 
 ---
 
@@ -386,6 +386,9 @@ classDiagram
 | **存证数据防篡改** | 9 要素区块链式哈希链 + 链式验真 | 保证存证前后强关联，杜绝删行、篡改与重放，无需昂贵的外部硬件即可实现审计抗抵赖 |
 | **机密数据保护** | SM4-GCM 信封加密 (`enc:v1:`) | 针对敏感字段按需加密，密文自带 Nonce 与 Auth Tag，具备版本前缀透明兼容回退能力 |
 | **多副本分布式租约** | PostgreSQL `FOR UPDATE SKIP LOCKED` | 利用成熟 RDBMS 的行级锁实现原子任务争抢，免去第三方分布式锁运维与锁超时脑裂风险 |
+| **大文件恒定内存处理** | `ProcessFileStream` 逐行解码分块脱敏 | 基于 `bufio` + `json.Decoder`/`csv.Reader` 单趟流水线与 `streamBatchSize` 分块，避免全量物化 4~6 倍内存峰值放大 |
+| **匹配算子防泄漏** | `boundedRegexCache` 有界正则缓存 | 淘汰无界 `sync.Map`，设定 1024 槽位上限与半容量自适应驱逐，杜绝长运行态内存泄漏 |
+| **医疗脱敏流水线** | 单一全域规格流水线 (`NewFullMedicalPipeline`) | 融合医保 19、康养 27、体征及民政扩展槽位，消除多实例冗余状态，支持声明式动态热装配 |
 | **微服务通信协议** | gRPC (Protobuf) + REST (HTTP/JSON) 双协议 | 兼顾前端易用性与微服务间高性能二进制传输、强类型定义及双向流控 |
 
 ---

@@ -51,10 +51,7 @@ func InitTracing(endpoint, serviceName string) Tracer {
 			endpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 		}
 		if serviceName == "" {
-			serviceName = os.Getenv("PRIVACY_SERVICE_NAME")
-			if serviceName == "" {
-				serviceName = "PrivShield"
-			}
+			serviceName = "service"
 		}
 
 		var t Tracer

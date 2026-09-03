@@ -507,3 +507,30 @@ func TestRateLimit_AllowsUnderBurstAndRejectsOver(t *testing.T) {
 		t.Errorf("request 3 expected 429 Too Many Requests, got %d", w3.Code)
 	}
 }
+
+func TestTrustedProxiesFromEnv(t *testing.T) {
+	// 1. 空键名时返回 nil（pkg 自身不硬编码任何具体变量）
+	if res := TrustedProxiesFromEnv(""); res != nil {
+		t.Errorf("expected nil for empty envKey, got %v", res)
+	}
+
+	// 2. 传入不存在或未配置的键时返回 nil
+	t.Setenv("NON_EXISTENT_PROXIES", "")
+	if res := TrustedProxiesFromEnv("NON_EXISTENT_PROXIES"); res != nil {
+		t.Errorf("expected nil for empty env, got %v", res)
+	}
+
+	// 3. 传入配置的专属变量时成功解析
+	t.Setenv("GATEWAY_TRUSTED_PROXIES", "172.16.0.1")
+	resGw := TrustedProxiesFromEnv("GATEWAY_TRUSTED_PROXIES")
+	if len(resGw) != 1 || resGw[0] != "172.16.0.1" {
+		t.Errorf("service-specific mismatch, got %v", resGw)
+	}
+
+	// 4. 解析多代理逗号分隔
+	t.Setenv("AGENT_TRUSTED_PROXIES", "127.0.0.1, 10.0.0.1")
+	resAgent := TrustedProxiesFromEnv("AGENT_TRUSTED_PROXIES")
+	if len(resAgent) != 2 || resAgent[0] != "127.0.0.1" || resAgent[1] != "10.0.0.1" {
+		t.Errorf("parsed proxies mismatch, got %v", resAgent)
+	}
+}

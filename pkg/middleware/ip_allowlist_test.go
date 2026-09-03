@@ -98,3 +98,30 @@ func TestIPAllowlist_InvalidCIDRSkipped(t *testing.T) {
 		t.Errorf("valid CIDR should still work after invalid entry: got %d, want 200", w.Code)
 	}
 }
+
+func TestAllowedCIDRsFromEnv(t *testing.T) {
+	// 1. 空键名时返回 nil（pkg 自身不硬编码任何具体变量）
+	if res := AllowedCIDRsFromEnv(""); res != nil {
+		t.Errorf("expected nil for empty envKey, got %v", res)
+	}
+
+	// 2. 传入不存在或未配置的键时返回 nil
+	t.Setenv("NON_EXISTENT_CIDRS", "")
+	if res := AllowedCIDRsFromEnv("NON_EXISTENT_CIDRS"); res != nil {
+		t.Errorf("expected nil for empty env, got %v", res)
+	}
+
+	// 3. 传入配置的专属变量时成功解析
+	t.Setenv("GATEWAY_ALLOWED_CIDRS", "172.16.0.0/16")
+	resGw := AllowedCIDRsFromEnv("GATEWAY_ALLOWED_CIDRS")
+	if len(resGw) != 1 || resGw[0] != "172.16.0.0/16" {
+		t.Errorf("service-specific mismatch, got %v", resGw)
+	}
+
+	// 4. 解析多网段逗号分隔
+	t.Setenv("AGENT_ALLOWED_CIDRS", "10.0.0.0/8, 192.168.1.0/24")
+	resAgent := AllowedCIDRsFromEnv("AGENT_ALLOWED_CIDRS")
+	if len(resAgent) != 2 || resAgent[0] != "10.0.0.0/8" || resAgent[1] != "192.168.1.0/24" {
+		t.Errorf("parsed slices mismatch, got %v", resAgent)
+	}
+}

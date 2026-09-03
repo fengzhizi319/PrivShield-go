@@ -66,7 +66,7 @@ type SecurityRequirements struct {
 	HashKey string
 	// RequireHashKey 用于写入链式存证的服务（audit-log）。
 	RequireHashKey bool
-	// AllowedCIDRs 是 IP 白名单（PRIVACY_ALLOWED_CIDRS）。空表示透传。
+	// AllowedCIDRs 是 IP 白名单。空表示透传。
 	// 非环回地址且为空时 ValidateFailClosed 输出 slog.Warn 警告。
 	AllowedCIDRs []string
 }
@@ -124,7 +124,7 @@ func ValidateFailClosed(req SecurityRequirements) error {
 	}
 
 	if remoteExposed && len(req.AllowedCIDRs) == 0 {
-		slog.Warn("IP allowlist is empty; all client IPs are accepted. Set PRIVACY_ALLOWED_CIDRS to restrict access",
+		slog.Warn("IP allowlist is empty; all client IPs are accepted. Set IP allowlist to restrict access",
 			"service", name)
 	}
 

@@ -284,12 +284,20 @@
 | `DATASOURCE_MGR_RATE_LIMIT_RPS` | int | `100` | 令牌桶速率 |
 | `DATASOURCE_MGR_RATE_LIMIT_BURST` | int | `200` | 令牌桶突发容量 |
 
-### 1.5 跨服务共享变量
+### 1.5 跨服务共享与网络访问控制变量
 
-以下变量被多个服务读取，需确保全局一致配置：
+以下变量涉及跨服务网络通信与统一安全边界，严格遵循单一职责与专属命名：各服务独立配置专属变量，不设隐式全局次级变量。
 
 | 变量 | 使用方 | 用途 |
 |---|---|---|
+| `GATEWAY_ALLOWED_CIDRS` | privshield-gateway | 网关 IP 访问控制白名单（CIDR 列表） |
+| `GATEWAY_TRUSTED_PROXIES` | privshield-gateway | 网关可信反向代理 CIDR 列表（G-02 防伪造） |
+| `AGENT_ALLOWED_CIDRS` | privshield-agent | Agent 算力引擎 IP 白名单 |
+| `AGENT_TRUSTED_PROXIES` | privshield-agent | Agent 可信代理列表 |
+| `CONSOLE_BFF_ALLOWED_CIDRS` | bff-go | 统一控制台 BFF IP 白名单 |
+| `CONSOLE_BFF_TRUSTED_PROXIES` | bff-go | 统一控制台 BFF 可信代理列表 |
+| `APP_LZ_ALLOWED_CIDRS` | app-lz/bff-go | 业务 BFF IP 白名单 |
+| `APP_LZ_TRUSTED_PROXIES` | app-lz/bff-go | 业务 BFF 可信代理列表 |
 | `PRIVACY_AGENT_REST_HOST` | audit-log, service-hub | 上游 Agent REST 主机 |
 | `PRIVACY_REST_PORT` | audit-log, service-hub | 上游 Agent REST 端口 |
 | `PRIVACY_AGENT_API_KEY` | audit-log, service-hub | 上游 Agent 鉴权密钥 |
@@ -306,7 +314,7 @@
 | 环境变量 | 使用场景 | 说明 |
 |---|---|---|
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `pkg/observability/tracing.go` | 分布式追踪 OTLP 端点（设置后启用追踪） |
-| `PRIVACY_SERVICE_NAME` | `pkg/observability/tracing.go` | 追踪服务名称（默认 `"PrivShield"`） |
+| `AGENT_SERVICE_NAME` | `engine-go/internal/observability` | 追踪服务名称（由服务层显式传参注入 `pkg/observability`，默认 `"service"`） |
 | `PRIVSHIELD_PG_TEST_DSN` | 集成测试 | PostgreSQL 集成测试 DSN |
 | `PRIVSHIELD_MIGRATE_PG_DSN` | `pkg/store/cmd/migrate` | 迁移目标 PostgreSQL DSN |
 | `PRIVSHIELD_MIGRATE_SNAPSHOT_VERIFY` | `pkg/store/cmd/migrate` | 快照验证模式 |

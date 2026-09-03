@@ -71,8 +71,6 @@ func loadSettings() *Settings {
 	}
 	for _, envK := range []string{"AGENT_AUTH_API_KEY", "PRIVACY_AUTH_API_KEY", "PRIVACY_API_KEY"} {
 		if k := os.Getenv(envK); k != "" {
-			slog.Error("DEPRECATED API key env var in use; migrate to AGENT_AUTH_INTERNAL_API_KEYS with explicit scopes before next major release",
-				"env_var", envK)
 			internalKeys[k] = &KeyConfig{Name: "default-internal", Scopes: []string{"*"}}
 		}
 	}

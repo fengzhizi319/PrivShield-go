@@ -123,6 +123,33 @@ func HMACSM3Hex(key, data []byte) string
 func NewCipher(key []byte) (cipher.Block, error)
 ```
 
+### 1.7 多版本密钥轮换与管理 (G-08)
+
+```go
+// RegisterKeyVersion 注册一个密钥版本（用于解密，若 active=true 则同时用于加密写入）。
+func RegisterKeyVersion(version string, key []byte, active bool)
+
+// RegisterKeyVersionsFromEnv 从指定环境变量前缀注册多版本密钥。
+// 机制与策略完全分离：基础密码包不硬编码任何具体业务环境变量前缀，不维护次级兼容兜底。
+// 调用方必须显式传入前缀参数（如 "AUDIT_CRYPTO_"）。未传入返回 0。
+func RegisterKeyVersionsFromEnv(prefix string) int
+
+// LookupKeyVersion 根据版本标识检索密钥（区分大小写）。
+func LookupKeyVersion(version string) (*KeyVersion, error)
+
+// ActiveKeyVersion 获取当前用于加密写入的活跃密钥版本。
+func ActiveKeyVersion() *KeyVersion
+```
+
+**环境变量约定范例**（由业务调用方指定前缀，例如 `AUDIT_CRYPTO_`）：
+```bash
+AUDIT_CRYPTO_KEY_V1=key-material-for-v1
+AUDIT_CRYPTO_KEY_V2=key-material-for-v2
+AUDIT_CRYPTO_ACTIVE_VERSION=V2
+```
+调用方式：`crypto.RegisterKeyVersionsFromEnv("AUDIT_CRYPTO_")`
+
+
 ---
 
 ## 二、持久化与微批存储引擎 (`pkg/store` & `pkg/store/flusher`)
@@ -806,10 +833,39 @@ func Auth(apiKey string) gin.HandlerFunc
 func AuthWithRoles(apiKey, readerKey string, readOnly []ReadOnlyEndpoint) gin.HandlerFunc
 ```
 
+#### 网络层访问控制与反向代理受信 (G-02 / CIDR 白名单)
+
+```go
+// IPAllowlist 基于 CIDR 范围对客户端源 IP 执行严格准入校验。
+// 未命中返回 403 FORBIDDEN。传入空切片时放行所有请求。
+func IPAllowlist(allowedCIDRs []string) gin.HandlerFunc
+
+// AllowedCIDRsFromEnv 从调用方指定的环境变量名中解析允许的 CIDR 列表。
+// 机制与策略完全分离：pkg 基础包不硬编码任何具体业务环境变量，不维护次级兼容兜底。
+// 若 envKey 为空或未配置，则返回 nil（全量放行）。
+func AllowedCIDRsFromEnv(envKey string) []string
+
+// ConfigureTrustedProxies 配置 Gin 引擎的可信反向代理列表（三级等保 G-02）。
+// 仅当对端位于指定受信 CIDR 时才采信 X-Forwarded-For 与 X-Real-IP 标头。
+func ConfigureTrustedProxies(r *gin.Engine, trustedProxies []string)
+
+// TrustedProxiesFromEnv 从调用方指定的环境变量名中解析可信代理列表。
+// 机制与策略完全分离：pkg 基础包不硬编码任何具体业务环境变量，不维护次级兼容兜底。
+// 若 envKey 为空或未配置，则返回 nil。
+func TrustedProxiesFromEnv(envKey string) []string
+
+// RealClientIP 提取真实客户端 IP 地址（已受 TrustedProxies 约束，剥除端口与 IPv6 方括号）。
+func RealClientIP(c *gin.Context) string
+```
+
 ### 3.7 完整中间件挂载范例
 
 ```go
 router := gin.New()
+
+// 0. 网络边界准入与受信任代理（显式传入服务专属变量）
+middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv("AGENT_TRUSTED_PROXIES"))
+router.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv("AGENT_ALLOWED_CIDRS")))
 
 // 1. 注册纵深防御中间件
 router.Use(middleware.TraceMiddleware())
@@ -1252,6 +1308,37 @@ if !whitelist.IsAuthorized("service-hub-client") {
     // 拦截无权限客户端
 }
 scopes, ok := whitelist.GetScopes("service-hub-client")
+```
+
+### 6.5 国密 TLCP 双证书配置与监听 (GM/T 0024)
+
+```go
+// IsTLCPEnabled 判断环境是否显式要求启用国密 TLCP。
+// 若 envKey 为空或未配置，则返回 false。
+func IsTLCPEnabled(envKey string) bool
+
+// TLCPConfigFromEnv 根据调用方显式传入的前缀从环境变量构建 TLCPConfig。
+// 机制与策略完全分离：基础包自身不硬编码任何特定环境变量前缀，不维护次级兼容兜底。
+func TLCPConfigFromEnv(prefix string) *TLCPConfig
+
+// BuildTLCPConfig 根据 TLCPConfig 构建 GM/T 0024 规范的双证书国密 TLS 配置（包含签名与加密两对证书私钥）。
+func BuildTLCPConfig(cfg *TLCPConfig) (*gmtls.Config, error)
+
+// NewTLCPListener 创建 TLCP 国密 TLS 监听器，替换标准 net.Listen + tls 链路。
+func NewTLCPListener(network, address string, config *gmtls.Config) (net.Listener, error)
+```
+
+**调用范例**：
+```go
+// 显式传入服务专属变量
+if tlsutil.IsTLCPEnabled("AGENT_TLS_NATIONAL_CIPHER") {
+    tlcpCfg := tlsutil.TLCPConfigFromEnv("AGENT_")
+    gmtlsConfig, err := tlsutil.BuildTLCPConfig(tlcpCfg)
+    if err != nil {
+        log.Fatal(err)
+    }
+    listener, err := tlsutil.NewTLCPListener("tcp", ":8443", gmtlsConfig)
+}
 ```
 
 ---

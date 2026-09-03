@@ -163,9 +163,19 @@ func RegisterKeyVersion(version string, key []byte, active bool) {
 //	PRIVACY_CRYPTO_KEY_V2=new-key-material
 //	PRIVACY_CRYPTO_ACTIVE_VERSION=V2
 //
-// 返回注册的版本数量。
-func RegisterKeyVersionsFromEnv() int {
-	activeVersion := os.Getenv("PRIVACY_CRYPTO_ACTIVE_VERSION")
+// RegisterKeyVersionsFromEnv 从指定环境变量前缀注册多版本密钥（G-08 密钥轮换）。
+//
+// 机制与策略完全分离：基础密码包不硬编码任何具体业务环境变量前缀，不维护次级兼容兜底。
+// 调用方必须显式传入前缀参数（如 "AUDIT_CRYPTO_"）。
+// 若 prefix 为空或未配置，则返回 0。
+func RegisterKeyVersionsFromEnv(prefix string) int {
+	if prefix == "" {
+		return 0
+	}
+	activeKey := prefix + "ACTIVE_VERSION"
+	keyPrefix := prefix + "KEY_"
+
+	activeVersion := os.Getenv(activeKey)
 
 	count := 0
 	for _, env := range os.Environ() {
@@ -174,10 +184,10 @@ func RegisterKeyVersionsFromEnv() int {
 			continue
 		}
 		name, material := kv[0], kv[1]
-		if !strings.HasPrefix(name, "PRIVACY_CRYPTO_KEY_") || name == "PRIVACY_CRYPTO_ACTIVE_VERSION" {
+		if !strings.HasPrefix(name, keyPrefix) || name == activeKey {
 			continue
 		}
-		version := strings.TrimPrefix(name, "PRIVACY_CRYPTO_KEY_")
+		version := strings.TrimPrefix(name, keyPrefix)
 		if version == "" || material == "" {
 			continue
 		}

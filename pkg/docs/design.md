@@ -549,38 +549,52 @@ func (f *ClassificationFunnel) highestStandardDefaultLevel() string
 
 ## 9. 纵深防御中间件流水线 (`pkg/middleware`)
 
-所有进入 Gin HTTP 服务的请求均依次流经 **8 层**标准化中间件栈（原 9 层中的 `StructuredLogger` 已下沉至 `pkg/observability.RequestLoggerWithModule`，作为独立中间件按需挂载）：
+所有进入 Gin HTTP 服务的请求均依次流经标准化纵深防御中间件流水线。中间件设计严格贯彻 **机制与策略分离（Separation of Mechanism and Policy）** 原则：`pkg/middleware` 基础包仅提供纯函数/纯中间件逻辑，不硬编码任何具体业务环境变量；各微服务在挂载时显式传入其专属配置键与全局回退键。
 
 ```text
 HTTP Request
      │
      ▼
-[ 1. TraceMiddleware ]       ➔ 提取/生成 X-Trace-ID & X-Request-ID，注入 context
-     │                         （实现下沉至 pkg/observability，trace.go 为兼容垫片）
+[ 0. ConfigureTrustedProxies ] ➔ 反向代理受信列表（三级等保 G-02），防止 XFF 伪造
+     │                           （支持显式传入专属变量，如 GATEWAY_TRUSTED_PROXIES）
      ▼
-[ 2. Recovery ]              ➔ 捕获 panic 并使用统一 JSON 信封输出 500
+[ 1. IPAllowlist ]             ➔ 客户端源 IP CIDR 白名单准入闸门，非法 IP 立即 403 阻断
+     │                           （支持显式传入专属变量，如 GATEWAY_ALLOWED_CIDRS）
+     ▼
+[ 2. TraceMiddleware ]         ➔ 提取/生成 X-Trace-ID & X-Request-ID，注入 context
+     │                           （实现下沉至 pkg/observability，trace.go 为兼容垫片）
+     ▼
+[ 3. Recovery ]                ➔ 捕获 panic 并使用统一 JSON 信封输出 500
      │
      ▼
-[ 3. SecurityHeaders ]       ➔ 注入 6 项安全响应头 (nosniff, HSTS, X-Frame-Options 等)
+[ 4. SecurityHeaders ]         ➔ 注入 6 项安全响应头 (nosniff, HSTS, X-Frame-Options 等)
      │
      ▼
-[ 4. MaxBodySize ]           ➔ 限制请求体最大 32 MiB，防止内存拒绝服务 (DoS)
+[ 5. MaxBodySize ]             ➔ 限制请求体最大 32 MiB，防止内存拒绝服务 (DoS)
      │
      ▼
-[ 5. MaxConcurrent ]         ➔ 限制全局最大并发请求数 (默认 1000)，超载返回 503
+[ 6. MaxConcurrent ]           ➔ 限制全局最大并发请求数 (默认 1000)，超载返回 503
      │
      ▼
-[ 6. RateLimit ]             ➔ 客户端 IP 32 分片令牌桶限流 (RPS + Burst)，10 分钟过期自动淘汰
+[ 7. RateLimit ]               ➔ 客户端真实 IP 32 分片令牌桶限流 (RPS + Burst)，防 DoS
      │
      ▼
-[ 7. CORS ]                  ➔ 精确 Origin 白名单匹配，严格禁止通配符携带凭证
+[ 8. CORS ]                    ➔ 精确 Origin 白名单匹配，严格禁止通配符携带凭证
      │
      ▼
-[ 8. Auth / AuthWithRoles ]  ➔ API Key 常量时间比对 (crypto/subtle.ConstantTimeCompare)
-     │                         /metrics 纳入鉴权范围（P1-6 安全加固）
+[ 9. Auth / AuthWithRoles ]    ➔ API Key 常量时间比对 (crypto/subtle.ConstantTimeCompare)
+     │                           /metrics 纳入鉴权范围（P1-6 安全加固）
      ▼
 业务 Handler (Controller)
 ```
+
+### 9.0 机制与策略分离原则 (Pure Functions & Parameter-Driven)
+
+`pkg` 作为中台公共包，其所有辅助函数遵循**纯参数驱动**规范，不维护隐式兜底或多级次级变量兼容：
+- `middleware.AllowedCIDRsFromEnv(envKey string) []string`
+- `middleware.TrustedProxiesFromEnv(envKey string) []string`
+
+函数内部**绝不硬编码任何具体业务环境变量名**，仅解析调用方显式指定的专属键名，未配置或传入空键时安全返回 `nil`。各服务采用专属清晰命名（例如网关 `GATEWAY_ALLOWED_CIDRS`、Agent `AGENT_ALLOWED_CIDRS`），杜绝全局变量污染与隐式覆盖。
 
 ### 9.1 AuthWithRoles 读写密钥分离
 

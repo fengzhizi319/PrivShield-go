@@ -140,21 +140,29 @@ func BuildTLCPConfig(cfg *TLCPConfig) (*gmtls.Config, error) {
 }
 
 // IsTLCPEnabled 判断环境是否显式要求启用国密 TLCP。
-// 由 ServerTLSConfig.NationalCipher 或 PRIVACY_TLS_NATIONAL_CIPHER 触发。
-func IsTLCPEnabled() bool {
-	return getEnvBool("PRIVACY_TLS_NATIONAL_CIPHER", false)
+// 必须由调用方传入要检查的环境变量名（如 "AGENT_TLS_NATIONAL_CIPHER"）。
+// 若 envKey 为空或未配置，则返回 false。
+func IsTLCPEnabled(envKey string) bool {
+	if envKey == "" {
+		return false
+	}
+	return getEnvBool(envKey, false)
 }
 
-// TLCPConfigFromEnv 从环境变量构建 TLCPConfig。
-func TLCPConfigFromEnv() *TLCPConfig {
+// TLCPConfigFromEnv 根据调用方显式传入的前缀从环境变量构建 TLCPConfig。
+// 机制与策略完全分离：基础包自身不硬编码任何特定环境变量前缀，不维护次级兼容兜底。
+func TLCPConfigFromEnv(prefix string) *TLCPConfig {
+	if prefix == "" {
+		return &TLCPConfig{}
+	}
 	return &TLCPConfig{
-		Enabled:      IsTLCPEnabled(),
-		SignCertFile: getEnvString("PRIVACY_TLCP_SIGN_CERT_FILE", ""),
-		SignKeyFile:  getEnvString("PRIVACY_TLCP_SIGN_KEY_FILE", ""),
-		EncCertFile:  getEnvString("PRIVACY_TLCP_ENC_CERT_FILE", ""),
-		EncKeyFile:   getEnvString("PRIVACY_TLCP_ENC_KEY_FILE", ""),
-		ClientCAFile: getEnvString("PRIVACY_TLCP_CLIENT_CA_FILE", ""),
-		ClientAuth:   getEnvString("PRIVACY_TLCP_CLIENT_AUTH", ""),
+		Enabled:      getEnvBool(prefix+"TLS_NATIONAL_CIPHER", false),
+		SignCertFile: getEnvString(prefix+"TLCP_SIGN_CERT_FILE", ""),
+		SignKeyFile:  getEnvString(prefix+"TLCP_SIGN_KEY_FILE", ""),
+		EncCertFile:  getEnvString(prefix+"TLCP_ENC_CERT_FILE", ""),
+		EncKeyFile:   getEnvString(prefix+"TLCP_ENC_KEY_FILE", ""),
+		ClientCAFile: getEnvString(prefix+"TLCP_CLIENT_CA_FILE", ""),
+		ClientAuth:   getEnvString(prefix+"TLCP_CLIENT_AUTH", ""),
 	}
 }
 

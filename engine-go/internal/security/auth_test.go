@@ -109,7 +109,7 @@ func TestIsHealthPathOrMethod(t *testing.T) {
 
 func TestAuthMiddleware_Disabled(t *testing.T) {
 	ResetSettings()
-	t.Setenv("PRIVACY_AUTH_ENABLED", "false")
+	t.Setenv("AGENT_AUTH_ENABLED", "false")
 	ResetSettings()
 
 	r := gin.New()
@@ -133,8 +133,8 @@ func TestAuthMiddleware_Disabled(t *testing.T) {
 
 func TestAuthMiddleware_Enabled_NoToken(t *testing.T) {
 	ResetSettings()
-	t.Setenv("PRIVACY_AUTH_ENABLED", "true")
-	t.Setenv("PRIVACY_AUTH_INTERNAL_API_KEYS", "test-key-1234567890:internal-svc:*")
+	t.Setenv("AGENT_AUTH_ENABLED", "true")
+	t.Setenv("AGENT_AUTH_INTERNAL_API_KEYS", "test-key-1234567890:internal-svc:*")
 	ResetSettings()
 
 	r := gin.New()
@@ -153,8 +153,8 @@ func TestAuthMiddleware_Enabled_NoToken(t *testing.T) {
 
 func TestAuthMiddleware_Enabled_ValidToken(t *testing.T) {
 	ResetSettings()
-	t.Setenv("PRIVACY_AUTH_ENABLED", "true")
-	t.Setenv("PRIVACY_AUTH_INTERNAL_API_KEYS", "test-key-1234567890:internal-svc:*")
+	t.Setenv("AGENT_AUTH_ENABLED", "true")
+	t.Setenv("AGENT_AUTH_INTERNAL_API_KEYS", "test-key-1234567890:internal-svc:*")
 	ResetSettings()
 
 	r := gin.New()
@@ -175,8 +175,8 @@ func TestAuthMiddleware_Enabled_ValidToken(t *testing.T) {
 
 func TestRequirePermission(t *testing.T) {
 	ResetSettings()
-	t.Setenv("PRIVACY_AUTH_ENABLED", "true")
-	t.Setenv("PRIVACY_AUTH_INTERNAL_API_KEYS", "limited-key-123456:limited-svc:privacy:mask")
+	t.Setenv("AGENT_AUTH_ENABLED", "true")
+	t.Setenv("AGENT_AUTH_INTERNAL_API_KEYS", "limited-key-123456:limited-svc:privacy:mask")
 	ResetSettings()
 
 	r := gin.New()
@@ -219,9 +219,9 @@ func TestSecurityHeaders(t *testing.T) {
 
 func TestPprofRequiresOpsAdmin(t *testing.T) {
 	ResetSettings()
-	t.Setenv("PRIVACY_AUTH_ENABLED", "true")
+	t.Setenv("AGENT_AUTH_ENABLED", "true")
 	// 只有 ops:diagnostics 权限，没有 ops:admin
-	t.Setenv("PRIVACY_AUTH_INTERNAL_API_KEYS", "diag-key-1234567890:diag-svc:ops:diagnostics")
+	t.Setenv("AGENT_AUTH_INTERNAL_API_KEYS", "diag-key-1234567890:diag-svc:ops:diagnostics")
 	ResetSettings()
 
 	r := gin.New()
@@ -242,8 +242,8 @@ func TestPprofRequiresOpsAdmin(t *testing.T) {
 
 func TestPprofAllowsOpsAdmin(t *testing.T) {
 	ResetSettings()
-	t.Setenv("PRIVACY_AUTH_ENABLED", "true")
-	t.Setenv("PRIVACY_AUTH_INTERNAL_API_KEYS", "admin-key-1234567890:admin-svc:ops:admin")
+	t.Setenv("AGENT_AUTH_ENABLED", "true")
+	t.Setenv("AGENT_AUTH_INTERNAL_API_KEYS", "admin-key-1234567890:admin-svc:ops:admin")
 	ResetSettings()
 
 	r := gin.New()
@@ -268,11 +268,11 @@ func TestPprofAllowsOpsAdmin(t *testing.T) {
 
 func TestRateLimiter_AnonymousIPDimension(t *testing.T) {
 	ResetSettings()
-	t.Setenv("PRIVACY_AUTH_ENABLED", "false")
-	t.Setenv("PRIVACY_RATE_LIMIT_ENABLED", "true")
+	t.Setenv("AGENT_AUTH_ENABLED", "false")
+	t.Setenv("AGENT_RATE_LIMIT_ENABLED", "true")
 	// 极低限流：1 RPS，burst=2
-	t.Setenv("PRIVACY_RATE_LIMIT_DEFAULT_RPS", "1")
-	t.Setenv("PRIVACY_RATE_LIMIT_DEFAULT_BURST", "2")
+	t.Setenv("AGENT_RATE_LIMIT_DEFAULT_RPS", "1")
+	t.Setenv("AGENT_RATE_LIMIT_DEFAULT_BURST", "2")
 	ResetSettings()
 
 	r := gin.New()

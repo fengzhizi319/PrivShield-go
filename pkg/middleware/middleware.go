@@ -166,10 +166,16 @@ func ConfigureTrustedProxies(r *gin.Engine, trustedProxies []string) {
 	_ = r.SetTrustedProxies(trustedProxies)
 }
 
-// TrustedProxiesFromEnv 从 PRIVACY_TRUSTED_PROXIES 环境变量解析可信代理列表。
-// 未配置时返回 nil，表示不信任任何代理，避免 X-Forwarded-For 伪造攻击。
-func TrustedProxiesFromEnv() []string {
-	return pkgconfig.EnvStringSlice("PRIVACY_TRUSTED_PROXIES")
+// TrustedProxiesFromEnv 从调用方指定的环境变量名中解析可信代理列表。
+//
+// 机制与策略完全分离：pkg 基础包不硬编码任何具体业务环境变量，不维护次级兼容兜底。
+// 调用方必须显式传入专属环境变量名（例如 "GATEWAY_TRUSTED_PROXIES"、"AGENT_TRUSTED_PROXIES"）。
+// 若 envKey 为空或未配置，则返回 nil（表示不信任任何代理，避免 X-Forwarded-For 伪造攻击）。
+func TrustedProxiesFromEnv(envKey string) []string {
+	if envKey == "" {
+		return nil
+	}
+	return pkgconfig.EnvStringSlice(envKey)
 }
 
 // RealClientIP 从请求中提取真实客户端 IP（三级等保 G-02）。

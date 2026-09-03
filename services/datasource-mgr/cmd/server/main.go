@@ -120,8 +120,8 @@ func main() {
 	naming.SetObserver(mc)
 	server := handlers.New(cfg, keyStore, logger, mc)
 	router := gin.New()
-	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv()) // G-02
-	router.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv()))           // IP access control
+	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv("DATASOURCE_MGR_TRUSTED_PROXIES")) // G-02
+	router.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv("DATASOURCE_MGR_ALLOWED_CIDRS")))             // IP access control
 	server.RegisterRoutes(router)
 
 	// 4) 显式配置 http.Server 网络超时参数，防范 Slowloris 慢连接拒绝服务攻击与连接泄露：
@@ -317,8 +317,8 @@ func main() {
 
 	// 3) 在后台独立 Goroutine 中启动 HTTP/HTTPS REST 服务
 	go func() {
-		if tlsutil.IsTLCPEnabled() {
-			tlcpCfg := tlsutil.TLCPConfigFromEnv()
+		if tlsutil.IsTLCPEnabled("DATASOURCE_MGR_TLS_NATIONAL_CIPHER") {
+			tlcpCfg := tlsutil.TLCPConfigFromEnv("DATASOURCE_MGR_")
 			gmtlsConfig, tlcpErr := tlsutil.BuildTLCPConfig(tlcpCfg)
 			if tlcpErr != nil {
 				log.Fatalf("failed to build TLCP config: %v", tlcpErr)

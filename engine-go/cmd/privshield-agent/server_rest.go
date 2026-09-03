@@ -69,10 +69,10 @@ func newRESTServerRunner(
 	router := gin.New()          // 空引擎：不内置默认 Logger/Recovery，确保链路顺序完全受控
 
 	// G-02：受信任代理配置。仅当对端 IP 属于可信 CIDR 时才信任 X-Forwarded-For 标头
-	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv())
+	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv("AGENT_TRUSTED_PROXIES"))
 
-	// ① IP 准入白名单（基于 PRIVACY_ALLOWED_CIDRS，未配置时全量放行）
-	router.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv()))
+	// ① IP 准入白名单（AGENT_ALLOWED_CIDRS）
+	router.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv("AGENT_ALLOWED_CIDRS")))
 
 	// ② Panic 恢复保护：兜底捕获异常，防止协程崩溃造成服务宕机
 	router.Use(gin.Recovery())
@@ -100,7 +100,7 @@ func newRESTServerRunner(
 
 	restAddr := cfg.RESTAddress()
 	var lis net.Listener
-	if !tlsutil.IsTLCPEnabled() {
+	if !tlsutil.IsTLCPEnabled("AGENT_TLS_NATIONAL_CIPHER") {
 		var err error
 		lis, err = net.Listen("tcp", restAddr)
 		if err != nil {
@@ -128,12 +128,12 @@ func newRESTServerRunner(
 // Start 启动 REST 服务监听（阻塞直至服务发生不可逆错误或被 Shutdown 关闭）。
 //
 // 协议自适应选择机制：
-//  1. TLCP 国密模式（PRIVACY_TLCP_ENABLED=true）：根据 GM/T 0024 标准，绑定签名证书与加密证书双证书监听；
-//  2. 标准 TLS 模式（PRIVACY_TLS_ENABLED=true）：启用标准 HTTPS 协议（TLS 1.2 / TLS 1.3）；
+//  1. TLCP 国密模式（AGENT_TLS_NATIONAL_CIPHER=true）：根据 GM/T 0024 标准，绑定签名证书与加密证书双证书监听；
+//  2. 标准 TLS 模式（AGENT_TLS_ENABLED=true）：启用标准 HTTPS 协议（TLS 1.2 / TLS 1.3）；
 //  3. 明文 HTTP 模式：仅在本地环回地址 (127.0.0.1) 或安全受控集群内部启用。
 func (r *RESTServerRunner) Start() error {
-	if tlsutil.IsTLCPEnabled() {
-		tlcpCfg := tlsutil.TLCPConfigFromEnv()
+	if tlsutil.IsTLCPEnabled("AGENT_TLS_NATIONAL_CIPHER") {
+		tlcpCfg := tlsutil.TLCPConfigFromEnv("AGENT_")
 		gmtlsConfig, tlcpErr := tlsutil.BuildTLCPConfig(tlcpCfg)
 		if tlcpErr != nil {
 			return fmt.Errorf("failed to build TLCP config: %w", tlcpErr)

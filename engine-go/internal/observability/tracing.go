@@ -3,6 +3,7 @@ package observability
 
 import (
 	"context"
+	"os"
 
 	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 )
@@ -18,6 +19,9 @@ type OTelTracer = pkgobs.OTelTracer
 
 // InitTracing 初始化追踪器（委托给 pkg/observability）。
 func InitTracing(endpoint, serviceName string) Tracer {
+	if serviceName == "" {
+		serviceName = os.Getenv("AGENT_SERVICE_NAME")
+	}
 	return pkgobs.InitTracing(endpoint, serviceName)
 }
 

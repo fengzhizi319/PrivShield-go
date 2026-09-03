@@ -68,16 +68,19 @@
 
 ### 2.3 纵深防御与通信韧性需求
 
-* **FR-5：Gin 8 层标准化安全中间件栈**
-  * 统一提供 8 层安全中间件，按注册顺序依次为：
-    1. **TraceMiddleware** — 全链路追踪（`X-Trace-ID` / `X-Request-ID` 注入与传播）；
-    2. **Recovery** — Panic 恢复，内部记录完整堆栈，外部返回安全 500 信封；
-    3. **SecurityHeaders** — 安全响应头（CSP / HSTS 1年 / X-Frame-Options / X-Content-Type-Options / Referrer-Policy / Permissions-Policy）；
-    4. **MaxBodySize** — 请求体防爆（32MB / 64MB 可配置）；
-    5. **MaxConcurrent** — 全局并发控制（默认 1000 连接，超限返回 503）；
-    6. **RateLimit** — 按客户端 IP 令牌桶限流（可配置 RPS / Burst，条件启用）；
-    7. **CORS** — 白名单跨域（精确匹配或 `*` 开发模式）；
-    8. **Auth / AuthWithRoles** — 常量时间比对鉴权（`subtle.ConstantTimeCompare`），支持角色分级（Reader/Writer 分离）。
+* **FR-5：Gin 标准化纵深防御安全中间件栈**
+  * 统一提供全流程安全中间件体系，按挂载顺序依次为：
+    0. **ConfigureTrustedProxies** — 反向代理受信控制（等保 G-02，严格校验对端代理 IP，杜绝 XFF 伪造）；
+    1. **IPAllowlist** — 客户端源 IP CIDR 白名单准入控制（未命中立即 403 阻断，支持纯参数驱动解析）；
+    2. **TraceMiddleware** — 全链路追踪（`X-Trace-ID` / `X-Request-ID` 注入与传播）；
+    3. **Recovery** — Panic 恢复，内部记录完整堆栈，外部返回安全 500 信封；
+    4. **SecurityHeaders** — 安全响应头（CSP / HSTS 1年 / X-Frame-Options / X-Content-Type-Options / Referrer-Policy / Permissions-Policy）；
+    5. **MaxBodySize** — 请求体防爆（32MB / 64MB 可配置）；
+    6. **MaxConcurrent** — 全局并发控制（默认 1000 连接，超限返回 503）；
+    7. **RateLimit** — 按客户端 IP 令牌桶限流（可配置 RPS / Burst，条件启用）；
+    8. **CORS** — 白名单跨域（精确匹配或 `*` 开发模式）；
+    9. **Auth / AuthWithRoles** — 常量时间比对鉴权（`subtle.ConstantTimeCompare`），支持角色分级（Reader/Writer 分离）。
+  * **机制与策略分离设计**：中间件辅助函数（如 `AllowedCIDRsFromEnv`、`TrustedProxiesFromEnv`）必须遵循纯参数驱动规范，严禁在 `pkg` 内部写死具体业务环境变量，由业务层显式注入专属键与全局回退键。
   * **`/metrics` 端点必须纳入鉴权**（P1-6 安全要求），健康探针路径（`/health`、`/readyz`、`/api/health`）豁免，非 `/api/` 前缀的其余路径豁免认证。
 * **FR-6：上游 Agent 弹性通信客户端（多节点集群 + 逐端点熔断）**
   * **多节点集群配置**：通过 `Config.BaseURLs []string` 配置多个 Agent 端点地址，`PickEndpoint()` 以原子轮询（atomic round-robin）方式选取下一个健康节点，`BaseURL` 单节点字段仅作向后兼容回退；

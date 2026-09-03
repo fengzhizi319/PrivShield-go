@@ -74,8 +74,8 @@ func main() {
 	// ── HTTP 反向代理 ──
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
-	middleware.ConfigureTrustedProxies(r, middleware.TrustedProxiesFromEnv()) // G-02
-	r.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv()))           // IP access control
+	middleware.ConfigureTrustedProxies(r, middleware.TrustedProxiesFromEnv("GATEWAY_TRUSTED_PROXIES")) // G-02
+	r.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv("GATEWAY_ALLOWED_CIDRS")))             // IP access control
 	r.Use(gin.Recovery())
 	r.Use(middleware.WAF(slog.Default())) // 三级等保 G-12：Web 攻击载荷检测
 	r.Use(middleware.SecurityHeaders())   // CSP + HSTS + X-Frame-Options 等安全响应头

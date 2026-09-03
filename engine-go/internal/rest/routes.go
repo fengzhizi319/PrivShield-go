@@ -63,7 +63,7 @@ func RegisterRoutes(r *gin.Engine, svc *service.PrivacyService) {
 	r.Use(security.RateLimitMiddleware())
 
 	// 性能分析端点（环境变量控制，生产环境默认关闭）
-	if pkgconfig.EnvString("PRIVACY_PPROF_ENABLED", "false") == "true" {
+	if pkgconfig.EnvString("AGENT_PPROF_ENABLED", "false") == "true" {
 		registerPprof(r)
 	}
 
