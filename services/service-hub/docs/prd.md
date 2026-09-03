@@ -9,7 +9,7 @@
 | 模块名称 | `service-hub` | 数据流通调度中枢 |
 | HTTP REST 端口 | `8082` | 默认监听地址 `127.0.0.1:8082`（面向 Web 控制台与 BFF） |
 | gRPC 端口 | `50052` | 默认监听地址 `127.0.0.1:50052`（支持国密 SM2 / TLS 1.3 mTLS 与 CN 白名单） |
-| 开发语言与框架 | Go 1.24+ / Gin / gRPC | 原生协程并发、强类型、高吞吐 |
+| 开发语言与框架 | Go 1.25+ / Gin / gRPC | 原生协程并发、强类型、高吞吐 |
 | 上游依赖 | PrivShield Agent (`:8079` REST) | 3 层动态分类漏斗与脱敏隐私原语 |
 | 下游数据源依赖 | datasource-mgr (`:8083` REST / `:50053` gRPC) | 医保 (`ds_yibao` 19字段) / 康养 (`ds_kangyang` 27字段) 等仿真模拟数据源 |
 | 下游审计依赖 | audit-log (`:8084` REST / `:50054` gRPC) | 国密 SM3 区块链式防篡改存证与 SM4-GCM 快照 |
@@ -31,11 +31,11 @@
 | 阶段 | 标识 | 说明 | 协同模块与动作 |
 |---|---|---|---|
 | ① | `ingest` | 接收请求，参数校验，生成唯一 `task_id`，落库 `pending` 状态 | 快速校验与入队，立即响应 `202 Accepted` |
-| ② | `fetch` | 申请并抽取原始数据 | 若请求未显式携带 Payload，自动调用 `datasource-mgr` 采样 |
+| ② | `fetch` | 数据拉取阶段保留 | 分页抽取接口已移除，需由调用方在提交任务时显式携带 `payload`（按身份证号取数请用独立的 `fetch-and-desensitize` 端点） |
 | ③ | `classify` | 分类与脱敏一体化处理 | 一次调用 Agent `POST /v1/agent/process`（404 时兼容 `POST /v1/medical/process`） |
 | ④ | `desensitize` | 状态追踪 | 快速流转 |
 | ⑤ | `return` | 状态追踪 | 快速流转 |
-| ⑥ | `audit` | 状态追踪 | 记录审计存证并写为 `completed/done` |
+| ⑥ | `audit` | 出域存证 | 调用 `submitEvidence` 向 `audit-log` 提交出域存证（`POST /api/audit/logs`），提交失败即任务 `failed`（P0-6 fail-closed），成功后写为 `completed/done` |
 
 ### 2.2 敏感度等级到脱敏策略自动映射 (DB51/T 2989—2023)
 
@@ -45,7 +45,7 @@
 | **L2 (内部)** | 姓名 / 电话 / 身份证号 | `mask` | normal (20) | 字段级动态国密 SM3 掩码与哈希打码 |
 | **L3 (敏感)** | 年龄 / 邮编 / 准标识符集合 | `k_anon` | high (50) | K-匿名化区间泛化与微聚合 |
 | **L4 (高敏)** | 诊疗金额 / 体征数值 / 主诉病史 | `dp` | critical (80) | 差分隐私加噪与四柱特征剥离 |
-| **L5 (极敏)** | 传染病 / HIV / 绝密特种诊断 | `qol` / purge | critical (100) | 查询混淆或整块整句彻底抹平 |
+| **L5 (极敏)** | 传染病 / HIV / 绝密特种诊断 | `dp` | critical (100) | 差分隐私加噪与四柱特征剥离（与 L4 同为 `dp`；定级缺失即任务失败） |
 
 ### 2.3 多副本租约与持久化高可用
 
@@ -68,6 +68,8 @@
 | GET | `/api/hub/tasks` | 可选 API Key | 分页查询任务列表（支持 `?status=` 过滤与 `limit`/`offset` 参数） |
 | GET | `/api/hub/tasks/:id` | 可选 API Key | 查询单个任务详情（包含流水线阶段、耗时与错误信息） |
 | POST | `/api/hub/dispatch` | 可选 API Key | 手动提交指定算子的隐私调度任务（返回 202 Accepted） |
+| POST | `/api/hub/classify` | 可选 API Key | 分类分级分发（`/api/hub/dispatch` 的向后兼容别名） |
+| POST | `/api/hub/fetch-and-desensitize` | 可选 API Key | 按身份证号端到端查询+脱敏（同步，需 `hub:dispatch` scope） |
 | GET | `/api/hub/pipeline` | 可选 API Key | 获取 6 阶段流水线活跃状态与 Agent 连通性 |
 | GET | `/metrics` | 免密 | Prometheus 格式指标导出端点 |
 
@@ -82,6 +84,7 @@
 | `GetTask` | `GetTaskRequest` | `TaskProto` | 任务详情查询 |
 | `ListTasks` | `ListTasksRequest` | `ListTasksResponse` | 任务列表查询（支持状态过滤） |
 | `PipelineStatus` | `PipelineStatusRequest` | `PipelineStatusResponse` | 流水线阶段活跃监控 |
+| `FetchAndDesensitize` | `FetchAndDesensitizeRequest` | `FetchAndDesensitizeResponse` | 按身份证号端到端查询+脱敏（同步） |
 
 ---
 
@@ -96,7 +99,7 @@
 | `SERVICE_HUB_PG_DSN` | `""` | string | PostgreSQL 连接串（启用多副本租约模式，带 3s 探针自动降级） |
 | `SERVICE_HUB_DB_PATH` | `""` | string | SQLite 数据库文件路径（空表示纯内存模式） |
 | `SERVICE_HUB_TLS_ENABLED` | `false` | bool | 是否开启 gRPC TLS 1.3 / 国密 SM2 mTLS |
-| `SERVICE_HUB_TLS_ALLOWED_CNS` | `""` | string | 允许调用的客户端证书 CN 白名单（逗号分隔） |
+| `PRIVACY_AUTH_MTLS_WHITELIST_FILE` | `""` | string | gRPC 客户端证书 CN 白名单 YAML 文件路径（支持热重载） |
 | `PRIVACY_AGENT_REST_HOST` | `127.0.0.1` | string | 上游 PrivShield Agent REST 主机地址 |
 | `PRIVACY_REST_PORT` | `8079` | int | 上游 PrivShield Agent REST 端口 |
-| `SERVICE_HUB_RETENTION_DAYS` | `90` | int | 终态任务数据保留清理天数 |
+| `SERVICE_HUB_RETENTION_DAYS` | `30` | int | 终态任务数据保留清理天数（0 表示不清理） |

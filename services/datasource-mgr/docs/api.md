@@ -1,9 +1,9 @@
 # 数据源管理与提供服务 (datasource-mgr) — 接口规范与数据局开发对接指南
 
-> **版本**：v2.4.0 (对齐 DB51/T 2989—2023 与国密/TLS 1.3 标准)  
+> **版本**：v3.0.0 (精简生产对接契约，建立 Class A ~ D 生产分级标准)  
 > **文档定位**：本规范为 **数联天下 · 数盾 (`PrivShield`)** 体系中「数据源提供服务（Data Provider Service）」的标准化通信与数据交互规约。  
 > **面向对象**：**数据局开发团队、政务云数据底座研发团队、第三方医疗/政务数据提供方**。  
-> **重要说明**：当前仓库中的 `services/datasource-mgr` 为 PrivShield 官方提供的**参考实现与高保真模拟服务**。在真实生产部署环境中，**实际只有数盾调度中枢 (`service-hub`) 与数据源服务程序进行直接通信与交互**。数据局及承建方在正式开发真实数据源服务时，**必须严格遵循本技术规范所定义的 REST / gRPC 接口契约、传输安全基线、字段字典与错误信封**，以确保与调度中枢 (`service-hub`) 的零代码修改无缝对接。
+> **重要说明**：当前仓库中的 `services/datasource-mgr` 为 PrivShield 官方提供的**参考实现与高保真模拟服务**。在真实生产部署环境中，**实际只有数盾调度中枢 (`service-hub`) 与数据源服务程序进行直接通信与交互**。数据局及承建方在正式开发真实数据源服务时，**仅需严格实现【Class A 核心生产契约】（按身份证取数、存活探针、连通性测试）**，无需实现集群内部运维监控或本地测试桩功能。
 
 ---
 
@@ -13,25 +13,29 @@
   - [1.1 业务定位与交互拓扑](#11-业务定位与交互拓扑)
   - [1.2 通信协议与端口规划](#12-通信协议与端口规划)
   - [1.3 核心数据源唯一标识 (Canonical IDs)](#13-核心数据源唯一标识-canonical-ids)
+  - [1.4 接口契约分级矩阵与数据局交付清单 (Class A ~ D)](#14-接口契约分级矩阵与数据局交付清单-class-a--d)
 - [2. 通信协议与安全基线规约](#2-通信协议与安全基线规约)
   - [2.1 传输层安全 (TLS 1.3 / 国密 SM2 / mTLS)](#21-传输层安全-tls-13--国密-sm2--mtls)
   - [2.2 身份鉴权与访问控制 (API Key / CN Whitelist)](#22-身份鉴权与访问控制-api-key--cn-whitelist)
   - [2.3 分布式全链路追踪规范 (Trace & Request ID)](#23-分布式全链路追踪规范-trace--request-id)
 - [3. HTTP RESTful API 详细规范](#3-http-restful-api-详细规范)
-  - [3.1 探针与监控端点](#31-探针与监控端点)
-    - [3.1.1 存活健康检查 (GET /health & GET /api/health)](#311-存活健康检查-get-health--get-apihealth)
-    - [3.1.2 服务就绪探针 (GET /readyz)](#312-服务就绪探针-get-readyz)
-    - [3.1.3 Prometheus 监控指标 (GET /metrics)](#313-prometheus-监控指标-get-metrics)
-  - [3.2 数据源元数据与状态管理端点](#32-数据源元数据与状态管理端点)
-    - [3.2.1 获取数据源资产目录列表 (GET /api/datasources)](#321-获取数据源资产目录列表-get-apidatasources)
-    - [3.2.2 获取单个数据源详情 (GET /api/datasources/:id)](#322-获取单个数据源详情-get-apidatasourcesid)
-    - [3.2.3 查询数据源 Schema 表结构 (GET /api/datasources/:id/metadata)](#323-查询数据源-schema-表结构-get-apidatasourcesidmetadata)
-    - [3.2.4 数据源物理/逻辑连通性测试 (POST /api/datasources/:id/test)](#324-数据源物理逻辑连通性测试-post-apidatasourcesidtest)
-    - [3.2.5 数据访问审计日志查询 (GET /api/datasources/:id/audit)](#325-数据访问审计日志查询-get-apidatasourcesidaudit)
-    - [3.2.6 数据源初始化与重置 (POST /api/datasources/seed)](#326-数据源初始化与重置-post-apidatasourcesseed)
-  - [3.3 核心业务数据抽取端点](#33-核心业务数据抽取端点)
-    - [3.3.1 按身份证号查询单条记录 (GET /api/datasources/:id/record-by-id)](#331-按身份证号查询单条记录-get-apidatasourcesidrecord-by-id)
-    - [3.3.2 按身份证号查询与完整 HTTP 请求-响应示例（端到端）](#332-按身份证号查询与完整-http-请求-响应示例端到端)
+  - [3.1 【Class A 核心生产契约】业务数据抽取端点（数据局必选）](#31-class-a-核心生产契约业务数据抽取端点数据局必选)
+    - [3.1.1 按身份证号查询单条记录 (GET /api/datasources/:id/record-by-id)](#311-按身份证号查询单条记录-get-apidatasourcesidrecord-by-id)
+    - [3.1.2 完整 HTTP 请求-响应示例（端到端：医保/康养/异常处理）](#312-完整-http-请求-响应示例端到端医保康养异常处理)
+  - [3.2 【Class A 核心生产契约】基础探针与连通性自测端点（数据局必选）](#32-class-a-核心生产契约基础探针与连通性自测端点数据局必选)
+    - [3.2.1 存活健康检查 (GET /health & GET /api/health)](#321-存活健康检查-get-health--get-apihealth)
+    - [3.2.2 数据源物理/逻辑连通性自测 (POST /api/datasources/:id/test)](#322-数据源物理逻辑连通性自测-post-apidatasourcesidtest)
+  - [3.3 【Class B 可选元数据契约】数据源元数据与目录发现（可选扩展）](#33-class-b-可选元数据契约数据源元数据与目录发现可选扩展)
+    - [3.3.1 获取数据源资产目录列表 (GET /api/datasources)](#331-获取数据源资产目录列表-get-apidatasources)
+    - [3.3.2 获取单个数据源详情 (GET /api/datasources/:id)](#332-获取单个数据源详情-get-apidatasourcesid)
+    - [3.3.3 查询数据源 Schema 表结构 (GET /api/datasources/:id/metadata)](#333-查询数据源-schema-表结构-get-apidatasourcesidmetadata)
+  - [3.4 【Class C 容器基础设施端点】集群编排与性能监控（外部数据局免实现）](#34-class-c-容器基础设施端点集群编排与性能监控外部数据局免实现)
+    - [3.4.1 服务就绪探针 (GET /readyz)](#341-服务就绪探针-get-readyz)
+    - [3.4.2 Prometheus 监控指标 (GET /metrics)](#342-prometheus-监控指标-get-metrics)
+  - [3.5 【Class D 本地 Mock 专用辅助端点】开发测试工具（生产环境禁用）](#35-class-d-本地-mock-专用辅助端点开发测试工具生产环境禁用)
+    - [3.5.1 生产环境禁用机制 (DATASOURCE_MGR_ENABLE_MOCK_HELPERS=false)](#351-生产环境禁用机制-datasource_mgr_enable_mock_helpersfalse)
+    - [3.5.2 数据访问模拟审计日志查询 (GET /api/datasources/:id/audit)](#352-数据访问模拟审计日志查询-get-apidatasourcesidaudit)
+    - [3.5.3 数据源初始化与重置 (POST /api/datasources/seed)](#353-数据源初始化与重置-post-apidatasourcesseed)
 - [4. gRPC API 规范与 Protobuf 定义](#4-grpc-api-规范与-protobuf-定义)
   - [4.1 Protobuf 契约文件 (datasourcemgr.proto)](#41-protobuf-契约文件-datasourcemgrproto)
   - [4.2 gRPC 服务接口与方法规约](#42-grpc-服务接口与方法规约)
@@ -49,7 +53,6 @@
   - [7.1 性能与高并发 SLA 指标](#71-性能与高并发-sla-指标)
   - [7.2 推荐环境变量配置表](#72-推荐环境变量配置表)
   - [7.3 数据局端联调自测命令与验收清单](#73-数据局端联调自测命令与验收清单)
-
 ---
 
 ## 1. 系统架构与对接概览
@@ -109,6 +112,22 @@ flowchart LR
 > 1. 数据局程序在解析与返回数据时，`datasource_id` 必须严格使用 `ds_yibao`、`ds_kangyang` 等规范小写下划线格式；
 > 2. 为兼容旧版调用，数据局服务对于入站别名（如 `yibao`、`yibao.csv`、`医保`）应支持归一化解析映射到 `ds_yibao`，但在响应报文的 `datasource_id` 中必须统一返回规范值。
 
+### 1.4 接口契约分级矩阵与数据局交付清单 (Class A ~ D)
+
+为了理清外部数据局开发团队与 PrivShield 内部平台的职责边界，彻底避免“功能过度膨胀”与“交付边界不清”，本规范将全部端点严格划分为四大级别：
+
+| 分级标识 | 契约级别名称 | 适用范围 | 数据局承建方要求 | 涵盖端点与 RPC 方法 |
+|---|---|---|---|---|
+| **Class A** | **数据局核心生产对接契约** | 真实生产数据抽取与基础设施探针 | **必须实现 (P0)** | `GET /api/datasources/:id/record-by-id` (`rpc GetRecordByIDCard`)<br/>`GET /health` (`rpc Health`)<br/>`POST /api/datasources/:id/test` (`rpc TestConnection`) |
+| **Class B** | **可选元数据与目录探查契约** | 动态多数据源资产发现与 Schema 反射 | **按需实现 (P2)** | `GET /api/datasources` (`rpc ListDataSources`)<br/>`GET /api/datasources/:id` (`rpc GetDataSource`)<br/>`GET /api/datasources/:id/metadata` |
+| **Class C** | **容器基础设施运维端点** | 局方或平台 K8s PaaS / Prometheus 监控 | **免对接实现**（局方内部自决） | `GET /readyz`<br/>`GET /metrics` |
+| **Class D** | **本地 Mock 测试专用辅助端点** | 本地离线环境测试恢复与单测桩 | **生产严禁开放**（生产环境已屏蔽） | `POST /api/datasources/seed`<br/>`GET /api/datasources/:id/audit` |
+
+> [!CAUTION]
+> **数据局开发团队实施红线**：
+> 1. **只需关注 Class A**：数据局或第三方机构仅需实现 Class A 规定的取数接口与健康/连通性探针，即可 100% 跑通数盾的数据要素流通治理流水线！
+> 2. **严禁在生产环境暴露 Class D**：`seed` 重置数据库与 `audit` 本地模拟日志仅作为 PrivShield 仓库内部开发自测夹具使用。生产数据源程序绝对不得包含允许外部调用方重置数据库的后门接口！真实审计存证全量由 PrivShield 的 `audit-log` 微服务独立负责。
+
 ---
 
 ## 2. 通信协议与安全基线规约
@@ -154,302 +173,13 @@ flowchart LR
 
 ## 3. HTTP RESTful API 详细规范
 
-### 3.1 探针与监控端点
+### 3.1 【Class A 核心生产契约】业务数据抽取端点（数据局必选）
 
-#### 3.1.1 存活健康检查 (GET /health & GET /api/health)
+> **契约级别**：**Class A (强制必须实现)**  
+> **调用方**：数盾调度中枢 (`service-hub`)  
+> **核心用途**：在数据要素治理流水线中，根据用户身份标识（如身份证号）从数据局底层业务库实时抽取原始单条记录。
 
-- **功能说明**：K8s Liveness 探针或负载均衡器健康检查端点。服务进程启动并能响应 HTTP 即返回 200。
-- **请求方法**：`GET`
-- **请求路径**：`/health`（规范路径）或 `/api/health`（兼容别名）
-- **请求头**：无特殊要求
-- **请求参数**：无
-- **成功响应**：`HTTP 200 OK`
-  ```json
-  {
-    "status": "ok",
-    "mode": "mock_datasource_provider",
-    "latency_ms": 0,
-    "via": "datasource-mgr"
-  }
-  ```
-- **字段说明**：
-- 
-  | 字段名 | 类型 | 必填 | 说明 |
-  |---|---|---|---|
-  | `status` | string | 是 | 服务运行状态，固定为 `"ok"` |
-  | `mode` | string | 是 | 运行模式标识（如 `"mock_datasource_provider"` 或 `"production_provider"`） |
-  | `latency_ms` | integer | 是 | 内部健康自检耗时（毫秒） |
-  | `via` | string | 是 | 响应服务标识符 |
-
----
-
-#### 3.1.2 服务就绪探针 (GET /readyz)
-
-- **功能说明**：K8s Readiness 探针。确认底层数据库连接池初始化完毕、具备对外处理流量能力。
-- **请求方法**：`GET`
-- **请求路径**：`/readyz`
-- **成功响应**：`HTTP 200 OK`
-  ```json
-  {
-    "status": "ready",
-    "mode": "mock_datasource_provider",
-    "latency_ms": 0,
-    "via": "datasource-mgr"
-  }
-  ```
-
----
-
-#### 3.1.3 Prometheus 监控指标 (GET /metrics)
-
-- **功能说明**：暴露 Prometheus 标准文本格式的运行指标，供监控系统周期性采集。
-- **请求方法**：`GET`
-- **请求路径**：`/metrics`
-- **成功响应**：`HTTP 200 OK`，`Content-Type: text/plain; version=0.0.4; charset=utf-8`
-- **核心指标规范**：
-  - `privshield_datasource_requests_total{datasource_id="ds_yibao",api_code="api1_yibao",status="success"}`：请求总计数
-  - `privshield_datasource_request_duration_seconds_bucket{...}`：请求耗时直方图
-  - `privshield_in_flight_requests`：当前并发在途请求数
-
----
-
-### 3.2 数据源元数据与状态管理端点
-
-#### 3.2.1 获取数据源资产目录列表 (GET /api/datasources)
-
-- **功能说明**：查询系统中已注册或已连接的全部数据源资产元数据列表。由 `service-hub` 在初始化资产探查时调用。
-- **请求方法**：`GET`
-- **请求路径**：`/api/datasources`
-- **请求头**：
-  - `Authorization: Bearer <API_KEY>`（如启用鉴权）
-- **成功响应**：`HTTP 200 OK`
-  ```json
-  {
-    "total": 4,
-    "datasources": [
-      {
-        "id": "ds_yibao",
-        "datasource_id": "ds_yibao",
-        "api_code": "api1_yibao",
-        "name": "医保就医与结算模拟数据库 (yibao.csv)",
-        "type": "file",
-        "description": "模拟医保局患者就医、诊断与费用结算明细数据",
-        "status": "connected",
-        "row_count": 50,
-        "tags": ["医保", "门诊住院", "结算流水", "敏感数据"]
-      },
-      {
-        "id": "ds_kangyang",
-        "datasource_id": "ds_kangyang",
-        "api_code": "api2_kangyang",
-        "name": "康养体检与慢病模拟数据库 (kangyang.csv)",
-        "type": "file",
-        "description": "模拟民政/卫健康养中心体检、慢病随访与残疾评估数据",
-        "status": "connected",
-        "row_count": 50,
-        "tags": ["康养", "慢病随访", "体检报告", "健康档案"]
-      },
-      {
-        "id": "ds_mock3",
-        "datasource_id": "ds_mock3",
-        "name": "预留政务数据源 3 (Reserved Mock Source 3)",
-        "type": "mock",
-        "description": "预留扩展模拟数据源 3，用于后续政务跨部门联合调试",
-        "status": "connected",
-        "row_count": 10,
-        "tags": ["预留", "政务流通", "扩展接口"]
-      },
-      {
-        "id": "ds_mock4",
-        "datasource_id": "ds_mock4",
-        "name": "预留企业/金融数据源 4 (Reserved Mock Source 4)",
-        "type": "mock",
-        "description": "预留扩展模拟数据源 4，用于后续企业端数据合规流转调试",
-        "status": "connected",
-        "row_count": 10,
-        "tags": ["预留", "金融统计", "扩展接口"]
-      }
-    ],
-    "via": "datasource-mgr"
-  }
-  ```
-- **字段定义表**：
-- 
-  | 字段名 | 归属结构 | 类型 | 必填 | 业务说明 |
-  |---|---|---|---|---|
-  | `total` | 顶层 | integer | 是 | 注册数据源总数量 |
-  | `datasources` | 顶层 | array[object] | 是 | 数据源实体对象列表 |
-  | `datasources[].id` | 实体 | string | 是 | 数据源唯一标识（与 `datasource_id` 一致） |
-  | `datasources[].datasource_id` | 实体 | string | 是 | canonical 数据源 ID（`ds_yibao` 等） |
-  | `datasources[].api_code` | 实体 | string | 否 | 业务 API 代码（如 `api1_yibao`），预留数据源可为空 |
-  | `datasources[].name` | 实体 | string | 是 | 数据源中文展示名称 |
-  | `datasources[].type` | 实体 | string | 是 | 存储类型（`"database"`, `"file"`, `"api"`, `"mock"`） |
-  | `datasources[].description` | 实体 | string | 是 | 数据源业务用途与背景描述 |
-  | `datasources[].status` | 实体 | string | 是 | 连接状态（`"connected"`, `"disconnected"`, `"error"`） |
-  | `datasources[].row_count` | 实体 | integer | 是 | 预估或精确总数据行数 |
-  | `datasources[].tags` | 实体 | array[string] | 是 | 业务与分类分级标签数组 |
-  | `via` | 顶层 | string | 是 | 响应节点标识 |
-
----
-
-#### 3.2.2 获取单个数据源详情 (GET /api/datasources/:id)
-
-- **功能说明**：根据数据源 ID 查询单个数据源的元数据。
-- **请求方法**：`GET`
-- **请求路径**：`/api/datasources/:id`（例如：`/api/datasources/ds_yibao`）
-- **路径参数**：
-  - `id` (string, 必填)：数据源唯一标识符，支持 `ds_yibao`、`ds_kangyang`、`ds_mock3`、`ds_mock4`。
-- **成功响应**：`HTTP 200 OK`
-  ```json
-  {
-    "id": "ds_yibao",
-    "datasource_id": "ds_yibao",
-    "api_code": "api1_yibao",
-    "name": "医保就医与结算模拟数据库 (yibao.csv)",
-    "type": "file",
-    "description": "模拟医保局患者就医、诊断与费用结算明细数据",
-    "status": "connected",
-    "row_count": 50,
-    "tags": ["医保", "门诊住院", "结算流水", "敏感数据"]
-  }
-  ```
-- **错误响应**：若不存在返回 `HTTP 404 Not Found`：
-  ```json
-  {
-    "code": "NOT_FOUND",
-    "message": "mock datasource not found: ds_unknown",
-    "trace_id": "req-20260831-err-001",
-    "timestamp": "2026-08-31T05:40:00Z"
-  }
-  ```
-
----
-
-#### 3.2.3 查询数据源 Schema 表结构 (GET /api/datasources/:id/metadata)
-
-- **功能说明**：探查并返回目标数据源的表结构模式（Schema）、字段名称、物理/逻辑字段类型。PrivShield 的 3-Layer 分类分级引擎在执行敏感特征自动探查时会通过 `service-hub` 调用此接口。
-- **请求方法**：`GET`
-- **请求路径**：`/api/datasources/:id/metadata`
-- **路径参数**：`id` (string, 必填)
-- **成功响应**：`HTTP 200 OK`
-  ```json
-  {
-    "datasource_id": "ds_yibao",
-    "tables": [
-      {
-        "name": "医保就医与结算模拟数据库 (yibao.csv)",
-        "row_count": 50,
-        "fields": [
-          {"name": "insurance_settlement_id", "type": "string"},
-          {"name": "person_id", "type": "string"},
-          {"name": "gender", "type": "string"},
-          {"name": "birth_date", "type": "string"},
-          {"name": "admission_date", "type": "string"},
-          {"name": "discharge_date", "type": "string"},
-          {"name": "length_of_stay", "type": "integer"},
-          {"name": "admission_dept", "type": "string"},
-          {"name": "discharge_dept", "type": "string"},
-          {"name": "hospital_code", "type": "string"},
-          {"name": "medical_category", "type": "string"},
-          {"name": "discharge_mode", "type": "string"},
-          {"name": "settlement_seq_no", "type": "string"},
-          {"name": "diagnosis_seq", "type": "integer"},
-          {"name": "diagnosis_type", "type": "string"},
-          {"name": "icd10_code", "type": "string"},
-          {"name": "diagnosis_name", "type": "string"},
-          {"name": "admission_condition", "type": "string"}
-        ]
-      }
-    ],
-    "via": "datasource-mgr"
-  }
-  ```
-- **字段定义表**：
-
-  | 字段名 | 归属 | 类型 | 说明 |
-  |---|---|---|---|
-  | `datasource_id` | 顶层 | string | 数据源规范标识 |
-  | `tables` | 顶层 | array[object] | 数据表列表 |
-  | `tables[].name` | 表对象 | string | 表名或数据集名 |
-  | `tables[].row_count` | 表对象 | integer | 表内记录总数 |
-  | `tables[].fields` | 表对象 | array[object] | 字段定义清单 |
-  | `tables[].fields[].name` | 字段对象 | string | 字段英文物理名（如 `person_id`） |
-  | `tables[].fields[].type` | 字段对象 | string | 数据类型（`"string"`, `"integer"`, `"float"`, `"timestamp"`, `"boolean"`） |
-
----
-
-#### 3.2.4 数据源物理/逻辑连通性测试 (POST /api/datasources/:id/test)
-
-- **功能说明**：由调度中枢 (`service-hub`) 或专网运维工具触发，主动探测目标数据源的网络连通性、账号鉴权状态及响应延迟。
-- **请求方法**：`POST`
-- **请求路径**：`/api/datasources/:id/test`
-- **路径参数**：`id` (string, 必填)
-- **请求 Body**：空
-- **成功响应**：`HTTP 200 OK`
-  ```json
-  {
-    "datasource_id": "ds_yibao",
-    "success": true,
-    "latency_ms": 2,
-    "via": "datasource-mgr"
-  }
-  ```
-- **失败响应**：若连通失败返回 `HTTP 200 OK` 且 `success: false`，或者抛出 `HTTP 404/500` 错误信封：
-  ```json
-  {
-    "datasource_id": "ds_yibao",
-    "success": false,
-    "error": "database connection timeout after 3000ms",
-    "latency_ms": 3001,
-    "via": "datasource-mgr"
-  }
-  ```
-
----
-
-#### 3.2.5 数据访问审计日志查询 (GET /api/datasources/:id/audit)
-
-- **功能说明**：查询针对该数据源的历史采样与抽取审计记录。
-- **请求方法**：`GET`
-- **请求路径**：`/api/datasources/:id/audit`
-- **成功响应**：`HTTP 200 OK`
-  ```json
-  {
-    "datasource_id": "ds_yibao",
-    "total": 1,
-    "records": [
-      {
-        "id": "audit_mock_1",
-        "operation": "query_sample",
-        "user": "service-hub",
-        "timestamp": "2026-08-31T05:40:00Z",
-        "status": "success"
-      }
-    ],
-    "via": "datasource-mgr"
-  }
-  ```
-
----
-
-#### 3.2.6 数据源初始化与重置 (POST /api/datasources/seed)
-
-- **功能说明**：重置或预填充模拟数据源，用于测试环境一键恢复基准状态。
-- **请求方法**：`POST`
-- **请求路径**：`/api/datasources/seed`
-- **成功响应**：`HTTP 200 OK`
-  ```json
-  {
-    "message": "mock datasources initialized (yibao, kangyang, mock3, mock4)",
-    "via": "datasource-mgr"
-  }
-  ```
-
----
-
-### 3.3 核心业务数据抽取端点
-
-#### 3.3.1 按身份证号查询单条记录 (GET /api/datasources/:id/record-by-id)
+#### 3.1.1 按身份证号查询单条记录 (GET /api/datasources/:id/record-by-id)
 
 - **功能说明**：根据身份证号从指定数据源中精确查询单条记录。支持 `ds_yibao` 和 `ds_kangyang` 两个核心数据源，均按 `id_card_no` 字段匹配。
 - **请求方法**：`GET`
@@ -516,15 +246,11 @@ flowchart LR
 
 ---
 
-#### 3.3.2 按身份证号查询与完整 HTTP 请求-响应示例（端到端）
+#### 3.1.2 完整 HTTP 请求-响应示例（端到端：医保/康养/异常处理）
 
-> 本节提供 `ds_yibao`（医保）和 `ds_kangyang`（康养）两个核心数据集的**完整 HTTP 请求与响应报文示例**。
-> 当前数盾调度流水线已切换为**按身份证号查询单条记录**模式（参见 §3.3.1），调度中枢 (`service-hub`) 通过 `/api/datasources/:id/record-by-id?id_card_no=xxx` 按身份证号精确抽取单条记录。
-
-##### 示例 1：ds_yibao 按身份证号查询单条记录（推荐）
+##### 示例 1：ds_yibao 按身份证号查询单条记录
 
 **curl 命令**：
-
 ```bash
 curl -s -i \
   -H "Authorization: Bearer sec_privshield_token_2026" \
@@ -533,19 +259,7 @@ curl -s -i \
   "http://127.0.0.1:8083/api/datasources/ds_yibao/record-by-id?id_card_no=110101196809171010"
 ```
 
-**完整 HTTP 请求报文**：
-
-```http
-GET /api/datasources/ds_yibao/record-by-id?id_card_no=110101196809171010 HTTP/1.1
-Host: 127.0.0.1:8083
-Authorization: Bearer sec_privshield_token_2026
-Accept: application/json
-X-Request-ID: req-20260902-yibao-id-a1b2c3
-User-Agent: service-hub/1.0
-```
-
 **完整 HTTP 响应报文**：
-
 ```http
 HTTP/1.1 200 OK
 Content-Type: application/json; charset=utf-8
@@ -582,17 +296,11 @@ Content-Length: 1284
 }
 ```
 
-> **要点说明**：
-> - 端点 `/api/datasources/:id/record-by-id` 为**当前推荐规范**，通过 `id_card_no` 查询参数按身份证号精确查询单条记录（参见 §3.3.6）；
-> - 响应中 `found` 字段标识是否找到匹配记录，`record` 为匹配的单条完整数据对象（19 字段）或 `null`；
-> - 响应固定包含 `datasource_id`（规范数据源标识符）。
-
 ---
 
-##### 示例 2：ds_kangyang 按身份证号查询单条记录（推荐）
+##### 示例 2：ds_kangyang 按身份证号查询单条记录
 
 **curl 命令**：
-
 ```bash
 curl -s -i \
   -H "Authorization: Bearer sec_privshield_token_2026" \
@@ -601,19 +309,7 @@ curl -s -i \
   "http://127.0.0.1:8083/api/datasources/ds_kangyang/record-by-id?id_card_no=110105198402151071"
 ```
 
-**完整 HTTP 请求报文**：
-
-```http
-GET /api/datasources/ds_kangyang/record-by-id?id_card_no=110105198402151071 HTTP/1.1
-Host: 127.0.0.1:8083
-Authorization: Bearer sec_privshield_token_2026
-Accept: application/json
-X-Request-ID: req-20260902-ky-id-g7h8i9
-User-Agent: service-hub/1.0
-```
-
 **完整 HTTP 响应报文**：
-
 ```http
 HTTP/1.1 200 OK
 Content-Type: application/json; charset=utf-8
@@ -658,26 +354,9 @@ Content-Length: 3156
 }
 ```
 
-> **要点说明**：
-> - `ds_kangyang` 严格输出 **27 个字段**，与 §5.2 字段字典完全一致；
-> - 允许部分字段为空字符串（如 `smoking_duration` 不吸烟时、`disability_cert_no` 无残疾时），但**字段 Key 必须完整保留**，不得省略；
-> - 长文本字段（`present_illness`、`past_history`、`family_history`、`progress_note`）保留原始换行与标点，调用方需自行处理展示。
-
 ---
 
 ##### 示例 3：按身份证号查询未找到记录
-
-**curl 命令**：
-
-```bash
-curl -s -i \
-  -H "Authorization: Bearer sec_privshield_token_2026" \
-  -H "Accept: application/json" \
-  -H "X-Request-ID: req-20260902-yibao-nf-x1y2z3" \
-  "http://127.0.0.1:8083/api/datasources/ds_yibao/record-by-id?id_card_no=000000000000000000"
-```
-
-**完整 HTTP 响应报文**：
 
 ```http
 HTTP/1.1 200 OK
@@ -695,25 +374,11 @@ Content-Length: 98
 }
 ```
 
-> **要点说明**：
-> - 身份证号格式合法（18 位）但在数据源中未找到匹配记录时，仍返回 `HTTP 200 OK`；
-> - `found` 为 `false`，`record` 为 `null`，调用方应据此判断是否需要降级处理。
-
-
 ---
 
 ##### 错误响应示例
 
-**场景：查询不存在的数据源**
-
-```bash
-curl -s -i \
-  -H "Authorization: Bearer sec_privshield_token_2026" \
-  -H "Accept: application/json" \
-  -H "X-Request-ID: req-20260902-err-m3n4o5" \
-  "http://127.0.0.1:8083/api/datasources/ds_unknown/record-by-id?id_card_no=110101196809171010"
-```
-
+**场景 1：查询不存在的数据源**
 ```http
 HTTP/1.1 404 Not Found
 Content-Type: application/json; charset=utf-8
@@ -731,15 +396,7 @@ Content-Length: 186
 }
 ```
 
-**场景：缺少身份证号参数**
-
-```bash
-curl -s -i \
-  -H "Authorization: Bearer sec_privshield_token_2026" \
-  -H "Accept: application/json" \
-  "http://127.0.0.1:8083/api/datasources/ds_yibao/record-by-id"
-```
-
+**场景 2：缺少身份证号参数**
 ```http
 HTTP/1.1 400 Bad Request
 Content-Type: application/json; charset=utf-8
@@ -755,15 +412,7 @@ Content-Length: 178
 }
 ```
 
-**场景：身份证号格式非法**
-
-```bash
-curl -s -i \
-  -H "Authorization: Bearer sec_privshield_token_2026" \
-  -H "Accept: application/json" \
-  "http://127.0.0.1:8083/api/datasources/ds_yibao/record-by-id?id_card_no=12345"
-```
-
+**场景 3：身份证号格式非法**
 ```http
 HTTP/1.1 400 Bad Request
 Content-Type: application/json; charset=utf-8
@@ -779,7 +428,196 @@ Content-Length: 168
 }
 ```
 
-> **注意**：`record-by-id` 端点对 `id_card_no` 参数进行严格校验：必填且必须为 18 位，不合法时返回 `HTTP 400 Bad Request` 及标准 5 字段错误信封。
+---
+
+### 3.2 【Class A 核心生产契约】基础探针与连通性自测端点（数据局必选）
+
+> **契约级别**：**Class A (强制必须实现)**  
+> **核心用途**：由调度中枢 (`service-hub`) 或专网探测工具定时发起，用于确认数据源前置机存活状态及底层数据库连通性。
+
+#### 3.2.1 存活健康检查 (GET /health & GET /api/health)
+
+- **功能说明**：服务存活探针。服务进程启动并能响应 HTTP 即返回 200。
+- **请求方法**：`GET`
+- **请求路径**：`/health`（规范路径）或 `/api/health`（兼容别名）
+- **成功响应**：`HTTP 200 OK`
+  ```json
+  {
+    "status": "ok",
+    "mode": "mock_datasource_provider",
+    "latency_ms": 0,
+    "via": "datasource-mgr"
+  }
+  ```
+
+---
+
+#### 3.2.2 数据源物理/逻辑连通性自测 (POST /api/datasources/:id/test)
+
+- **功能说明**：由调度中枢主动探测目标数据源的网络连通性、数据库连接池及响应延迟。
+- **请求方法**：`POST`
+- **请求路径**：`/api/datasources/:id/test`
+- **路径参数**：`id` (string, 必填)
+- **成功响应**：`HTTP 200 OK`
+  ```json
+  {
+    "datasource_id": "ds_yibao",
+    "success": true,
+    "latency_ms": 2,
+    "via": "datasource-mgr"
+  }
+  ```
+- **失败响应**：若连通失败返回 `HTTP 200 OK` 且 `success: false`：
+  ```json
+  {
+    "datasource_id": "ds_yibao",
+    "success": false,
+    "error": "database connection timeout after 3000ms",
+    "latency_ms": 3001,
+    "via": "datasource-mgr"
+  }
+  ```
+
+---
+
+### 3.3 【Class B 可选元数据契约】数据源元数据与目录发现（可选扩展）
+
+> **契约级别**：**Class B (可选实现 · P2)**  
+> **说明**：在真实政务数据交换中，表结构和数据源目录通常在线下契约确定。若数据局支持动态资产目录发现和 Schema 自动反射，可选择性实现此类接口。
+
+#### 3.3.1 获取数据源资产目录列表 (GET /api/datasources)
+
+- **功能说明**：查询已接入的数据源资产元数据列表。由 `service-hub` 资产初始化探查时调用。
+- **请求方法**：`GET`
+- **请求路径**：`/api/datasources`
+- **成功响应**：`HTTP 200 OK`
+  ```json
+  {
+    "total": 2,
+    "datasources": [
+      {
+        "id": "ds_yibao",
+        "datasource_id": "ds_yibao",
+        "api_code": "api1_yibao",
+        "name": "医保就医与结算数据库",
+        "type": "database",
+        "status": "connected",
+        "row_count": 500000,
+        "tags": ["医保", "门诊住院", "结算流水"]
+      },
+      {
+        "id": "ds_kangyang",
+        "datasource_id": "ds_kangyang",
+        "api_code": "api2_kangyang",
+        "name": "康养体检与慢病数据库",
+        "type": "database",
+        "status": "connected",
+        "row_count": 200000,
+        "tags": ["康养", "慢病随访", "体检报告"]
+      }
+    ],
+    "via": "datasource-mgr"
+  }
+  ```
+
+---
+
+#### 3.3.2 获取单个数据源详情 (GET /api/datasources/:id)
+
+- **功能说明**：根据数据源 ID 查询单个数据源的元数据。
+- **请求方法**：`GET`
+- **请求路径**：`/api/datasources/:id`
+- **成功响应**：`HTTP 200 OK`
+  ```json
+  {
+    "id": "ds_yibao",
+    "datasource_id": "ds_yibao",
+    "api_code": "api1_yibao",
+    "name": "医保就医与结算数据库",
+    "type": "database",
+    "status": "connected",
+    "row_count": 500000,
+    "tags": ["医保", "门诊住院", "结算流水"]
+  }
+  ```
+
+---
+
+#### 3.3.3 查询数据源 Schema 表结构 (GET /api/datasources/:id/metadata)
+
+- **功能说明**：探查并返回目标数据源的表结构字段定义（物理名与字段类型）。
+- **请求方法**：`GET`
+- **请求路径**：`/api/datasources/:id/metadata`
+- **成功响应**：`HTTP 200 OK`
+  ```json
+  {
+    "datasource_id": "ds_yibao",
+    "tables": [
+      {
+        "name": "医保就医与结算数据库",
+        "row_count": 500000,
+        "fields": [
+          {"name": "insurance_settlement_id", "type": "string"},
+          {"name": "person_id", "type": "string"},
+          {"name": "gender", "type": "string"},
+          {"name": "birth_date", "type": "string"},
+          {"name": "id_card_no", "type": "string"}
+        ]
+      }
+    ],
+    "via": "datasource-mgr"
+  }
+  ```
+
+---
+
+### 3.4 【Class C 容器基础设施端点】集群编排与性能监控（外部数据局免实现）
+
+> **契约级别**：**Class C (云原生基础设施专用 · 外部数据局免对接实现)**  
+> **说明**：此两项端点属于当前 Go 微服务作为容器部署时的通用基础设施端点，供 K8s 集群与局方内部监控系统采集。**数据局在为 PrivShield 提供数据接口时，无需向调度中枢暴露或实现此类端点**。
+
+#### 3.4.1 服务就绪探针 (GET /readyz)
+
+- **功能说明**：K8s Readiness 探针。确认服务已就绪、具备对外处理流量能力。
+- **请求路径**：`GET /readyz`
+- **成功响应**：`HTTP 200 OK` (`{"status": "ready", "via": "datasource-mgr"}`)
+
+---
+
+#### 3.4.2 Prometheus 监控指标 (GET /metrics)
+
+- **功能说明**：暴露 Prometheus 标准文本格式运行指标（QPS、耗时分位值、并发连接等）。
+- **请求路径**：`GET /metrics`
+- **注意**：数据局可沿用其政务内网现有的监控与运维体系，无需特意向 PrivShield 暴露 `/metrics`。
+
+---
+
+### 3.5 【Class D 本地 Mock 专用辅助端点】开发测试工具（生产环境禁用）
+
+> **契约级别**：**Class D (本地 Mock / 测试专用 · 生产环境严禁暴露)**  
+> **安全警告**：此类端点仅用于 PrivShield 本地开发、CI 自动化集成测试与测试沙箱基准恢复。真实数据局服务绝对**严禁开放或实现**任何类似 `/seed` 或 `/audit` 的后门端点！
+
+#### 3.5.1 生产环境禁用机制 (DATASOURCE_MGR_ENABLE_MOCK_HELPERS=false)
+
+在生产部署编排中，设置环境变量：
+```bash
+DATASOURCE_MGR_ENABLE_MOCK_HELPERS=false
+```
+服务启动时将彻底跳过 `/seed` 与 `/audit` 路由注册，任何对此类端点的访问均直接返回 `404 Not Found`。
+
+---
+
+#### 3.5.2 数据访问模拟审计日志查询 (GET /api/datasources/:id/audit)
+
+- **功能说明**：仅供本地离线单测校验模拟访问行为。
+- **生产替代**：生产环境所有数据要素流通的不可篡改审计存证，均由调度中枢通过专用通道全量写入 **`audit-log` 微服务 (HTTP :8084)**。
+
+---
+
+#### 3.5.3 数据源初始化与重置 (POST /api/datasources/seed)
+
+- **功能说明**：仅供本地集成测试一键恢复样例 CSV 状态。
+- **生产替代**：真实数据由数据局业务生产库承载，杜绝一切外部重置接口。
 
 ---
 
@@ -799,21 +637,20 @@ option go_package = "github.com/fengzhizi319/PrivShield-go/services/datasource-m
 // DataSourceManagerService 数据源管理与提供服务
 // 对外提供高性能数据记录查询、目录清单与连通性探针
 service DataSourceManagerService {
-  // Health 服务可用性探针
+  // 【Class A 核心契约】Health 服务可用性探针（强制实现）
   rpc Health(HealthRequest) returns (HealthResponse);
 
-  // ListDataSources 规范通用 RPC：获取当前已注册数据源目录列表
+  // 【Class B 可选元数据】ListDataSources 获取当前已注册数据源目录列表（可选实现）
   rpc ListDataSources(ListMockSourcesRequest) returns (ListMockSourcesResponse);
 
-  // GetDataSource 获取单个数据源详细元数据
+  // 【Class B 可选元数据】GetDataSource 获取单个数据源详细元数据（可选实现）
   rpc GetDataSource(GetDataSourceRequest) returns (DataSourceProto);
 
-  // TestConnection 连通性与响应延迟探测
+  // 【Class A 核心契约】TestConnection 连通性与响应延迟探测（推荐实现）
   rpc TestConnection(TestConnectionRequest) returns (TestConnectionResponse);
 
-  // GetRecordByIDCard 按身份证号查询单条记录
+  // 【Class A 核心契约】GetRecordByIDCard 按身份证号查询单条记录（强制实现 · 数据要素核心流通通道）
   rpc GetRecordByIDCard(GetRecordByIDCardRequest) returns (SingleRecordResponse);
-
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1069,17 +906,26 @@ message SingleRecordResponse {
 
 | 环境变量名 | 默认值 | 示例值 | 配置说明 |
 |---|---|---|---|
-| `DATASOURCE_MGR_HOST` | `0.0.0.0` | `0.0.0.0` | HTTP/REST 监听绑定地址 |
+| `DATASOURCE_MGR_HOST` | `127.0.0.1` | `0.0.0.0` | HTTP/REST 监听绑定地址（生产置 `0.0.0.0`） |
 | `DATASOURCE_MGR_PORT` | `8083` | `8083` | HTTP/REST 监听端口 |
-| `DATASOURCE_MGR_GRPC_HOST` | `0.0.0.0` | `0.0.0.0` | gRPC 服务监听绑定地址 |
+| `DATASOURCE_MGR_GRPC_HOST` | `127.0.0.1` | `0.0.0.0` | gRPC 服务监听绑定地址 |
 | `DATASOURCE_MGR_GRPC_PORT` | `50053` | `50053` | gRPC 服务监听端口 |
 | `DATASOURCE_MGR_TLS_ENABLED` | `false` | `true` | 是否启用 TLS 1.3 / 国密 SM2 双向 mTLS |
+| `DATASOURCE_MGR_REQUIRE_TLS` | `false` | `true` | 生产门禁：置真时未启用 TLS 即拒绝启动 (fail-closed) |
 | `DATASOURCE_MGR_TLS_CERT_FILE` | `""` | `/etc/certs/server.crt` | 服务端 X.509 证书路径 |
 | `DATASOURCE_MGR_TLS_KEY_FILE` | `""` | `/etc/certs/server.key` | 服务端私钥路径 |
 | `DATASOURCE_MGR_TLS_CA_FILE` | `""` | `/etc/certs/ca.crt` | 客户端认证根 CA 证书路径 |
-| `DATASOURCE_MGR_TLS_CLIENT_AUTH` | `""` | `require` | 客户端证书模式 (`require` / `verify`) |
-| `DATASOURCE_MGR_TLS_ALLOWED_CNS` | `""` | `service-hub` | 允许连接的客户端证书 CN 白名单 |
+| `DATASOURCE_MGR_TLS_CLIENT_AUTH` | `""` | `require` | 客户端证书模式 (`require` / `verify` / `request`) |
+| `DATASOURCE_MGR_TLS_PINNED_PUBKEY_FILE` | `""` | `/etc/certs/client.pub` | 客户端公钥指纹固定文件（防 CA 劫持与伪造） |
+| `PRIVACY_AUTH_MTLS_WHITELIST_FILE` | `""` | `/etc/mtls-whitelist.yaml` | gRPC 客户端证书 CN 白名单 YAML 文件（启用 gRPC TLS 时必填） |
 | `DATASOURCE_MGR_API_KEY` | `""` | `sec_privshield_token_2026` | 统一 API Key 鉴权口令（为空则免 Token） |
+| `DATASOURCE_MGR_API_KEYS` | `""` | `datasource:read=<token>` | Scope-based API Key 映射，优先于单 `API_KEY` |
+| `DATASOURCE_MGR_API_KEYS_FILE` | `""` | `/etc/api-keys.yaml` | API Key 文件路径（支持热轮转，K8s Secret 投影场景） |
+| `DATASOURCE_MGR_CORS_ORIGINS` | `""` | `https://console.privshield` | 允许的 CORS 跨域源（逗号分隔） |
+| `DATASOURCE_MGR_STRICT_STORAGE` | `true` | `true` | 严格存储模式 (P0-4 禁静音降级)：CSV 损坏行直接报错，不静默丢弃 |
+| `DATASOURCE_MGR_RATE_LIMIT_RPS` | `100` | `500` | 每客户端 IP 令牌桶限流速率（0 = 不限流） |
+| `DATASOURCE_MGR_RATE_LIMIT_BURST` | `200` | `500` | 令牌桶突发容量 |
+| `DATASOURCE_MGR_SHUTDOWN_TIMEOUT` | `5` | `5` | HTTP 优雅关闭超时秒数 |
 | `DATASOURCE_MGR_LOG_LEVEL` | `info` | `debug` / `info` | 日志级别 (`debug`, `info`, `warn`, `error`) |
 | `DATASOURCE_MGR_LOG_FORMAT` | `json` | `json` | 日志输出格式 (`json` 推荐结构化日志) |
 

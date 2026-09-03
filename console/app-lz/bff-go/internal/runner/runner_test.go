@@ -46,20 +46,20 @@ func TestRunSuites_WithMockAuditLog(t *testing.T) {
 						"id_card": "5101***********234",
 					},
 					"classification_report": map[string]any{"max_sensitivity": "L4"},
-					"summary":              map[string]any{"total_fields": 2, "sanitized_fields": 2},
-					"audit_task_id":        "fad-ds_yibao-510101199001011234-mock123",
-					"via":                  "service-hub",
+					"summary":               map[string]any{"total_fields": 2, "sanitized_fields": 2},
+					"audit_task_id":         "fad-ds_yibao-510101199001011234-mock123",
+					"via":                   "service-hub",
 				})
 				return
 			}
-		case "/api/audit/logs":
+		case "/api/hub/audit/logs", "/api/audit/logs":
 			if r.Method == http.MethodPost {
 				w.WriteHeader(http.StatusCreated)
 				_ = json.NewEncoder(w).Encode(map[string]string{
 					"id":             "audit-12345",
 					"snapshot_id":    "snap-12345",
 					"integrity_hash": "hash-12345",
-					"via":            "audit-log",
+					"via":            "service-hub",
 				})
 				return
 			}
@@ -78,7 +78,18 @@ func TestRunSuites_WithMockAuditLog(t *testing.T) {
 						"status":        "success",
 					},
 				},
-				"via": "audit-log",
+				"via": "service-hub",
+			})
+		case "/api/hub/audit/verify":
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"snapshot_id":   "snap-12345",
+				"merkle_valid":  true,
+				"expected_hash": "hash-12345",
+				"root_hash":     "hash-12345",
+				"total_entries": 1,
+				"source":        "service-hub",
+				"via":           "service-hub",
 			})
 		case "/api/audit/snapshots":
 			w.WriteHeader(http.StatusOK)

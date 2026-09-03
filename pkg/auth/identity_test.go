@@ -195,7 +195,12 @@ func TestServiceHubPermissionForPath(t *testing.T) {
 		{"/api/hub/classify", "hub:dispatch"},
 		{"/api/hub/classify/", "hub:dispatch"}, // 尾部斜杠不应绕过 Scope 校验
 		{"/api/hub/tasks/", "hub:read"},        // 尾部斜杠归一化
-		{"/unknown", ""},
+		{"/api/hub/topology", "hub:read"},
+		{"/api/hub/audit/logs", "hub:read"},
+		{"/api/hub/audit/verify", "hub:dispatch"},
+		{"/api/hub/datasources", "hub:read"},
+		{"/api/hub/fetch-and-desensitize", "hub:dispatch"},
+		{"/unknown", "admin"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {

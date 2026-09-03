@@ -27,7 +27,7 @@ func TestIPAllowlist_EmptyPassthrough(t *testing.T) {
 func TestIPAllowlist_MatchedCIDR(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(IPAllowlist([]string{"10.0.0.0/8", "192.168.1.0/24"}))
+	r.Use(IPAllowlist([]string{"10.0.0.0/8", "192.168.1.0/24", "::1/128", "2001:db8::/32"}))
 	r.GET("/test", func(c *gin.Context) { c.String(200, "ok") })
 
 	tests := []struct {
@@ -39,6 +39,9 @@ func TestIPAllowlist_MatchedCIDR(t *testing.T) {
 		{"192.168.1.x matches", "192.168.1.100:1234", http.StatusOK},
 		{"172.16.x not in allowlist", "172.16.0.1:1234", http.StatusForbidden},
 		{"8.8.8.8 not in allowlist", "8.8.8.8:1234", http.StatusForbidden},
+		{"IPv6 loopback matches ::1/128", "[::1]:54321", http.StatusOK},
+		{"IPv6 subnet matches 2001:db8::/32", "[2001:db8::cafe]:9999", http.StatusOK},
+		{"IPv6 outside not in allowlist", "[2001:dead::1]:8888", http.StatusForbidden},
 	}
 
 	for _, tt := range tests {

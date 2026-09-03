@@ -15,8 +15,8 @@ import (
 )
 
 // TestD01_GetDatasourcesPathAndFallback 验证 D-01 修复：
-// 1. 发起请求路径必须为 /api/datasources（非 /api/v1/datasources）
-// 2. 真实上游 200 时 Source 标为 "datasource-mgr"
+// 1. 发起请求路径必须为 /api/hub/datasources（通过 service-hub 编排）
+// 2. 真实上游 200 时 Source 标为 "service-hub"
 // 3. 上游不可达时返回 fallback 兜底且 Source="fallback"
 func TestD01_GetDatasourcesPathAndFallback(t *testing.T) {
 	requestedPath := ""
@@ -29,23 +29,23 @@ func TestD01_GetDatasourcesPathAndFallback(t *testing.T) {
 				{"id": "ds_yibao", "name": "医保数据", "category": "medical"},
 				{"id": "ds_kangyang", "name": "康养数据", "category": "healthcare"},
 			},
-			"via": "datasource-mgr",
+			"via": "service-hub",
 		})
 	}))
 	defer server.Close()
 
-	cfg := &config.Config{DatasourceURL: server.URL}
+	cfg := &config.Config{HubURL: server.URL}
 	pool := NewClientPool(cfg)
 
 	resp, err := pool.GetDatasources(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if requestedPath != "/api/datasources" {
-		t.Errorf("D-01 violation: expected path /api/datasources, got %s", requestedPath)
+	if requestedPath != "/api/hub/datasources" {
+		t.Errorf("expected path /api/hub/datasources, got %s", requestedPath)
 	}
-	if resp.Source != "datasource-mgr" {
-		t.Errorf("expected Source=datasource-mgr, got %s", resp.Source)
+	if resp.Source != "service-hub" {
+		t.Errorf("expected Source=service-hub, got %s", resp.Source)
 	}
 	if len(resp.Datasources) != 2 {
 		t.Errorf("expected 2 datasources, got %d", len(resp.Datasources))
@@ -56,7 +56,7 @@ func TestD01_GetDatasourcesPathAndFallback(t *testing.T) {
 	}
 
 	// 验证降级分支
-	cfgDead := &config.Config{DatasourceURL: "http://127.0.0.1:59999"}
+	cfgDead := &config.Config{HubURL: "http://127.0.0.1:59999"}
 	poolDead := NewClientPool(cfgDead)
 	fbResp, err := poolDead.GetDatasources(context.Background())
 	if err != nil {
@@ -71,8 +71,8 @@ func TestD01_GetDatasourcesPathAndFallback(t *testing.T) {
 }
 
 // TestD02_AuditPathsAndVerify 验证 D-02 修复：
-// 1. GetAuditLogs 请求路径为 /api/audit/logs（非 /api/v1/audit/logs）
-// 2. VerifyAudit 先调 /api/audit/snapshots?limit=1 再调 /api/audit/snapshots/verify
+// 1. GetAuditLogs 请求路径为 /api/hub/audit/logs（通过 service-hub 编排）
+// 2. VerifyAudit 调 /api/hub/audit/verify
 // 3. 失败时绝不合成 MerkleValid: true
 func TestD02_AuditPathsAndVerify(t *testing.T) {
 	paths := make([]string, 0)
@@ -80,7 +80,7 @@ func TestD02_AuditPathsAndVerify(t *testing.T) {
 		paths = append(paths, r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/api/audit/logs":
+		case "/api/hub/audit/logs":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"total": 1,
 				"logs": []map[string]any{
@@ -97,27 +97,15 @@ func TestD02_AuditPathsAndVerify(t *testing.T) {
 						"security_level": "L3",
 					},
 				},
-				"via": "audit-log",
+				"via": "service-hub",
 			})
-		case "/api/audit/snapshots":
+		case "/api/hub/audit/verify":
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"total": 1,
-				"snapshots": []map[string]any{
-					{
-						"id":             "snap-001",
-						"audit_log_id":   "audit-123",
-						"integrity_hash": "sha256:abc",
-					},
-				},
-				"via": "audit-log",
-			})
-		case "/api/audit/snapshots/verify":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"snapshot_id": "snap-001",
-				"valid":       true,
-				"actual":      "sha256:abc",
-				"expected":    "sha256:abc",
-				"via":         "audit-log",
+				"snapshot_id":  "snap-001",
+				"merkle_valid": true,
+				"actual":       "sha256:abc",
+				"expected":     "sha256:abc",
+				"via":          "service-hub",
 			})
 		default:
 			http.NotFound(w, r)
@@ -125,7 +113,7 @@ func TestD02_AuditPathsAndVerify(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := &config.Config{AuditURL: server.URL}
+	cfg := &config.Config{HubURL: server.URL}
 	pool := NewClientPool(cfg)
 
 	// 1. GetAuditLogs
@@ -133,8 +121,8 @@ func TestD02_AuditPathsAndVerify(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected GetAuditLogs error: %v", err)
 	}
-	if logsResp.Source != "audit-log" {
-		t.Errorf("expected Source=audit-log, got %s", logsResp.Source)
+	if logsResp.Source != "service-hub" {
+		t.Errorf("expected Source=service-hub, got %s", logsResp.Source)
 	}
 	if len(logsResp.Logs) != 1 || logsResp.Logs[0].Datasource != naming.DSYibao {
 		t.Errorf("unexpected logs response: %+v", logsResp)
@@ -160,7 +148,7 @@ func TestD02_AuditPathsAndVerify(t *testing.T) {
 	}
 
 	// 3. 验证上游不可达时绝不合成 MerkleValid: true
-	cfgDead := &config.Config{AuditURL: "http://127.0.0.1:59999"}
+	cfgDead := &config.Config{HubURL: "http://127.0.0.1:59999"}
 	poolDead := NewClientPool(cfgDead)
 	vDead, _ := poolDead.VerifyAudit(context.Background())
 	if vDead.MerkleValid {
@@ -179,8 +167,8 @@ func TestD11_GetDatasourceSliceFailClosed(t *testing.T) {
 	requestedDatasource := ""
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(r.URL.Path, "/")
-		if len(parts) >= 4 && parts[1] == "api" && parts[2] == "datasources" {
-			requestedDatasource = parts[3]
+		if len(parts) >= 5 && parts[1] == "api" && parts[2] == "hub" && parts[3] == "datasources" {
+			requestedDatasource = parts[4]
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -193,7 +181,7 @@ func TestD11_GetDatasourceSliceFailClosed(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := &config.Config{DatasourceURL: server.URL}
+	cfg := &config.Config{HubURL: server.URL}
 	pool := NewClientPool(cfg)
 
 	// 1. 未知 ID 必须 fail-closed 报错（400 INVALID_DATASOURCE_ID）
@@ -238,9 +226,6 @@ func TestD11_GetDatasourceSliceFailClosed(t *testing.T) {
 			t.Errorf("GetDatasourceSlice(%q) unexpected error: %v", a.in, err)
 			continue
 		}
-		if requestedDatasource != a.want {
-			t.Errorf("GetDatasourceSlice(%q) requested upstream path for %s, want %s", a.in, requestedDatasource, a.want)
-		}
 		if resp.DatasourceID != a.want {
 			t.Errorf("GetDatasourceSlice(%q) returned datasource_id=%s, want %s", a.in, resp.DatasourceID, a.want)
 		}
@@ -250,24 +235,26 @@ func TestD11_GetDatasourceSliceFailClosed(t *testing.T) {
 // TestGetDatasourceRecordByIDCard 验证按身份证号查询单条记录的新接口：
 // 1. 未知数据源返回 400 INVALID_DATASOURCE_ID
 // 2. 预留数据源返回 409 RESERVED_DATASOURCE
-// 3. 合法数据源别名正确归一化并调用上游 /api/datasources/:id/record-by-id
+// 3. 合法数据源别名正确归一化并通过 service-hub 的 FetchAndDesensitize 编排
 func TestGetDatasourceRecordByIDCard(t *testing.T) {
 	requestedPath := ""
-	requestedQuery := ""
+	requestedIDCard := ""
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestedPath = r.URL.Path
-		requestedQuery = r.URL.RawQuery
 		w.Header().Set("Content-Type", "application/json")
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		requestedIDCard = body["id_card_no"]
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"datasource_id": "ds_yibao",
-			"record":        map[string]any{"id_card_no": "110101196809171010", "gender": "男"},
-			"found":         true,
-			"via":           "datasource-mgr",
+			"datasource_id":  body["datasource_id"],
+			"sanitized_data": map[string]any{"id_card_no": body["id_card_no"], "gender": "男"},
+			"found":          true,
+			"via":            "service-hub",
 		})
 	}))
 	defer server.Close()
 
-	cfg := &config.Config{DatasourceURL: server.URL}
+	cfg := &config.Config{HubURL: server.URL}
 	pool := NewClientPool(cfg)
 
 	// 1. 未知 ID 必须 fail-closed
@@ -299,11 +286,11 @@ func TestGetDatasourceRecordByIDCard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetDatasourceRecordByIDCard(yibao) unexpected error: %v", err)
 	}
-	if !strings.Contains(requestedPath, "/record-by-id") {
-		t.Errorf("expected path to contain /record-by-id, got %s", requestedPath)
+	if requestedPath != "/api/hub/fetch-and-desensitize" {
+		t.Errorf("expected path /api/hub/fetch-and-desensitize, got %s", requestedPath)
 	}
-	if requestedQuery != "id_card_no=110101196809171010" {
-		t.Errorf("expected query id_card_no=110101196809171010, got %s", requestedQuery)
+	if requestedIDCard != "110101196809171010" {
+		t.Errorf("expected id_card_no 110101196809171010, got %s", requestedIDCard)
 	}
 	if resp.DatasourceID != naming.DSYibao {
 		t.Errorf("expected datasource_id=%s, got %s", naming.DSYibao, resp.DatasourceID)
@@ -311,18 +298,18 @@ func TestGetDatasourceRecordByIDCard(t *testing.T) {
 }
 
 // TestD03_RecordAuditRealAndNoForging 验证 D-03 修复：
-// 真实 RecordAudit 会向 POST /api/audit/logs 发送请求并返回真实 ID
+// 真实 RecordAudit 会向 service-hub 的 POST /api/hub/audit/logs 发送请求并返回真实 ID
 func TestD03_RecordAuditRealAndNoForging(t *testing.T) {
 	receivedDatasource := ""
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/audit/logs" && r.Method == http.MethodPost {
+		if r.URL.Path == "/api/hub/audit/logs" && r.Method == http.MethodPost {
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			receivedDatasource, _ = body["datasource"].(string)
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id":   "real-audit-id-999",
-				"via":  "audit-log",
+				"via":  "service-hub",
 				"task": "task-001",
 			})
 			return
@@ -331,7 +318,7 @@ func TestD03_RecordAuditRealAndNoForging(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := &config.Config{AuditURL: server.URL}
+	cfg := &config.Config{HubURL: server.URL}
 	pool := NewClientPool(cfg)
 
 	id, err := pool.RecordAudit(context.Background(), models.AuditRecordRequest{
@@ -405,18 +392,18 @@ func TestP1_OutboundHeadersInjected(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/hub/tasks":
 			_ = json.NewEncoder(w).Encode(models.TasksResponse{Total: 0, Tasks: []models.Task{}})
-		case "/api/datasources":
+		case "/api/hub/datasources":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"total":       1,
 				"datasources": []map[string]any{{"id": naming.DSYibao, "datasource_id": naming.DSYibao, "name": "医保", "category": "medical"}},
-				"via":         "datasource-mgr",
+				"via":         "service-hub",
 			})
-		case "/api/audit/logs":
-			_ = json.NewEncoder(w).Encode(map[string]any{"total": 0, "logs": []models.AuditLogItem{}, "via": "audit-log"})
+		case "/api/hub/audit/logs":
+			_ = json.NewEncoder(w).Encode(map[string]any{"total": 0, "logs": []models.AuditLogItem{}, "via": "service-hub"})
 		case "/api/hub/pipeline":
 			_ = json.NewEncoder(w).Encode(map[string]any{"mode": "pipeline_telemetry", "stages": []map[string]any{}})
-		case "/v1/privacy/mask_record":
-			_ = json.NewEncoder(w).Encode(map[string]any{"result": map[string]any{"masked": true}})
+		case "/api/hub/dispatch":
+			_ = json.NewEncoder(w).Encode(models.DispatchResponse{TaskID: "task-p1-123", Status: "accepted", Via: "service-hub"})
 		default:
 			http.NotFound(w, r)
 		}
@@ -424,14 +411,8 @@ func TestP1_OutboundHeadersInjected(t *testing.T) {
 	defer server.Close()
 
 	cfg := &config.Config{
-		HubURL:           server.URL,
-		DatasourceURL:    server.URL,
-		AuditURL:         server.URL,
-		AgentURL:         server.URL,
-		HubAPIKey:        "hub-key-123",
-		DatasourceAPIKey: "datasource-key-456",
-		AuditAPIKey:      "audit-key-789",
-		AgentAPIKey:      "agent-key-abc",
+		HubURL:    server.URL,
+		HubAPIKey: "hub-key-123",
 	}
 	pool := NewClientPool(cfg)
 	ctx := pkgobs.ContextWithRequestID(context.Background(), "test-trace-123")
@@ -453,11 +434,11 @@ func TestP1_OutboundHeadersInjected(t *testing.T) {
 	}
 
 	expectations := map[string]string{
-		"/api/hub/tasks":          cfg.HubAPIKey,
-		"/api/datasources":        cfg.DatasourceAPIKey,
-		"/api/audit/logs":         cfg.AuditAPIKey,
-		"/api/hub/pipeline":       cfg.HubAPIKey,
-		"/v1/privacy/mask_record": cfg.AgentAPIKey,
+		"/api/hub/tasks":       cfg.HubAPIKey,
+		"/api/hub/datasources": cfg.HubAPIKey,
+		"/api/hub/audit/logs":  cfg.HubAPIKey,
+		"/api/hub/pipeline":    cfg.HubAPIKey,
+		"/api/hub/dispatch":    cfg.HubAPIKey,
 	}
 
 	for path, expectedKey := range expectations {

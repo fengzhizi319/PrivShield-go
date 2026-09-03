@@ -1051,3 +1051,72 @@ func TestServer_LocalPendingWorker(t *testing.T) {
 		t.Fatalf("expected task to be completed by local worker, got state: %+v", tCheck)
 	}
 }
+
+// TestHubOrchestrationEndpoints tests the orchestration endpoints provided by service-hub for app-lz.
+func TestHubOrchestrationEndpoints(t *testing.T) {
+	s, mockAgent := newMockEngineServer(t, "L1", true)
+	defer mockAgent.Close()
+	defer s.Shutdown()
+
+	router := newTestRouter(s)
+
+	// 1. GET /api/hub/topology
+	t.Run("HubTopology", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/api/hub/topology", nil)
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var topo map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &topo)
+		if topo["status"] == "" {
+			t.Errorf("expected non-empty status in topology: %+v", topo)
+		}
+		services, ok := topo["services"].([]any)
+		if !ok || len(services) != 4 {
+			t.Fatalf("expected 4 services in topology, got %d", len(services))
+		}
+	})
+
+	// 2. GET /api/hub/audit/logs
+	t.Run("GetAuditLogs", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/api/hub/audit/logs?limit=10", nil)
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var logsResp map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &logsResp)
+		if logsResp["via"] != "service-hub" {
+			t.Errorf("expected via=service-hub, got %v", logsResp["via"])
+		}
+	})
+
+	// 3. POST /api/hub/audit/verify
+	t.Run("VerifyAudit", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/api/hub/audit/verify", nil)
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var verifyResp map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &verifyResp)
+		if verifyResp["merkle_valid"] != true {
+			t.Errorf("expected merkle_valid=true, got %+v", verifyResp)
+		}
+	})
+
+	// 4. POST /api/hub/audit/logs
+	t.Run("CreateAuditLog", func(t *testing.T) {
+		payload := []byte(`{"task_id":"task-test-1","datasource":"ds_yibao","api_code":"api1_yibao","operation":"mask","status":"success"}`)
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/api/hub/audit/logs", bytes.NewReader(payload))
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+}

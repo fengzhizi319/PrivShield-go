@@ -179,7 +179,8 @@ services:
       start_period: 5s
     restart: "no"
 
-  # 5. App-LZ Go BFF 聚合后端 (:8085，仅 HTTP；本进程无 gRPC 服务端)
+  # 5. App-LZ Go BFF 外部模拟业务程序 (:8085，仅访问 service-hub 调度中枢)
+  # 架构原则：app-lz 模拟外部系统，除 service-hub 外无权直连任何内部服务 (datasource-mgr / engine-go / audit-log)
   app-lz-bff:
     build:
       context: ../..
@@ -189,28 +190,16 @@ services:
     container_name: privshield-app-lz-bff
     ports:
       - "8085:8085"
-    # 注：原先此处的 "50055:50055" 是从 console/bff-go gRPC 端口抄来的配置漂移——
-    # 本 BFF 没有 gRPC 服务端，且两栈同起时端口冲突，已按 P2-1 删除。
     environment:
       APP_LZ_HOST: "0.0.0.0"
       APP_LZ_PORT: "8085"
+      # ── 唯一调度编排中枢 ──
       APP_LZ_HUB_URL: "http://service-hub:8082"
       APP_LZ_HUB_GRPC: "service-hub:50052"
-      APP_LZ_DATASOURCE_URL: "http://datasource-mgr:8083"
-      APP_LZ_DATASOURCE_GRPC: "datasource-mgr:50053"
-      APP_LZ_AUDIT_URL: "http://audit-log:8084"
-      APP_LZ_AUDIT_GRPC: "audit-log:50054"
-      APP_LZ_AGENT_URL: "http://PrivShield:8079"
-      APP_LZ_AGENT_GRPC: "PrivShield:50051"
-      # ── P0-1：入站 Key + 四个上游出站 Key（须与对端入站值一致，否则 401）──
+      # ── 入站 Key 与 service-hub 出站调用凭证 ──
       APP_LZ_API_KEY: "${APP_LZ_API_KEY:-dev-app-lz-bff-key}"
       APP_LZ_HUB_API_KEY: "${SERVICE_HUB_API_KEY:-dev-service-hub-key}"
-      APP_LZ_DATASOURCE_API_KEY: "${DATASOURCE_MGR_API_KEY:-dev-datasource-key}"
-      APP_LZ_AUDIT_API_KEY: "${AUDIT_LOG_API_KEY:-dev-audit-key}"
-      APP_LZ_AGENT_API_KEY: "${PRIVSHIELD_ENGINE_API_KEY:-dev-engine-key}"
     depends_on:
-      PrivShield:
-        condition: service_healthy
       service-hub:
         condition: service_healthy
     networks:

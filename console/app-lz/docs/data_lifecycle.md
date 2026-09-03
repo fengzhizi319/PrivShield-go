@@ -39,15 +39,19 @@ graph TD
         B4["Schema Catalog\n(医保 19 字段 / 康养 27 字段)"]
     end
 
-    subgraph Services["PrivShield 微服务集群"]
-        S1["service-hub (:8082/:50052)\n任务调度与流水线编排"]
+    subgraph Hub["唯一外部调度编排中枢"]
+        S1["service-hub (:8082/:50052)\n任务调度/全链路流水线编排/拓扑与存证代理"]
+    end
+
+    subgraph InternalServices["网格受保护内部微服务 (严禁 app-lz 直连)"]
         S2["engine Agent (:8079/:50051)\n分类分级与合规脱敏流水线"]
         S3["datasource-mgr (:8083/:50053)\n资产管理与真实切片采样"]
         S4["audit-log (:8084/:50054)\n不可篡改 SHA-256 / Merkle 存证"]
     end
 
     UI <-->|HTTP/1.1 JSON| BFF
-    BFF -->|REST / gRPC| Services
+    BFF -->|REST / gRPC 唯一编排调用| Hub
+    Hub -->|内部流水线与探针| InternalServices
     B3 -.->|上游不可达时显式降级| UI
 ```
 
@@ -59,8 +63,7 @@ graph TD
 
 | 数据项 | 来源层级 | 具体来源 | 代码位置 |
 |---|---|---|---|
-| 4 服务 REST RTT / 状态 | **L1 实时** | BFF `ClientPool.ProbeNode()` → HTTP `GET /api/health` 探测各服务 | `clients.go` `ProbeNode` |
-| 4 服务 gRPC RTT / 状态 | **L1 实时** | BFF `net.DialTimeout("tcp", grpcAddr, 800ms)` TCP 拨测 | `clients.go` `probeGRPC` |
+| 4 服务 REST/gRPC RTT / 状态 | **L1 实时** | BFF `ClientPool.GetTopology()` → `GET :8082/api/hub/topology` 由 service-hub 统一探测并下发 | `clients.go` `GetTopology` |
 | 节点固定排列顺序 | **L3 前端** | 前端 `FIXED_ORDER` 数组排序 | `TopologyPanel.tsx` |
 | 服务角色/端口/图标元数据 | **L3 前端** | 前端 `getServiceMeta()` switch-case 硬编码 | `TopologyPanel.tsx` |
 | 上游不可达时的标记 | **L2 BFF** | BFF 标记各节点 `status: "unreachable"`，透传真实探测错误 | `clients.go` `GetTopology` |

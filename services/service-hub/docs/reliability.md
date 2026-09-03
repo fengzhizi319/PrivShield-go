@@ -226,7 +226,7 @@ service-hub 支持端到端请求标识传递，保证异步 6 阶段流水线�
                                       │
               ┌───────────────────────┴───────────────────────┐
               ▼                                               ▼
-[datasource.Client.Health/GetDataSource]            [agent.Client.ProcessMedical]
+[datasource.Client.Health/GetDataSource]            [agent.Client.ProcessAgent]
    (注入 X-Request-ID Header/Metadata)             (注入 X-Request-ID & X-Idempotency-Key)
 ```
 
@@ -251,10 +251,10 @@ HTTP `Dispatch` 与 gRPC `Dispatch` 都遵循相同的写入模型：请求入�
 | 接收调度请求 | `Save()`；新建 `pending/queued` | `id`、`status`、`stage`、`source`、`api_code`、`datasource_id`、`operation`、`priority`、`created_at`、`payload_json`、初始重试字段 | `Save()` 失败则 HTTP 返回 `500` 或 gRPC 返回 `Internal`，不会启动异步任务。 |
 | `ingest` | `Update()`；`pending/queued → running/ingest` | `status=running`、`stage=ingest`、`started_at=当前时间` | 更新成功后才进行该阶段处理；失败则整个协程立即退出。 |
 | `fetch` | 首先 `Update()`；`running/ingest → running/fetch` | `status=running`、`stage=fetch`、新的 `started_at` | 数据源拉取阶段保留，分页抽取接口已移除，需由调用方在提交任务时携带载荷。 |
-| `classify` | `Update()`；`running/fetch → running/classify` | `status=running`、`stage=classify`、新的 `started_at` | 对隐私操作调用 Agent 医疗流水线，透传 `X-Idempotency-Key`。Agent 调用失败时转入失败终态写入。 |
+| `classify` | `Update()`；`running/fetch → running/classify` | `status=running`、`stage=classify`、新的 `started_at` | 对隐私操作调用 Agent 一体化处理接口 `ProcessAgent`（`POST /v1/agent/process`，404 回退 `/v1/medical/process`），透传 `X-Idempotency-Key`。Agent 调用失败时转入失败终态写入。 |
 | `desensitize` | `Update()`；`running/classify → running/desensitize` | `status=running`、`stage=desensitize`、新的 `started_at` | 该阶段保留状态追踪；实际脱敏已在 `classify` 调用的医疗流水线中完成。 |
 | `return` | `Update()`；`running/desensitize → running/return` | `status=running`、`stage=return`、新的 `started_at` | 预留结果返回阶段。 |
-| `audit` | `Update()`；`running/return → running/audit` | `status=running`、`stage=audit`、新的 `started_at` | 审计阶段完成后立即执行成功终态写入。 |
+| `audit` | `Update()`；`running/return → running/audit` | `status=running`、`stage=audit`、新的 `started_at` | 审计阶段调用 `submitEvidence` 向 audit-log 提交出域存证（`POST /api/audit/logs`，P0-6 fail-closed），成功后立即执行成功终态写入；提交失败则转入失败终态。 |
 | 正常完成 | `Update()`；`running/audit → completed/done` | `status=completed`、`stage=done`、`completed_at=当前时间`、`duration_ms=当前时间-created_at` | 成功终态写入。 |
 | 失败或取消 | `Update()`；当前 `running/<stage> → failed/<stage>` | `status=failed`、保留当前 `stage`、`error`、`completed_at`、`duration_ms` | 写入失败记录，可被后续重试协程拾取。 |
 
@@ -324,7 +324,8 @@ SIGINT/SIGTERM → 停止后台协程(retry+retention) → 异步任务广播取
 |---|---|
 | 最低协议版本 | TLS 1.3 / 国密 SM2 最低基线锁定 |
 | HTTP/gRPC 双向认证 | 与 `pkg/tlsutil` 工具库打通，支持 `require`/`verify`/`request` 模式 |
-| 身份准入 | 动态 CN 白名单（`SERVICE_HUB_TLS_ALLOWED_CNS`）隔离各域访问权限 |
+| 身份准入 | gRPC 方法级 Scope 鉴权（`hub:read` / `hub:dispatch`）+ 动态 CN 白名单（`PRIVACY_AUTH_MTLS_WHITELIST_FILE`）隔离各域访问权限 |
+
 service-hub 的 HTTP REST 和 gRPC 双协议均支持 TLS 1.3 及 mTLS 双向认证，配置完全对称：
 
 | 变量 | 默认值 | 说明 |

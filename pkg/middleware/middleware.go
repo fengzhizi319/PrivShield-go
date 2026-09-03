@@ -15,6 +15,7 @@ package middleware
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 
@@ -173,14 +174,14 @@ func TrustedProxiesFromEnv() []string {
 
 // RealClientIP 从请求中提取真实客户端 IP（三级等保 G-02）。
 // 优先使用 Gin 的 ClientIP()（已受 TrustedProxies 约束），
-// 若为空则回退到 RemoteAddr。该值可安全用于限流 key 与审计日志。
+// 若为空则回退到 RemoteAddr（安全剥除端口与方括号，全面兼容 IPv4 与 IPv6）。该值可安全用于限流 key 与审计日志。
 func RealClientIP(c *gin.Context) string {
 	if ip := c.ClientIP(); ip != "" {
 		return ip
 	}
 	addr := c.Request.RemoteAddr
-	if idx := strings.LastIndex(addr, ":"); idx >= 0 {
-		return addr[:idx]
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return strings.Trim(host, "[]")
 	}
-	return addr
+	return strings.Trim(addr, "[]")
 }

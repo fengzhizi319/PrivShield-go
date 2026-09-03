@@ -31,6 +31,12 @@
     - [3.3.2 流水线监控遥测 (GET /api/hub/pipeline)](#332-流水线监控遥测-get-apihubpipeline)
   - [3.4 按身份证号查询并脱敏端点 (POST /api/hub/fetch-and-desensitize)](#34-按身份证号查询并脱敏端点-post-apihubfetch-and-desensitize)
   - [3.5 跨服务完整调用链路：按身份证分级脱敏全链路 API 时序](#35-跨服务完整调用链路按身份证分级脱敏全链路-api-时序)
+  - [3.6 外部系统统一编排代理端点 (External Orchestration Endpoints)](#36-外部系统统一编排代理端点-external-orchestration-endpoints)
+    - [3.6.1 集群拓扑健康探针 (GET /api/hub/topology)](#361-集群拓扑健康探针-get-apihubtopology)
+    - [3.6.2 数据源目录查询 (GET /api/hub/datasources)](#362-数据源目录查询-get-apihubdatasources)
+    - [3.6.3 审计存证查询 (GET /api/hub/audit/logs)](#363-审计存证查询-get-apihubauditlogs)
+    - [3.6.4 审计存证写入 (POST /api/hub/audit/logs)](#364-审计存证写入-post-apihubauditlogs)
+    - [3.6.5 Merkle 完整性防篡改验真 (POST /api/hub/audit/verify)](#365-merkle-完整性防篡改验真-post-apihubauditverify)
 - [4. gRPC API 规范与 Protobuf 定义](#4-grpc-api-规范与-protobuf-定义)
   - [4.1 Protobuf 契约文件 (servicehub.proto)](#41-protobuf-契约文件-servicehubproto)
   - [4.2 gRPC 服务接口与方法规约](#42-grpc-服务接口与方法规约)
@@ -110,7 +116,7 @@ flowchart LR
 |---|---|---|
 | ① | `ingest` | 更新任务状态为 `running`，初始化任务元数据与并发信号量 |
 | ② | `fetch` | 数据拉取阶段保留（分页抽取接口已移除，需由调用方在提交任务时显式携带载荷） |
-| ③ | `classify` | 一次调用 engine `/v1/medical/process` 医疗流水线，同时完成 3-Layer 分类分级 + 高敏文本剥离 + PII 掩码 |
+| ③ | `classify` | 一次调用 engine `POST /v1/agent/process`（404 时回退 `POST /v1/medical/process`），同时完成 3-Layer 分类分级 + 高敏文本剥离 + PII 掩码 |
 | ④ | `desensitize` | 已由 ③ 合并完成，快速通过（保留阶段状态追踪） |
 | ⑤ | `return` | 组装脱敏后的数据对象 |
 | ⑥ | `audit` | 向独立存证节点 `audit-log` 提交出域存证；提交失败一律任务失败（P0-6 fail-closed） |
@@ -301,7 +307,7 @@ flowchart LR
 - **功能说明**：分页获取任务列表，支持按状态过滤。服务端强制执行分页安全边界。
 - **请求方法**：`GET`
 - **请求路径**：`/api/hub/tasks`
-- **鉴权要求**：需要有效 Bearer Token（`read:tasks` 权限）
+- **鉴权要求**：需要有效 Bearer Token（`hub:read` 权限）
 - **Query 参数**：
 
   | 参数名 | 类型 | 必填 | 默认值 | 说明 |
@@ -329,7 +335,10 @@ flowchart LR
         "created_at": "2026-09-03T10:00:00Z",
         "started_at": "2026-09-03T10:00:01Z",
         "completed_at": "2026-09-03T10:00:03Z",
-        "duration_ms": 2345
+        "duration_ms": 2345,
+        "retry_count": 0,
+        "version": 3,
+        "max_retries": 3
       }
     ],
     "via": "service-hub"
@@ -355,6 +364,16 @@ flowchart LR
   | `tasks[].started_at` | string | 否 | 开始执行时间（RFC3339） |
   | `tasks[].completed_at` | string | 否 | 完成时间（RFC3339） |
   | `tasks[].duration_ms` | integer | 否 | 端到端耗时（毫秒） |
+  | `tasks[].retry_count` | integer | 是 | 当前已发生的重试尝试次数（无 `omitempty`，始终序列化） |
+  | `tasks[].version` | integer | 是 | 乐观并发控制版本计数器（无 `omitempty`，始终序列化） |
+  | `tasks[].max_retries` | integer | 是 | 允许的最大重试次数（默认 3，无 `omitempty`，始终序列化） |
+  | `tasks[].error` | string | 否 | 失败时的错误信息详情（`omitempty`） |
+  | `tasks[].error_class` | string | 否 | 失败分类枚举（P2-7，`omitempty`） |
+  | `tasks[].retry_after` | string | 否 | 下次允许重试的最早时间戳（RFC3339，`omitempty`） |
+  | `tasks[].trace_id` | string | 否 | 全链路分布式追踪 ID（`omitempty`） |
+  | `tasks[].lease_owner` | string | 否 | Phase B 多副本租约持有者实例标识（`omitempty`） |
+  | `tasks[].lease_token` | string | 否 | 租约唯一随机令牌（`omitempty`） |
+  | `tasks[].lease_expires_at` | string | 否 | 租约绝对过期时间（RFC3339，`omitempty`） |
   | `via` | string | 是 | 响应节点标识符 |
 
 - **错误响应**：`HTTP 400 Bad Request`（`status` 值不在有效枚举内）
@@ -368,7 +387,7 @@ flowchart LR
 - **请求路径**：`/api/hub/tasks/:id`（例如：`/api/hub/tasks/task-1787554500-eabf3934`）
 - **路径参数**：
   - `id` (string, 必填)：任务唯一标识符。
-- **鉴权要求**：需要有效 Bearer Token（`read:tasks` 权限）
+- **鉴权要求**：需要有效 Bearer Token（`hub:read` 权限）
 - **成功响应**：`HTTP 200 OK`
   ```json
   {
@@ -384,7 +403,10 @@ flowchart LR
       "created_at": "2026-09-03T10:00:00Z",
       "started_at": "2026-09-03T10:00:01Z",
       "completed_at": "2026-09-03T10:00:03Z",
-      "duration_ms": 2345
+      "duration_ms": 2345,
+      "retry_count": 0,
+      "version": 3,
+      "max_retries": 3
     },
     "via": "service-hub"
   }
@@ -410,7 +432,7 @@ flowchart LR
 - **请求方法**：`POST`
 - **请求路径**：`/api/hub/dispatch`
 - **兼容别名**：`POST /api/hub/classify`（向后兼容）
-- **鉴权要求**：需要有效 Bearer Token（`write:dispatch` 权限）
+- **鉴权要求**：需要有效 Bearer Token（`hub:dispatch` 权限）
 - **请求体**：
   ```json
   {
@@ -502,7 +524,7 @@ flowchart LR
   3. 同步返回脱敏后数据、分类级别与分类报告。
 - **请求方法**：`POST`
 - **请求路径**：`/api/hub/fetch-and-desensitize`
-- **鉴权要求**：需要有效 Bearer Token（`write:dispatch` 权限）
+- **鉴权要求**：需要有效 Bearer Token（`hub:dispatch` 权限）
 - **请求体**：
   ```json
   {
@@ -848,6 +870,155 @@ curl -s -X POST \
 
 ---
 
+### 3.6 外部系统统一编排代理端点 (External Orchestration Endpoints)
+
+> **核心架构原则**：`app-lz BFF` 作为模拟的外部业务程序，运行在受保护网络边界外，**除了访问 `service-hub` (:8082)，并没有直接访问内部微服务（`datasource-mgr` / `engine-go` / `audit-log`）的权限**。  
+> `service-hub` 承担唯一编排调度中枢职能，对外统一暴露以下代理编排端点。
+
+#### 3.6.1 集群拓扑健康探针 (GET /api/hub/topology)
+
+由调度中枢统一探测自身及所有下游微服务节点（`engine`、`datasource-mgr`、`audit-log`）的健康状态与微秒级往返延迟，以固定顺序返回完整网格拓扑。
+
+- **端点**：`GET /api/hub/topology?protocol=rest|grpc`
+- **鉴权**：`hub:read`
+- **响应体**（`HTTP 200 OK`）：
+  ```json
+  {
+    "status": "healthy",
+    "active_protocol": "rest",
+    "timestamp": "2026-09-03T11:00:00Z",
+    "services": [
+      {
+        "id": "service-hub",
+        "name": "调度中枢 (Service Hub)",
+        "http_url": "http://127.0.0.1:8082",
+        "status": "ready",
+        "rest_status": "ready",
+        "grpc_status": "ready",
+        "rest_rtt_ms": 1.2,
+        "version": "1.8.0"
+      },
+      {
+        "id": "engine",
+        "name": "隐私与分类引擎 (PrivShield Agent)",
+        "status": "ready",
+        "rest_status": "ready",
+        "rest_rtt_ms": 3.4
+      },
+      {
+        "id": "datasource-mgr",
+        "name": "数据源管理 (Datasource Mgr)",
+        "status": "ready",
+        "rest_status": "ready",
+        "rest_rtt_ms": 2.1
+      },
+      {
+        "id": "audit-log",
+        "name": "脱敏审计日志 (Audit Log)",
+        "status": "ready",
+        "rest_status": "ready",
+        "rest_rtt_ms": 1.8
+      }
+    ]
+  }
+  ```
+
+#### 3.6.2 数据源目录查询 (GET /api/hub/datasources)
+
+代理查询内部 `datasource-mgr` 中已注册的数据源资产目录。
+
+- **端点**：`GET /api/hub/datasources`
+- **鉴权**：`hub:read`
+- **响应体**（`HTTP 200 OK`）：
+  ```json
+  {
+    "total": 2,
+    "datasources": [
+      {
+        "datasource_id": "ds_yibao",
+        "name": "医保结算数据",
+        "category": "medical"
+      },
+      {
+        "datasource_id": "ds_kangyang",
+        "name": "智慧康养数据",
+        "category": "healthcare"
+      }
+    ],
+    "via": "service-hub"
+  }
+  ```
+
+#### 3.6.3 审计存证查询 (GET /api/hub/audit/logs)
+
+代理向 `audit-log` 发起复合过滤查询审计存证记录。
+
+- **端点**：`GET /api/hub/audit/logs?limit=10&offset=0&datasource=ds_yibao&task_id=...&api_code=...`
+- **鉴权**：`hub:read`
+- **响应体**（`HTTP 200 OK`）：
+  ```json
+  {
+    "total": 1,
+    "logs": [
+      {
+        "id": "audit-log-001",
+        "datasource_id": "ds_yibao",
+        "operation": "mask",
+        "status": "success",
+        "timestamp": "2026-09-03T10:00:03Z"
+      }
+    ],
+    "via": "service-hub"
+  }
+  ```
+
+#### 3.6.4 审计存证写入 (POST /api/hub/audit/logs)
+
+代理向 `audit-log` 提交并存储一条新的不可篡改出域存证。
+
+- **端点**：`POST /api/hub/audit/logs`
+- **鉴权**：`hub:dispatch`
+- **请求体**：
+  ```json
+  {
+    "task_id": "task-12345",
+    "datasource": "ds_yibao",
+    "api_code": "api1_yibao",
+    "operation": "mask",
+    "status": "success"
+  }
+  ```
+- **响应体**（`HTTP 201 Created`）：
+  ```json
+  {
+    "id": "audit-12345",
+    "snapshot_id": "snap-12345",
+    "integrity_hash": "sha256:7f8a9b...",
+    "via": "service-hub"
+  }
+  ```
+
+#### 3.6.5 Merkle 完整性防篡改验真 (POST /api/hub/audit/verify)
+
+代理向 `audit-log` 发起 Merkle Tree 链式防篡改验真并返回重算结果。
+
+- **端点**：`POST /api/hub/audit/verify`
+- **鉴权**：`hub:dispatch`
+- **响应体**（`HTTP 200 OK`）：
+  ```json
+  {
+    "snapshot_id": "snap-12345",
+    "merkle_valid": true,
+    "root_hash": "sha256:7f8a9b...",
+    "expected_hash": "sha256:7f8a9b...",
+    "total_entries": 100,
+    "source": "service-hub",
+    "timestamp": "2026-09-03T11:00:00Z"
+  }
+  ```
+
+---
+
 ## 4. gRPC API 规范与 Protobuf 定义
 
 ### 4.1 Protobuf 契约文件 (servicehub.proto)
@@ -1115,7 +1286,7 @@ message FetchAndDesensitizeResponse {
 | 入参 `source` 为空或非法 | `codes.InvalidArgument` | `"source / datasource_id / api_code is required"` |
 | 请求的任务 ID 不存在 | `codes.NotFound` | `"task task-unknown not found"` |
 | 客户端 mTLS 证书校验失败 | `codes.Unauthenticated` | `"client did not present a valid certificate"` |
-| 客户端 CN 无权执行该 RPC | `codes.PermissionDenied` | `"CN 'test.client' is not authorized for method Dispatch"` |
+| 客户端 Scope 无权执行该 RPC | `codes.PermissionDenied` | `"insufficient scope: need \"hub:dispatch\""` |
 | 上游 Agent 调用超时 | `codes.DeadlineExceeded` | `"medical pipeline timed out after 15000ms"` |
 | 调度中枢并发超载 | `codes.ResourceExhausted` | `"task semaphore full (max 10 concurrent)"` |
 | 内部 TaskStore 或未知错误 | `codes.Internal` | `"failed to save task: sqlite database is locked"` |
@@ -1130,7 +1301,7 @@ message FetchAndDesensitizeResponse {
 |---|---|---|---|
 | ① `ingest` | 状态置为 `running`，初始化元数据，获取并发信号量 | 即时 | 信号量满时阻塞等待 |
 | ② `fetch` | 数据拉取阶段保留（分页接口已移除，需调用方携带载荷） | — | — |
-| ③ `classify` | 调用 engine `/v1/medical/process`，完成分类分级 + PII 掩码 + ICD-10 脱敏 | 15 秒 | 任务标记 `failed`，记录错误分类 |
+| ③ `classify` | 调用 engine `POST /v1/agent/process`（404 时回退 `POST /v1/medical/process`），完成分类分级 + PII 掩码 + ICD-10 脱敏 | 15 秒 | 任务标记 `failed`，记录错误分类 |
 | ④ `desensitize` | 已由 ③ 合并完成，快速通过 | — | — |
 | ⑤ `return` | 组装脱敏后数据对象 | 即时 | — |
 | ⑥ `audit` | 向 `audit-log` 提交出域存证（含 task_id / api_code / 输入输出指纹） | 可配置（默认 10 秒） | **提交失败即任务失败**（P0-6 fail-closed），支持重试（默认 3 次） |

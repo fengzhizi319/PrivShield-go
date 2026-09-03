@@ -1,17 +1,17 @@
 # PrivShield 接口权限控制漏洞修复——安全审计报告
 
-> **审计日期**：2026-09-02  
-> **审计范围**：`pkg/auth/`、`engine-go/internal/security/`、`engine-go/internal/rest/`、`services/service-hub/`  
-> **审计类型**：接口权限控制（Authorization）专项代码审计  
-> **修复版本**：v16.5.0+permission-fix-rev2
+> **审计日期**：2026-09-03  
+> **审计范围**：`pkg/auth/`、`engine-go/internal/security/`、`engine-go/internal/rest/`、`engine-go/cmd/privshield-gateway/`、`services/service-hub/`、`services/datasource-mgr/`、`services/audit-log/`  
+> **审计类型**：接口权限控制（Authorization）与访问控制架构专项代码审计  
+> **修复版本**：v16.5.0+permission-fix-rev3
 
 ---
 
 ## 一、审计背景
 
-`PrivShield` 采用 Scope-based 接口权限控制体系，通过 `PermissionForRESTPath()` 将 REST 路径映射为权限字符串，再由全局 `AuthMiddleware` 与调用方 Identity 的 Scopes 进行比对。`service-hub` 作为唯一对外网提供服务的微服务，其鉴权强度直接关系到整个政务云数据流通链路的安全性。
+`PrivShield` 采用 Scope-based 接口权限控制体系，通过 `PermissionForRESTPath()`、`ServiceHubPermissionForPath()` 等将 REST 路径映射为权限字符串，再由全局鉴权中间件与调用方 Identity 的 Scopes 进行比对。`service-hub` 作为唯一对外网提供编排调度服务的微服务，其鉴权强度直接关系到整个政务云数据流通链路的安全性。
 
-本次审计发现 **5 项权限控制漏洞**（4 项高危、1 项中危），均已修复并通过全量测试验证。
+本次审计与复盘共识别并闭环修复 **10 项权限控制与访问安全漏洞**（SEC-09 至 SEC-18），涵盖别名绕过、根路径直调漏报、破坏性端点未授权、尾部斜杠穿透、空格污染、网关拓扑泄露以及未映射路径的 Fail-Closed 兜底缺失，所有项目均已实装并通过 100% 单元测试与端到端回归验证。
 
 ---
 
@@ -134,6 +134,45 @@ POST /api/v1/dp/count     →  PermissionForRESTPath 返回 ""  →  任何已�
 
 ---
 
+### SEC-17：网关拓扑端点未鉴权与时序攻击风险（低危）
+
+**漏洞描述**：负载均衡网关（`engine-go/cmd/privshield-gateway`）的 `/gateway/backends` 端点原无鉴权机制，可直接向公网探测内部所有 Agent 节点的真实 IP、端口与实时 EWMA 延迟拓扑；同时 `/metrics` 端点采用原生非恒定时间字符串比较 `auth[7:] != metricsKey`，存在微秒级时序侧信道嗅探风险，且报错使用非标准的裸 JSON。
+
+**影响范围**：攻击者可通过公网端口直接嗅探内网后端拓扑，并对网关指标进行非授权读取。
+
+**修复方案**：
+1. 引入 `GATEWAY_ADMIN_API_KEY`（回退为 `GATEWAY_METRICS_API_KEY`）对 `/gateway/backends` 实施 Bearer Token 鉴权保护；
+2. 全面采用 `crypto/subtle.ConstantTimeCompare` 常量时间验证 token；
+3. 未授权拦截统一走 `middleware.AbortWithError` 输出标准 5 字段信封与 trace ID。
+
+**修复文件**：`engine-go/cmd/privshield-gateway/main.go`
+
+---
+
+### SEC-18：全栈未显式映射路由 Fail-Closed 兜底缺失（高危）
+
+**漏洞描述**：`ServiceHubPermissionForPath`、`DatasourceMgrPermissionForPath`、`AuditLogPermissionForPath` 在请求路径不匹配任何已知路由时，默认返回空字符串 `""`。在各微服务的 `scopeAuthMiddleware()` 中，判定逻辑为：
+```go
+requiredPerm := PermissionForPath(path)
+if requiredPerm != "" && !identity.HasPermission(requiredPerm) {
+    // 拦截
+}
+// requiredPerm == "" 时跳过检查放行！
+```
+若服务未来注册新路由、存在路径微调或外部调用方请求未映射端点，任何持有空 Scope（`[]`）或任意低权限 Token 的合法调用方均可直接穿透鉴权。
+
+**影响范围**：外部调用方可利用未收敛映射的内部路径绕过细粒度鉴权，打破最小权限原则。
+
+**修复方案**：
+将所有微服务路径权限映射函数的 `default` 分支从返回空串升级为返回最高管理员权限（`admin`、`datasource:admin`、`audit:admin`），实现严格的 **Fail-Closed（默认拒绝）**；非敏感的健康检查与探活接口（`/health`、`/readyz`、`/livez`、`/metrics`）显式放行。
+
+**修复文件**：
+- `pkg/auth/identity.go`（`ServiceHubPermissionForPath`）
+- `services/datasource-mgr/internal/handlers/handlers.go`（`DatasourceMgrPermissionForPath`）
+- `services/audit-log/internal/handlers/handlers.go`（`AuditLogPermissionForPath`）
+
+---
+
 ## 三、修复验证
 
 ### 3.1 单元测试覆盖
@@ -175,17 +214,19 @@ ok  	github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/handler
 | 外部调用 `/api/v1/dynclassification/classify` 或 `/api/v1/privacy/profile/recommend` | **404**（别名路由缺失） | **200**（别名路由已注册） |
 | 低权限 Key 调用 `/api/hub/dispatch/` | **成功**（尾部斜杠绕过 Scope） | **阻断**（归一化后需要 `hub:dispatch`） |
 | 环境变量空格导致 Key 无法命中 | **成功/异常**（空格污染） | **正常**（自动 TrimSpace） |
+| 外部未授权探测 `/gateway/backends` 获取内网拓扑 | **成功**（直接泄露内部实例） | **阻断**（401 Unauthorized，常量时间校验） |
+| 低权限/空 Scope Token 访问未显式映射的新增端点 | **成功**（空串直接绕过检查） | **阻断**（403 Forbidden，Fail-Closed 兜底拦截） |
 
 ---
 
-## 五、残留风险与建议
+## 五、残留风险与已闭环清单
 
-| 编号 | 风险描述 | 严重级别 | 建议措施 |
+| 编号 | 风险描述 | 状态 | 落地措施 |
 |---|---|---|---|
-| R-01 | `SERVICE_HUB_API_KEYS`（Scope-based 模式）尚未在任何部署清单（Docker Compose / Helm / K8s）中配置 | 低 | 生产环境迁移至 Scope-based 模式，为不同调用方分配最小权限；同时校验 Key 配置中不存在空 token/name |
-| R-02 | Gateway（`engine-go/cmd/privshield-gateway`）无自身鉴权，`/gateway/backends` 端点暴露内部拓扑 | 低 | 依赖后端 Agent 鉴权（设计如此），但建议为 `/gateway/backends` 增加 `ops:diagnostics` 权限检查 |
-| R-03 | `datasource-mgr` 暴露原始未脱敏数据接口，仅依赖单 Key 鉴权 | 信息 | 该服务位于内网受控 VPC，BFF 层已有 allowlist 拦截，但建议后续引入 Scope-based 鉴权 |
-| R-04 | `/api/v1/*` 别名路由未来新增端点时，必须同步更新 `PermissionForRESTPath()` 映射并在 `/api/v1` 路由组注册，否则再次出现 SEC-09/SEC-14 类不一致 | 低 | 将别名路由注册纳入代码审查清单（Checklist），并在 CI 中增加路由与权限映射一致性检查 |
+| R-01 | `SERVICE_HUB_API_KEYS` 生产部署环境变量下发 | 待运维接入 | 生产环境通过 K8s Secret 或 Vault 注入 Scope-based 配置，为各调用方分配最小权限 |
+| R-02 | Gateway `/gateway/backends` 暴露内部拓扑 | ✅ 已闭环 (SEC-17) | 引入 `GATEWAY_ADMIN_API_KEY` 保护，基于常量时间校验与标准 5 字段信封 |
+| R-03 | `datasource-mgr` 原始数据接口仅单 Key 鉴权 | ✅ 已闭环 | 全面实装 `DATASOURCE_MGR_API_KEYS` 细粒度权限控制（`datasource:read` / `datasource:admin`） |
+| R-04 | 别名路由新增或映射表遗漏导致越权绕过 | ✅ 已闭环 (SEC-18) | 实施全栈 Fail-Closed 兜底策略，未在白名单显式映射的非健康路径一律强制要求 `admin` 权限 |
 
 ---
 
@@ -193,19 +234,22 @@ ok  	github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/handler
 
 | 文件路径 | 修改类型 | 说明 |
 |---|---|---|
-| `pkg/auth/identity.go` | 修复 + 新增 | 路径归一化、根路径映射、dynclassification 默认 read、budget/reset 映射、`ParseAPIKeysEnv` 空格裁剪与空 Key 丢弃、`ServiceHubPermissionForPath` 尾部斜杠归一化 |
-| `pkg/auth/identity_test.go` | 新增 | 50+ 测试用例覆盖全部修复路径（含 SEC-15/SEC-16） |
-| `engine-go/internal/rest/routes.go` | 修复 | 补全 `/api/v1/dynclassification/*` 与 `/api/v1/privacy/profile/recommend` 别名路由 |
+| `pkg/auth/identity.go` | 修复 + 新增 | 路径归一化、根路径映射、dynclassification 默认 read、budget/reset 映射、`ParseAPIKeysEnv` 空格裁剪与空 Key 丢弃、`ServiceHubPermissionForPath` 尾部斜杠归一化与 Fail-Closed admin 兜底 |
+| `pkg/auth/identity_test.go` | 新增 | 50+ 测试用例覆盖全部修复路径（含 SEC-15/SEC-16/SEC-18） |
+| `engine-go/cmd/privshield-gateway/main.go` | 修复 | `/gateway/backends` 与 `/metrics` 引入 Bearer Token 认证、常量时间校验与统一错误信封 (SEC-17) |
+| `engine-go/internal/rest/routes.go` | 修复 | 补全 `/api/v1/dynclassification/*` 与 `/api/v1/privacy/profile/recommend` 别名路由 (SEC-14) |
 | `engine-go/internal/rest/routes_test.go` | 新增 | 别名路由覆盖测试 |
 | `engine-go/internal/security/config.go` | 重构 | 删除重复的 `parseAPIKeys`，改用共享的 `pkgauth.LoadAPIKeysFromEnv` |
 | `services/service-hub/internal/config/config.go` | 新增 | `ScopeKeys` 字段、`SERVICE_HUB_API_KEYS` 加载 |
 | `services/service-hub/internal/handlers/handlers.go` | 新增 | `scopeAuthMiddleware()`、`constantTimeLookupKeys()` |
 | `services/service-hub/internal/handlers/handlers_test.go` | 新增 | Scope-based 细粒度鉴权集成测试 |
 | `services/service-hub/cmd/server/main.go` | 修复 | 安全警告条件增加 `ScopeKeys` 检查 |
-| `docs/production_security/audit_report_permission_fix.md` | 更新 | 新增 SEC-14 ~ SEC-16 及对应修复验证 |
+| `services/datasource-mgr/internal/handlers/handlers.go` | 修复 | `DatasourceMgrPermissionForPath` 增加 Fail-Closed 兜底 (SEC-18) |
+| `services/audit-log/internal/handlers/handlers.go` | 修复 | `AuditLogPermissionForPath` 增加 Fail-Closed 兜底 (SEC-18) |
+| `docs/production_security/audit_report_permission_fix.md` | 更新 | 新增 SEC-14 ~ SEC-18 修复详情、对比表与闭环清单 |
 | `docs/production_security/design.md` | 更新 | 权限映射表同步 |
 | `docs/production_security/api_reference.md` | 更新 | 权限映射表 + `SERVICE_HUB_API_KEYS` 环境变量文档 |
-| `docs/production_security/security_requirements.md` | 更新 | 新增 SEC-09 ~ SEC-16 漏洞记录 |
+| `docs/production_security/security_requirements.md` | 更新 | 新增 SEC-09 ~ SEC-18 漏洞记录 |
 | `docs/architecture/architecture-design.md` | 新增 | 6.4 Scope-based 接口权限控制体系 |
 | `pkg/docs/design.md` | 更新 | `pkg/auth` 目录描述 |
 | `pkg/docs/api.md` | 新增 | `pkg/auth` API 参考章节 |

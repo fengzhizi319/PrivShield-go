@@ -570,14 +570,14 @@ func (s *GRPCServer) FetchAndDesensitize(ctx context.Context, req *pb.FetchAndDe
 	summaryJSON, _ := json.Marshal(result.Summary)
 
 	return &pb.FetchAndDesensitizeResponse{
-		DatasourceId:          normID,
-		IdCardNo:              idCardNo,
-		Found:                 true,
-		Level:                 level,
-		SanitizedDataJson:     string(sanitizedJSON),
+		DatasourceId:             normID,
+		IdCardNo:                 idCardNo,
+		Found:                    true,
+		Level:                    level,
+		SanitizedDataJson:        string(sanitizedJSON),
 		ClassificationReportJson: string(classifyJSON),
-		SummaryJson:           string(summaryJSON),
-		Via:                   moduleVia,
+		SummaryJson:              string(summaryJSON),
+		Via:                      moduleVia,
 	}, nil
 }
 

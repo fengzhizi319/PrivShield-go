@@ -42,7 +42,7 @@
                                       │ HTTP REST (:8082) / gRPC (:50052)
                                       ▼
 ┌───────────────────────────────────────────────────────────────────────────┐
-│                    service-hub 调度中枢 (Go 1.24+ / Gin / gRPC)            │
+│                    service-hub 调度中枢 (Go 1.25+ / Gin / gRPC)            │
 │                                                                           │
 │   • 接入认证与校验  • 任务生命周期管理  • 动态分类决策  • 隐私策略映射        │
 └───────────┬─────────────────────────┬──────────────────────────┬──────────┘
@@ -110,10 +110,10 @@ flowchart TB
 
 ## 3. 六阶段数据流通调度流水线
 
-调度中枢将每一个完整的数据治理流抽象为 6 个有序状态追踪标签；其中 `classify` 是唯一执行分类与脱敏业务处理的标签，`desensitize` 只用于兼容的状态追踪。
+调度中枢将每一个完整的数据治理流抽象为 6 个有序阶段；其中 `classify` 执行一体化分类与脱敏，`audit` 执行出域存证（P0-6 fail-closed），`desensitize` / `return` 为兼容的状态追踪标签。
 
 ```
-① ingest (接入) ──▶ ② fetch (取数) ──▶ ③ classify（分类与脱敏处理） ──▶ ④ desensitize（状态追踪） ──▶ ⑤ return（状态追踪） ──▶ ⑥ audit（状态追踪） ──▶ done
+① ingest (接入) ──▶ ② fetch (取数) ──▶ ③ classify（分类与脱敏处理） ──▶ ④ desensitize（状态追踪） ──▶ ⑤ return（状态追踪） ──▶ ⑥ audit（出域存证） ──▶ done
 ```
 
 | 序号 | 阶段标识 (`stage`) | 具体动作 | 协同模块与关键实现 |
@@ -123,7 +123,7 @@ flowchart TB
 | **3** | `classify` | 调用 Agent `POST /v1/agent/process`，404 时回退 `POST /v1/medical/process`；一次完成分类与脱敏 | `internal/agent/client.go`: `ProcessAgent` |
 | **4** | `desensitize` | 不执行独立脱敏调用；处理已在 `classify` 一体化完成 | `processTask` 状态机快速流转 |
 | **5** | `return` | 当前为状态追踪标签，不组装或持久化额外结果对象 | `processTask` 状态机快速流转 |
-| **6** | `audit` | 当前为状态追踪标签；随后写入 `completed/done`，不直接调用 audit-log | `processTask` 状态机快速流转 |
+| **6** | `audit` | 调用 `submitEvidence` 向 audit-log 提交出域存证（`POST /api/audit/logs`）；提交失败即任务 `failed`（P0-6 fail-closed），成功后写入 `completed/done` | `internal/audit/client.go` + `processTask` → `submitEvidence` |
 
 ### 敏感度等级与隐私原语自动映射策略
 
@@ -135,8 +135,8 @@ graph LR
     Funnel -->|L1 公开| OpNone["无脱敏直接流通 (none)"]
     Funnel -->|L2 内部| OpMask["字段级动态掩码 (mask)"]
     Funnel -->|L3 敏感| OpKAnon["K-匿名化泛化 (k_anon)"]
-    Funnel -->|L4 极敏| OpDP["差分隐私加噪 / 强脱敏 (dp)"]
-    Funnel -->|L5 绝密| OpDeny["禁止流通 / 阻断 (deny)"]
+    Funnel -->|L4 高敏| OpDP4["差分隐私加噪 / 强脱敏 (dp)"]
+    Funnel -->|L5 极敏| OpDP5["差分隐私加噪 / 强脱敏 (dp)"]
 ```
 
 ---
@@ -157,10 +157,17 @@ services/service-hub/
 │   ├── agent/                   # PrivShield Agent 客户端封装 (HTTP)
 │   │   ├── client.go
 │   │   └── client_test.go
+│   ├── audit/                   # audit-log 出域存证客户端封装 (P0-6)
+│   │   ├── client.go
+│   │   └── client_test.go
 │   ├── datasource/              # datasource-mgr 客户端封装
 │   │   ├── client.go
 │   │   └── client_test.go
-│   ├── grpcserver/              # gRPC 服务端实现与 TLS/mTLS 凭证构造
+│   ├── retry/                   # 失败任务可重试判定与指数退避
+│   │   ├── retry.go
+│   │   └── retry_test.go
+│   ├── grpcserver/              # gRPC 服务端实现、Scope 鉴权与 TLS/mTLS 凭证构造
+│   │   ├── auth.go              # gRPC 方法级 Scope 鉴权拦截器
 │   │   ├── server.go
 │   │   └── server_test.go
 │   ├── handlers/                # HTTP REST 控制层与 Pipeline 编排逻辑
@@ -319,13 +326,18 @@ type Server struct {
 
 func (s *Server) RegisterRoutes(r *gin.Engine) {
     // 挂载通用中间件链
-    r.Use(middleware.TraceMiddleware())  // 全链路追踪（X-Request-ID + X-Trace-ID）
-    r.Use(middleware.StructuredLogger(s.logger, "service-hub"))
+    r.Use(middleware.TraceMiddleware())                  // 全链路追踪（X-Request-ID + X-Trace-ID）
+    r.Use(pkgobs.RequestLoggerWithModule("service-hub")) // 结构化访问日志
     r.Use(middleware.Recovery(s.logger, "service-hub"))
+    r.Use(middleware.WAF(s.logger))                      // 三级等保 G-12：Web 攻击载荷检测
     r.Use(middleware.SecurityHeaders())
-    r.Use(middleware.MaxBodySize(32 << 20)) // 32 MiB 请求体上限
+    r.Use(middleware.MaxBodySize(32 << 20))              // 32 MiB 请求体上限
+    r.Use(middleware.MaxConcurrent(1000))                // 并发在途请求上限，超限返回 503
+    if s.cfg.RateLimitRPS > 0 {
+        r.Use(middleware.RateLimit(s.cfg.RateLimitRPS, s.cfg.RateLimitBurst)) // 每客户端 IP 令牌桶限流
+    }
     r.Use(middleware.CORS(s.cfg.CORSOrigins))
-    r.Use(middleware.Auth(s.cfg.APIKey))
+    r.Use(s.scopeAuthMiddleware()) // Scope-based 鉴权（hub:read / hub:dispatch），向后兼容单 API Key
 
     // 基础健康检查与服务概览
     r.GET("/health", s.Health)     // Liveness probe / 存活探针
@@ -337,6 +349,10 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
     r.GET("/api/hub/tasks", s.ListTasks)
     r.GET("/api/hub/tasks/:id", s.GetTask)
     r.POST("/api/hub/dispatch", s.Dispatch)
+    r.POST("/api/hub/classify", s.Dispatch) // 分类分级分发兼容别名
+
+    // 按身份证号端到端查询+脱敏（同步）
+    r.POST("/api/hub/fetch-and-desensitize", s.FetchAndDesensitize)
 
     // 流水线状态
     r.GET("/api/hub/pipeline", s.Pipeline)
@@ -395,7 +411,7 @@ config.VerifyPeerCertificate = func(rawCerts [][]byte, verifiedChains [][]*x509.
 在 `service-hub` 模块中，Protobuf 生成文件 `proto/servicehub_grpc.pb.go` 与服务端具体业务实现 `internal/grpcserver/server.go` 构成契约与实现的对应关系：
 
 1. **接口契约 (Server Interface)**：
-    `servicehub_grpc.pb.go` 中的 `ServiceHubServiceServer` 接口定义 `Health`、`HubStatus`、`Dispatch`、`ClassifyAndDispatch`、`GetTask`、`ListTasks` 与 `PipelineStatus`；
+    `servicehub_grpc.pb.go` 中的 `ServiceHubServiceServer` 接口定义 `Health`、`HubStatus`、`Dispatch`、`ClassifyAndDispatch`、`GetTask`、`ListTasks`、`PipelineStatus` 与 `FetchAndDesensitize` 共 8 个 RPC 方法；
 2. **方法分发器 (Dispatcher)**：
     `_ServiceHubService_Dispatch_Handler` 等内部函数负责反序列化 HTTP/2 网络帧，并转发给注册的服务端实例；
 3. **业务落地实现 (Server Implementation)**：
@@ -409,19 +425,20 @@ config.VerifyPeerCertificate = func(rawCerts [][]byte, verifiedChains [][]*x509.
 
 ### 存储接口抽象 (`pkg/store/store.go`)
 
-Service Hub 依赖统一抽象的 `store.TaskStore` 接口：
+Service Hub 依赖统一抽象的 `store.TaskStore` 接口（定义于 `pkg/store/store.go`，任务实体为 `store.Task`，方法均不带 `context` 参数）：
 
 ```go
 type TaskStore interface {
-    SaveTask(ctx context.Context, task *models.Task) error
-    GetTask(ctx context.Context, id string) (*models.Task, error)
-    ListTasks(ctx context.Context, filter models.TaskFilter) ([]*models.Task, int, error)
-    UpdateTaskStatus(ctx context.Context, id string, status models.TaskStatus, result any, errStr string) error
-    Close() error
+    Save(task *Task) error                       // 插入新任务或全量更新任务
+    Get(id string) (*Task, error)                // 按任务 ID 查询详情，不存在返回错误
+    List(filter TaskFilter) ([]Task, int, error) // 分页过滤查询，返回当前页切片与总记录数
+    Update(task *Task) error                     // 更新现有任务的可变业务字段与状态
+    Counts() (TaskCounts, error)                 // 聚合统计各状态的任务数量
+    CleanupOld(before time.Time) (int64, error)  // 物理删除早于指定时间戳的终态任务
 }
 ```
 
-- **MemoryStore (`pkg/store/memory`)**：基于 `sync.RWMutex` + `map[string]*models.Task`，适用于轻量开发与单元测试。
+- **MemoryStore (`pkg/store/memory`)**：基于 `sync.RWMutex` + `map[string]*Task`，适用于轻量开发与单元测试。
 - **SQLiteStore (`pkg/store/sqlite`)**：基于 `modernc.org/sqlite`（纯 Go 实现，无 CGO 依赖），开启 WAL 模式并发读写，持久化存储任务。
 
 ### 任务状态机流转
@@ -431,7 +448,7 @@ stateDiagram-v2
     [*] --> pending: Ingest 接入校验通过
     pending --> running: 获取 Worker 信号量，开始执行
     running --> completed: 6 阶段流水线全部成功执行
-    running --> failed: 取数/分类/脱敏阶段发生错误
+    running --> failed: 分类/脱敏/审计存证阶段发生错误
     completed --> [*]
     failed --> [*]
 ```

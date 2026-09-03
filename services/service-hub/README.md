@@ -6,9 +6,10 @@
 
 ## 功能特性
 
-- **跨服务联动编排**：自动对接 `datasource-mgr` 抓取医保/康养等模拟数据，并打通 `audit-log` 不可篡改存证；
+- **唯一外部调度编排中枢**：作为外部模拟应用（如 `app-lz`）接入数据网格的唯一受信任边界中枢，所有外部数据请求（拓扑探活、数据源探查、切片获取、存证写入、审计查询与 Merkle 验真）统一由 `service-hub` 代理编排，外部系统无权直连网格内部下游微服务；
+- **跨服务联动编排**：联动 `datasource-mgr`（按身份证号取数与切片采样）、`PrivShield Agent`（一体化分类脱敏）与 `audit-log`（P0-6 出域存证 fail-closed）；
 - **全链路流水线可视化**：实时追踪 `ingest` ➔ `fetch` ➔ `classify` ➔ `desensitize` ➔ `return` ➔ `audit` 六大阶段；
-- **分类分级智能调度**：根据数据敏感度等级（L1~L5）自动匹配最适脱敏原语（明文/掩码/K-匿名/差分隐私/查询混淆）；
+- **分类分级智能调度**：根据数据敏感度等级（L1~L5）自动匹配最适脱敏原语（明文/掩码/K-匿名/差分隐私；L4/L5 均映射为 `dp`）；
 - **双协议暴露**：同时支持面向 Web 控制台的 HTTP REST (:8082) 与面向高性能内部调用的 gRPC mTLS (:50052)；
 - **生产级高可用**：SQLite WAL 持久化、并发信号量防 DoS 击穿、Slowloris 慢连接防御及 Prometheus `/metrics` 监控；
 - **崩溃恢复与自动重试**：启动时自动回收孤立任务（running 标记失败、pending 保留队列），周期性后台重试失败任务（指数退避 + RetryCount）；
@@ -74,6 +75,8 @@ make build
 | `SERVICE_HUB_LOG_FORMAT` | `json` | string | 结构化日志格式 (`json`/`text`) |
 | `SERVICE_HUB_LOG_LEVEL` | `info` | string | 日志级别 (`debug`/`info`/`warn`/`error`) |
 
+> 完整环境变量（含 P0-6 出域存证 `SERVICE_HUB_AUDIT_LOG_*`、P0-4 `SERVICE_HUB_STRICT_STORAGE`、Scope 鉴权 `SERVICE_HUB_API_KEYS`、gRPC CN 白名单 `PRIVACY_AUTH_MTLS_WHITELIST_FILE`、限流与 CIDR 白名单等）见 [docs/ops.md](docs/ops.md) §2 与 [docs/api.md](docs/api.md) §7.2。
+
 ---
 
 ## 路由与 API 清单
@@ -89,8 +92,12 @@ make build
 | POST | `/api/hub/dispatch` | 可选 | 手动分发隐私处理任务到流水线 |
 | GET | `/api/hub/pipeline` | 可选 | 流水线 6 阶段实时活跃状态 |
 | POST | `/api/hub/classify` | 可选 | 智能分类分级 + 自动策略脱敏分发 |
-| POST | `/api/hub/pipeline/trigger-datasource` | 可选 | 申请模拟数据源数据并触发脱敏流水线 |
-| GET | `/api/hub/datasources` | 可选 | 代理列出已接入的模拟数据源列表 |
+| POST | `/api/hub/fetch-and-desensitize` | 可选 | 按身份证号端到端查询+脱敏（同步，需 `hub:dispatch` scope） |
+| GET | `/api/hub/topology` | 可选 | **外部编排**：网格拓扑与微服务健康状态全景探针 |
+| GET | `/api/hub/datasources` | 可选 | **外部编排**：数据源资产目录查询代理 |
+| GET | `/api/hub/audit/logs` | 可选 | **外部编排**：不可篡改审计日志查询代理 |
+| POST | `/api/hub/audit/logs` | 可选 | **外部编排**：审计存证日志写入代理 |
+| POST | `/api/hub/audit/verify` | 可选 | **外部编排**：Merkle Tree 完整性验真代理 |
 | GET | `/metrics` | 免密 | Prometheus 监控指标采集端点 |
 
 ---

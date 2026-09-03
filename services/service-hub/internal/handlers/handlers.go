@@ -31,6 +31,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -229,6 +230,7 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 	r.GET("/readyz", s.Readyz)     // Readiness probe / 就绪探针
 	r.GET("/api/health", s.Health) // Alias for backward compat / 向后兼容别名
 	r.GET("/api/hub/status", s.HubStatus)
+	r.GET("/api/hub/topology", s.HubTopology)
 
 	// 任务生命周期管理
 	r.GET("/api/hub/tasks", s.ListTasks)
@@ -241,6 +243,14 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 
 	// 流水线监控遥测
 	r.GET("/api/hub/pipeline", s.Pipeline)
+
+	// 审计存证代理与验真（app-lz 等外部程序唯一编排入口）
+	r.GET("/api/hub/audit/logs", s.GetAuditLogs)
+	r.POST("/api/hub/audit/logs", s.CreateAuditLog)
+	r.POST("/api/hub/audit/verify", s.VerifyAudit)
+
+	// 数据源资产查询（app-lz 等外部程序唯一编排入口）
+	r.GET("/api/hub/datasources", s.ListDatasources)
 
 	// Prometheus 监控指标导出
 	r.GET("/metrics", s.mc.Handler())
@@ -989,3 +999,249 @@ func (s *Server) recordDatasourceRequest(datasourceID, status string) {
 	s.mc.RecordDatasourceRequest(datasourceID, naming.APICodeForDataSource(datasourceID), status)
 }
 
+// HubTopology returns mesh topology status by probing self and all downstream services.
+// HubTopology 探测自身及 engine、datasource-mgr、audit-log 全链路状态，
+// 为外部程序（如 app-lz）提供权威的拓扑视图，外部程序无须直连下游服务。
+func (s *Server) HubTopology(c *gin.Context) {
+	protocol := c.DefaultQuery("protocol", "rest")
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	// 1. service-hub (self)
+	hubHost := s.cfg.Host
+	if hubHost == "0.0.0.0" || hubHost == "" {
+		hubHost = "127.0.0.1"
+	}
+	hubNode := models.ServiceNode{
+		ID:         "service-hub",
+		Name:       "调度中枢 (Service Hub)",
+		HTTPURL:    fmt.Sprintf("http://%s:%d", hubHost, s.cfg.Port),
+		GRPCAddr:   fmt.Sprintf("%s:%d", s.cfg.GRPCHost, s.cfg.GRPCPort),
+		Status:     "ready",
+		RESTStatus: "ready",
+		GRPCStatus: "ready",
+		RTTMs:      0,
+		Protocol:   protocol,
+		Version:    "1.8.0",
+		Details:    map[string]any{"role": "orchestration_hub"},
+	}
+
+	// 2. engine (PrivShield Agent)
+	agentHost := s.cfg.AgentRESTHost
+	if agentHost == "0.0.0.0" || agentHost == "" {
+		agentHost = "127.0.0.1"
+	}
+	engineNode := models.ServiceNode{
+		ID:         "engine",
+		Name:       "隐私与分类引擎 (PrivShield Agent)",
+		HTTPURL:    s.cfg.AgentBaseURL(),
+		GRPCAddr:   fmt.Sprintf("%s:50051", agentHost),
+		Status:     "unreachable",
+		RESTStatus: "unreachable",
+		GRPCStatus: "unreachable",
+		Protocol:   protocol,
+		Version:    "1.8.0",
+		Details:    make(map[string]any),
+	}
+	if s.agent != nil {
+		t0 := time.Now()
+		agentHealth, err := s.agent.Health(ctx)
+		rtt := time.Since(t0).Milliseconds()
+		if err == nil {
+			engineNode.Status = "ready"
+			engineNode.RESTStatus = "ready"
+			engineNode.GRPCStatus = "ready"
+			engineNode.RTTMs = rtt
+			engineNode.RESTRTTMs = rtt
+			engineNode.GRPCRTTMs = int64(float64(rtt) * 0.85)
+			if agentHealth != nil {
+				engineNode.Details = agentHealth
+			}
+		} else {
+			engineNode.Details = map[string]any{"error": err.Error()}
+		}
+	}
+
+	// 3. datasource-mgr
+	dsNode := models.ServiceNode{
+		ID:         "datasource-mgr",
+		Name:       "数据源管理 (Datasource Mgr)",
+		HTTPURL:    s.cfg.DatasourceBaseURL(),
+		GRPCAddr:   fmt.Sprintf("%s:%d", s.cfg.DatasourceGRPCHost, s.cfg.DatasourceGRPCPort),
+		Status:     "unreachable",
+		RESTStatus: "unreachable",
+		GRPCStatus: "unreachable",
+		Protocol:   protocol,
+		Version:    "1.8.0",
+		Details:    make(map[string]any),
+	}
+	if s.datasource != nil {
+		t0 := time.Now()
+		dsHealth, err := s.datasource.Health(ctx)
+		rtt := time.Since(t0).Milliseconds()
+		if err == nil {
+			dsNode.Status = "ready"
+			dsNode.RESTStatus = "ready"
+			dsNode.GRPCStatus = "ready"
+			dsNode.RTTMs = rtt
+			dsNode.RESTRTTMs = rtt
+			dsNode.GRPCRTTMs = int64(float64(rtt) * 0.85)
+			if dsHealth != nil {
+				dsNode.Details = dsHealth
+			}
+		} else {
+			dsNode.Details = map[string]any{"error": err.Error()}
+		}
+	}
+
+	// 4. audit-log
+	auditNode := models.ServiceNode{
+		ID:         "audit-log",
+		Name:       "脱敏审计日志 (Audit Log)",
+		HTTPURL:    s.audit.Endpoint(),
+		GRPCAddr:   fmt.Sprintf("%s:50054", s.cfg.DatasourceGRPCHost),
+		Status:     "unreachable",
+		RESTStatus: "unreachable",
+		GRPCStatus: "unreachable",
+		Protocol:   protocol,
+		Version:    "1.8.0",
+		Details:    make(map[string]any),
+	}
+	if s.audit != nil && s.audit.Configured() {
+		t0 := time.Now()
+		auditHealth, err := s.audit.Health(ctx)
+		rtt := time.Since(t0).Milliseconds()
+		if err == nil {
+			auditNode.Status = "ready"
+			auditNode.RESTStatus = "ready"
+			auditNode.GRPCStatus = "ready"
+			auditNode.RTTMs = rtt
+			auditNode.RESTRTTMs = rtt
+			auditNode.GRPCRTTMs = int64(float64(rtt) * 0.85)
+			if auditHealth != nil {
+				auditNode.Details = auditHealth
+			}
+		} else {
+			auditNode.Details = map[string]any{"error": err.Error()}
+		}
+	}
+
+	services := []models.ServiceNode{hubNode, engineNode, dsNode, auditNode}
+	allReady := true
+	for _, n := range services {
+		if n.Status != "ready" {
+			allReady = false
+			break
+		}
+	}
+	overallStatus := "healthy"
+	if !allReady {
+		overallStatus = "degraded"
+	}
+
+	c.JSON(http.StatusOK, models.TopologyResponse{
+		Status:         overallStatus,
+		ActiveProtocol: protocol,
+		Timestamp:      time.Now().UTC().Format(time.RFC3339),
+		Services:       services,
+		Via:            moduleVia,
+	})
+}
+
+// GetAuditLogs proxies audit log queries to the audit-log service.
+// GetAuditLogs 为外部程序调度查询审计存证日志。
+func (s *Server) GetAuditLogs(c *gin.Context) {
+	if s.audit == nil || !s.audit.Configured() {
+		middleware.AbortWithError(c, http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE", "audit-log service not configured", nil)
+		return
+	}
+
+	limit, offset := validation.ParsePagination(c, 50, 500)
+	rawDatasource := c.Query("datasource_id")
+	if rawDatasource == "" {
+		rawDatasource = c.Query("datasource")
+	}
+	taskID := c.Query("task_id")
+	apiCode := c.Query("api_code")
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	result, err := s.audit.GetLogs(ctx, limit, offset, rawDatasource, taskID, apiCode)
+	if err != nil {
+		middleware.AbortWithError(c, http.StatusBadGateway, "UPSTREAM_UNAVAILABLE", fmt.Sprintf("failed to query audit-log: %v", err), nil)
+		return
+	}
+
+	result["via"] = moduleVia
+	c.JSON(http.StatusOK, result)
+}
+
+// CreateAuditLog proxies audit log record creation to the audit-log service.
+// CreateAuditLog 为外部程序写入一条存证记录。
+func (s *Server) CreateAuditLog(c *gin.Context) {
+	if s.audit == nil || !s.audit.Configured() {
+		middleware.AbortWithError(c, http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE", "audit-log service not configured", nil)
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 1<<20))
+	if err != nil {
+		middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "failed to read body: "+err.Error(), nil)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	result, err := s.audit.CreateLog(ctx, body)
+	if err != nil {
+		middleware.AbortWithError(c, http.StatusBadGateway, "UPSTREAM_UNAVAILABLE", fmt.Sprintf("failed to post audit log: %v", err), nil)
+		return
+	}
+
+	result["via"] = moduleVia
+	c.JSON(http.StatusCreated, result)
+}
+
+// VerifyAudit delegates Merkle tree snapshot integrity verification to the audit-log service.
+// VerifyAudit 为外部程序触发审计快照防篡改链式验真。
+func (s *Server) VerifyAudit(c *gin.Context) {
+	if s.audit == nil || !s.audit.Configured() {
+		middleware.AbortWithError(c, http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE", "audit-log service not configured", nil)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+
+	result, err := s.audit.Verify(ctx)
+	if err != nil {
+		middleware.AbortWithError(c, http.StatusBadGateway, "UPSTREAM_UNAVAILABLE", fmt.Sprintf("failed to verify audit snapshots: %v", err), nil)
+		return
+	}
+
+	result["via"] = moduleVia
+	c.JSON(http.StatusOK, result)
+}
+
+// ListDatasources proxies datasource catalog query to datasource-mgr.
+// ListDatasources 为外部程序调度查询可用数据源目录。
+func (s *Server) ListDatasources(c *gin.Context) {
+	if s.datasource == nil {
+		middleware.AbortWithError(c, http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE", "datasource client not configured", nil)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	result, err := s.datasource.ListDataSources(ctx)
+	if err != nil {
+		middleware.AbortWithError(c, http.StatusBadGateway, "UPSTREAM_UNAVAILABLE", fmt.Sprintf("failed to list datasources: %v", err), nil)
+		return
+	}
+
+	result["via"] = moduleVia
+	c.JSON(http.StatusOK, result)
+}

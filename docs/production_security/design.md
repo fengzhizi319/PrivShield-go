@@ -1,8 +1,8 @@
 # 生产安全加固设计文档
 
-> **版本**：v16.0.0  
-> **适用范围**：`PrivShield` 核心算力引擎（`engine`）、企业级中台微服务群（`service-hub` / `datasource-mgr` / `audit-log`）、控制台与双 BFF 体系（`bff-go` / `app-lz`）。  
-> **核心目标**：定义 TLS 1.3/mTLS 传输安全、mTLS CN 白名单动态热重载认证鉴权、速率限制、全栈 9 层中间件纵深防 DDoS、SM4-GCM 快照信封加密与 9 要素密码学哈希链防篡改存证的技术架构与实现细节。
+> **版本**：v17.0.0 (Go 1.25+ Cloud-Native 全栈纯 Go 实现)  
+> **适用范围**：`PrivShield` 核心算力引擎（`engine-go`）、自适应网关（`privshield-gateway`）、企业级中台微服务群（`service-hub` / `datasource-mgr` / `audit-log`）、控制台与双 BFF 体系（`bff-go` / `app-lz`）。  
+> **核心目标**：定义 TLS 1.3/mTLS (SAN/SPIFFE) 传输安全与国密 TLCP 双证书、动态热重载认证鉴权、全栈 Fail-Closed 访问控制、Bell-LaPadula MAC 强制访问控制、32 分片高水位限流与端点级差异化限流、全栈 9 层中间件纵深防 DDoS、SM4-GCM 多版本信封加密、国密算法上电自检 (KAT)、内存敏感数据安全销毁 (Zeroize) 与 9 要素密码学哈希链防篡改存证的技术架构与实现细节。
 
 ---
 
@@ -13,31 +13,38 @@
 - [3. 威胁模型与缓解措施](#3-威胁模型与缓解措施)
 - [4. 总体架构](#4-总体架构)
 - [5. 模块设计与实现细节](#5-模块设计与实现细节)
-  - [5.1 配置管理 (security/config.py)](#51-配置管理-securityconfigpy)
-  - [5.2 TLS 传输层参数生成 (security/tls.py)](#52-tls-传输层参数生成-securitytlspy)
+  - [5.1 配置管理 (engine-go/internal/security/config.go & pkg/auth/settings.go)](#51-配置管理-engine-gointernalsecurityconfiggo--pkgauthsettingsgo)
+  - [5.2 TLS / TLCP 传输层参数与双证书配置 (pkg/tlsutil/)](#52-tls--tlcp-传输层参数与双证书配置-pkgtlsutil)
   - [5.3 身份模型与 Scope 权限映射 (pkg/auth/identity.go)](#53-身份模型与-scope-权限映射-pkgauthidentitygo)
     - [5.3.1 Identity 数据结构](#531-identity-数据结构)
     - [5.3.2 API Key 配置解析 (ParseAPIKeysEnv)](#532-api-key-配置解析parseapikeysenv)
-    - [5.3.3 路径归一化与 REST 权限映射](#533-路径归一化与-rest-权限映射permissionforrestpath)
-    - [5.3.4 gRPC 方法权限映射](#534-grpc-方法权限映射permissionforgrpcmethod)
-    - [5.3.5 service-hub 权限映射](#535-service-hub-权限映射servicehubpermissionforpath)
-  - [5.4 认证与鉴权依赖 (pkg/auth/, pkg/middleware/, console/)](#54-认证与鉴权依赖-pkgauth-pkgmiddleware-console)
-    - [5.4.1 REST API Key 认证中间件](#541-rest-api-key-认证中间件)
-    - [5.4.2 gRPC mTLS CN 白名单拦截器](#542-grpc-mtls-cn-白名单拦截器)
+    - [5.3.3 路径归一化与 REST 权限映射 (PermissionForRESTPath)](#533-路径归一化与-rest-权限映射permissionforrestpath)
+    - [5.3.4 gRPC 方法权限映射 (PermissionForGRPCMethod)](#534-grpc-方法权限映射permissionforgrpcmethod)
+    - [5.3.5 微服务权限映射与 Fail-Closed 兜底机制](#535-微服务权限映射与-fail-closed-兜底机制)
+    - [5.3.6 强制访问控制 MAC 引擎 (pkg/auth/mac.go)](#536-强制访问控制-mac-引擎-pkgauthmacgo)
+  - [5.4 认证与鉴权体系 (pkg/auth/, pkg/middleware/, console/)](#54-认证与鉴权体系-pkgauth-pkgmiddleware-console)
+    - [5.4.1 REST API Key 认证中间件与常量时间查找](#541-rest-api-key-认证中间件与常量时间查找)
+    - [5.4.2 gRPC mTLS SAN/SPIFFE 与 CN 多级身份拦截器](#542-grpc-mtls-sanspiffe-与-cn-多级身份拦截器)
     - [5.4.3 控制台 BFF 增强认证（三级等保合规）](#543-控制台-bff-增强认证三级等保合规)
     - [5.4.4 WAF Web 攻击防护 (G-12)](#544-waf-web-攻击防护g-12)
-    - [5.4.5 可信代理与真实 IP (G-02)](#545-可信代理与真实-ipg-02)
+    - [5.4.5 可信代理、真实 IP 与 IPv6 双栈规范提取](#545-可信代理真实-ip-与-ipv6-双栈规范提取)
     - [5.4.6 API Key 生命周期管理 (G-14)](#546-api-key-生命周期管理g-14)
-  - [5.5 速率限制引擎 (security/ratelimit.py)](#55-速率限制引擎-securityratelimitpy)
+    - [5.4.7 集中化密钥凭据监听器与动态热加载 (SecretWatcher & KeyStore)](#547-集中化密钥凭据监听器与动态热加载-secretwatcher--keystore)
+  - [5.5 速率限制引擎 (pkg/middleware/ratelimit.go)](#55-速率限制引擎-pkgmiddlewareratelimitgo)
+    - [5.5.1 32 分片高并发令牌桶](#551-32-分片高并发令牌桶)
+    - [5.5.2 分片容量高水位保护与防 Hash-Flooding 淘汰](#552-分片容量高水位保护与防-hash-flooding-淘汰)
+    - [5.5.3 端点级差异化限流](#553-端点级差异化限流)
+  - [5.6 网关边界安全与协议强制 (engine-go/cmd/privshield-gateway/)](#56-网关边界安全与协议强制-engine-gocmdprivshield-gateway)
 - [6. mTLS 白名单认证鉴权体系](#6-mtls-白名单认证鉴权体系)
   - [6.1 原理与双层校验模型](#61-原理与双层校验模型)
   - [6.2 gRPC 与 REST 认证流程](#62-grpc-与-rest-认证流程)
   - [6.3 白名单管理器 (WhitelistManager) 与 5 秒热重载](#63-白名单管理器-whitelistmanager-与-5-秒热重载)
   - [6.4 Fail-Closed 安全设计](#64-fail-closed-安全设计)
-- [7. Go 共享微服务安全栈 (pkg/)](#7-go-共享微服务安全栈-pkg)
+- [7. Go 共享微服务安全栈与国密体系 (pkg/)](#7-go-共享微服务安全栈与国密体系-pkg)
   - [7.1 9 层统一中间件栈与纵深防 DDoS](#71-9-层统一中间件栈与纵深防-ddos)
-  - [7.2 SM4-GCM 快照信封加密 (pkg/crypto)](#72-sm4-gcm-快照信封加密-pkgcrypto)
+  - [7.2 SM4-GCM 快照信封加密与多版本密钥轮换 (pkg/crypto/envelope.go)](#72-sm4-gcm-快照信封加密与多版本密钥轮换-pkgcryptoenvelopego)
   - [7.3 9 要素密码学哈希链 (services/audit-log)](#73-9-要素密码学哈希链-servicesaudit-log)
+  - [7.4 国密算法上电已知答案自检 (KAT) 与内存敏感数据安全销毁 (pkg/crypto/)](#74-国密算法上电已知答案自检-kat-与内存敏感数据安全销毁-pkgcrypto)
 - [8. 部署与运维约定](#8-部署与运维约定)
 - [9. 标准错误码矩阵](#9-标准错误码矩阵)
 
@@ -118,63 +125,66 @@ graph TD
 
 ## 5. 模块设计与实现细节
 
-### 5.1 配置管理 (`security/config.py`)
+### 5.1 配置管理 (`engine-go/internal/security/config.go` & `pkg/auth/settings.go`)
 
-使用 Pydantic v2 `BaseModel` 解析环境变量：
+在 Go 运行时中，安全配置由 `pkg/auth/settings.go` 与 `engine-go/internal/security/config.go` 统一解析与维护：
 
-```python
-class SecuritySettings(BaseModel):
-    tls_enabled: bool = False
-    tls_cert_file: Path | None = None
-    tls_key_file: Path | None = None
-    tls_ca_file: Path | None = None
-    tls_client_auth: Literal["none", "optional", "require"] = "none"
-    tls_key_password: str | None = None
+```go
+type Settings struct {
+	TLSEnabled              bool
+	TLSCertFile             string
+	TLSKeyFile              string
+	TLSCAFile               string
+	TLSClientAuth           string // "none" | "optional" | "require"
+	TLSKeyPassword          string
 
-    auth_enabled: bool = False
-    auth_internal_mtls_enabled: bool = False
-    auth_mtls_allowed_cns: list[str] = Field(default_factory=list)
-    auth_mtls_whitelist_file: Path | None = None  # YAML 配置文件路径（可选）
-    internal_keys: dict[str, KeyConfig] = Field(default_factory=dict)
-    external_keys: dict[str, KeyConfig] = Field(default_factory=dict)
+	AuthEnabled             bool
+	AuthInternalMTLSEnabled bool
+	AuthMTLSWhitelistFile   string
+	InternalKeys            map[string]*KeyConfig
+	ExternalKeys            map[string]*KeyConfig
 
-    rate_limit_enabled: bool = False
-    rate_limit_default_rps: float = 10.0
-    rate_limit_default_burst: float = 20.0
-    rate_limit_per_endpoint: dict[str, RateLimitConfig] = Field(default_factory=dict)
-    rate_limit_redis_url: str | None = None
+	RateLimitEnabled        bool
+	RateLimitDefaultRPS     float64
+	RateLimitDefaultBurst   float64
+	RateLimitPerEndpoint    map[string]*pkgmiddleware.EndpointRateLimit
 
-    health_no_auth: bool = True
-    health_no_rate_limit: bool = True
+	HealthNoAuth            bool
+	HealthNoRateLimit       bool
+}
 ```
 
-### 5.2 TLS 传输层参数生成 (`security/tls.py`)
+配置从标准环境变量加载，严格执行 Fail-Closed 校验：当认证开启但未注入有效密钥或白名单文件不存在时，系统启动时拒绝提供服务。
 
-#### REST
-```python
-def uvicorn_ssl_kwargs(settings: SecuritySettings) -> dict:
-    return {
-        "ssl_keyfile": str(settings.tls_key_file),
-        "ssl_certfile": str(settings.tls_cert_file),
-        "ssl_keyfile_password": settings.tls_key_password,
-        "ssl_cert_reqs": _map_client_auth(settings.tls_client_auth),
-        "ssl_ca_certs": str(settings.tls_ca_file) if settings.tls_ca_file else None,
-    }
+### 5.2 TLS / TLCP 传输层参数与双证书配置 (`pkg/tlsutil/`)
+
+#### REST (Gin / HTTP Server)
+支持标准 TLS 1.3 与国密 TLCP（GB/T 38636-2020 / GM/T 0024 双证书）纯国密传输：
+```go
+// 标准 TLS 配置（crypto/tls）
+tlsConfig := &tls.Config{
+	MinVersion:   tls.VersionTLS12,
+	Certificates: []tls.Certificate{serverCert},
+	ClientAuth:   tlsClientAuthType,
+	ClientCAs:    caCertPool,
+}
+
+// TLCP 国密双证书模式（pkg/tlsutil/tlcp.go）
+// 自动加载签名证书 (sign.crt/sign.key) 与加密证书 (enc.crt/enc.key)
+tlcpConfig, err := tlsutil.NewTLCPConfig(signCert, signKey, encCert, encKey, caCert)
 ```
 
 #### gRPC
-```python
-def grpc_server_credentials(settings: SecuritySettings) -> grpc.ServerCredentials:
-    private_key = settings.tls_key_file.read_bytes()
-    certificate_chain = settings.tls_cert_file.read_bytes()
-    if settings.tls_client_auth == "require":
-        root_certificates = settings.tls_ca_file.read_bytes()
-        return grpc.ssl_server_credentials(
-            ((private_key, certificate_chain),),
-            root_certificates=root_certificates,
-            require_client_auth=True,
-        )
-    return grpc.ssl_server_credentials(((private_key, certificate_chain),))
+```go
+// 构造服务端传输凭证 credentials.TransportCredentials
+creds, err := credentials.NewServerTLSFromFile(certFile, keyFile)
+if requireClientAuth {
+	creds = credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{cert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    caPool,
+	})
+}
 ```
 
 ### 5.3 身份模型与 Scope 权限映射 (`pkg/auth/identity.go`)
@@ -305,15 +315,59 @@ func PermissionForGRPCMethod(method string) string {
 }
 ```
 
-#### 5.3.5 service-hub 权限映射（`ServiceHubPermissionForPath`）
+#### 5.3.5 微服务权限映射与 Fail-Closed 兜底机制
 
+在中台微服务中，每个服务独立维护路径到所需权限的映射函数，并严格执行 **Fail-Closed（默认拒绝）** 策略：
+
+##### service-hub (`ServiceHubPermissionForPath`)
 | REST 路径 | 对应权限 Scope |
 |---|---|
-| `/api/hub/status`, `/api/hub/tasks`, `/api/hub/tasks/:id`, `/api/hub/pipeline` | `hub:read` |
-| `/api/hub/dispatch`, `/api/hub/classify` | `hub:dispatch` |
-| `/health`, `/readyz`, `/api/health`, `/metrics` | 无需特定权限（已认证即可） |
+| `/api/hub/status`, `/api/hub/tasks`, `/api/hub/tasks/:id`, `/api/hub/pipeline`, `/api/hub/topology`, `/api/hub/audit/logs`, `/api/hub/datasources` | `hub:read` |
+| `/api/hub/dispatch`, `/api/hub/classify`, `/api/hub/fetch-and-desensitize`, `/api/hub/audit/verify` | `hub:dispatch` |
+| `/health`, `/readyz`, `/api/health`, `/metrics` | 豁免放行（健康检查与指标） |
+| **未显式声明的其它路径（default）** | **`admin` (Fail-Closed 兜底)** |
 
-**设计要点**：`hub:dispatch` 仅授予需要触发数据流通流水线的调用方（如 BFF 网关），只读查询用 `hub:read`，遵循最小权限原则。
+##### datasource-mgr (`DatasourceMgrPermissionForPath`)
+| REST 路径 | 对应权限 Scope |
+|---|---|
+| `/api/datasources`, `/api/datasources/:id`, `/record-by-id`, `/metadata`, `/audit` | `datasource:read` |
+| `/api/datasources/:id/test`, `/api/datasources/seed` | `datasource:admin` |
+| `/health`, `/readyz`, `/api/health`, `/metrics` | 豁免放行 |
+| **未显式声明的其它路径（default）** | **`datasource:admin` (Fail-Closed 兜底)** |
+
+##### audit-log (`AuditLogPermissionForPath`)
+| REST 路径与方法 | 对应权限 Scope |
+|---|---|
+| `GET /api/audit/logs`, `/stats`, `/snapshots` | `audit:read` |
+| `POST /api/audit/logs`, `/report` | `audit:write` |
+| `POST /api/audit/snapshots/verify`, `/api/audit/chain/verify` | `audit:verify` |
+| `/health`, `/readyz`, `/api/health`, `/metrics` | 豁免放行 |
+| **未显式声明的其它路径（default）** | **`audit:admin` (Fail-Closed 兜底)** |
+
+> **Fail-Closed 安全设计**：若外部调用方持有低权限或空 Scope Token，一旦访问未在白名单中显式声明的路由，映射函数一律返回最高管理员权限，鉴权中间件立即返回 `403 Forbidden`，彻底杜绝新增端点时的越权穿透风险。
+
+#### 5.3.6 强制访问控制 MAC 引擎 (`pkg/auth/mac.go`)
+
+为满足三级等保（GB/T 22239-2019 §2.4.2）对主体/客体安全标记与强制访问控制的合规要求，`PrivShield` 实现了基于多级安全（MLS）Bell-LaPadula 模型的不下读（No Read Up）MAC 判定引擎：
+
+```go
+type SecurityLevel int
+
+const (
+	LevelPublic       SecurityLevel = 1 // S1 / L1: 公开数据
+	LevelInternal     SecurityLevel = 2 // S2 / L2: 内部业务受控
+	LevelConfidential SecurityLevel = 3 // S3 / L3: 敏感隐私数据
+	LevelRestricted   SecurityLevel = 4 // S4 / L4: 核心极密数据
+)
+
+func EvaluateMAC(subjectClearance, objectLevel SecurityLevel) error {
+	if subjectClearance < objectLevel {
+		return fmt.Errorf("MAC access forbidden: subject clearance %s is insufficient for object security level %s", subjectClearance, objectLevel)
+	}
+	return nil
+}
+```
+结合 3-Layer 动态分类分级引擎的输出，当客体数据被标记为 $S_i$ 时，主体调用方安全许可（Clearance）必须满足 $\text{Clearance} \ge S_i$，否则在脱敏调度链路前直接强制阻断。
 
 ### 5.4 认证与鉴权依赖 (`pkg/auth/`, `pkg/middleware/`, `console/`)
 
@@ -354,22 +408,26 @@ func ConstantTimeLookup(keys map[string]*KeyConfig, token string) *KeyConfig {
 }
 ```
 
-#### 5.4.2 gRPC mTLS CN 白名单拦截器
+#### 5.4.2 gRPC mTLS SAN/SPIFFE 与 CN 多级身份拦截器
 
 **源码位置**：`pkg/tlsutil/grpc_interceptor.go`
 
+针对现代云原生零信任架构（Istio、SPIFFE/SPIRE、cert-manager），拦截器在传统的 CommonName 基础上全面升级为 **SAN (Subject Alternative Name) 多级身份凭据解析**：
+
 ```text
-gRPC 请求 → extractClientCN(ctx) → 从 peer.Peer.AuthInfo 提取
-           → VerifiedChains[0][0].Subject.CommonName（经 CA 验证）
-           → DynamicWhitelist.CheckScope(cn, fullMethod)
-           → 匹配规则："*" → 精确匹配 → 前缀通配符（如 /AuditLog/*）
-           → 通过 → 执行 RPC | 拒绝 → PERMISSION_DENIED
+gRPC 请求 → extractClientIdentities(ctx)
+           ├─ 1. SAN URIs (SPIFFE ID: spiffe://cluster.local/ns/prod/sa/service-hub)
+           ├─ 2. SAN DNSNames (如 service-hub.prod.svc)
+           └─ 3. Subject CommonName (CN)
+           → DynamicWhitelist.authorizeClientIdentities(identities, fullMethod)
+           → 只要任一合法身份匹配白名单且满足 Scope 权限 → 放行并透明执行 RPC
+           → 未授权身份 → 返回 codes.PermissionDenied (403)
 ```
 
-同时提供 `UnaryServerInterceptor` 和 `StreamServerInterceptor`，一元与流式全覆盖。快速装配工厂：
+快速装配工厂：
 ```go
 unaryInt, streamInt, whitelist, err := tlsutil.NewWhitelistInterceptor(path)
-// path 为空 → 返回全 nil（禁用 CN 白名单鉴权）
+// path 为空 → 返回全 nil（禁用 CN/SAN 白名单鉴权）
 ```
 
 #### 5.4.3 控制台 BFF 增强认证（三级等保合规）
@@ -439,19 +497,13 @@ type JWTManager struct {
 
 **命中响应**：`403 Forbidden`，错误码 `WAF_BLOCKED`，结构化日志记录攻击详情（类别、匹配规则、载荷截断至 512 字符）。
 
-#### 5.4.5 可信代理与真实 IP（G-02）
+#### 5.4.5 可信代理、真实 IP 与 IPv6 双栈规范提取
 
-**源码位置**：`pkg/middleware/middleware.go`
+**源码位置**：`pkg/middleware/middleware.go` 与 `pkg/middleware/ip_allowlist.go`
 
-```go
-func ConfigureTrustedProxies(r *gin.Engine, trustedProxies []string)
-func RealClientIP(c *gin.Context) string
-```
-
-- `ConfigureTrustedProxies`：包装 `r.SetTrustedProxies()`，仅受信代理 IP/CIDR 的 `X-Forwarded-For` / `X-Real-IP` 头被采信；
-- `RealClientIP`：优先 `c.ClientIP()`（受 TrustedProxies 配置约束），回退 `c.Request.RemoteAddr`（去端口）；
-- 环境变量 `PRIVACY_TRUSTED_PROXIES` 配置受信代理列表，未配置时不信任任何代理（防 `X-Forwarded-For` 伪造）；
-- 限流 key、WAF 日志、审计记录统一使用 `RealClientIP` 获取真实客户端地址。
+- **规范化双栈 IP 提取**：`RealClientIP` 使用 `net.SplitHostPort` 提取主机，自动剥除方括号，完美支持 `[::1]:port`、`[2001:db8::1]:port` 等 IPv6 格式与常规 IPv4；
+- **可信代理绑定**：仅受信代理（`PRIVACY_TRUSTED_PROXIES`）转发的 `X-Forwarded-For` / `X-Real-IP` 被采信；
+- **标准错误响应**：IP 白名单拦截（`IPAllowlist`）统一采用 `middleware.AbortWithError` 输出带 `trace_id` 与 `IP_NOT_ALLOWED` 的 5 字段信封，确保全链路审计追踪。
 
 #### 5.4.6 API Key 生命周期管理（G-14）
 
@@ -462,11 +514,39 @@ func RealClientIP(c *gin.Context) string
 | 环境配置 | 末尾追加 RFC3339 时间戳：`token:name:scopes:2025-12-31T23:59:59Z` | `pkg/auth/identity.go` |
 | 解析兼容 | `findExpirySeparator()` 回溯扫描，不破坏含冒号的 scope（如 `privacy:mask`） | `pkg/auth/identity.go` |
 
-### 5.5 速率限制引擎 (`security/ratelimit.py`)
+#### 5.4.7 集中化密钥凭据监听器与动态热加载 (`pkg/auth/secret_manager.go` / `pkg/auth/keystore.go`)
 
-- **限流键**：`f"{identity.name}:{method_or_path}"`；
-- **后端适配**：支持内存滑动窗口与 Redis 分布式共享存储（`PRIVACY_RATE_LIMIT_REDIS_URL`）；
-- **响应**：REST 超速返回 `429 Too Many Requests`，gRPC 超速返回 `grpc.StatusCode.RESOURCE_EXHAUSTED`。
+为了适应云原生 Secrets 运维（HashiCorp Vault、K8s Secret Watcher、AWS Secrets Manager），`PrivShield` 提供了无缝的密钥动态热重载与监听接口：
+
+- `SecretWatcher`：定义基于事件通道的凭据监听抽象，支持 `Watch()`、`Close()` 与上下文生命周期；
+- `KeyStoreWithWatcher`：通过 `NewKeyStoreWithWatcher(watcher)` 实现由 Vault / K8s ConfigMap 推送事件驱动的内存级 API Key 热更新，支持字符串配置内容热重载（`ReloadContent`）与结构化条目原子替换（`UpdateKeys`），完全摆脱本地静态磁盘文件依赖。
+
+### 5.5 速率限制引擎 (`pkg/middleware/ratelimit.go`)
+
+#### 5.5.1 32 分片高并发令牌桶
+- **无锁分片**：内置 32 个独立的互斥锁分片（`rateLimitShard`），通过 FNV-1a 哈希将限流 key 均匀打散至对应分片，极大消除高并发场景下的跨核锁争用；
+- **限流键**：`identity.ServiceType + ":" + identity.Name + ":" + normalizedPath`（未认证用户追加 `RealClientIP` 防止单 IP 洪泛）。
+
+#### 5.5.2 分片容量高水位保护与防 Hash-Flooding 淘汰
+- **容量硬上限**：定义 `maxBucketsPerShard = 10000`（单实例上限 320,000 桶）；
+- **自适应内存淘汰**：新 Key 插入时若达到上限，首先执行快速局部淘汰（清理 2 分钟未活动的闲置桶）；若仍达高水位则强制驱逐随机旧桶，防范恶意高基数随机路径导致内存耗尽（OOM DoS）。
+
+#### 5.5.3 端点级差异化限流
+- **环境变量配置**：支持 `PRIVACY_RATE_LIMIT_PER_ENDPOINT`（格式 `/heavy=10/20,/export=2/5`）；
+- **最长前缀匹配**：`RateLimitWithEndpoints` 自动执行标准化路径的最长前缀匹配，重型计算接口（如 K-匿名、批处理）与轻量探针接口实行配额隔离。
+
+### 5.6 网关边界安全与协议强制 (`engine-go/cmd/privshield-gateway/`)
+
+#### 5.6.1 TLS 终止协议强制
+网关本身面向内网高速转发，当部署于前置 Ingress / 硬件负载均衡之后时：
+- 设置 `GATEWAY_REQUIRE_FORWARDED_PROTO=true` 或 `GATEWAY_REQUIRE_TLS=true`；
+- 网关强制校验非环回请求必须携带 `X-Forwarded-Proto: https`（否则返回 `426 Upgrade Required` 并带标准错误信封）；
+- 若绑定非环回地址且未开启强制校验，启动时输出 Audit Warning 警示运维。
+
+#### 5.6.2 网关管理端点与拓扑暴露保护
+- **后端拓扑保护**：`/gateway/backends` 端点受 `GATEWAY_ADMIN_API_KEY`（或 `GATEWAY_METRICS_API_KEY`）保护；
+- **指标端点保护**：`/metrics` 端点受 `GATEWAY_METRICS_API_KEY` 保护；
+- **防时序侧信道**：token 校验全面采用 `crypto/subtle.ConstantTimeCompare`，拒绝访问统一返回标准 5 字段信封与 trace ID。
 
 ---
 
@@ -504,10 +584,10 @@ graph TD
     S -->|拒绝| U["返回 PERMISSION_DENIED"]
 ```
 
-### 6.3 白名单管理器 (WhitelistManager) 与 5 秒热重载
+### 6.3 白名单管理器 (DynamicWhitelist) 与 5 秒热重载
 
-- **Per-CN Scope 控制**：支持在 `config/mtls-whitelist.yaml` 中为每个 CN 单独配置 `scopes: ["*"]` 或 `scopes: ["health:read"]`；
-- **动态热重载**：基于文件 `mtime` 轮询（Go 端 5 秒轮询，Python 端每次请求被动比对），修改配置后**无需重启服务即可立即生效**。
+- **Per-CN / Per-SPIFFE Scope 控制**：支持在 `config/mtls-whitelist.yaml` 中为每个证书主体单独配置通配符 `scopes: ["*"]`、精确方法或前缀模式（如 `/PrivacyService/*`、`health:read`）；
+- **动态热重载**：基于文件 `mtime` 后台轮询（5 秒检测），检测到文件变更后原子置换内部授权映射表，修改配置**无需重启服务即可立即生效**。
 
 ### 6.4 Fail-Closed 安全设计
 
@@ -519,7 +599,7 @@ graph TD
 
 ---
 
-## 7. Go 共享微服务安全栈 (`pkg/`)
+## 7. Go 共享微服务安全栈与国密体系 (`pkg/`)
 
 ### 7.1 9 层统一中间件栈与纵深防 DDoS
 
@@ -529,22 +609,38 @@ TraceMiddleware ➔ StructuredLogger ➔ Recovery ➔ SecurityHeaders ➔ MaxBod
 ```
 1. **Slowloris 防护**：`ReadHeaderTimeout: 5s` + `MaxHeaderBytes: 1MB`；
 2. **大包防御**：`MaxBodySize` 限制 32MB / 64MB，超限返回 `413 Payload Too Large`；
-3. **IP 令牌桶限流**：`RateLimit(rps, burst)` 自动回收闲置 IP 桶，超限返回 `429 Too Many Requests`；
+3. **IP 令牌桶限流**：`RateLimit(rps, burst)` 自动回收闲置 IP 桶与分片容量上限硬顶（10,000 桶），超限返回 `429 Too Many Requests`；
 4. **并发容量硬顶**：`MaxConcurrent(limit)` 限制在途最大请求数，超载快速失败返回 `503 Service Unavailable`；
-5. **异常脱敏**：`Recovery` 捕获 Panic 并向客户端返回通用错误信封，堆栈收敛至内部日志。
+5. **异常脱敏**：`Recovery` 捕获 Panic 并向客户端返回通用 5 字段错误信封，堆栈收敛至内部日志；
+6. **全链路追踪**：`TraceMiddleware` 注入并提取 `X-Trace-ID` / `X-Request-ID`，日志与信封统一携带追踪元数据。
 
-### 7.2 SM4-GCM 快照信封加密 (`pkg/crypto`)
+### 7.2 SM4-GCM 快照信封加密与多版本密钥轮换 (`pkg/crypto/envelope.go`)
 
-脱敏出域快照落盘前执行 SM4-GCM 信封加密：
+脱敏出域快照落盘前执行基于国密 SM4-GCM 的信封加密：
 ```text
-enc:v1:<Base64(12B Nonce + Ciphertext + 16B Tag)>
+enc:v3:<KeyVersion>:<Base64(16B Salt + 12B Nonce + Ciphertext + 16B Tag)>
 ```
-密钥由环境变量 `AUDIT_LOG_ENCRYPTION_KEY` 派生，读取时透明还原。
+- **密钥多版本注册**：支持通过环境变量 `PRIVACY_CRYPTO_KEY_<VERSION>` 注册多个历史与未来密钥版本，写入时采用活跃版本（默认 `v3`），解密时自适应按版本提取解密密钥；
+- **独立 Salt 派生**：每次加密使用 `crypto/rand` 采集 16 字节随机 salt 经由 HMAC-SM3 派生单次工作密钥，确保即使明文相同，密文输出也绝对随机唯一；
+- **完整向后兼容**：自动兼容旧版 `enc:v1:` 与 `enc:v2:` 密文格式，实现业务无感平滑轮换。
 
 ### 7.3 9 要素密码学哈希链 (`services/audit-log`)
 
-$$\text{IntegrityHash} = \text{SHA256}(\text{prev\_hash} \parallel \text{id} \parallel \text{task\_id} \parallel \text{api\_code} \parallel \text{datasource\_id} \parallel \text{timestamp} \parallel \text{input\_hash} \parallel \text{output\_hash} \parallel \text{algorithm})$$
-形成严格的区块链式链式锚定，提供秒级在线核验（`POST /api/audit/chain/verify`）。
+$$\text{IntegrityHash} = \text{HMAC-SM3}(\text{prev\_hash} \parallel \text{id} \parallel \text{task\_id} \parallel \text{api\_code} \parallel \text{datasource\_id} \parallel \text{timestamp} \parallel \text{input\_hash} \parallel \text{output\_hash} \parallel \text{algorithm})$$
+形成严格的区块链式链式锚定，辅以 SM2 非对称数字签名与存证，提供秒级在线链完整性核验（`POST /api/audit/chain/verify`）。
+
+### 7.4 国密算法上电已知答案自检 (KAT) 与内存敏感数据安全销毁 (`pkg/crypto/`)
+
+#### 7.4.1 上电与运行时自检 Known Answer Test (`pkg/crypto/self_test.go`)
+对标密评 GM/T 0115-2023 与 GB/T 39786 标准，提供上电自检函数 `RunCryptoSelfTests()`：
+- **SM3 杂凑算法自检**：对标 GM/T 0004-2012 附录 A.1 官方标准测试向量进行杂凑校验；
+- **SM4 分组密码自检**：对标 GM/T 0002-2012 附录 A 单分组加解密测试向量进行正确性自检；
+- **SM2 非对称算法自检**：执行动态密钥对生成、签名生成、正向验签与篡改报文负向验签流程。自检失败则阻断系统密码服务启动，防范算法后门与实现篡改。
+
+#### 7.4.2 敏感数据显式内存清零 (`pkg/crypto/zeroize.go`)
+为满足密钥生命周期安全销毁要求，实现 `Zeroize(b []byte)` 原语：
+- 对明文私钥、对称密钥和敏感凭证在内存使用完毕后立即显式覆写清零；
+- 引入 `runtime.KeepAlive(b)` 抑制 Go 编译器的死存储消除（Dead Store Elimination, DSE）优化，确保内存清零操作切实执行。
 
 ---
 

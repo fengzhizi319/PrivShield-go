@@ -82,8 +82,10 @@ func DatasourceMgrPermissionForPath(path string) string {
 	case strings.HasPrefix(path, "/api/datasources/") && strings.HasSuffix(path, "/test") ||
 		path == "/api/datasources/seed":
 		return "datasource:admin"
+	default:
+		// fail-closed：未显式映射的非豁免路径默认归入最高 admin 权限，防止空 scope 绕过
+		return "datasource:admin"
 	}
-	return ""
 }
 
 // constantTimeLookupKeys 在排序后的 key 集合上执行常量时间 token 查找，防止时序攻击。
@@ -175,24 +177,31 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 	r.Use(middleware.CORS(s.cfg.CORSOrigins))
 	r.Use(s.scopeAuthMiddleware())
 
-	// 健康探针路由
-	r.GET("/health", s.Health)     // Liveness probe / 存活探针
-	r.GET("/readyz", s.Readyz)     // Readiness probe / 就绪探针
-	r.GET("/api/health", s.Health) // Alias for backward compat / 向后兼容别名
+	// 【Class A / Class C】基础探针与监控基础设施路由
+	r.GET("/health", s.Health)     // Class A: Liveness probe / 存活探针
+	r.GET("/readyz", s.Readyz)     // Class C: Readiness probe / K8s 就绪探针（基础设施）
+	r.GET("/api/health", s.Health) // Class A: Alias for backward compat / 向后兼容别名
 
-	// Prometheus 指标端点（§7.2）：mc 为 nil（单测）时不注册。
+	// 【Class C】Prometheus 监控指标端点（外部数据局免实现；mc 为 nil 时不注册）
 	if s.mc != nil {
 		r.GET("/metrics", s.mc.Handler())
 	}
 
-	// 通用数据源资产与采样端点
-	r.GET("/api/datasources", s.ListDataSources)                          // 数据源目录列表
-	r.GET("/api/datasources/:id", s.GetDataSource)                        // 单个数据源详情
-	r.GET("/api/datasources/:id/record-by-id", s.GetDataSourceRecordByID) // 按身份证号查询单条记录
+	// 【Class A】数据局核心生产对接端点 (Core Production Contract)
+	r.GET("/api/datasources/:id/record-by-id", s.GetDataSourceRecordByID) // 按身份证号精确抽取记录
 	r.POST("/api/datasources/:id/test", s.TestConnection)                 // 数据源连通性测试
-	r.GET("/api/datasources/:id/metadata", s.GetMetadata)                 // Schema 元数据查询
-	r.GET("/api/datasources/:id/audit", s.GetAccessAudit)                 // 数据访问审计日志查询
-	r.POST("/api/datasources/seed", s.SeedDataSourcesEndpoint)            // 初始化/重置模拟数据源
+
+	// 【Class B】可选元数据与目录探查端点 (Optional Metadata Discovery)
+	r.GET("/api/datasources", s.ListDataSources)          // 数据源目录列表
+	r.GET("/api/datasources/:id", s.GetDataSource)        // 单个数据源详情
+	r.GET("/api/datasources/:id/metadata", s.GetMetadata) // Schema 元数据探查
+
+	// 【Class D】本地开发测试桩辅助端点（Mock/Test Only · 生产环境严禁暴露）
+	// 仅在 s.cfg.EnableMockHelpers 为 true 时注册；生产环境配置 DATASOURCE_MGR_ENABLE_MOCK_HELPERS=false 彻底屏蔽。
+	if s.cfg == nil || s.cfg.EnableMockHelpers {
+		r.GET("/api/datasources/:id/audit", s.GetAccessAudit)      // 模拟访问审计日志查询 (Class D)
+		r.POST("/api/datasources/seed", s.SeedDataSourcesEndpoint) // 模拟数据源初始化/重置 (Class D)
+	}
 }
 
 // Health returns mock service status.
@@ -347,7 +356,7 @@ func (s *Server) GetAccessAudit(c *gin.Context) {
 			{
 				"id":        "audit_mock_1",
 				"operation": "query_sample",
-				"user":      "dev_user",
+				"user":      "service-hub",
 				"timestamp": time.Now().Format(time.RFC3339),
 				"status":    "success",
 			},

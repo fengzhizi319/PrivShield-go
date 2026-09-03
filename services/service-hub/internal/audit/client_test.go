@@ -721,3 +721,63 @@ func TestMultiReplicaEndpointsRoundRobin(t *testing.T) {
 		t.Errorf("round-robin distribution mismatch: a=%d b=%d, want 2/2", a, b)
 	}
 }
+
+// TestAuditClient_Health_GetLogs_Verify tests Health, GetLogs, and Verify methods.
+func TestAuditClient_Health_GetLogs_Verify(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+	})
+	mux.HandleFunc("/api/audit/logs", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"total": 1,
+			"logs":  []map[string]any{{"id": "log-1", "task_id": "task-1"}},
+		})
+	})
+	mux.HandleFunc("/api/audit/snapshots", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"total": 1,
+			"snapshots": []map[string]any{
+				{
+					"id":             "snap-1",
+					"integrity_hash": "hash1",
+					"timestamp":      time.Now().UTC(),
+				},
+			},
+		})
+	})
+	mux.HandleFunc("/api/audit/snapshots/verify", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"snapshot_id": "snap-1",
+			"valid":       true,
+			"actual":      "hash1",
+			"expected":    "hash1",
+			"via":         "audit-log",
+		})
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client := clientFor([]string{srv.URL}, "test-key", 0)
+
+	ctx := context.Background()
+	h, err := client.Health(ctx)
+	if err != nil || h["status"] != "ok" {
+		t.Fatalf("Health failed: %v, resp: %+v", err, h)
+	}
+
+	logs, err := client.GetLogs(ctx, 10, 0, "ds_yibao", "", "")
+	if err != nil || logs["total"].(float64) != 1 {
+		t.Fatalf("GetLogs failed: %v, resp: %+v", err, logs)
+	}
+
+	v, err := client.Verify(ctx)
+	if err != nil || v["merkle_valid"] != true {
+		t.Fatalf("Verify failed: %v, resp: %+v", err, v)
+	}
+}

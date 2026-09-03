@@ -19,6 +19,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"log"
 	"log/slog"
 	"net/http"
@@ -33,6 +34,7 @@ import (
 	engineconfig "github.com/fengzhizi319/PrivShield-go/engine-go/internal/config"
 	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/gateway"
 	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/observability"
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 )
@@ -78,6 +80,32 @@ func main() {
 	r.Use(middleware.WAF(slog.Default())) // 三级等保 G-12：Web 攻击载荷检测
 	r.Use(middleware.SecurityHeaders())   // CSP + HSTS + X-Frame-Options 等安全响应头
 	r.Use(middleware.MaxBodySize(int64(pkgconfig.EnvInt("GATEWAY_MAX_BODY_BYTES", 32<<20))))
+
+	// Ingress/LB 上游 TLS 终止校验：若配置 GATEWAY_REQUIRE_FORWARDED_PROTO 或 GATEWAY_REQUIRE_TLS，强制校验 X-Forwarded-Proto 为 https
+	requireProto := pkgconfig.EnvBool("GATEWAY_REQUIRE_FORWARDED_PROTO", false) || pkgconfig.EnvBool("GATEWAY_REQUIRE_TLS", false)
+	if requireProto {
+		r.Use(func(c *gin.Context) {
+			path := c.Request.URL.Path
+			if path == "/health" {
+				c.Next()
+				return
+			}
+			proto := c.GetHeader("X-Forwarded-Proto")
+			if proto == "" && c.Request.TLS != nil {
+				proto = "https"
+			}
+			clientIP := middleware.RealClientIP(c)
+			if proto != "https" && !pkgconfig.IsLoopbackHost(clientIP) {
+				middleware.AbortWithError(c, http.StatusUpgradeRequired, "HTTPS_REQUIRED", "HTTPS is required by gateway security policy; ensure upstream Ingress/LB terminates TLS", nil)
+				return
+			}
+			c.Next()
+		})
+		slog.Info("Gateway HTTPS enforcement enabled (requires X-Forwarded-Proto: https)")
+	} else if !pkgconfig.IsLoopbackHost(cfg.RESTHost) {
+		slog.Warn("Gateway TLS termination is skipped; ensure upstream Ingress or LoadBalancer terminates TLS (or set GATEWAY_REQUIRE_FORWARDED_PROTO=true)", "host", cfg.RESTHost)
+	}
+
 	if rps := pkgconfig.EnvInt("GATEWAY_RATE_LIMIT_RPS", 0); rps > 0 {
 		burst := pkgconfig.EnvInt("GATEWAY_RATE_LIMIT_BURST", rps*2)
 		r.Use(middleware.RateLimit(rps, burst)) // 32 分片令牌桶限流
@@ -91,17 +119,32 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "component": "gateway"})
 	})
 
-	// 后端状态查询
-	r.GET("/gateway/backends", gateway.NewHealthCheckHandler(lb))
+	// 后端拓扑与状态查询（R-02：受保护端点，防拓扑信息泄漏）
+	backendsHandler := gateway.NewHealthCheckHandler(lb)
+	metricsKey := pkgconfig.EnvString("GATEWAY_METRICS_API_KEY", "")
+	adminKey := pkgconfig.EnvString("GATEWAY_ADMIN_API_KEY", metricsKey)
+	if adminKey != "" {
+		r.GET("/gateway/backends", func(c *gin.Context) {
+			token := pkgauth.ExtractBearerToken(c.GetHeader("Authorization"))
+			if subtle.ConstantTimeCompare([]byte(token), []byte(adminKey)) != 1 {
+				middleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHORIZED", "Unauthorized: invalid gateway admin credentials", nil)
+				return
+			}
+			backendsHandler(c)
+		})
+		slog.Info("Gateway /gateway/backends requires Bearer token auth")
+	} else {
+		r.GET("/gateway/backends", backendsHandler)
+	}
 
 	// Prometheus /metrics 端点（设计文档 §11.1）
 	// P1-6: 可选鉴权 —— 若配置 GATEWAY_METRICS_API_KEY 则要求 Bearer Token，否则保持开放（环回/开发态）
 	metricsHandler := gwMetrics.Handler()
-	if metricsKey := pkgconfig.EnvString("GATEWAY_METRICS_API_KEY", ""); metricsKey != "" {
+	if metricsKey != "" {
 		r.GET("/metrics", func(c *gin.Context) {
-			auth := c.GetHeader("Authorization")
-			if !strings.HasPrefix(auth, "Bearer ") || auth[7:] != metricsKey {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			token := pkgauth.ExtractBearerToken(c.GetHeader("Authorization"))
+			if subtle.ConstantTimeCompare([]byte(token), []byte(metricsKey)) != 1 {
+				middleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHORIZED", "Unauthorized: invalid gateway metrics credentials", nil)
 				return
 			}
 			metricsHandler(c)

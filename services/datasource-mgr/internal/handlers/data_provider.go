@@ -322,7 +322,7 @@ func GetMetadata(sourceID string) (*models.MetadataResponse, error) {
 
 	// 针对特定数据集定制其业务 Schema，与 CSV 表头严格对齐
 	if ds.ID == naming.DSYibao {
-		// yibao.csv 18 字段
+		// yibao.csv 19 字段
 		fields = []models.MetadataField{
 			{Name: "insurance_settlement_id", Type: "string"},
 			{Name: "person_id", Type: "string"},

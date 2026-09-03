@@ -54,9 +54,17 @@ make gen-certs
 | `DATASOURCE_MGR_TLS_KEY_FILE` | (空) | 服务端私钥 PEM 路径 |
 | `DATASOURCE_MGR_TLS_CA_FILE` | (空) | 客户端证书校验 CA 证书 PEM 路径 |
 | `DATASOURCE_MGR_TLS_CLIENT_AUTH` | (空) | 客户端认证模式: `require` \| `verify` \| `request` |
-| `DATASOURCE_MGR_TLS_ALLOWED_CNS` | (空) | 允许调用的客户端证书 CN 白名单（逗号分隔） |
+| `DATASOURCE_MGR_TLS_PINNED_PUBKEY_FILE` | (空) | 客户端公钥指纹固定文件路径 (SPKI Pinning) |
+| `PRIVACY_AUTH_MTLS_WHITELIST_FILE` | (空) | gRPC 客户端证书 CN 白名单 YAML 文件（启用 gRPC TLS 时必填） |
+| `DATASOURCE_MGR_REQUIRE_TLS` | `false` | 生产门禁：置真时未启用 TLS 即拒绝启动 (fail-closed) |
 | `DATASOURCE_MGR_API_KEY` | (空) | 本模块入站 API Key（空表示免密） |
+| `DATASOURCE_MGR_API_KEYS` | (空) | Scope-based API Key 映射，优先于单 `API_KEY` |
+| `DATASOURCE_MGR_API_KEYS_FILE` | (空) | API Key 文件路径（支持热轮转，K8s Secret 投影） |
 | `DATASOURCE_MGR_CORS_ORIGINS` | (空) | 允许的 CORS 跨域源（逗号分隔） |
+| `DATASOURCE_MGR_STRICT_STORAGE` | `true` | 严格存储模式 (P0-4)：CSV 损坏行直接报错，不静默丢弃 |
+| `DATASOURCE_MGR_RATE_LIMIT_RPS` | `100` | 每客户端 IP 令牌桶限流速率（0 = 不限流） |
+| `DATASOURCE_MGR_RATE_LIMIT_BURST` | `200` | 令牌桶突发容量 |
+| `DATASOURCE_MGR_SHUTDOWN_TIMEOUT` | `5` | HTTP 优雅关闭超时秒数 |
 | `DATASOURCE_MGR_LOG_FORMAT` | `json` | 日志格式: `json` \| `text` |
 | `DATASOURCE_MGR_LOG_LEVEL` | `info` | 日志级别: `debug` \| `info` \| `warn` \| `error` |
 
@@ -72,16 +80,16 @@ curl -s http://127.0.0.1:8083/readyz | jq .
 
 ### 3.2 HTTPS 双向认证 (mTLS) 调取示例（生产加固模式）
 ```bash
-# 携带 CA 根证书与客户端证书访问 HTTPS REST API
+# 携带 CA 根证书与客户端证书访问 HTTPS REST API（按身份证号查询单条记录）
 curl -s --cacert certs/ca.crt \
   --cert certs/client.crt \
   --key certs/client.key \
-  https://127.0.0.1:8083/api/datasources/ds_yibao/records?limit=5 | jq .
+  "https://127.0.0.1:8083/api/datasources/ds_yibao/record-by-id?id_card_no=110101196809171010" | jq .
 ```
 
-### 3.3 申请 API 2 康养数据 (27 字段)
+### 3.3 按身份证号查询康养数据 (27 字段)
 ```bash
-curl -s "http://127.0.0.1:8083/api/datasources/ds_kangyang/records?limit=5" | jq .
+curl -s "http://127.0.0.1:8083/api/datasources/ds_kangyang/record-by-id?id_card_no=110105198402151071" | jq .
 ```
 
 ---

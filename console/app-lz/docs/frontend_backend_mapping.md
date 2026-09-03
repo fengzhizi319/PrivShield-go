@@ -2,7 +2,9 @@
 
 > 本文档清晰列出 App-LZ 控制台每个前端功能模块对应的 BFF 后端接口，以及 BFF 向 4 个上游微服务发起的实际调用。
 >
-> **架构概览**：前端 (React :5174) → BFF Go (:8085) → 4 上游微服务 (Engine :8079 / Hub :8082 / Datasource :8083 / Audit :8084)
+> **架构概览**：前端 (React :5174) → BFF Go (:8085) → **唯一编排中枢 service-hub (:8082)** → 内部微服务 (Engine :8079 / Datasource :8083 / Audit :8084)
+> 
+> **核心安全原则**：App-LZ BFF 作为模拟外部业务程序，无直接访问其他内部微服务权限，所有外部请求统一通过 `service-hub` 调度与代理。
 
 ---
 
@@ -31,14 +33,13 @@
 
 ### 上游调用
 
-BFF 并发探测 4 个微服务的 REST + gRPC 健康端点：
+BFF 向唯一编排中枢 `service-hub` 发起拓扑查询，由 `service-hub` 在网格内部统一探测并返回 4 个微服务的状态：
 
-| 服务 | REST 探测 | gRPC 探测 |
-|------|----------|----------|
-| **service-hub** (:8082) | `GET :8082/api/health` | TCP `:50052` |
-| **engine** (:8079) | `GET :8079/api/health` → 回退 `/health` | TCP `:50051` |
-| **datasource-mgr** (:8083) | `GET :8083/api/health` | TCP `:50053` |
-| **audit-log** (:8084) | `GET :8084/api/health` | TCP `:50054` |
+| 层 | 接口 |
+|----|------|
+| **前端** | `api.getTopology(protocol)` |
+| **BFF** | `GET /api/lz/topology?protocol=rest\|grpc` → `GetTopology()` |
+| **上游** | `GET :8082/api/hub/topology?protocol=rest\|grpc` (service-hub 统一探测下发) |
 
 ### 前端行为
 
@@ -133,7 +134,7 @@ BFF 从 service-hub 查询 running 状态任务，按 `lease_owner` (worker) 分
 
 | 套件 | 标题 | 上游调用 |
 |------|------|--------|
-| **TS-01** | 全链路审计存证与 Merkle 验真 | `POST :8084/api/audit/snapshots/verify` (audit-log) |
+| **TS-01** | 全链路审计存证与 Merkle 验真 | `POST :8082/api/hub/fetch-and-desensitize` 编排存证 + `POST :8082/api/hub/audit/verify` (service-hub 代理验真) |
 | **TS-02** | 预设数据API高并发压测 | `POST :8082/api/hub/dispatch` × N 次并发 (service-hub) |
 | **TS-03** | 并发租约唯一性 | `POST :8082/api/hub/dispatch` × 5×4=20 并发 (service-hub) + `sync.Mutex` 零重复检测；service-hub 不可达时降级为合成 ID |
 
@@ -144,11 +145,11 @@ BFF 从 service-hub 查询 running 状态任务，按 `lease_owner` (worker) 分
 **前端组件**: `DatasourceExplorer.tsx`
 **页面加载时自动拉取数据源列表**
 
-> **注意**：数据源相关功能在当前实现中主要通过预设数据 API (`/api/lz/data-api/*`) 访问，而非独立的 datasource 路由。详见 [§8. 预设数据 API](#8-预设数据-api医保康养)。
+> **注意**：数据源相关功能通过 `service-hub` 的统一外部编排端点 (`GET /api/hub/datasources`) 及预设数据 API (`/api/lz/data-api/*`) 访问，零直接访问 datasource-mgr。遵循「原始数据不出域」安全原则，数据源不提供批量原始切片查询接口。详见 [§8. 预设数据 API](#8-预设数据-api医保康养)。
 
 ### 降级策略
 
-- datasource-mgr 不可达时 BFF 返回 `generateSampleSlice()` 硬编码样本数据
+- service-hub 不可达时 BFF 返回 `generateSampleSlice()` 硬编码样本数据
 - 数据源列表不可达时返回 `defaultDatasources()` 静态元数据
 
 ---
@@ -164,7 +165,7 @@ BFF 从 service-hub 查询 running 状态任务，按 `lease_owner` (worker) 分
 |----|------|
 | **前端** | `api.getAuditLogs(limit?, offset?)` |
 | **BFF** | `GET /api/lz/audit/logs?limit=50&offset=0` → `GetAuditLogs()` |
-| **上游** | `GET :8084/api/v1/audit/logs?limit=50&offset=0` (audit-log) |
+| **上游** | `GET :8082/api/hub/audit/logs?limit=50&offset=0` (service-hub 代理) |
 
 ### 6.2 Merkle 树验证
 
@@ -172,13 +173,13 @@ BFF 从 service-hub 查询 running 状态任务，按 `lease_owner` (worker) 分
 |----|------|
 | **前端** | `api.verifyAudit()` |
 | **BFF** | `POST /api/lz/audit/verify` → `VerifyAudit()` |
-| **上游** | `POST :8084/api/v1/audit/verify` (audit-log) |
+| **上游** | `POST :8082/api/hub/audit/verify` (service-hub 代理) |
 
 返回 Merkle 根哈希、总条目数、签名验证结果。
 
 ### 降级策略
 
-- audit-log 不可达时返回硬编码审计日志 + 静态验证结果
+- service-hub 不可达时返回硬编码审计日志 + 静态验证结果（绝不谎报 MerkleValid 为 true）
 
 ---
 
@@ -316,22 +317,24 @@ BFF 从 Prometheus 文本格式中提取：
 
 | BFF Client 方法 | 上游服务 | HTTP 端点 |
 |----------------|---------|----------|
-| `ProbeNode()` | 全部 4 个 | `GET /api/health` (回退 `/health`) + TCP dial |
-| `DispatchTask()` | service-hub | `POST /api/hub/dispatch` |
-| `ListTasks()` | service-hub | `GET /api/hub/tasks` |
-| `GetTask()` | service-hub | `GET /api/hub/tasks/:id` |
-| `GetLeasesFromHub()` | service-hub | `GET /api/hub/tasks?status=running&limit=100` |
+| `GetTopology()` | **service-hub** | `GET /api/hub/topology?protocol=...` |
+| `DispatchTask()` | **service-hub** | `POST /api/hub/dispatch` |
+| `ListTasks()` | **service-hub** | `GET /api/hub/tasks` |
+| `GetTask()` | **service-hub** | `GET /api/hub/tasks/:id` |
+| `GetLeasesFromHub()` | **service-hub** | `GET /api/hub/tasks?status=running&limit=100` |
 | `FetchAndDesensitizeViaHub()` | **service-hub** | `POST /api/hub/fetch-and-desensitize` |
-| `GetDatasources()` | datasource-mgr | `GET /api/datasources` |
-| `GetDatasourceSlice()` | datasource-mgr | `GET /api/datasources/{id}/records?limit=N` |
-| `GetAuditLogs()` | audit-log | `GET /api/audit/logs` |
-| `VerifyAudit()` | audit-log | `POST /api/audit/snapshots/verify` |
-| `GetHubMetrics()` | service-hub | `GET /metrics` |
-| `GetParsedMetrics()` | service-hub | `GET /metrics` → BFF 本地解析 |
-| `ProcessAgentRecords()` | **engine** | `POST /v1/agent/process`（兼容 `/v1/medical/process`） |
-| `MaskRecordViaEngine()` | **engine** | `POST /v1/privacy/mask_record` |
+| `GetDatasources()` | **service-hub** | `GET /api/hub/datasources` |
+| `GetDatasourceSlice()` | **本地安全降级** | 本地构造带 fallback 标记样本（原始数据切片不出域） |
+| `GetDatasourceRecordByIDCard()`| **service-hub** | `POST /api/hub/fetch-and-desensitize` (端到端编排) |
+| `GetAuditLogs()` | **service-hub** | `GET /api/hub/audit/logs` |
+| `RecordAudit()` | **service-hub** | `POST /api/hub/audit/logs` |
+| `VerifyAudit()` | **service-hub** | `POST /api/hub/audit/verify` |
+| `GetHubMetrics()` | **service-hub** | `GET /metrics` |
+| `GetParsedMetrics()` | **service-hub** | `GET /metrics` → BFF 本地解析 |
+| `ProcessAgentRecords()` | **service-hub** | `POST /api/hub/dispatch` |
+| `MaskRecordViaEngine()` | **service-hub** | `POST /api/hub/dispatch` |
 
-> **注意**：`InvokeDataApi` 已重构为通过 `FetchAndDesensitizeViaHub()` 统一编排，不再直接调用 `ProcessAgentRecords()` / `MaskRecordViaEngine()` / 审计直连方法。
+> **架构约束**：app-lz BFF 是模拟的外部程序，除 service-hub 调度中枢外零直连内部微服务（datasource-mgr / engine-go / audit-log）。所有调用统一收敛到 service-hub。
 
 ## 附录 B：前端 API Client → BFF 路由速查表
 

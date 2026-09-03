@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/fengzhizi319/PrivShield-go/pkg/validation"
 )
@@ -68,6 +69,49 @@ func (s *evidenceStub) handle(w http.ResponseWriter, r *http.Request) {
 	s.calls++
 	status, body := s.status, s.body
 	s.mu.Unlock()
+
+	if r.Method == http.MethodGet && (r.URL.Path == "/api/health" || r.URL.Path == "/health") {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "via": "audit-log"})
+		return
+	}
+	if r.Method == http.MethodGet && r.URL.Path == "/api/audit/logs" {
+		w.Header().Set("Content-Type", "application/json")
+		s.mu.Lock()
+		recs := s.records
+		s.mu.Unlock()
+		if recs == nil {
+			recs = []map[string]any{}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"total": len(recs), "logs": recs, "via": "audit-log"})
+		return
+	}
+	if r.Method == http.MethodGet && r.URL.Path == "/api/audit/snapshots" {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"total": 1,
+			"snapshots": []map[string]any{
+				{
+					"id":             "snap-test-1",
+					"integrity_hash": "hash123",
+					"timestamp":      time.Now().UTC(),
+				},
+			},
+			"via": "audit-log",
+		})
+		return
+	}
+	if r.Method == http.MethodPost && r.URL.Path == "/api/audit/snapshots/verify" {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"snapshot_id": "snap-test-1",
+			"valid":       true,
+			"actual":      "hash123",
+			"expected":    "hash123",
+			"via":         "audit-log",
+		})
+		return
+	}
 
 	if r.Method != http.MethodPost || r.URL.Path != "/api/audit/logs" {
 		writeEnvelope(w, http.StatusNotFound, "NOT_FOUND", "evidence stub only serves POST /api/audit/logs")

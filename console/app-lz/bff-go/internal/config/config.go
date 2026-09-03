@@ -23,23 +23,25 @@ type Config struct {
 	Host string // 监听地址，默认 0.0.0.0
 	Port string // 监听端口，默认 8085
 
-	// ── 上游微服务 HTTP URL ──
-	HubURL        string // Service Hub 调度中枢 REST 地址（默认 http://127.0.0.1:8082）
-	DatasourceURL string // 数据源管理器 REST 地址（默认 http://127.0.0.1:8083）
-	AuditURL      string // 审计存证服务 REST 地址（默认 http://127.0.0.1:8084）
-	AgentURL      string // 隐私脱敏引擎 REST 地址（默认 http://127.0.0.1:8079）
+	// ── 唯一调度编排中枢 HTTP URL ──
+	HubURL string // Service Hub 调度中枢 REST 地址（唯一调度编排入口，默认 http://127.0.0.1:8082）
+
+	// ── 下游服务地址（DEPRECATED：app-lz 无直接访问权限，全部由 service-hub 编排）──
+	DatasourceURL string // [DEPRECATED] 数据源管理器 REST 地址（不再直连，由 service-hub 编排）
+	AuditURL      string // [DEPRECATED] 审计存证服务 REST 地址（不再直连，由 service-hub 编排）
+	AgentURL      string // [DEPRECATED] 隐私脱敏引擎 REST 地址（不再直连，由 service-hub 编排）
 
 	// ── 上游微服务 API Key（出站零信任认证）──
-	HubAPIKey        string // Service Hub 出站 API Key（可选）
-	DatasourceAPIKey string // 数据源管理器出站 API Key（可选）
-	AuditAPIKey      string // 审计存证服务出站 API Key（可选）
-	AgentAPIKey      string // 隐私脱敏引擎出站 API Key（可选）
+	HubAPIKey        string // Service Hub 出站 API Key（出站调用凭证）
+	DatasourceAPIKey string // [DEPRECATED] 数据源管理器出站 API Key
+	AuditAPIKey      string // [DEPRECATED] 审计存证服务出站 API Key
+	AgentAPIKey      string // [DEPRECATED] 隐私脱敏引擎出站 API Key
 
-	// ── 上游微服务 gRPC 地址（用于拓扑探测）──
+	// ── 上游微服务 gRPC 地址 ──
 	HubGRPC        string // Service Hub gRPC 地址（默认 127.0.0.1:50052）
-	DatasourceGRPC string // 数据源管理器 gRPC 地址（默认 127.0.0.1:50053）
-	AuditGRPC      string // 审计存证服务 gRPC 地址（默认 127.0.0.1:50054）
-	AgentGRPC      string // 隐私脱敏引擎 gRPC 地址（默认 127.0.0.1:50051）
+	DatasourceGRPC string // [DEPRECATED] 数据源管理器 gRPC 地址
+	AuditGRPC      string // [DEPRECATED] 审计存证服务 gRPC 地址
+	AgentGRPC      string // [DEPRECATED] 隐私脱敏引擎 gRPC 地址
 
 	// ── 静态文件 & 日志 ──
 	StaticDir string // 前端 SPA 构建产物目录（默认 ./web/dist）

@@ -511,8 +511,8 @@ func (c *Client) FetchRecordByIDCardGRPC(ctx context.Context, datasourceID, idCa
 	}
 	outCtx := c.wrapGRPCContext(ctx)
 	resp, err := client.GetRecordByIDCard(outCtx, &dspb.GetRecordByIDCardRequest{
-		SourceId:  datasourceID,
-		IdCardNo:  idCardNo,
+		SourceId: datasourceID,
+		IdCardNo: idCardNo,
 	})
 	if err != nil {
 		if isRetryableGRPCCode(err) {
@@ -545,5 +545,3 @@ func (c *Client) TestConnectionGRPC(ctx context.Context, id string) (*dspb.TestC
 	c.recordSuccess()
 	return resp, nil
 }
-
-

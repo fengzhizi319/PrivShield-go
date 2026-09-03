@@ -28,66 +28,105 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// extractClientCN extracts the Common Name from the peer's TLS client certificate.
-//
-// extractClientCN 从当前 RPC 上下文中提取客户端 mTLS 证书的 Common Name (CN)：
-// 1. 调用 peer.FromContext(ctx) 获取对端网络与认证信息；
-// 2. 断言 AuthInfo 为 credentials.TLSInfo，校验 VerifiedChains 是否包含有效证书链；
-// 3. 提取叶子证书 VerifiedChains[0][0].Subject.CommonName；
-// 4. 若未开启 TLS 或证书未通过校验，返回 codes.Unauthenticated 错误。
-func extractClientCN(ctx context.Context) (string, error) {
+// extractClientIdentities 从当前 RPC 上下文中提取客户端 mTLS 证书的所有合法身份凭证：
+// 优先提取 SAN URIs (如 SPIFFE ID: spiffe://...) 与 SAN DNSNames，并回退包含 Subject.CommonName。
+func extractClientIdentities(ctx context.Context) ([]string, error) {
 	p, ok := peer.FromContext(ctx)
 	if !ok || p.AuthInfo == nil {
-		return "", status.Error(codes.Unauthenticated, "missing peer authentication info")
+		return nil, status.Error(codes.Unauthenticated, "missing peer authentication info")
 	}
 	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
 	if !ok || len(tlsInfo.State.VerifiedChains) == 0 || len(tlsInfo.State.VerifiedChains[0]) == 0 {
-		return "", status.Error(codes.Unauthenticated, "invalid or unverified client certificate")
+		return nil, status.Error(codes.Unauthenticated, "invalid or unverified client certificate")
 	}
-	return tlsInfo.State.VerifiedChains[0][0].Subject.CommonName, nil
+	cert := tlsInfo.State.VerifiedChains[0][0]
+
+	var identities []string
+	// 1. SAN URIs (例如 SPIFFE ID: spiffe://cluster.local/ns/default/sa/service-hub)
+	for _, u := range cert.URIs {
+		if u != nil && u.String() != "" {
+			identities = append(identities, u.String())
+		}
+	}
+	// 2. SAN DNSNames
+	for _, dns := range cert.DNSNames {
+		if dns != "" {
+			identities = append(identities, dns)
+		}
+	}
+	// 3. Subject CommonName (CN)
+	if cert.Subject.CommonName != "" {
+		identities = append(identities, cert.Subject.CommonName)
+	}
+
+	if len(identities) == 0 {
+		return nil, status.Error(codes.Unauthenticated, "client certificate has no CN or SAN identity")
+	}
+	return identities, nil
 }
 
-// authorizeClient checks CN existence in whitelist and method scope matching.
-//
-// authorizeClient 在白名单中校验客户端 CN 是否被授权调用指定的方法 fullMethod：
-// 1. 在读锁保护下查询 clients 映射表；
-// 2. 若 CN 不存在，记录警告日志并返回 codes.PermissionDenied；
-// 3. 遍历 scopes 列表执行精确匹配、通配符 `*` 匹配或前缀模式匹配；
-// 4. 若均不匹配，返回越权 codes.PermissionDenied 错误。
-func (dw *DynamicWhitelist) authorizeClient(clientCN, fullMethod string) error {
-	dw.mu.RLock()
-	scopes, exists := dw.clients[clientCN]
-	dw.mu.RUnlock()
+// extractClientCN 提取客户端的主标识（兼容保留）。
+func extractClientCN(ctx context.Context) (string, error) {
+	ids, err := extractClientIdentities(ctx)
+	if err != nil {
+		return "", err
+	}
+	// 优先返回首个身份凭据
+	return ids[0], nil
+}
 
-	if !exists {
-		log.Printf("[mTLS Auth] Unauthorized Client CN: %s", clientCN)
-		return status.Errorf(codes.PermissionDenied, "client CN '%s' is not authorized", clientCN)
+// authorizeClientIdentities 在白名单中校验客户端证书的任意身份凭证（SAN URI / DNS / CN）是否被授权调用 fullMethod。
+func (dw *DynamicWhitelist) authorizeClientIdentities(identities []string, fullMethod string) error {
+	dw.mu.RLock()
+	defer dw.mu.RUnlock()
+
+	var matchedIdentity string
+	var allowedScopes []string
+	found := false
+
+	for _, id := range identities {
+		if scopes, exists := dw.clients[id]; exists {
+			matchedIdentity = id
+			allowedScopes = scopes
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		log.Printf("[mTLS Auth] Unauthorized Client identities: %v", identities)
+		return status.Errorf(codes.PermissionDenied, "client identities '%v' are not authorized", identities)
 	}
 
 	// 范围匹配：通配符 "*"、精确匹配或模式匹配
-	for _, s := range scopes {
+	for _, s := range allowedScopes {
 		if s == "*" || s == fullMethod || matchScopePattern(s, fullMethod) {
 			return nil
 		}
 	}
-	log.Printf("[mTLS Auth] CN %s lacks scope for method %s", clientCN, fullMethod)
-	return status.Errorf(codes.PermissionDenied, "client CN '%s' lacks scope for method '%s'", clientCN, fullMethod)
+	log.Printf("[mTLS Auth] Identity %s lacks scope for method %s", matchedIdentity, fullMethod)
+	return status.Errorf(codes.PermissionDenied, "client '%s' lacks scope for method '%s'", matchedIdentity, fullMethod)
+}
+
+// authorizeClient checks CN existence in whitelist and method scope matching.
+func (dw *DynamicWhitelist) authorizeClient(clientCN, fullMethod string) error {
+	return dw.authorizeClientIdentities([]string{clientCN}, fullMethod)
 }
 
 // UnaryServerInterceptor returns a gRPC unary server interceptor that enforces
-// mTLS CN whitelist authorization on every incoming RPC call.
+// mTLS CN & SAN whitelist authorization on every incoming RPC call.
 //
 // UnaryServerInterceptor 返回一元 RPC 鉴权拦截器：
-// 1. 提取对端客户端证书 CN；
-// 2. 校验 CN 白名单与 info.FullMethod 方法权限；
+// 1. 提取对端客户端证书 SAN/CN 身份；
+// 2. 校验白名单与 info.FullMethod 方法权限；
 // 3. 鉴权通过后调用 handler(ctx, req) 继续执行业务逻辑。
 func (dw *DynamicWhitelist) UnaryServerInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		clientCN, err := extractClientCN(ctx)
+		identities, err := extractClientIdentities(ctx)
 		if err != nil {
 			return nil, err
 		}
-		if err := dw.authorizeClient(clientCN, info.FullMethod); err != nil {
+		if err := dw.authorizeClientIdentities(identities, info.FullMethod); err != nil {
 			return nil, err
 		}
 		return handler(ctx, req)
@@ -95,19 +134,19 @@ func (dw *DynamicWhitelist) UnaryServerInterceptor() grpc.UnaryServerInterceptor
 }
 
 // StreamServerInterceptor returns a gRPC stream server interceptor that enforces
-// mTLS CN whitelist authorization on every incoming streaming RPC call.
+// mTLS CN & SAN whitelist authorization on every incoming streaming RPC call.
 //
 // StreamServerInterceptor 返回流式 RPC 鉴权拦截器：
-// 1. 从流上下文 ss.Context() 提取对端客户端证书 CN；
-// 2. 校验 CN 白名单与 info.FullMethod 方法权限；
+// 1. 从流上下文 ss.Context() 提取对端客户端证书 SAN/CN 身份；
+// 2. 校验白名单与 info.FullMethod 方法权限；
 // 3. 鉴权通过后调用 handler(srv, ss) 启动流处理。
 func (dw *DynamicWhitelist) StreamServerInterceptor() grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		clientCN, err := extractClientCN(ss.Context())
+		identities, err := extractClientIdentities(ss.Context())
 		if err != nil {
 			return err
 		}
-		if err := dw.authorizeClient(clientCN, info.FullMethod); err != nil {
+		if err := dw.authorizeClientIdentities(identities, info.FullMethod); err != nil {
 			return err
 		}
 		return handler(srv, ss)

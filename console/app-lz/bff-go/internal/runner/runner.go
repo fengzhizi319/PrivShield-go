@@ -193,7 +193,7 @@ func (r *TestRunner) runTS01(ctx context.Context) models.TestSuiteCase {
 	verifyResp, _ := r.pool.VerifyAudit(ctx)
 
 	hasLogs := len(auditResp.Logs) > 0 && auditResp.Source != "fallback"
-	integrityPassed := verifyResp.MerkleValid && verifyResp.Source == "audit-log"
+	integrityPassed := verifyResp.MerkleValid && (verifyResp.Source == "audit-log" || verifyResp.Source == "service-hub")
 
 	logs = append(logs, fmt.Sprintf("[TS-01] ✅ Merkle 树校验结果: merkle_valid=%v, root_hash=%s, source=%s, total_logs=%d",
 		verifyResp.MerkleValid, verifyResp.RootHash, verifyResp.Source, len(auditResp.Logs)))
@@ -207,13 +207,13 @@ func (r *TestRunner) runTS01(ctx context.Context) models.TestSuiteCase {
 		},
 		{
 			Name:     "SHA-256 Audit Log Integrity",
-			Expected: "Audit trail contains valid records from live audit-log",
+			Expected: "Audit trail contains valid records from live audit-log / service-hub",
 			Actual:   fmt.Sprintf("Logs count: %d, source: %s", len(auditResp.Logs), auditResp.Source),
 			Passed:   hasLogs,
 		},
 		{
 			Name:     "Merkle Tree Consistency",
-			Expected: "merkle_valid=true from live audit-log",
+			Expected: "merkle_valid=true from live audit-log / service-hub",
 			Actual:   fmt.Sprintf("merkle_valid=%v (source=%s)", verifyResp.MerkleValid, verifyResp.Source),
 			Passed:   integrityPassed,
 		},

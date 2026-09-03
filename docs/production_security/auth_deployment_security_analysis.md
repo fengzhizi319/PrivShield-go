@@ -45,10 +45,13 @@
 | 密钥泄露后持续暴露 | ✅ 已防御（全栈热轮转） |
 | 错误配置导致安全降级 | ✅ 已防御（fail-closed） |
 | 微服务间无差别调用 | ✅ 已防御（全栈 gRPC scope 鉴权） |
+| 集中式密钥管理缺失 | ✅ 已防御（SecretWatcher 事件驱动热重载） |
+| 高开销接口挤占共享限流 | ✅ 已防御（端点级差异化限流） |
+| 网关未终止 TLS 明文暴露 | ✅ 已防御（上游 HTTPS 协议强制校验） |
 
 ### 剩余风险
 
-仅剩 2 项待改进项（1 高风险 + 1 低风险），集中在**集中式密钥管理集成**和**限流端点差异化**方面，详见 [§3 待改进项与风险评估](#3-待改进项与风险评估)。
+**零高危未闭环风险**：在 v5.1 中，集中式密钥管理抽象（`SecretWatcher`）、端点级差异化限流（`PRIVACY_RATE_LIMIT_PER_ENDPOINT`）及反向代理网关 HTTPS 协议校验（`GATEWAY_REQUIRE_FORWARDED_PROTO`）已全量实装入库，各服务具备完整纵深防御与自动化测试保障。
 
 ---
 
@@ -130,6 +133,15 @@
 | **机制** | `PRIVACY_AUTH_API_KEY` / `PRIVACY_API_KEY` 使用 `slog.Error` 级别告警（非 `Warn`），明确标注「下一大版本移除」 |
 | **安全效果** | 提高弃用变量可见度，防止运维人员忽视日志中的弃用警告 |
 | **防范攻击** | 遗留全权 Key 被无感知使用导致的最小权限原则失效 |
+
+#### 2.1.9 集中式密钥管理抽象（SecretWatcher）
+
+| 项目 | 说明 |
+|------|------|
+| **实现** | `pkg/auth/secret_manager.go` + `pkg/auth/keystore.go` — `SecretWatcher` / `NewKeyStoreWithWatcher` / `ChannelSecretWatcher` |
+| **机制** | 定义 `SecretWatcher` 与 `SecretProvider` 接口，解耦具体凭据源。支持从 Kubernetes Secret Watcher、HashiCorp Vault、AWS Secrets Manager 等集中式密钥库以事件流（`<-chan SecretEvent`）直接推送到内存中的 `KeyStore`，支持 `ReloadContent` 与 `UpdateKeys` 原子生效 |
+| **安全效果** | 摆脱纯本地明文磁盘文件依赖，消除 `/proc/<pid>/environ` 泄露环境变量 Key 的高危途径，实现秒级远程主动轮转 |
+| **防范攻击** | 容器/主机进程环境窥探窃取 Key、静态密钥分发不同步、紧急吊销窗口过长 |
 
 ---
 
@@ -267,6 +279,24 @@
 | **安全效果** | 确保限流、IP 白名单、日志记录使用真实客户端 IP |
 | **防范攻击** | `X-Forwarded-For` 伪造绕过 IP 白名单 / 限流 |
 
+#### 2.4.5 端点级差异化限流
+
+| 项目 | 说明 |
+|------|------|
+| **实现** | `pkg/middleware/ratelimit.go` + `engine-go/internal/security` — `RateLimitWithEndpoints` / `ParseEndpointRateLimits` |
+| **机制** | 环境变量 `PRIVACY_RATE_LIMIT_PER_ENDPOINT` 配置各路径前缀的特定 `RPS:Burst`（如 `/v1/privacy/process_file=10:20;/v1/agent/process=50:100`），采用最长前缀匹配与独立分片令牌桶，与默认全局 RPS 隔离 |
+| **安全效果** | 保护大算力密集型计算（如批量 DP、文件合规脱敏）不被占满，同时保证轻量健康检查和查询接口高可用 |
+| **防范攻击** | 高低开销接口资源竞争导致的拒绝服务、重型算力 API 突发调用引发的级联崩溃 |
+
+#### 2.4.6 Gateway 上游 TLS 协议强制
+
+| 项目 | 说明 |
+|------|------|
+| **实现** | `engine-go/cmd/privshield-gateway/main.go` |
+| **机制** | 支持 `GATEWAY_REQUIRE_FORWARDED_PROTO=true` / `GATEWAY_REQUIRE_TLS=true` 开关；反向代理强制校验来自可信代理的 `X-Forwarded-Proto: https` 请求头，非 HTTPS 外部流量直接返回 HTTP 426 Upgrade Required；非环回监听未配置协议强制时启动阶段输出 `slog.Warn` 审计日志 |
+| **安全效果** | 闭环网关「不终止 TLS、依赖上游负载均衡器」时的安全依赖盲区，确保外网流量必经 Ingress/LB TLS 终结 |
+| **防范攻击** | Ingress/LB 错误配置导致反向代理以明文 HTTP 裸露在公网/共享平台网络 |
+
 ---
 
 ### 2.5 安全审计与可观测性
@@ -337,41 +367,42 @@
 
 ---
 
-## 3. 待改进项与风险评估
+## 3. 待改进项与落地闭环记录
 
-### 3.1 高风险
+> **说明**：原 v5.0 报告中指出的 3 项待改进安全项已在 v5.1 完成全栈设计与代码落地。
 
-#### 3.1.1 无集中式密钥管理集成
+### 3.1 集中式密钥管理集成（原高风险项 · ✅ 已实装闭环）
 
 | 项目 | 说明 |
 |------|------|
-| **现状** | API Key 来源仅支持环境变量和文件，无 Vault / K8s Secret / AWS Secrets Manager 原生集成 |
-| **风险** | 环境变量可通过 `/proc/<pid>/environ` 泄露；文件需手动分发到各节点 |
-| **影响范围** | 全栈 |
-| **缓解措施** | K8s 环境可通过 projected volume 挂载 Secret 并结合 `KeyStore` 文件轮询实现近实时同步；非 K8s 环境可使用外部配置管理工具同步密钥文件 |
-| **改进建议** | 实现 Secret Manager Watcher 接口，监听密钥变更事件并自动刷新 `KeyStore` |
+| **原现状** | API Key 来源仅支持环境变量和文件，无 Vault / K8s Secret / AWS Secrets Manager 原生集成 |
+| **落地设计** | 在 `pkg/auth/secret_manager.go` 中定义统一的 `SecretWatcher` 与 `SecretProvider` 抽象接口；提供事件驱动 `ChannelSecretWatcher`；并在 `pkg/auth/keystore.go` 中提供 `NewKeyStoreWithWatcher`、`ReloadContent` 与 `UpdateKeys` 原子生效机制 |
+| **防护效果** | 允许从 Kubernetes Secret Watcher、HashiCorp Vault、AWS Secrets Manager 等集中式密钥平面直接向内存推流热更 API Key，无需依赖本地磁盘文件，消除环境变量与磁盘泄露风险 |
+| **代码位置** | [`pkg/auth/secret_manager.go`](file:///home/charles/code/PrivShield-go/pkg/auth/secret_manager.go)、[`pkg/auth/keystore.go`](file:///home/charles/code/PrivShield-go/pkg/auth/keystore.go) |
+| **单测覆盖** | [`pkg/auth/secret_manager_test.go`](file:///home/charles/code/PrivShield-go/pkg/auth/secret_manager_test.go)（`TestChannelSecretWatcher_Lifecycle`、`TestKeyStore_WithWatcher`） |
 
 ---
 
-### 3.2 低风险
-
-#### 3.2.1 限流策略无端点级差异化
+### 3.2 限流策略端点级差异化（原低风险项 · ✅ 已实装闭环）
 
 | 项目 | 说明 |
 |------|------|
-| **现状** | 限流使用全局默认 RPS/Burst（`PRIVACY_RATE_LIMIT_DEFAULT_RPS`），无端点级差异化配置 |
-| **风险** | 高开销接口（如文件处理、批量 DP 计算）与轻量查询接口共享限流配额，可能被低开销高频请求占满 |
-| **影响范围** | 全栈 |
-| **改进建议** | 支持 `PRIVACY_RATE_LIMIT_PER_ENDPOINT` 配置（`Settings` 已预留 `RateLimitPerEndpoint` 字段），按路径前缀设置差异化限流 |
+| **原现状** | 限流使用全局默认 RPS/Burst，高开销接口与轻量查询接口共享限流配额 |
+| **落地设计** | 在 `pkg/middleware/ratelimit.go` 中增加 `ParseEndpointRateLimits` 与 `RateLimitWithEndpoints`，支持通过环境变量 `PRIVACY_RATE_LIMIT_PER_ENDPOINT` 配置各路径前缀差异化限流规则（格式：`prefix=rps:burst;...`），基于独立分片令牌桶并最长前缀匹配 |
+| **防护效果** | 高计算开销接口（如文件脱敏、批处理）与常规轻量查询彻底配额隔离，杜绝因高耗算力端点被大并发调用占满导致全系统服务降级 |
+| **代码位置** | [`pkg/middleware/ratelimit.go`](file:///home/charles/code/PrivShield-go/pkg/middleware/ratelimit.go)、[`engine-go/internal/security/config.go`](file:///home/charles/code/PrivShield-go/engine-go/internal/security/config.go)、[`engine-go/internal/security/auth.go`](file:///home/charles/code/PrivShield-go/engine-go/internal/security/auth.go) |
+| **单测覆盖** | [`pkg/middleware/ratelimit_test.go`](file:///home/charles/code/PrivShield-go/pkg/middleware/ratelimit_test.go)（`TestParseEndpointRateLimits`、`TestRateLimitWithEndpoints`） |
 
-#### 3.2.2 Gateway TLS 终止依赖上游
+---
+
+### 3.3 Gateway 上游 TLS 终止校验（原低风险项 · ✅ 已实装闭环）
 
 | 项目 | 说明 |
 |------|------|
-| **现状** | Gateway 设置 `SkipTLSForRemote=true`，不终止 TLS，依赖上游负载均衡器/Ingress 处理 |
-| **风险** | 若上游未正确配置 TLS 终止，Gateway 将以明文 HTTP 暴露 |
-| **影响范围** | engine-go gateway |
-| **改进建议** | 在部署文档中明确要求 Ingress/LB 必须配置 TLS 终止；或在 Gateway 增加启动时探测上游 TLS 状态的健康检查 |
+| **原现状** | Gateway 设置 `SkipTLSForRemote=true`，不终止 TLS，依赖上游负载均衡器/Ingress 处理，存在上游漏配 TLS 导致网关明文暴露盲区 |
+| **落地设计** | 在 `engine-go/cmd/privshield-gateway/main.go` 中实装上游协议校验中间件：支持 `GATEWAY_REQUIRE_FORWARDED_PROTO=true` / `GATEWAY_REQUIRE_TLS=true` 环境变量；非环回请求强制校验 `X-Forwarded-Proto == "https"`，非 HTTPS 直接拒绝（HTTP 426 Upgrade Required）；未配置时对非环回监听启动输出明确的 `slog.Warn` 安全提示 |
+| **防护效果** | 彻底闭环反向代理对上游 Ingress/LB TLS 终结的配置盲区，杜绝未加密明文数据流入网关网络 |
+| **代码位置** | [`engine-go/cmd/privshield-gateway/main.go`](file:///home/charles/code/PrivShield-go/engine-go/cmd/privshield-gateway/main.go) |
 
 ---
 
@@ -394,7 +425,9 @@
 | **内部服务横向移动** | 攻破一个服务后尝试调用其他服务 | IP 白名单 + mTLS + gRPC 方法级 scope 隔离 | ✅ 已防御 |
 | **跨服务无差别调用** | 合法 mTLS 证书调用目标全部 gRPC 方法 | 全栈 gRPC 方法级 scope 映射（service-hub / datasource-mgr / audit-log） | ✅ 已防御 |
 | **IP 白名单配置遗漏** | 运维遗漏 `PRIVACY_ALLOWED_CIDRS` 配置 | 启动阶段 `slog.Warn` 警告 + fail-closed 校验链 | ✅ 已防御 |
-| **密钥管理平面攻击** | 通过 `/proc/environ` 获取环境变量中的 Key | 待改进：需集成 Secret Manager | ⚠️ 部分防御 |
+| **密钥管理平面攻击** | 通过 `/proc/environ` 获取环境变量中的 Key | `SecretWatcher` 事件流热注入，内存直读，避免持久化落盘与环境明文泄露 | ✅ 已防御 |
+| **高开销接口占用全局限流** | 突发调用大算力接口占满常规查询配额 | 端点级差异化限流（`PRIVACY_RATE_LIMIT_PER_ENDPOINT`）独立令牌桶隔离 | ✅ 已防御 |
+| **网关明文协议裸露** | 上游 Ingress/LB 未终止 TLS 或配置遗漏 | `GATEWAY_REQUIRE_FORWARDED_PROTO` 强制校验 HTTPS，非 HTTPS 直接拒绝 | ✅ 已防御 |
 
 ---
 
@@ -450,7 +483,7 @@
 | **通信保密性** | TLS 1.3 + SM4-GCM 信封加密 + fail-closed 强制 | ✅ 全覆盖 |
 | **安全审计** | 结构化日志 + 不可篡改审计链 + `auth_failures_total` Prometheus 指标 | ✅ 全覆盖 |
 | **入侵防范** | 登录锁定 + 32 分片限流 + WAF 73 规则 + IP 白名单 + 认证失败告警 + IP 空值警告 + gRPC fail-closed | ✅ 全覆盖 |
-| **密钥管理** | API Key 过期 + 全栈 KeyStore 热轮转（REST/gRPC 双通道）+ 遗留单 Key 空 scope（不再默认全权） | ✅ 全覆盖（Secret Manager 原生集成列为未来增强） |
+| **密钥管理** | API Key 过期 + 全栈 KeyStore 热轮转（REST/gRPC 双通道）+ `SecretWatcher` 事件驱动集中式注入（Vault/K8s）+ 遗留单 Key 空 scope | ✅ 全覆盖 |
 
 ---
 
@@ -468,6 +501,8 @@
 | `SERVICE_HUB_API_KEYS_FILE` | 空 | service-hub Key 文件路径（启用热轮转，5s 轮询） |
 | `DATASOURCE_MGR_API_KEYS_FILE` | 空 | datasource-mgr Key 文件路径（启用热轮转，5s 轮询） |
 | `AUDIT_LOG_API_KEYS_FILE` | 空 | audit-log Key 文件路径（启用热轮转，5s 轮询） |
+| `PRIVACY_RATE_LIMIT_PER_ENDPOINT` | 空 | 单端点差异化限流（格式：`prefix=rps:burst;...`） |
+| `GATEWAY_REQUIRE_FORWARDED_PROTO` | `false` | 网关强制要求 `X-Forwarded-Proto: https`（外部流量） |
 | `PRIVACY_ALLOWED_CIDRS` | 空 | IP 白名单 CIDR（空=透传 + 启动警告） |
 | `PRIVACY_TRUSTED_PROXIES` | 空 | 可信代理 CIDR |
 | `PRIVACY_AUTH_API_KEY` | 空 | ⚠️ 遗留（已弃用，启动时输出 `slog.Error`） |
@@ -480,6 +515,7 @@
 | Scope-based 权限 | `pkg/auth/identity.go` |
 | API Key 过期检查 | `pkg/auth/middleware.go` |
 | KeyStore 热轮转 | `pkg/auth/keystore.go` |
+| 集中式密钥管理 (SecretWatcher) | `pkg/auth/secret_manager.go` |
 | 热轮转中间件（engine-go） | `engine-go/internal/security/auth.go` |
 | Fail-closed 校验 | `pkg/config/security.go` |
 | IP 白名单 | `pkg/middleware/ip_allowlist.go` |
@@ -488,7 +524,9 @@
 | gRPC 鉴权（audit-log） | `services/audit-log/internal/grpcserver/auth.go` |
 | mTLS CN 白名单 + 热重载 | `pkg/tlsutil/whitelist.go` |
 | mTLS gRPC 拦截器 | `pkg/tlsutil/grpc_interceptor.go` |
-| 32 分片限流 | `pkg/middleware/ratelimit.go` |
+| 32 分片令牌桶限流 | `pkg/middleware/ratelimit.go` |
+| 端点级差异化限流 | `pkg/middleware/ratelimit.go` + `engine-go/internal/security/config.go` |
+| Gateway 上游 TLS 协议校验 | `engine-go/cmd/privshield-gateway/main.go` |
 | WAF 规则引擎 | `pkg/middleware/waf.go` |
 | 认证失败指标 | `pkg/auth/middleware.go` |
 | 指标注册 | `pkg/metrics/metrics.go` |

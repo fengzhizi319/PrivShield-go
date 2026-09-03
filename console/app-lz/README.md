@@ -6,11 +6,16 @@
 
 ## 1. 项目简介
 
-`console/app-lz` 是专为 `services/service-hub` 打造的集成测试与微服务网格全景工作台，打通四大核心服务：
-- **`services/service-hub`** (:8082 / :50052)：数据流水线调度中枢
-- **`services/datasource-mgr`** (:8083 / :50053)：模拟数据源管理与切片探查
-- **`services/audit-log`** (:8084 / :50054)：不可篡改 SHA-256 / Merkle 树审计存证
-- **`engine` Agent** (:8079 / :50051)：动态分类分级与隐私计算引擎
+`console/app-lz`（调度之眼）模拟外部业务系统应用程序，其 BFF 后端 (`console/app-lz/bff-go`) 运行于受保护服务网格边界之外。
+
+> **核心架构原则（唯一调度编排中枢）**：  
+> `app-lz BFF` 作为模拟的外部业务程序，**除了访问 `service-hub` (:8082)，并没有直接访问其他服务（`datasource-mgr` / `engine-go` / `audit-log`）的权限**。  
+> 所有 `app-lz` 发起的业务请求（集群拓扑、数据源目录、数据采样切片、任务派发、全链路脱敏、审计查询与 Merkle 验真）**全部由 `service-hub` 统一调度与编排**。`service-hub` 为唯一的编排调度入口。
+
+- **`services/service-hub`** (:8082 / :50052)：数据流水线调度中枢 · 唯一外部编排入口
+- **`services/datasource-mgr`** (:8083 / :50053)：模拟数据源管理（仅由 `service-hub` 内部调用）
+- **`services/audit-log`** (:8084 / :50054)：不可篡改 SHA-256 / Merkle 树审计存证（仅由 `service-hub` 内部调用）
+- **`engine` Agent** (:8079 / :50051)：动态分类分级与隐私计算引擎（仅由 `service-hub` 内部调用）
 
 前端设计风格与 `console/web` 保持高度一致（React 18 + TypeScript + Vite + Tailwind CSS + Lucide Icons），提供 **7 大核心工作台**。
 

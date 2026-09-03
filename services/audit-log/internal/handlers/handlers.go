@@ -102,8 +102,10 @@ func AuditLogPermissionForPath(method, path string) string {
 	case path == "/api/audit/snapshots/verify" && method == http.MethodPost,
 		path == "/api/audit/chain/verify":
 		return "audit:verify"
+	default:
+		// fail-closed：未显式映射的非豁免路径默认归入最高 admin 权限，防止空 scope 绕过
+		return "audit:admin"
 	}
-	return ""
 }
 
 // constantTimeLookupKeys 在排序后的 key 集合上执行常量时间 token 查找，防止时序攻击。

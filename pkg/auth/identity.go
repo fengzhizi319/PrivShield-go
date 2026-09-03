@@ -282,10 +282,17 @@ func ServiceHubPermissionForPath(path string) string {
 		return ""
 	case path == "/api/hub/status" || path == "/api/hub/tasks" ||
 		strings.HasPrefix(path, "/api/hub/tasks/") ||
-		path == "/api/hub/pipeline":
+		path == "/api/hub/pipeline" ||
+		path == "/api/hub/topology" ||
+		path == "/api/hub/audit/logs" ||
+		path == "/api/hub/datasources":
 		return "hub:read"
-	case path == "/api/hub/dispatch" || path == "/api/hub/classify":
+	case path == "/api/hub/dispatch" || path == "/api/hub/classify" ||
+		path == "/api/hub/fetch-and-desensitize" ||
+		path == "/api/hub/audit/verify":
 		return "hub:dispatch"
+	default:
+		// fail-closed：未显式映射的非豁免路径默认归入最高 admin 权限，防止空 scope 绕过
+		return "admin"
 	}
-	return ""
 }

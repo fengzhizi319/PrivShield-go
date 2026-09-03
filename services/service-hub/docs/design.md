@@ -11,7 +11,7 @@
 1. **统一接入与协商**：统一接收来自各调用方的数据申请请求与协商凭证；
 2. **数据源跨服务联动**：对接 `services/datasource-mgr`，按需调取医保（`ds_yibao` 19字段）、康养（`ds_kangyang` 27字段）及预留数据源进行高保真仿真调度；
 3. **六阶段流水线编排**：按「请求接入 → 申请原数 → 分类与脱敏一体化处理 → 返回结果 → 完成」编排任务；状态机保留 `ingest`、`fetch`、`classify`、`desensitize`、`return`、`audit` 六个追踪标签；
-4. **分类分级智能联动 (DB51/T 2989—2023)**：接入 Layer-1~3 分类分级漏斗，根据动态评估得出的数据敏感度（L1~L5）自动决策并下发最适隐私原语（明文/字段脱敏/K-匿名/差分隐私/查询混淆）；
+4. **分类分级智能联动 (DB51/T 2989—2023)**：接入 Layer-1~3 分类分级漏斗，根据动态评估得出的数据敏感度（L1~L5）自动决策并下发最适隐私原语（明文/字段脱敏/K-匿名/差分隐私；L4/L5 均映射为差分隐私 `dp`）；
 5. **双协议服务暴露**：同时提供面向 Web 前端与管控端的 HTTP REST API (:8082)，以及面向高性能微服务互通的双向 mTLS / CN 白名单 gRPC 服务 (:50052)；
 6. **多副本租约与生产级持久化**：
    * 支持 **PostgreSQL Phase B 存储底座**：基于 `FOR UPDATE SKIP LOCKED` 短事务实现多副本无阻塞争抢任务租约（`ClaimNext`）与令牌续期（`RenewLease`），彻底杜绝分布式死锁与脑裂重复消费；
@@ -83,17 +83,17 @@ graph TD
 调度中枢将每一个数据治理请求抽象为 6 个有序阶段：
 
 ```text
-① ingest (接入) ──▶ ② fetch (取数) ──▶ ③ classify（分类与脱敏一体化处理） ──▶ ④ desensitize（状态追踪） ──▶ ⑤ return (返回) ──▶ ⑥ audit（状态追踪） ──▶ done
+① ingest (接入) ──▶ ② fetch (取数) ──▶ ③ classify（分类与脱敏一体化处理） ──▶ ④ desensitize（状态追踪） ──▶ ⑤ return (返回) ──▶ ⑥ audit（出域存证） ──▶ done
 ```
 
 | 阶段 | 标识 | 执行动作 | 协同模块与机制 |
 |---|---|---|---|
 | **1. 接入** | `ingest` | 任务已由 HTTP `Dispatch` 或 gRPC `Dispatch` 创建为 `pending/queued`；流水线写入 `running/ingest` | 参数不合法时请求入口立即拒绝 |
-| **2. 取数** | `fetch` | 若请求未显式携带 Payload，自动调用 `datasource-mgr` 根据数据源标识（如 `ds_yibao`）抓取高保真样本 | `internal/datasource/client.go` |
+| **2. 取数** | `fetch` | 数据拉取阶段保留：分页抽取接口已移除，需由调用方在提交任务时显式携带 `payload`（按身份证号取数请使用独立的 `fetch-and-desensitize` 端点） | `internal/datasource/client.go` |
 | **3. 分类与脱敏** | `classify` | 一次调用 engine `POST /v1/agent/process`（404 时兼容 `POST /v1/medical/process`），一体化完成分类分级与脱敏处理 | `internal/agent.Client.ProcessAgent()` |
 | **4. 状态追踪** | `desensitize` | 不执行独立脱敏动作；已在 `classify` 的一体化调用中完成 | 状态机快速流转 |
 | **5. 返回** | `return` | 当前为状态追踪阶段，不写入额外结果对象 | 状态机快速流转 |
-| **6. 完成前追踪** | `audit` | 触发审计状态流转，随后写为 `completed/done` | 状态机快速流转 |
+| **6. 出域存证** | `audit` | 调用 `submitEvidence` 向 `audit-log` 提交出域存证（`POST /api/audit/logs`），提交失败即任务 `failed`（P0-6 fail-closed），成功后写为 `completed/done` | `internal/audit/client.go` |
 
 ---
 
@@ -106,5 +106,5 @@ graph LR
     Funnel -->|L2 内部| OpMask[字段级国密 SM3/正则打码 (mask)]
     Funnel -->|L3 敏感| OpKAnon[K-匿名化泛化 (k_anon)]
     Funnel -->|L4 高敏| OpDP[差分隐私加噪与四柱剥离 (dp)]
-    Funnel -->|L5 极敏| OpQOL[查询混淆与整块抹平 (qol)]
+    Funnel -->|L5 极敏| OpDP5[差分隐私加噪与四柱剥离 (dp)]
 ```

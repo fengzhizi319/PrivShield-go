@@ -105,7 +105,7 @@ func RateLimitMiddleware() gin.HandlerFunc {
 	rps := int(settings.RateLimitDefaultRPS)
 	burst := settings.RateLimitDefaultBurst
 
-	return pkgmiddleware.RateLimitWithKeyFunc(rps, burst, func(c *gin.Context) string {
+	return pkgmiddleware.RateLimitWithEndpoints(rps, burst, settings.RateLimitPerEndpoint, func(c *gin.Context) string {
 		path := c.Request.URL.Path
 		if pkgauth.IsHealthPathOrMethod(path) && settings.HealthNoRateLimit {
 			// 返回空 key，让 pkg/middleware 透传健康端点

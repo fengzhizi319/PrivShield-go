@@ -54,19 +54,13 @@ func IPAllowlist(allowedCIDRs []string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		clientIP := RealClientIP(c)
 		if clientIP == "" {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-				"code":    "FORBIDDEN",
-				"message": "unable to determine client IP",
-			})
+			AbortWithError(c, http.StatusForbidden, "FORBIDDEN", "unable to determine client IP", nil)
 			return
 		}
 
 		ip := net.ParseIP(clientIP)
 		if ip == nil {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-				"code":    "FORBIDDEN",
-				"message": "invalid client IP",
-			})
+			AbortWithError(c, http.StatusForbidden, "FORBIDDEN", "invalid client IP", nil)
 			return
 		}
 
@@ -77,10 +71,7 @@ func IPAllowlist(allowedCIDRs []string) gin.HandlerFunc {
 			}
 		}
 
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-			"code":    "IP_NOT_ALLOWED",
-			"message": "client IP not in allowed CIDR ranges",
-		})
+		AbortWithError(c, http.StatusForbidden, "IP_NOT_ALLOWED", "client IP not in allowed CIDR ranges", nil)
 	}
 }
 

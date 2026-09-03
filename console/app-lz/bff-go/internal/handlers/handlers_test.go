@@ -224,9 +224,9 @@ func TestInvokeDataApiContractAndFailClosed(t *testing.T) {
 					"id_card": "5101***********234",
 				},
 				"classification_report": map[string]any{"max_sensitivity": "L4"},
-				"summary":              map[string]any{"total_fields": 2, "sanitized_fields": 2},
-				"audit_task_id":        "fad-ds_yibao-510101199001011234-1234567890",
-				"via":                  "service-hub",
+				"summary":               map[string]any{"total_fields": 2, "sanitized_fields": 2},
+				"audit_task_id":         "fad-ds_yibao-510101199001011234-1234567890",
+				"via":                   "service-hub",
 			})
 			return
 		}

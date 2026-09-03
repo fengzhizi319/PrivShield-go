@@ -36,7 +36,9 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -191,6 +193,220 @@ func (c *Client) Endpoint() string {
 		return ""
 	}
 	return c.baseURLs[0]
+}
+
+// Health checks audit-log connectivity via HTTP GET /api/health.
+func (c *Client) Health(ctx context.Context) (map[string]any, error) {
+	if c == nil || len(c.baseURLs) == 0 {
+		return nil, ErrNotConfigured
+	}
+	if c.initErr != nil {
+		return nil, c.initErr
+	}
+	endpoint := c.pickEndpoint()
+	u := strings.TrimRight(endpoint, "/") + "/api/health"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.setHeaders(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: audit-log unreachable: %v", ErrUnavailable, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("audit-log health returned HTTP %d", resp.StatusCode)
+	}
+	var res map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// GetLogs queries audit logs from the audit-log service.
+func (c *Client) GetLogs(ctx context.Context, limit, offset int, datasourceID, taskID, apiCode string) (map[string]any, error) {
+	if c == nil || len(c.baseURLs) == 0 {
+		return nil, ErrNotConfigured
+	}
+	if c.initErr != nil {
+		return nil, c.initErr
+	}
+	endpoint := c.pickEndpoint()
+	parsedURL, err := url.Parse(strings.TrimRight(endpoint, "/") + "/api/audit/logs")
+	if err != nil {
+		return nil, err
+	}
+	q := parsedURL.Query()
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	if offset > 0 {
+		q.Set("offset", strconv.Itoa(offset))
+	}
+	if datasourceID != "" {
+		q.Set("datasource", datasourceID)
+		q.Set("datasource_id", datasourceID)
+	}
+	if taskID != "" {
+		q.Set("task_id", taskID)
+	}
+	if apiCode != "" {
+		q.Set("api_code", apiCode)
+	}
+	parsedURL.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsedURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: audit-log unreachable: %v", ErrUnavailable, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("audit-log returned HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var res map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// CreateLog forwards an audit log creation request to the audit-log service.
+func (c *Client) CreateLog(ctx context.Context, body []byte) (map[string]any, error) {
+	if c == nil || len(c.baseURLs) == 0 {
+		return nil, ErrNotConfigured
+	}
+	if c.initErr != nil {
+		return nil, c.initErr
+	}
+	endpoint := c.pickEndpoint()
+	u := strings.TrimRight(endpoint, "/") + "/api/audit/logs"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	c.setHeaders(req)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: audit-log unreachable: %v", ErrUnavailable, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("audit-log returned HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var res map[string]any
+	if err := json.Unmarshal(respBody, &res); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// Verify verifies Merkle tree integrity of snapshots against the audit-log service.
+func (c *Client) Verify(ctx context.Context) (map[string]any, error) {
+	if c == nil || len(c.baseURLs) == 0 {
+		return nil, ErrNotConfigured
+	}
+	if c.initErr != nil {
+		return nil, c.initErr
+	}
+	endpoint := c.pickEndpoint()
+
+	// 1. Get latest snapshot
+	snapURL := strings.TrimRight(endpoint, "/") + "/api/audit/snapshots?limit=1"
+	snapReq, err := http.NewRequestWithContext(ctx, http.MethodGet, snapURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.setHeaders(snapReq)
+
+	snapResp, err := c.httpClient.Do(snapReq)
+	if err != nil {
+		return nil, fmt.Errorf("%w: audit-log unreachable: %v", ErrUnavailable, err)
+	}
+	defer snapResp.Body.Close()
+
+	if snapResp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("audit-log snapshots returned HTTP %d", snapResp.StatusCode)
+	}
+
+	var snapResult struct {
+		Total     int `json:"total"`
+		Snapshots []struct {
+			ID            string    `json:"id"`
+			AuditLogID    string    `json:"audit_log_id"`
+			Timestamp     time.Time `json:"timestamp"`
+			IntegrityHash string    `json:"integrity_hash"`
+		} `json:"snapshots"`
+	}
+	if err := json.NewDecoder(snapResp.Body).Decode(&snapResult); err != nil {
+		return nil, fmt.Errorf("decode snapshots failed: %w", err)
+	}
+	if len(snapResult.Snapshots) == 0 {
+		return map[string]any{
+			"merkle_valid":  false,
+			"total_entries": snapResult.Total,
+			"source":        "audit-log",
+			"timestamp":     time.Now().UTC().Format(time.RFC3339),
+			"error":         "no snapshot stored yet; nothing to verify",
+		}, nil
+	}
+
+	// 2. Verify snapshot integrity
+	snapshotID := snapResult.Snapshots[0].ID
+	verifyPayload, _ := json.Marshal(map[string]string{"snapshot_id": snapshotID})
+	verifyURL := strings.TrimRight(endpoint, "/") + "/api/audit/snapshots/verify"
+	verifyReq, err := http.NewRequestWithContext(ctx, http.MethodPost, verifyURL, bytes.NewReader(verifyPayload))
+	if err != nil {
+		return nil, err
+	}
+	c.setHeaders(verifyReq)
+	verifyReq.Header.Set("Content-Type", "application/json")
+
+	verifyResp, err := c.httpClient.Do(verifyReq)
+	if err != nil {
+		return nil, fmt.Errorf("%w: audit-log verify unreachable: %v", ErrUnavailable, err)
+	}
+	defer verifyResp.Body.Close()
+
+	if verifyResp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("audit-log verify returned HTTP %d", verifyResp.StatusCode)
+	}
+
+	var verifyResult struct {
+		SnapshotID string `json:"snapshot_id"`
+		Valid      bool   `json:"valid"`
+		Expected   string `json:"expected"`
+		Actual     string `json:"actual"`
+		Via        string `json:"via"`
+	}
+	if err := json.NewDecoder(verifyResp.Body).Decode(&verifyResult); err != nil {
+		return nil, fmt.Errorf("decode verify response failed: %w", err)
+	}
+
+	return map[string]any{
+		"merkle_valid":  verifyResult.Valid,
+		"root_hash":     verifyResult.Actual,
+		"expected_hash": verifyResult.Expected,
+		"snapshot_id":   verifyResult.SnapshotID,
+		"total_entries": snapResult.Total,
+		"source":        "audit-log",
+		"timestamp":     time.Now().UTC().Format(time.RFC3339),
+	}, nil
 }
 
 // OutboundFlow describes one data flow leaving a datasource boundary.

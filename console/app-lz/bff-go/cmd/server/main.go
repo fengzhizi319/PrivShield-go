@@ -98,14 +98,12 @@ func main() {
 	// ── 第 5 步：打印启动 Banner ──────────────────────────────────────
 	// 显示 BFF 监听地址和所有上游微服务的连接地址，方便运维确认。
 	fmt.Println("==================================================================")
-	fmt.Println(" 🚀 启动 PrivShield Console App-LZ BFF (调度之眼 聚合后端)")
+	fmt.Println(" 🚀 启动 PrivShield Console App-LZ BFF (调度之眼 模拟业务程序)")
 	fmt.Println("==================================================================")
 	fmt.Printf("  REST API:       http://%s\n", addr)
-	fmt.Printf("  Service Hub:    %s\n", cfg.HubURL)
-	fmt.Printf("  Datasource Mgr: %s\n", cfg.DatasourceURL)
-	fmt.Printf("  Audit Log:      %s\n", cfg.AuditURL)
-	fmt.Printf("  Agent Engine:   %s\n", cfg.AgentURL)
+	fmt.Printf("  Service Hub:    %s (唯一调度编排中枢)\n", cfg.HubURL)
 	fmt.Printf("  Static SPA:     %s\n", cfg.StaticDir)
+	fmt.Println("  架构原则:       零直接下游访问 (datasource/audit/engine 均走 hub 编排)")
 	fmt.Println("==================================================================")
 
 	// ── 第 6 步：在后台 goroutine 启动 HTTP 监听 ─────────────────────

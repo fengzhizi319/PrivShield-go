@@ -59,6 +59,10 @@ type Config struct {
 	// Rate limiting / 每客户端 IP 令牌桶限流
 	RateLimitRPS   int // 每秒允许的请求数（默认 100，0 = 不限流）
 	RateLimitBurst int // 令牌桶突发容量（默认 200）
+
+	// Mock testing helpers / 本地测试桩辅助端点（/seed, /audit）
+	// 为 true 时开放开发测试专用接口；生产环境设为 false 以彻底禁用 Mock 端点。默认 true。
+	EnableMockHelpers bool
 }
 
 // Load reads configuration from environment variables with fallback defaults.
@@ -109,6 +113,9 @@ func Load() *Config {
 		// Rate limiting / 每客户端 IP 令牌桶限流（默认 100 rps，突发 200）
 		RateLimitRPS:   pkgconfig.EnvInt("DATASOURCE_MGR_RATE_LIMIT_RPS", 100),
 		RateLimitBurst: pkgconfig.EnvInt("DATASOURCE_MGR_RATE_LIMIT_BURST", 200),
+
+		// Mock testing helpers / 本地测试桩辅助端点（默认 true，生产可置 false 彻底关闭）
+		EnableMockHelpers: pkgconfig.EnvBool("DATASOURCE_MGR_ENABLE_MOCK_HELPERS", true),
 	}
 }
 

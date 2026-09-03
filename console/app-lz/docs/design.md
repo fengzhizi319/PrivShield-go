@@ -106,10 +106,7 @@ flowchart TB
 
     %% 连接关系
     Frontend <-->|HTTP / JSON / SSE| BFF
-    BFF -->|REST / gRPC mTLS| ServiceHub
-    BFF -->|REST / gRPC mTLS| DatasourceMgr
-    BFF -->|REST / gRPC mTLS| AuditLog
-    BFF -->|REST / gRPC mTLS| AgentEngine
+    BFF -->|REST / gRPC (唯一外部编排调用)| ServiceHub
 
     ServiceHub -->|1. 抓取原始切片| DatasourceMgr
     ServiceHub -->|2. 分类分级与脱敏| AgentEngine

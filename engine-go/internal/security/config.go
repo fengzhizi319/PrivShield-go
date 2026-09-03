@@ -8,16 +8,14 @@ import (
 
 	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
+	pkgmiddleware "github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 )
 
 // KeyConfig 表示单个 API Key 配置。
 type KeyConfig = pkgauth.KeyConfig
 
 // EndpointRateLimit 单端点限流配置。
-type EndpointRateLimit struct {
-	RPS   float64
-	Burst int
-}
+type EndpointRateLimit = pkgmiddleware.EndpointRateLimit
 
 // Settings 安全配置，从环境变量加载。
 // 嵌入 pkg/auth.Settings 以复用 scope-based 认证配置。
@@ -113,6 +111,7 @@ func loadSettings() *Settings {
 		MTLSWhitelistFile:     pkgconfig.EnvString("PRIVACY_AUTH_MTLS_WHITELIST_FILE", ""),
 		RateLimitDefaultRPS:   pkgconfig.EnvFloat("PRIVACY_RATE_LIMIT_DEFAULT_RPS", 100),
 		RateLimitDefaultBurst: pkgconfig.EnvInt("PRIVACY_RATE_LIMIT_DEFAULT_BURST", 200),
+		RateLimitPerEndpoint:  pkgmiddleware.ParseEndpointRateLimits(pkgconfig.EnvString("PRIVACY_RATE_LIMIT_PER_ENDPOINT", "")),
 		RateLimitRedisURL:     pkgconfig.EnvString("PRIVACY_RATE_LIMIT_REDIS_URL", ""),
 		MTLSAllowedCNs:        parseStringList(pkgconfig.EnvString("PRIVACY_AUTH_MTLS_ALLOWED_CNS", "")),
 	}

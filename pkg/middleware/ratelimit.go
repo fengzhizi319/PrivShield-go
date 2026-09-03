@@ -78,7 +78,10 @@ func MaxConcurrent(limit int) gin.HandlerFunc {
 // 32-shard token bucket rate limiter
 // ──────────────────────────────────────────────
 
-const numRateLimitShards = 32
+const (
+	numRateLimitShards = 32
+	maxBucketsPerShard = 10000 // 单分片最大桶容量上限，全实例最多 320,000 桶，防止 Hash-Flooding DoS 导致内存耗尽
+)
 
 type rateLimitBucket struct {
 	tokens    float64
@@ -138,6 +141,21 @@ func (l *shardedRateLimiter) allow(key string, rps, burst float64) bool {
 	now := time.Now()
 	b, ok := shard.buckets[key]
 	if !ok {
+		// 容量保护（三级等保 G-12）：单分片达到容量水位上限时，优先淘汰闲置超过 2 分钟的旧桶
+		if len(shard.buckets) >= maxBucketsPerShard {
+			for k, oldB := range shard.buckets {
+				if now.Sub(oldB.lastCheck) > 2*time.Minute {
+					delete(shard.buckets, k)
+				}
+			}
+		}
+		// 若仍达到上限，强制驱逐随机旧桶，防止 Hash-Flooding 内存耗尽攻击
+		if len(shard.buckets) >= maxBucketsPerShard {
+			for k := range shard.buckets {
+				delete(shard.buckets, k)
+				break
+			}
+		}
 		b = &rateLimitBucket{tokens: burst, lastCheck: now}
 		shard.buckets[key] = b
 	}
@@ -223,6 +241,80 @@ func (l *IPRateLimiter) Allow(key string) bool {
 	return l.limiter.allow(key, l.rps, l.burst)
 }
 
+// AllowWithParams checks whether a request from the given key is permitted with custom rps and burst.
+func (l *IPRateLimiter) AllowWithParams(key string, rps, burst float64) bool {
+	if l.limiter == nil {
+		return true
+	}
+	if rps <= 0 {
+		rps = l.rps
+	}
+	if burst <= 0 {
+		burst = l.burst
+	}
+	return l.limiter.allow(key, rps, burst)
+}
+
+// EndpointRateLimit 单端点/前缀限流规则。
+type EndpointRateLimit struct {
+	RPS   float64
+	Burst int
+}
+
+// ParseEndpointRateLimits 从环境变量字符串解析单端点差异化限流配置。
+// 支持格式："/v1/privacy/process_file=10:20;/v1/agent/process=50:100" 或以逗号分隔。
+func ParseEndpointRateLimits(envStr string) map[string]*EndpointRateLimit {
+	envStr = strings.TrimSpace(envStr)
+	if envStr == "" {
+		return nil
+	}
+
+	result := make(map[string]*EndpointRateLimit)
+	items := strings.FieldsFunc(envStr, func(r rune) bool {
+		return r == ';' || r == ','
+	})
+
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		parts := strings.SplitN(item, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		prefix := strings.TrimSpace(parts[0])
+		limitPart := strings.TrimSpace(parts[1])
+		if prefix == "" || limitPart == "" {
+			continue
+		}
+
+		limitParts := strings.SplitN(limitPart, ":", 2)
+		var rps float64
+		var burst int
+		if _, err := fmt.Sscanf(limitParts[0], "%f", &rps); err != nil || rps <= 0 {
+			continue
+		}
+		if len(limitParts) == 2 {
+			if _, err := fmt.Sscanf(limitParts[1], "%d", &burst); err != nil || burst <= 0 {
+				burst = int(rps * 2)
+			}
+		} else {
+			burst = int(rps * 2)
+		}
+
+		result[prefix] = &EndpointRateLimit{
+			RPS:   rps,
+			Burst: burst,
+		}
+	}
+
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
 // RateLimit returns a Gin middleware that enforces per-key token bucket rate limiting.
 // The default key is the client IP.
 //
@@ -234,7 +326,13 @@ func RateLimit(rps int, burst int) gin.HandlerFunc {
 // RateLimitWithKeyFunc returns a Gin middleware that enforces token bucket rate limiting
 // using a caller-provided key function. If keyFunc returns an empty string, the client IP is used.
 func RateLimitWithKeyFunc(rps int, burst int, keyFunc func(*gin.Context) string) gin.HandlerFunc {
-	limiter := NewIPRateLimiter(rps, burst)
+	return RateLimitWithEndpoints(rps, burst, nil, keyFunc)
+}
+
+// RateLimitWithEndpoints returns a Gin middleware that enforces both endpoint-specific
+// and default token bucket rate limiting using a caller-provided key function.
+func RateLimitWithEndpoints(defaultRPS int, defaultBurst int, perEndpoint map[string]*EndpointRateLimit, keyFunc func(*gin.Context) string) gin.HandlerFunc {
+	limiter := NewIPRateLimiter(defaultRPS, defaultBurst)
 
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
@@ -247,9 +345,28 @@ func RateLimitWithKeyFunc(rps int, burst int, keyFunc func(*gin.Context) string)
 		if key == "" {
 			key = RealClientIP(c)
 		}
-		if !limiter.Allow(key) {
+
+		rps := float64(defaultRPS)
+		burst := float64(defaultBurst)
+		bucketKey := key
+
+		// 最长前缀匹配端点差异化配置
+		var matchedPrefix string
+		for prefix, rule := range perEndpoint {
+			if strings.HasPrefix(path, prefix) && len(prefix) > len(matchedPrefix) {
+				matchedPrefix = prefix
+				rps = rule.RPS
+				burst = float64(rule.Burst)
+			}
+		}
+
+		if matchedPrefix != "" {
+			bucketKey = matchedPrefix + "@" + key
+		}
+
+		if !limiter.AllowWithParams(bucketKey, rps, burst) {
 			c.Writer.Header().Set("Retry-After", "1")
-			c.Writer.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", rps))
+			c.Writer.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", int(rps)))
 			AbortWithError(c, http.StatusTooManyRequests,
 				"RATE_LIMITED",
 				"Too Many Requests: rate limit exceeded, please retry later",

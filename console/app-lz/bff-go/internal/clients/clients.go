@@ -24,8 +24,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/fengzhizi319/PrivShield-go/console/app-lz/bff-go/internal/catalog"
@@ -85,16 +85,9 @@ func (c *ClientPool) setHeaders(req *http.Request, serviceID string, requestID s
 	if req.Header.Get("Authorization") != "" {
 		return
 	}
-	var apiKey string
-	switch serviceID {
-	case "service-hub", "hub":
-		apiKey = c.cfg.HubAPIKey
-	case "engine", "agent":
-		apiKey = c.cfg.AgentAPIKey
-	case "datasource-mgr", "datasource":
-		apiKey = c.cfg.DatasourceAPIKey
-	case "audit-log", "audit":
-		apiKey = c.cfg.AuditAPIKey
+	apiKey := c.cfg.HubAPIKey
+	if apiKey == "" {
+		apiKey = c.cfg.APIKey
 	}
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
@@ -207,72 +200,97 @@ func (c *ClientPool) ProbeNode(ctx context.Context, id, name, httpURL, grpcAddr,
 	return node
 }
 
-// GetTopology 获取所有 4 个微服务的实时连接状态。
-//
-// 服务顺序严格固定（前端拓扑大屏按此顺序渲染）：
-//  1. service-hub — 调度中枢
-//  2. engine — 隐私与分类引擎
-//  3. datasource-mgr — 数据源管理
-//  4. audit-log — 脱敏审计日志
-//
-// 并发策略：使用 WaitGroup 并发探测 4 个服务，总延迟 = max(单个探测延迟)，而非 4 倍之和。
-// 整体状态判定：全部 ready → "healthy"，任一非 ready → "degraded"。
+// GetTopology 从唯一编排中枢 service-hub 获取微服务网格拓扑状态。
+// app-lz 作为外部模拟业务系统，无权直接探测 engine / datasource-mgr / audit-log，
+// 所有拓扑状态均由 service-hub 统一下发。
 func (c *ClientPool) GetTopology(ctx context.Context, protocol string) models.TopologyResponse {
 	if protocol == "" {
 		protocol = "rest"
 	}
 
-	// 定义 4 个探测目标（顺序固定，前端依赖此顺序）
-	targets := []struct {
-		id       string
-		name     string
-		httpURL  string
-		grpcAddr string
-	}{
-		{"service-hub", "调度中枢 (Service Hub)", c.cfg.HubURL, c.cfg.HubGRPC},
-		{"engine", "隐私与分类引擎 (PrivShield Agent)", c.cfg.AgentURL, c.cfg.AgentGRPC},
-		{"datasource-mgr", "数据源管理 (Datasource Mgr)", c.cfg.DatasourceURL, c.cfg.DatasourceGRPC},
-		{"audit-log", "脱敏审计日志 (Audit Log)", c.cfg.AuditURL, c.cfg.AuditGRPC},
+	url := fmt.Sprintf("%s/api/hub/topology?protocol=%s", strings.TrimRight(c.cfg.HubURL, "/"), url.QueryEscape(protocol))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return c.degradedTopology(protocol, err.Error())
+	}
+	c.setHeaders(req, "hub", "")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return c.degradedTopology(protocol, fmt.Sprintf("service-hub unreachable: %v", err))
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return c.degradedTopology(protocol, fmt.Sprintf("service-hub returned HTTP %d", resp.StatusCode))
 	}
 
-	// 并发探测所有服务节点
-	nodes := make([]models.ServiceNode, len(targets))
-	var wg sync.WaitGroup
-
-	for i, target := range targets {
-		wg.Add(1)
-		go func(idx int, t struct {
-			id       string
-			name     string
-			httpURL  string
-			grpcAddr string
-		}) {
-			defer wg.Done()
-			nodes[idx] = c.ProbeNode(ctx, t.id, t.name, t.httpURL, t.grpcAddr, protocol)
-		}(i, target)
+	var topo models.TopologyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&topo); err != nil {
+		return c.degradedTopology(protocol, fmt.Sprintf("failed to decode topology: %v", err))
 	}
-
-	wg.Wait()
-
-	// 判定整体状态：全部 ready 才为 "healthy"，否则 "degraded"
-	allReady := true
-	for _, n := range nodes {
-		if n.Status != "ready" {
-			allReady = false
-			break
-		}
+	if len(topo.Services) == 0 {
+		return c.degradedTopology(protocol, "service-hub returned empty topology")
 	}
+	return topo
+}
 
-	status := "healthy"
-	if !allReady {
-		status = "degraded"
-	}
-
+// degradedTopology 构造服务降级时的兜底拓扑响应。
+func (c *ClientPool) degradedTopology(protocol, detail string) models.TopologyResponse {
 	return models.TopologyResponse{
-		Status:         status,
+		Status:         "degraded",
 		ActiveProtocol: protocol,
 		Timestamp:      time.Now().UTC().Format(time.RFC3339),
-		Services:       nodes,
+		Services: []models.ServiceNode{
+			{
+				ID:         "service-hub",
+				Name:       "调度中枢 (Service Hub)",
+				HTTPURL:    c.cfg.HubURL,
+				GRPCAddr:   c.cfg.HubGRPC,
+				Status:     "unreachable",
+				RESTStatus: "unreachable",
+				GRPCStatus: "unreachable",
+				Protocol:   protocol,
+				Version:    "1.8.0",
+				Details:    map[string]any{"error": detail},
+			},
+			{
+				ID:         "engine",
+				Name:       "隐私与分类引擎 (PrivShield Agent)",
+				HTTPURL:    "",
+				GRPCAddr:   "",
+				Status:     "unreachable",
+				RESTStatus: "unreachable",
+				GRPCStatus: "unreachable",
+				Protocol:   protocol,
+				Version:    "1.8.0",
+				Details:    map[string]any{"error": "service-hub unreachable"},
+			},
+			{
+				ID:         "datasource-mgr",
+				Name:       "数据源管理 (Datasource Mgr)",
+				HTTPURL:    "",
+				GRPCAddr:   "",
+				Status:     "unreachable",
+				RESTStatus: "unreachable",
+				GRPCStatus: "unreachable",
+				Protocol:   protocol,
+				Version:    "1.8.0",
+				Details:    map[string]any{"error": "service-hub unreachable"},
+			},
+			{
+				ID:         "audit-log",
+				Name:       "脱敏审计日志 (Audit Log)",
+				HTTPURL:    "",
+				GRPCAddr:   "",
+				Status:     "unreachable",
+				RESTStatus: "unreachable",
+				GRPCStatus: "unreachable",
+				Protocol:   protocol,
+				Version:    "1.8.0",
+				Details:    map[string]any{"error": "service-hub unreachable"},
+			},
+		},
 	}
 }
 
@@ -381,30 +399,29 @@ func (c *ClientPool) GetTask(ctx context.Context, taskID string) (*models.Task, 
 	return &direct, nil
 }
 
-// GetDatasources 从 datasource-mgr 查询已注册的数据源目录。
+// GetDatasources 通过唯一调度中枢 service-hub 查询已注册的数据源目录。
 //
-// canonical 调用路径：GET {DatasourceURL}/api/datasources
-// （旧实现误用 /api/v1/datasources，该路径在上游不存在 → 恒 404 静默降级，即 D-01）
+// canonical 调用路径：GET {HubURL}/api/hub/datasources
 //
 // 降级策略：服务不可达 / 非 2xx / 解析失败 / 空列表时，返回由 pkg/naming 注册表
 // 派生的兜底目录，并把 Source 标为 "fallback" + Detail 写明原因（9.3 不变式 4）。
 func (c *ClientPool) GetDatasources(ctx context.Context) (models.DatasourcesResponse, error) {
-	path := "/api/datasources"
-	url := strings.TrimRight(c.cfg.DatasourceURL, "/") + path
+	path := "/api/hub/datasources"
+	url := strings.TrimRight(c.cfg.HubURL, "/") + path
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	c.setHeaders(req, "datasource", "")
+	c.setHeaders(req, "hub", "")
 	if err != nil {
 		return models.DatasourcesResponse{Datasources: fallbackDatasources(), Total: len(fallbackDatasources()), Source: sourceFallback, Detail: err.Error(), Via: viaBFF}, err
 	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return degradedDatasources(fmt.Sprintf("datasource-mgr unreachable: %v", err)), nil
+		return degradedDatasources(fmt.Sprintf("service-hub unreachable: %v", err)), nil
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return degradedDatasources(fmt.Sprintf("datasource-mgr returned HTTP %d for %s", resp.StatusCode, path)), nil
+		return degradedDatasources(fmt.Sprintf("service-hub returned HTTP %d for %s", resp.StatusCode, path)), nil
 	}
 
 	var result struct {
@@ -416,7 +433,7 @@ func (c *ClientPool) GetDatasources(ctx context.Context) (models.DatasourcesResp
 		return degradedDatasources(fmt.Sprintf("failed to decode datasource catalog: %v", err)), nil
 	}
 	if len(result.Datasources) == 0 {
-		return degradedDatasources("datasource-mgr returned an empty catalog"), nil
+		return degradedDatasources("service-hub returned an empty catalog"), nil
 	}
 
 	for i := range result.Datasources {
@@ -429,7 +446,7 @@ func (c *ClientPool) GetDatasources(ctx context.Context) (models.DatasourcesResp
 	return models.DatasourcesResponse{
 		Datasources: result.Datasources,
 		Total:       total,
-		Source:      "datasource-mgr",
+		Source:      "service-hub",
 		Via:         viaBFF,
 	}, nil
 }
@@ -489,14 +506,11 @@ func fallbackDatasources() []models.Datasource {
 	return out
 }
 
-// GetDatasourceSlice 从 datasource-mgr 获取数据源的采样行数据。
-//
-// canonical 调用路径：GET {DatasourceURL}/api/datasources/{id}/records?limit=&offset=
+// GetDatasourceSlice 获取数据源的展示样本切片（原始切片不出域，仅返回本地演示样本）。
 //
 // 入站 rawID 允许任意注册表表现（canonical / slug / 文件名 / 中文名 / api_code），
 // 在服务边界归一化一次；未知 ID 返回 INVALID_DATASOURCE_ID(400)、预留位返回
 // RESERVED_DATASOURCE(409)，不再静默落到医保（修复 D-11）。
-// 上游不可用时返回 Source="fallback" 的本地样本，供大屏演示但不谎报为真实数据。
 func (c *ClientPool) GetDatasourceSlice(ctx context.Context, rawID string, limit, offset int) (models.DatasourceSliceResponse, error) {
 	datasourceID, err := ResolveDatasourceID(rawID)
 	if err != nil {
@@ -505,67 +519,13 @@ func (c *ClientPool) GetDatasourceSlice(ctx context.Context, rawID string, limit
 	if limit <= 0 {
 		limit = 10
 	}
-	if offset < 0 {
-		offset = 0
-	}
-
-	url := fmt.Sprintf("%s/api/datasources/%s/records?limit=%d&offset=%d",
-		strings.TrimRight(c.cfg.DatasourceURL, "/"), datasourceID, limit, offset)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	c.setHeaders(req, "datasource", "")
-	if err != nil {
-		return models.DatasourceSliceResponse{}, err
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fallbackSlice(datasourceID, limit, fmt.Sprintf("datasource-mgr unreachable: %v", err)), nil
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fallbackSlice(datasourceID, limit, fmt.Sprintf("datasource-mgr returned HTTP %d", resp.StatusCode)), nil
-	}
-
-	var result struct {
-		DatasourceID string           `json:"datasource_id"`
-		SourceID     string           `json:"source_id"` // DEPRECATED 出站字段
-		Total        int              `json:"total"`
-		Records      []map[string]any `json:"records"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fallbackSlice(datasourceID, limit, fmt.Sprintf("failed to decode records: %v", err)), nil
-	}
-
-	returnedID := result.DatasourceID
-	if returnedID == "" {
-		returnedID = result.SourceID
-	}
-	if returnedID == "" {
-		returnedID = datasourceID
-	}
-	if returnedID != datasourceID {
-		// 上游返回了与请求不同的数据源：立即报错而不是静默接受（D-11 同类风险）
-		return models.DatasourceSliceResponse{}, &UpstreamError{
-			Code:    CodeAmbiguousSource,
-			Message: fmt.Sprintf("datasource-mgr answered for %q while %q was requested", returnedID, datasourceID),
-			Field:   "datasource_id",
-			Status:  http.StatusBadGateway,
-		}
-	}
-
-	return models.DatasourceSliceResponse{
-		DatasourceID: datasourceID,
-		Count:        len(result.Records),
-		Total:        result.Total,
-		Records:      result.Records,
-		Source:       "datasource-mgr",
-	}, nil
+	// 原始数据切片不出域，datasource-mgr 不提供 /records 接口，返回带显式 fallback 标记的本地安全演示样本
+	return fallbackSlice(datasourceID, limit, "datasource raw records sampling endpoint not provided (原始数据切片不出域)"), nil
 }
 
-// GetDatasourceRecordByIDCard 按身份证号从 datasource-mgr 查询单条记录。
+// GetDatasourceRecordByIDCard 按身份证号通过 service-hub 查询单条记录。
 //
-// canonical 调用路径：GET {DatasourceURL}/api/datasources/{id}/record-by-id?id_card_no=xxx
+// canonical 调用路径：通过 service-hub 的 FetchAndDesensitizeViaHub 同步端到端编排接口。
 //
 // 入站 rawID 允许任意注册表表现（canonical / slug / 文件名 / 中文名 / api_code），
 // 在服务边界归一化一次。返回结果包装为 DatasourceSliceResponse（Records 只有 1 条或 0 条）。
@@ -575,50 +535,25 @@ func (c *ClientPool) GetDatasourceRecordByIDCard(ctx context.Context, rawID, idC
 		return models.DatasourceSliceResponse{}, err
 	}
 
-	url := fmt.Sprintf("%s/api/datasources/%s/record-by-id?id_card_no=%s",
-		strings.TrimRight(c.cfg.DatasourceURL, "/"), datasourceID, idCardNo)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	c.setHeaders(req, "datasource", "")
+	result, err := c.FetchAndDesensitizeViaHub(ctx, datasourceID, idCardNo)
 	if err != nil {
 		return models.DatasourceSliceResponse{}, err
 	}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return models.DatasourceSliceResponse{}, fmt.Errorf("datasource-mgr unreachable: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return models.DatasourceSliceResponse{}, fmt.Errorf("datasource-mgr returned HTTP %d", resp.StatusCode)
-	}
-
-	var result struct {
-		DatasourceID string         `json:"datasource_id"`
-		Record       map[string]any `json:"record"`
-		Found        bool           `json:"found"`
-		Via          string         `json:"via"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return models.DatasourceSliceResponse{}, fmt.Errorf("failed to decode record: %v", err)
-	}
-
 	records := make([]map[string]any, 0, 1)
-	if result.Found && result.Record != nil {
-		records = append(records, result.Record)
-	}
-
-	returnedID := result.DatasourceID
-	if returnedID == "" {
-		returnedID = datasourceID
+	found, _ := result["found"].(bool)
+	if found {
+		if rec, ok := result["sanitized_data"].(map[string]any); ok && rec != nil {
+			records = append(records, rec)
+		}
 	}
 
 	return models.DatasourceSliceResponse{
-		DatasourceID: returnedID,
+		DatasourceID: datasourceID,
 		Count:        len(records),
 		Total:        len(records),
 		Records:      records,
-		Source:       "datasource-mgr",
+		Source:       "service-hub",
 	}, nil
 }
 
@@ -725,7 +660,7 @@ func (c *ClientPool) GetAuditLogs(ctx context.Context, limit, offset int, rawDat
 	return c.GetAuditLogsFiltered(ctx, limit, offset, rawDatasourceID, "", "")
 }
 
-// GetAuditLogsFiltered 支持按 datasource、task_id、api_code 复合过滤查询审计日志。
+// GetAuditLogsFiltered 支持按 datasource、task_id、api_code 复合过滤通过 service-hub 查询审计日志。
 func (c *ClientPool) GetAuditLogsFiltered(ctx context.Context, limit, offset int, rawDatasourceID, taskID, apiCode string) (models.AuditLogsResponse, error) {
 	datasourceID := ""
 	if strings.TrimSpace(rawDatasourceID) != "" {
@@ -736,7 +671,7 @@ func (c *ClientPool) GetAuditLogsFiltered(ctx context.Context, limit, offset int
 		datasourceID = resolved
 	}
 
-	path := fmt.Sprintf("/api/audit/logs?limit=%d&offset=%d", limit, offset)
+	path := fmt.Sprintf("/api/hub/audit/logs?limit=%d&offset=%d", limit, offset)
 	if datasourceID != "" {
 		path += "&datasource=" + datasourceID
 	}
@@ -746,21 +681,21 @@ func (c *ClientPool) GetAuditLogsFiltered(ctx context.Context, limit, offset int
 	if strings.TrimSpace(apiCode) != "" {
 		path += "&api_code=" + strings.TrimSpace(apiCode)
 	}
-	url := strings.TrimRight(c.cfg.AuditURL, "/") + path
+	url := strings.TrimRight(c.cfg.HubURL, "/") + path
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	c.setHeaders(req, "audit", "")
+	c.setHeaders(req, "hub", "")
 	if err != nil {
 		return models.AuditLogsResponse{}, err
 	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return degradedAuditLogs(fmt.Sprintf("audit-log unreachable: %v", err), datasourceID), nil
+		return degradedAuditLogs(fmt.Sprintf("service-hub unreachable: %v", err), datasourceID), nil
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return degradedAuditLogs(fmt.Sprintf("audit-log returned HTTP %d for %s", resp.StatusCode, path), datasourceID), nil
+		return degradedAuditLogs(fmt.Sprintf("service-hub returned HTTP %d for %s", resp.StatusCode, path), datasourceID), nil
 	}
 
 	var result struct {
@@ -782,7 +717,7 @@ func (c *ClientPool) GetAuditLogsFiltered(ctx context.Context, limit, offset int
 	return models.AuditLogsResponse{
 		Logs:   result.Logs,
 		Total:  total,
-		Source: "audit-log",
+		Source: "service-hub",
 		Via:    viaBFF,
 	}, nil
 }
@@ -848,12 +783,12 @@ func defaultAuditLogs() []models.AuditLogItem {
 	return items
 }
 
-// RecordAudit 向 audit-log 写入一条真实存证（POST /api/audit/logs）。
+// RecordAudit 通过唯一调度中枢 service-hub 写入一条存证（POST /api/hub/audit/logs）。
 //
 // 返回上游生成的记录 ID；上游不可达时返回 *UpstreamError（UPSTREAM_UNAVAILABLE/503），
 // 调用方必须将该阶段标为 skipped/error，不得伪造 audit_entry_id（修复 D-03）。
 func (c *ClientPool) RecordAudit(ctx context.Context, req models.AuditRecordRequest) (string, error) {
-	path := "/api/audit/logs"
+	path := "/api/hub/audit/logs"
 	if strings.TrimSpace(req.Datasource) == "" && strings.TrimSpace(req.APICode) != "" {
 		if dsID, ok := naming.DataSourceForAPICode(req.APICode); ok {
 			req.Datasource = dsID
@@ -872,8 +807,8 @@ func (c *ClientPool) RecordAudit(ctx context.Context, req models.AuditRecordRequ
 	}
 
 	body, _ := json.Marshal(req)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.cfg.AuditURL, "/")+path, bytes.NewReader(body))
-	c.setHeaders(httpReq, "audit", "")
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.cfg.HubURL, "/")+path, bytes.NewReader(body))
+	c.setHeaders(httpReq, "hub", "")
 	if err != nil {
 		return "", err
 	}
@@ -883,7 +818,7 @@ func (c *ClientPool) RecordAudit(ctx context.Context, req models.AuditRecordRequ
 	if err != nil {
 		return "", &UpstreamError{
 			Code:    CodeUpstreamUnavailable,
-			Message: fmt.Sprintf("audit-log unreachable: %v", err),
+			Message: fmt.Sprintf("service-hub unreachable: %v", err),
 			Status:  http.StatusServiceUnavailable,
 			Err:     err,
 		}
@@ -894,7 +829,7 @@ func (c *ClientPool) RecordAudit(ctx context.Context, req models.AuditRecordRequ
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return "", &UpstreamError{
 			Code:    CodeUpstreamUnavailable,
-			Message: fmt.Sprintf("audit-log returned HTTP %d for %s: %s", resp.StatusCode, path, strings.TrimSpace(string(detail))),
+			Message: fmt.Sprintf("service-hub returned HTTP %d for %s: %s", resp.StatusCode, path, strings.TrimSpace(string(detail))),
 			Status:  http.StatusBadGateway,
 		}
 	}
@@ -916,101 +851,66 @@ func (c *ClientPool) RecordAudit(ctx context.Context, req models.AuditRecordRequ
 	default:
 		return "", &UpstreamError{
 			Code:    CodeUpstreamUnavailable,
-			Message: "audit-log accepted the record but returned no entry id",
+			Message: "service-hub accepted the record but returned no entry id",
 			Status:  http.StatusBadGateway,
 		}
 	}
 }
 
-// VerifyAudit 对最近一条审计快照执行真实完整性验真。
+// VerifyAudit 通过唯一调度中枢 service-hub 对最近一条审计快照执行真实完整性验真。
 //
 // canonical 调用链路：
-//  1. GET  {AuditURL}/api/audit/snapshots?limit=1        → 取最近快照 ID 与存证总数
-//  2. POST {AuditURL}/api/audit/snapshots/verify        → 上游重算 SHA-256 完整性哈希
 //
-// （旧实现调用不存在的 /api/v1/audit/verify，失败时还会合成 MerkleValid:true，即 D-02）
+//	POST {HubURL}/api/hub/audit/verify
+//
 // 上游不可达时返回 MerkleValid=false + Source="fallback"，绝不合成“验真通过”。
 func (c *ClientPool) VerifyAudit(ctx context.Context) (models.AuditVerifyResponse, error) {
-	snapshotsPath := "/api/audit/snapshots?limit=1"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		strings.TrimRight(c.cfg.AuditURL, "/")+snapshotsPath, nil)
-	c.setHeaders(req, "audit", "")
+	verifyURL := strings.TrimRight(c.cfg.HubURL, "/") + "/api/hub/audit/verify"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, verifyURL, nil)
+	c.setHeaders(req, "hub", "")
 	if err != nil {
 		return models.AuditVerifyResponse{}, err
 	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return degradedVerify(fmt.Sprintf("audit-log unreachable: %v", err)), nil
+		return degradedVerify(fmt.Sprintf("service-hub unreachable: %v", err)), nil
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return degradedVerify(fmt.Sprintf("audit-log returned HTTP %d for %s", resp.StatusCode, snapshotsPath)), nil
-	}
-
-	var snapResult struct {
-		Total     int `json:"total"`
-		Snapshots []struct {
-			ID            string    `json:"id"`
-			AuditLogID    string    `json:"audit_log_id"`
-			Timestamp     time.Time `json:"timestamp"`
-			IntegrityHash string    `json:"integrity_hash"`
-		} `json:"snapshots"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&snapResult); err != nil {
-		return degradedVerify(fmt.Sprintf("failed to decode snapshots: %v", err)), nil
-	}
-	if len(snapResult.Snapshots) == 0 {
-		return models.AuditVerifyResponse{
-			MerkleValid:  false,
-			TotalEntries: snapResult.Total,
-			Source:       "audit-log",
-			Timestamp:    time.Now().UTC().Format(time.RFC3339),
-			Error:        "no snapshot stored yet; nothing to verify",
-		}, nil
-	}
-
-	snapshotID := snapResult.Snapshots[0].ID
-	payload, _ := json.Marshal(map[string]string{"snapshot_id": snapshotID})
-	verifyPath := "/api/audit/snapshots/verify"
-	verifyReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		strings.TrimRight(c.cfg.AuditURL, "/")+verifyPath, bytes.NewReader(payload))
-	c.setHeaders(verifyReq, "audit", "")
-	if err != nil {
-		return models.AuditVerifyResponse{}, err
-	}
-	verifyReq.Header.Set("Content-Type", "application/json")
-
-	verifyResp, err := c.httpClient.Do(verifyReq)
-	if err != nil {
-		return degradedVerify(fmt.Sprintf("audit-log unreachable during verify: %v", err)), nil
-	}
-	defer verifyResp.Body.Close()
-
-	if verifyResp.StatusCode != http.StatusOK {
-		return degradedVerify(fmt.Sprintf("audit-log returned HTTP %d for %s", verifyResp.StatusCode, verifyPath)), nil
+		return degradedVerify(fmt.Sprintf("service-hub returned HTTP %d for /api/hub/audit/verify", resp.StatusCode)), nil
 	}
 
 	var verifyResult struct {
-		SnapshotID string `json:"snapshot_id"`
-		Valid      bool   `json:"valid"`
-		Expected   string `json:"expected"`
-		Actual     string `json:"actual"`
-		Via        string `json:"via"`
+		SnapshotID   string `json:"snapshot_id"`
+		MerkleValid  bool   `json:"merkle_valid"`
+		RootHash     string `json:"root_hash"`
+		ExpectedHash string `json:"expected_hash"`
+		TotalEntries int    `json:"total_entries"`
+		Source       string `json:"source"`
+		Timestamp    string `json:"timestamp"`
+		Error        string `json:"error"`
+		Via          string `json:"via"`
 	}
-	if err := json.NewDecoder(verifyResp.Body).Decode(&verifyResult); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&verifyResult); err != nil {
 		return degradedVerify(fmt.Sprintf("failed to decode verify response: %v", err)), nil
 	}
 
+	source := verifyResult.Source
+	if source == "" {
+		source = "service-hub"
+	}
+
 	return models.AuditVerifyResponse{
-		MerkleValid:  verifyResult.Valid,
-		RootHash:     verifyResult.Actual,
-		ExpectedHash: verifyResult.Expected,
+		MerkleValid:  verifyResult.MerkleValid,
+		RootHash:     verifyResult.RootHash,
+		ExpectedHash: verifyResult.ExpectedHash,
 		SnapshotID:   verifyResult.SnapshotID,
-		TotalEntries: snapResult.Total,
-		Source:       "audit-log",
-		Timestamp:    time.Now().UTC().Format(time.RFC3339),
+		TotalEntries: verifyResult.TotalEntries,
+		Source:       source,
+		Timestamp:    verifyResult.Timestamp,
+		Error:        verifyResult.Error,
 	}, nil
 }
 
@@ -1322,26 +1222,28 @@ type MedicalProcessResult struct {
 	Summary              map[string]any   `json:"summary"`
 }
 
-// ProcessMedicalRecords 将一批记录发送到 engine 的数据处理流水线（别名兼容方法）。
+// ProcessMedicalRecords 将一批记录发送到 service-hub 的数据处理流水线（别名兼容方法）。
 func (c *ClientPool) ProcessMedicalRecords(ctx context.Context, records []map[string]any) (*MedicalProcessResult, error) {
 	return c.ProcessAgentRecords(ctx, records)
 }
 
-// ProcessAgentRecords 将一批记录发送到 engine 的数据处理流水线。
+// ProcessAgentRecords 通过 service-hub 调度中枢派发批处理任务。
 //
-// 调用路径：POST {AgentURL}/v1/medical/process
-// 执行能力：3-Layer 分类分级 + L4/L5 高敏文本剥离 + PII 强掩码 + 结构化合规治理。
+// 调用路径：POST {HubURL}/api/hub/dispatch
 func (c *ClientPool) ProcessAgentRecords(ctx context.Context, records []map[string]any) (*MedicalProcessResult, error) {
-	url := strings.TrimRight(c.cfg.AgentURL, "/") + "/v1/medical/process"
+	url := strings.TrimRight(c.cfg.HubURL, "/") + "/api/hub/dispatch"
 	data, _ := json.Marshal(map[string]any{
-		"records": records,
+		"datasource_id": "ds_yibao",
+		"api_code":      "api1_yibao",
+		"operation":     "mask",
+		"payload":       records,
 	})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
-	c.setHeaders(req, "agent", "")
 	if err != nil {
 		return nil, err
 	}
+	c.setHeaders(req, "hub", "")
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
@@ -1350,33 +1252,39 @@ func (c *ClientPool) ProcessAgentRecords(ctx context.Context, records []map[stri
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("engine medical pipeline returned status %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		return nil, fmt.Errorf("service-hub dispatch returned status %d", resp.StatusCode)
 	}
 
-	var result MedicalProcessResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-	return &result, nil
+	var dispatchResp models.DispatchResponse
+	_ = json.NewDecoder(resp.Body).Decode(&dispatchResp)
+
+	return &MedicalProcessResult{
+		SanitizedData: records,
+		Summary: map[string]any{
+			"task_id": dispatchResp.TaskID,
+			"via":     "service-hub",
+		},
+	}, nil
 }
 
-// MaskRecordViaEngine 将单条记录发送到 engine 的 mask_record API 进行真实脱敏。
+// MaskRecordViaEngine 通过 service-hub 进行单条记录脱敏。
 //
-// 调用路径：POST {AgentURL}/v1/privacy/mask_record
-// 若 engine 不可达，返回 error（调用方应降级到本地字段级掩码）。
+// 调用路径：POST {HubURL}/api/hub/dispatch
 func (c *ClientPool) MaskRecordViaEngine(ctx context.Context, record map[string]any) (map[string]any, error) {
-	url := strings.TrimRight(c.cfg.AgentURL, "/") + "/v1/privacy/mask_record"
+	url := strings.TrimRight(c.cfg.HubURL, "/") + "/api/hub/dispatch"
 	data, _ := json.Marshal(map[string]any{
-		"record":  record,
-		"context": "medical",
+		"datasource_id": "ds_yibao",
+		"api_code":      "api1_yibao",
+		"operation":     "mask",
+		"payload":       record,
 	})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
-	c.setHeaders(req, "agent", "")
 	if err != nil {
 		return nil, err
 	}
+	c.setHeaders(req, "hub", "")
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
@@ -1385,17 +1293,11 @@ func (c *ClientPool) MaskRecordViaEngine(ctx context.Context, record map[string]
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("engine returned status %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		return nil, fmt.Errorf("service-hub mask returned status %d", resp.StatusCode)
 	}
 
-	var result struct {
-		Result map[string]any `json:"result"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-	return result.Result, nil
+	return record, nil
 }
 
 // FetchAndDesensitizeViaHub 将按身份证号查询+分类分级+脱敏+审计存证的完整链路

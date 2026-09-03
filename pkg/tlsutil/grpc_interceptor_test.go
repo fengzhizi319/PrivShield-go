@@ -29,6 +29,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"net/url"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -311,5 +312,49 @@ func TestNewWhitelistInterceptor_LoadAndAuthorize(t *testing.T) {
 	st, _ := status.FromError(err)
 	if st.Code() != codes.PermissionDenied {
 		t.Errorf("expected PermissionDenied, got %v", st.Code())
+	}
+}
+
+func TestExtractClientIdentities_SANAndSPIFFE(t *testing.T) {
+	parsedURI, _ := url.Parse("spiffe://cluster.local/ns/default/sa/service-hub")
+	peerCtx := peer.NewContext(context.Background(), &peer.Peer{
+		AuthInfo: credentials.TLSInfo{
+			State: tls.ConnectionState{
+				VerifiedChains: [][]*x509.Certificate{
+					{
+						{
+							Subject:  pkix.Name{CommonName: ""}, // 现代证书 CommonName 为空
+							DNSNames: []string{"service-hub.prod.svc"},
+							URIs:     []*url.URL{parsedURI},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	identities, err := extractClientIdentities(peerCtx)
+	if err != nil {
+		t.Fatalf("extractClientIdentities failed: %v", err)
+	}
+
+	if len(identities) != 2 {
+		t.Fatalf("expected 2 identities, got %d: %v", len(identities), identities)
+	}
+	if identities[0] != "spiffe://cluster.local/ns/default/sa/service-hub" {
+		t.Errorf("expected SPIFFE URI first, got %s", identities[0])
+	}
+	if identities[1] != "service-hub.prod.svc" {
+		t.Errorf("expected DNS name second, got %s", identities[1])
+	}
+
+	// 验证使用 SPIFFE ID 作为白名单 key 的鉴权
+	dw := &DynamicWhitelist{
+		clients: map[string][]string{
+			"spiffe://cluster.local/ns/default/sa/service-hub": {"/TestService/*"},
+		},
+	}
+	if err := dw.authorizeClientIdentities(identities, "/TestService/DoSomething"); err != nil {
+		t.Errorf("expected SPIFFE ID to be authorized, got error: %v", err)
 	}
 }

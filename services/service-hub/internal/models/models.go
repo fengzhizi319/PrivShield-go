@@ -97,6 +97,32 @@ type ProxyResponse struct {
 	Via        string `json:"via"`         // 代理中间件标识（固定为 "service-hub"）
 }
 
+// ServiceNode represents one service node in the cluster topology.
+type ServiceNode struct {
+	ID         string         `json:"id"`
+	Name       string         `json:"name"`
+	HTTPURL    string         `json:"http_url"`
+	GRPCAddr   string         `json:"grpc_addr"`
+	Status     string         `json:"status"`
+	RESTStatus string         `json:"rest_status"`
+	GRPCStatus string         `json:"grpc_status"`
+	RTTMs      int64          `json:"rtt_ms"`
+	RESTRTTMs  int64          `json:"rest_rtt_ms"`
+	GRPCRTTMs  int64          `json:"grpc_rtt_ms"`
+	Protocol   string         `json:"protocol"`
+	Version    string         `json:"version"`
+	Details    map[string]any `json:"details"`
+}
+
+// TopologyResponse represents the mesh topology status.
+type TopologyResponse struct {
+	Status         string        `json:"status"`
+	ActiveProtocol string        `json:"active_protocol"`
+	Timestamp      string        `json:"timestamp"`
+	Services       []ServiceNode `json:"services"`
+	Via            string        `json:"via,omitempty"`
+}
+
 // LevelToOperation maps a data security classification level (L1~L5) to the corresponding privacy operation.
 // LevelToOperation 根据「三层四柱五御六类」数据安全分级标准，将数据的敏感级别映射为对应的隐私增强保护算子。
 //

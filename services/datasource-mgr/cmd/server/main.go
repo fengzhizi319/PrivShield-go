@@ -2,23 +2,20 @@
 // Command server 是模拟数据源模块（datasource-mgr）的程序入口。
 //
 // 本服务在 PrivShield 架构中扮演“数据源资产与敏感特征模拟服务”角色，
-// 负责向上游应用（如 service-hub 流水线、BFF 网关、前端控制台）提供结构化医保、康养及测试数据源，
-// 同时支持 HTTP REST 与双向认证 gRPC (mTLS) 双协议接入。
+// 作为数据提供者（Data Provider）仅向数盾调度中枢 service-hub 输出结构化医保、康养及测试数据源；
+// 前端控制台与 BFF 网关不直连本服务，统一经 service-hub 编排调度，同时支持 HTTP REST 与双向认证 gRPC (mTLS) 双协议接入。
 //
 // ==============================================================================
 // Architecture & Traffic Flow / 系统架构与流量图：
 // ==============================================================================
 //
-//	┌────────────────────────┐         HTTP / JSON (:8083)
-//	│  React Web UI / BFF-Go │ ──────────────────────────────────┐
-//	└────────────────────────┘                                   │
-//	                                                             ▼
 //	┌────────────────────────┐   gRPC + mTLS 双向加密 (:50053)   ┌───────────────────────────────┐
 //	│ service-hub 数据调度中枢 │ ───────────────────────────────▶ │ datasource-mgr 模拟数据源服务  │
-//	└────────────────────────┘                                  │ - HTTP REST: :8083           │
-//	                                                            │ - gRPC (mTLS/Plain): :50053  │
+//	│   【唯一直接调用方】     │   HTTPS REST + mTLS (:8083)      │ - HTTP REST: :8083           │
+//	└────────────────────────┘ ───────────────────────────────▶ │ - gRPC (mTLS/Plain): :50053  │
 //	                                                            │ - 提供 yibao/kangyang 模拟数据 │
 //	                                                            └───────────────────────────────┘
+//	（前端控制台 / BFF 网关不直连本服务，统一经 service-hub 编排调度）
 //
 // ==============================================================================
 // Key Responsibilities / 核心职责：
@@ -292,27 +289,25 @@ func main() {
 	//    - 握手成功后，为该 TCP 连接创建独立的 HTTP/2 传输层处理器 (transport)，单个 TCP 即可支持高并发 Stream 多路复用。
 	//
 	// b. 【请求路由与并发派发 (HTTP/2 Frame & Method Dispatch)】：
-	//    - 当客户端通过该连接发送 RPC 请求时（如 HTTP/2 HEADERS 帧携带 `:path: /datasource_mgr.DataSourceManagerService/GetYibaoData`）；
+	//    - 当客户端通过该连接发送 RPC 请求时（如 HTTP/2 HEADERS 帧携带 `:path: /datasourcemgr.DataSourceManagerService/GetRecordByIDCard`）；
 	//    - gRPC 运行时根据注册表（通过上文 `pb.RegisterDataSourceManagerServiceServer` 注册的服务描述 `ServiceDesc`）查找对应的方法处理器；
 	//    - 为每个 RPC 请求独立派发一个 Worker Goroutine，实现高并发无阻塞处理。
 	//
 	// c. 【相关核心代码位置 / Related Code Locations】：
 	//    1. 路由分发与 Protobuf 编解码桩代码：
-	//       - 文件：`proto/datasource_mgr_grpc.pb.go`
-	//       - 符号：`_DataSourceManagerService_GetYibaoData_Handler`、`DataSourceManagerService_ServiceDesc`
+	//       - 文件：`proto/datasourcemgr_grpc.pb.go`
+	//       - 符号：`_DataSourceManagerService_GetRecordByIDCard_Handler`、`DataSourceManagerService_ServiceDesc`
 	//    2. 业务逻辑核心实现（方法接收者为 `*grpcserver.GRPCServer`）：
 	//       - 文件：`internal/grpcserver/server.go`
 	//       - 方法：
-	//         * `GetYibaoData(ctx, req)`：医保结算数据抽取处理
-	//         * `GetKangyangData(ctx, req)`：康养健康档案数据抽取处理
-	//         * `GetMockData3(ctx, req)` / `GetMockData4(ctx, req)`：扩展数据源抽取处理
-	//         * `GetDataBySource(ctx, req)`：多态通用数据源路由分发
-	//         * `ListMockSources(ctx, req)`：数据源资产目录列表查询
+	//         * `GetRecordByIDCard(ctx, req)`：按身份证号查询单条记录（医保/康养）
+	//         * `ListDataSources(ctx, req)`：数据源资产目录列表查询（委托内部 ListMockSources）
+	//         * `GetDataSource(ctx, req)`：单个数据源元数据详情查询
 	//         * `TestConnection(ctx, req)`：数据源连通性测试
 	//         * `Health(ctx, req)`：gRPC 服务存活与就绪探针
-	//    3. 底层高保真数据生成与分页过滤引擎：
-	//       - 文件：`internal/handlers/mock_data.go`
-	//       - 函数：`GetYibaoRecords(limit, offset)`、`GetKangyangRecords(limit, offset)`
+	//    3. 底层高保真数据加载与检索引擎：
+	//       - 文件：`internal/handlers/data_provider.go`
+	//       - 函数：`LoadCSVRecords(filename)`、`GetRecordByIDCard(sourceID, idCardNo)`
 	// ─────────────────────────────────────────────────────────────────────────
 	go func() {
 		if err := grpcServer.ServeListener(grpcLis); err != nil {

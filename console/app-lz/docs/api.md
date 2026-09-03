@@ -13,22 +13,22 @@
 | 模块 | HTTP 方法 | 端点路径 | 调用模式 | 上游映射 |
 |---|---|---|---|---|
 | **健康与拓扑** | `GET` | `/api/health` | 本地 | BFF 自身存活探针 |
-| | `GET` | `/api/lz/topology` | **[聚合]** | 并发调用 4 服务 `/health` + TCP gRPC 拨测 |
-| | `POST` | `/api/lz/probe/all` | **[聚合]** | 强制全集群主动并发重探测 |
+| | `GET` | `/api/lz/topology` | **[转发]** | → `service-hub` `GET /api/hub/topology` (调度中枢统一探测网格拓扑) |
+| | `POST` | `/api/lz/probe/all` | **[转发]** | → `service-hub` `GET /api/hub/topology` (触发全网格拓扑刷新) |
 | **任务与租约** | `GET` | `/api/lz/tasks` | **[转发]** | → `service-hub` `GET /api/hub/tasks` |
 | | `GET` | `/api/lz/tasks/:id` | **[转发]** | → `service-hub` `GET /api/hub/tasks/:id` |
 | | `GET` | `/api/lz/tasks/leases` | **[聚合]** | `service-hub` 存储后端检测 + 租约状态 |
 | | `POST` | `/api/lz/tasks/dispatch` | **[转发]** | → `service-hub` `POST /api/hub/dispatch` |
 | **自动化测试** | `GET` | `/api/lz/suites` | 本地 | BFF 内置测试用例定义 (TS-01~TS-03) |
-| | `POST` | `/api/lz/suites/run` | 本地 | BFF 测试执行引擎（调用上游服务执行断言） |
-| **审计验真** | `GET` | `/api/lz/audit/logs` | **[转发]** | → `audit-log` `GET /api/audit/logs` |
-| | `POST` | `/api/lz/audit/verify` | **[转发]** | → `audit-log` `POST /api/audit/snapshots/verify` |
+| | `POST` | `/api/lz/suites/run` | 本地 | BFF 测试执行引擎（通过 service-hub 编排执行断言） |
+| **审计验真** | `GET` | `/api/lz/audit/logs` | **[转发]** | → `service-hub` `GET /api/hub/audit/logs` (调度中枢代理查询) |
+| | `POST` | `/api/lz/audit/verify` | **[转发]** | → `service-hub` `POST /api/hub/audit/verify` (调度中枢代理验真) |
 | **监控指标** | `GET` | `/api/lz/metrics` | **[转发]** | → `service-hub` `GET /metrics` (Prometheus 原始文本) |
 | | `GET` | `/api/lz/metrics/parsed` | **[本地]** | BFF 解析 Prometheus 文本 → 结构化指标 |
 | **预设数据 API** | `GET` | `/api/lz/data-api/definitions` | 本地 | BFF 内置 4 个预设数据 API 定义 |
 | | `POST` | `/api/lz/data-api/invoke` | **[聚合]** | 通过 service-hub 编排 3 阶段会话：ingest → hub_orchestrate → return |
 
-> **[聚合]** = BFF 并发调用多个上游服务并合并结果；**[转发]** = BFF 透传请求到单一上游，附加认证头与 `X-Request-ID`；**[本地]** = BFF 内部直接处理。
+> **[转发]** = BFF 透传请求到唯一编排中枢 `service-hub`，附加出站凭证与 `X-Request-ID`；**[聚合]** = BFF 通过 `service-hub` 统一编排并组装结果；**[本地]** = BFF 内部直接处理。
 
 ---
 
@@ -50,14 +50,14 @@ Authorization: Bearer <LZ_CONSOLE_API_KEY>
 
 ### 2.2 出站认证
 
-BFF 向各上游服务转发请求时，自动注入对应的 Bearer Token：
+BFF 作为外部模拟业务程序，仅向唯一中枢 `service-hub` 转发请求，自动注入对应 Bearer Token：
 
-| 上游服务 | 认证头 | 环境变量 |
-|---|---|---|
-| `service-hub` | `Authorization: Bearer <key>` | `LZ_HUB_API_KEY` |
-| `datasource-mgr` | `Authorization: Bearer <key>` | `LZ_DATASOURCE_API_KEY` |
-| `audit-log` | `Authorization: Bearer <key>` | `LZ_AUDIT_API_KEY` |
-| `engine` Agent | `Authorization: Bearer <key>` | `LZ_AGENT_API_KEY` |
+| 上游服务 | 认证头 | 环境变量 | 说明 |
+|---|---|---|---|
+| `service-hub` | `Authorization: Bearer <key>` | `APP_LZ_HUB_API_KEY` / `SERVICE_HUB_API_KEY` | 唯一调度编排中枢出站调用凭证 |
+| `datasource-mgr` | — | — | **无直接访问权限**（统一走 `service-hub`） |
+| `audit-log` | — | — | **无直接访问权限**（统一走 `service-hub`） |
+| `engine` Agent | — | — | **无直接访问权限**（统一走 `service-hub`） |
 
 ### 2.3 SSE 流认证
 

@@ -15,6 +15,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -189,6 +190,35 @@ func TestSeedDataSources(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+// TestMockHelpersDisabled verifies that when EnableMockHelpers is false, Class D mock endpoints return 404.
+func TestMockHelpersDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	cfg := &config.Config{
+		Host:              "127.0.0.1",
+		Port:              8083,
+		EnableMockHelpers: false,
+	}
+	srv := New(cfg, nil, slog.Default(), nil)
+	srv.RegisterRoutes(r)
+
+	// 1. POST /api/datasources/seed -> 404
+	reqSeed, _ := http.NewRequest("POST", "/api/datasources/seed", nil)
+	wSeed := httptest.NewRecorder()
+	r.ServeHTTP(wSeed, reqSeed)
+	if wSeed.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for disabled /seed, got %d", wSeed.Code)
+	}
+
+	// 2. GET /api/datasources/ds_yibao/audit -> 404
+	reqAudit, _ := http.NewRequest("GET", "/api/datasources/ds_yibao/audit", nil)
+	wAudit := httptest.NewRecorder()
+	r.ServeHTTP(wAudit, reqAudit)
+	if wAudit.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for disabled /audit, got %d", wAudit.Code)
 	}
 }
 

@@ -8,11 +8,12 @@
 
 | 测试包 | 测试文件 | 覆盖内容与核心断言 |
 |---|---|---|
-| `internal/grpcserver` | `server_test.go` | **全部 9 个 gRPC 方法**（Health/GetYibaoData/GetKangyangData/GetMockData3/GetMockData4/GetDataBySource/ListMockSources/GetDataSource/TestConnection）、入参校验防御、`BuildServerTLSConfig` / `BuildServerCredentials` 凭证构造、**HTTPS REST mTLS 握手校验与公钥固定 (SPKI Pinning)** |
-| `internal/handlers` | `handlers_test.go` | **HTTP REST Handler 层**（Health 探针、API 1 医保数据申请、API 2 康养数据申请、API 3/4 预留数据申请、数据源资产目录列表、数据源分页记录获取、连通性测试、表结构元数据自动探查、种子数据重置） |
-| `internal/config` | `config_test.go` | 默认配置、自定义环境变量加载、`Address()`、`GRPCAddress()` 与 mTLS 参数校验 |
+| `internal/grpcserver` | `server_test.go` | **5 个 gRPC 方法**（`Health` / `ListDataSources` / `GetDataSource` / `TestConnection` / `GetRecordByIDCard`）、入参校验防御（空 id、不存在 id）、`BuildServerCredentials` 凭证构造、**HTTPS REST mTLS 握手校验与公钥固定 (SPKI Pinning)**（`TestBuildServerTLSConfig_HTTPS_MTLS`） |
+| `internal/grpcserver` | `auth_test.go` | **gRPC 方法级 Scope 权限映射**（`DatasourceMgrPermissionForGRPCMethod`：查询类方法 → `datasource:read`，`TestConnection` → `datasource:admin`，`Health` / 未知方法 → 免鉴权）与 **Identity Scope 校验**（通配符 `*` 全授权、受限 Scope 仅匹配授权、空 Scope 全拒绝） |
+| `internal/handlers` | `handlers_test.go` | **HTTP REST Handler 层**（Health 探针、数据源资产目录列表、数据源详情与 404、连通性测试、表结构元数据自动探查、访问审计、种子数据重置、**按身份证号查询单条记录** `TestGetRecordByIDCard`）与 **CSV 加载安全**（路径遍历防御 `TestLoadCSVRecords_PathTraversal`、白名单文件校验、出厂样例严格模式存活、损坏行严格模式中断而不静默降级） |
+| `internal/config` | `config_test.go` | 默认配置、自定义环境变量加载、**fail-closed 零信任门禁**（`TestFailClosedDefaults`：严格存储默认 true、环回形态免密放行；`TestFailClosedRejections`：非环回监听缺 API Key → `ErrAPIKeyRequired`、`RequireTLS` 未启用 TLS → `ErrTLSRequired`、gRPC TLS 缺 CN 白名单文件 → `ErrMTLSWhitelistRequired`） |
 | `internal/config` | `scripts_test.go` | **运维与启动脚本集成测试**（全套 Shell 脚本执行权限与 Bash 语法检查、`gen-certs.sh` 证书链与 X.509 属性校验、`dev-run.sh` 守护进程启动与 HTTP 探活、`prod-run.sh` 生产进程拉起与 **HTTPS (mTLS) + gRPC (mTLS)** 双协议握手联调） |
-| `internal/models` | `models_test.go` | `MockDataSource`、`DataQueryResponse`、`MetadataResponse` 的 JSON 序列化与反序列化边界测试 |
+| `internal/models` | `models_test.go` | `MockDataSource`、`MetadataResponse`（含嵌套 `TableMetadata` / `MetadataField`）的 JSON 序列化与反序列化往返一致性边界测试 |
 
 ---
 

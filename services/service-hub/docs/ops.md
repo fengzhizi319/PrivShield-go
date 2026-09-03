@@ -40,7 +40,9 @@ SERVICE_HUB_TLS_CERT_FILE=/etc/privshield/certs/server.crt \
 SERVICE_HUB_TLS_KEY_FILE=/etc/privshield/certs/server.key \
 SERVICE_HUB_TLS_CA_FILE=/etc/privshield/certs/ca.crt \
 SERVICE_HUB_TLS_CLIENT_AUTH=require \
-SERVICE_HUB_TLS_ALLOWED_CNS=gateway-bff,app-lz,admin \
+PRIVACY_AUTH_MTLS_WHITELIST_FILE=/etc/privshield/mtls-whitelist.yaml \
+SERVICE_HUB_AUDIT_LOG_URLS=http://audit-log:8084 \
+SERVICE_HUB_STRICT_STORAGE=true \
 DATASOURCE_MGR_HOST=127.0.0.1 \
 DATASOURCE_MGR_PORT=8083 \
 DATASOURCE_MGR_GRPC_HOST=127.0.0.1 \
@@ -77,7 +79,7 @@ SERVICE_HUB_RETENTION_DAYS=30 \
 | `SERVICE_HUB_TLS_KEY_FILE` | `""` | string | 服务端私钥 PEM 文件路径 |
 | `SERVICE_HUB_TLS_CA_FILE` | `""` | string | 客户端证书校验根 CA 证书 PEM 路径 |
 | `SERVICE_HUB_TLS_CLIENT_AUTH` | `""` | string | 客户端双向认证模式: `require` \| `verify` \| `request` |
-| `SERVICE_HUB_TLS_ALLOWED_CNS` | `""` | string | 允许调用的客户端证书 CN 白名单（逗号分隔） |
+| `PRIVACY_AUTH_MTLS_WHITELIST_FILE` | `""` | string | gRPC 客户端证书 CN 白名单 YAML 文件路径（全局共享，支持热重载） |
 | `SERVICE_HUB_API_KEY` | `""` | string | 本模块入站 API Key（空表示免密） |
 | `SERVICE_HUB_CORS_ORIGINS` | `""` | string | 允许的 CORS 跨域源（逗号分隔） |
 | `SERVICE_HUB_DB_PATH` | `""` | string | SQLite 数据库路径（空表示纯内存模式） |
@@ -89,6 +91,24 @@ SERVICE_HUB_RETENTION_DAYS=30 \
 | `SERVICE_HUB_SHUTDOWN_TIMEOUT` | `5` | int | 优雅停机等待超时（秒） |
 | `SERVICE_HUB_LOG_FORMAT` | `json` | string | 日志格式: `json`（生产推荐） \| `text` |
 | `SERVICE_HUB_LOG_LEVEL` | `info` | string | 日志级别: `debug` \| `info` \| `warn` \| `error` |
+| `SERVICE_HUB_TLS_PINNED_PUBKEY_FILE` | `""` | string | 客户端固定公钥 PEM 路径（SPKI Pinning，防御 CA 劫持） |
+| `SERVICE_HUB_API_KEYS` | `""` | string | Scope-based 多 Key 映射（JSON），每个 Key 携带 `Name` 与 `Scopes`（`hub:read` / `hub:dispatch`） |
+| `SERVICE_HUB_API_KEYS_FILE` | `""` | string | Scope-based API Key 文件路径（支持 KeyStore 热轮转） |
+| `SERVICE_HUB_REQUIRE_TLS` | `false` | bool | 生产零信任（P0-1）：强制要求启用 TLS，否则拒绝启动 |
+| `SERVICE_HUB_STRICT_STORAGE` / `STRICT_STORAGE` | `true` | bool | 严格存储（P0-4）：配置 PG 但连接失败时拒绝启动，不静默降级 |
+| `SERVICE_HUB_RATE_LIMIT_RPS` | `100` | int | 每客户端 IP 令牌桶每秒请求数（0 = 不限流） |
+| `SERVICE_HUB_RATE_LIMIT_BURST` | `200` | int | 令牌桶突发容量 |
+| `SERVICE_HUB_DATASOURCE_API_KEY` | `""` | string | 访问下游 datasource-mgr 的 API Key |
+| `PRIVACY_ALLOWED_CIDRS` | `""` | string | 允许访问的客户端 CIDR 白名单（逗号分隔） |
+| `SERVICE_HUB_AUDIT_LOG_URLS` | `""` | string | 出域存证 audit-log REST 地址列表（逗号分隔；未配置时回退 `SERVICE_HUB_AUDIT_HTTP` ➔ `http://audit-log:8084`） |
+| `SERVICE_HUB_AUDIT_HTTP` | `""` | string | audit-log 存证备用地址（docker-compose 注入的别名） |
+| `SERVICE_HUB_AUDIT_LOG_API_KEY` / `AUDIT_LOG_API_KEY` | `""` | string | 访问 audit-log 的 API Key（专用变量优先，回退存证服务入站密钥） |
+| `SERVICE_HUB_AUDIT_LOG_TIMEOUT` | `10` | int | 单次存证提交超时（秒） |
+| `SERVICE_HUB_AUDIT_LOG_MAX_RETRIES` | `3` | int | 存证网络错误/5xx 重试次数 |
+| `SERVICE_HUB_AUDIT_LOG_TLS_ENABLED` | `false` | bool | 存证链路是否启用 TLS/mTLS（P0-6 出域存证 fail-closed） |
+| `SERVICE_HUB_AUDIT_LOG_TLS_CERT_FILE` | `""` | string | 存证链路客户端证书 PEM 路径（可回退 `SERVICE_HUB_TLS_CERT_FILE`） |
+| `SERVICE_HUB_AUDIT_LOG_TLS_KEY_FILE` | `""` | string | 存证链路客户端私钥 PEM 路径（可回退 `SERVICE_HUB_TLS_KEY_FILE`） |
+| `SERVICE_HUB_AUDIT_LOG_TLS_CA_FILE` | `""` | string | 存证链路根 CA 证书 PEM 路径（可回退 `SERVICE_HUB_TLS_CA_FILE`） |
 
 ---
 
@@ -110,14 +130,14 @@ curl -s http://127.0.0.1:8082/api/health | jq .
 - 上游 Agent 连通性与命名空间 (`agent: {"status": "ok"}`)
 - 下游模拟数据源连通性 (`datasource: "ok"`)
 
-### 3.2 提交调度任务并按需取数
+### 3.2 提交调度任务
 ```bash
 curl -s -X POST http://127.0.0.1:8082/api/hub/dispatch \
   -H "Content-Type: application/json" \
   -d '{"datasource_id": "ds_yibao", "operation": "mask"}' | jq .
 ```
 
-未提供 `payload` 时，任务在 `fetch` 状态追踪标签调用 datasource-mgr 获取记录；随后在 `classify` 标签通过一次 Agent 一体化调用完成分类与脱敏。
+任务需在提交时显式携带 `payload`（`fetch` 阶段的分页自动抽取接口已移除）；随后在 `classify` 标签通过一次 Agent 一体化调用（`POST /v1/agent/process`，404 回退 `/v1/medical/process`）完成分类与脱敏，并在 `audit` 标签向 audit-log 提交出域存证（P0-6 fail-closed）。若需按身份证号端到端取数+脱敏，请改用 `POST /api/hub/fetch-and-desensitize`。
 
 ### 3.3 查看 Prometheus 监控指标
 ```bash
