@@ -475,6 +475,55 @@ func (c *Client) GetDataSourceGRPC(ctx context.Context, id string) (*dspb.DataSo
 	return resp, nil
 }
 
+// FetchRecordByIDCard fetches a single record from datasource-mgr by ID card number via HTTP REST.
+// FetchRecordByIDCard 通过 HTTP REST 按身份证号从指定数据源精确查询单条记录。
+// 调用 datasource-mgr GET /api/datasources/:id/record-by-id?id_card_no=xxx 端点。
+func (c *Client) FetchRecordByIDCard(ctx context.Context, datasourceID, idCardNo string) (map[string]any, error) {
+	path := fmt.Sprintf("/api/datasources/%s/record-by-id?id_card_no=%s",
+		url.PathEscape(datasourceID), url.QueryEscape(idCardNo))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	body, err := c.doHTTP(req)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	return result, nil
+}
+
+// FetchRecordByIDCardGRPC fetches a single record by ID card number via gRPC.
+// FetchRecordByIDCardGRPC 通过 gRPC 按身份证号从指定数据源精确查询单条记录。
+func (c *Client) FetchRecordByIDCardGRPC(ctx context.Context, datasourceID, idCardNo string) (*dspb.SingleRecordResponse, error) {
+	if err := c.checkCircuit(); err != nil {
+		return nil, err
+	}
+	client, err := c.getGRPCClient(ctx)
+	if err != nil {
+		c.recordFailure()
+		return nil, err
+	}
+	outCtx := c.wrapGRPCContext(ctx)
+	resp, err := client.GetRecordByIDCard(outCtx, &dspb.GetRecordByIDCardRequest{
+		SourceId:  datasourceID,
+		IdCardNo:  idCardNo,
+	})
+	if err != nil {
+		if isRetryableGRPCCode(err) {
+			c.recordFailure()
+		}
+		return nil, err
+	}
+	c.recordSuccess()
+	return resp, nil
+}
+
 // TestConnectionGRPC tests connection via gRPC.
 func (c *Client) TestConnectionGRPC(ctx context.Context, id string) (*dspb.TestConnectionResponse, error) {
 	if err := c.checkCircuit(); err != nil {

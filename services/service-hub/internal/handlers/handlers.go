@@ -18,6 +18,7 @@
 //   GET  /api/hub/tasks                  → 分页查询任务列表 (支持 status 状态过滤)
 //   GET  /api/hub/tasks/:id              → 根据 TaskID 查询单个任务详情
 //   POST /api/hub/dispatch               → 直接分发指定算子的隐私处理任务 (API1/2/3/4 核心)
+//   POST /api/hub/fetch-and-desensitize  → 按身份证号拉取数据并同步执行分类分级+脱敏（端到端）
 //   GET  /api/hub/pipeline               → 6 阶段流水线监控遥测与 QPS 统计
 //   GET  /metrics                        → Prometheus 格式监控指标导出端点
 // ==============================================================================
@@ -233,6 +234,9 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 	r.GET("/api/hub/tasks/:id", s.GetTask)
 	r.POST("/api/hub/dispatch", s.Dispatch)
 	r.POST("/api/hub/classify", s.Dispatch) // Backward compatible alias for classify dispatch
+
+	// 按身份证号端到端查询+脱敏（同步）
+	r.POST("/api/hub/fetch-and-desensitize", s.FetchAndDesensitize)
 
 	// 流水线监控遥测
 	r.GET("/api/hub/pipeline", s.Pipeline)
@@ -803,6 +807,123 @@ func (s *Server) Pipeline(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"stages":   stages,
 		"agent_ok": agentErr == nil,
+	})
+}
+
+// fetchAndDesensitizeRequest is the request body for the synchronous fetch-and-desensitize endpoint.
+// fetchAndDesensitizeRequest 按身份证号端到端查询+脱敏同步接口的请求体。
+type fetchAndDesensitizeRequest struct {
+	DatasourceID string `json:"datasource_id" binding:"required"`
+	IDCardNo     string `json:"id_card_no" binding:"required"`
+}
+
+// FetchAndDesensitize synchronously fetches a record by ID card number from datasource-mgr,
+// runs the engine classification + desensitization pipeline, and returns the result.
+// FetchAndDesensitize 同步端到端接口：按身份证号从 datasource-mgr 拉取单条记录，
+// 调用 engine 完成 3-Layer 分类分级 + PII 脱敏，同步返回脱敏结果与分类报告。
+//
+// 执行步骤：
+// 1. 校验 datasource_id 与 id_card_no 必填参数；
+// 2. 归一化 datasource_id（支持别名如 yibao → ds_yibao）；
+// 3. 调用 datasource-mgr GET /api/datasources/:id/record-by-id?id_card_no=xxx 拉取单条记录；
+// 4. 调用 engine /v1/agent/process 完成分类分级 + 脱敏；
+// 5. 同步返回脱敏后数据、分类级别与分类报告。
+func (s *Server) FetchAndDesensitize(c *gin.Context) {
+	var req fetchAndDesensitizeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", fmt.Sprintf("invalid request: %v", err), nil)
+		return
+	}
+
+	if len(req.IDCardNo) != 18 {
+		middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "id_card_no must be exactly 18 characters", nil)
+		return
+	}
+
+	// 归一化数据源标识
+	normID, err := naming.ResolveInbound(req.DatasourceID)
+	if err != nil {
+		if naming.IsReserved(err) {
+			middleware.AbortWithError(c, http.StatusConflict, "RESERVED_DATASOURCE", fmt.Sprintf("data source %q is reserved: %v", req.DatasourceID, err), nil)
+			return
+		}
+		middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_DATASOURCE_ID", fmt.Sprintf("invalid data source %q: %v", req.DatasourceID, err), nil)
+		return
+	}
+
+	requestID := middleware.GetTraceID(c)
+	if requestID == "" {
+		requestID = validation.GenerateID("req")
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+	ctx = pkgobs.ContextWithRequestID(ctx, requestID)
+
+	// ① 从 datasource-mgr 按身份证号拉取单条记录
+	if s.datasource == nil {
+		middleware.AbortWithError(c, http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE", "datasource client not configured", nil)
+		return
+	}
+
+	fetchResult, err := s.datasource.FetchRecordByIDCard(ctx, normID, req.IDCardNo)
+	if err != nil {
+		middleware.AbortWithError(c, http.StatusBadGateway, "UPSTREAM_UNAVAILABLE", fmt.Sprintf("failed to fetch record from datasource-mgr: %v", err), nil)
+		return
+	}
+
+	found, _ := fetchResult["found"].(bool)
+	if !found {
+		middleware.AbortWithError(c, http.StatusNotFound, "RECORD_NOT_FOUND",
+			fmt.Sprintf("no record found for id_card_no=%s in datasource=%s", req.IDCardNo, normID), nil)
+		return
+	}
+
+	record, ok := fetchResult["record"].(map[string]any)
+	if !ok || len(record) == 0 {
+		middleware.AbortWithError(c, http.StatusNotFound, "RECORD_NOT_FOUND",
+			fmt.Sprintf("empty record for id_card_no=%s in datasource=%s", req.IDCardNo, normID), nil)
+		return
+	}
+
+	// ② 调用 engine 完成分类分级 + 脱敏
+	records := agent.ToRecords(record)
+	if len(records) == 0 {
+		middleware.AbortWithError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to convert record for engine processing", nil)
+		return
+	}
+
+	idempotencyKey := fmt.Sprintf("hub-fad-%s-%s", normID, req.IDCardNo)
+	ctx = agent.ContextWithIdempotencyKey(ctx, idempotencyKey)
+
+	result, err := s.agent.ProcessAgent(ctx, records, normID)
+	if err != nil {
+		middleware.AbortWithError(c, http.StatusBadGateway, "UPSTREAM_UNAVAILABLE", fmt.Sprintf("engine processing failed: %v", err), nil)
+		return
+	}
+
+	level := result.Level
+	if level == "" {
+		level = audit.MaxSensitivityLevel(result.ClassificationReport)
+	}
+
+	// 组装同步响应
+	var sanitizedData any
+	if len(result.SanitizedData) == 1 {
+		sanitizedData = result.SanitizedData[0]
+	} else if len(result.SanitizedData) > 1 {
+		sanitizedData = result.SanitizedData
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"datasource_id":         normID,
+		"id_card_no":            req.IDCardNo,
+		"found":                 true,
+		"level":                 level,
+		"sanitized_data":        sanitizedData,
+		"classification_report": result.ClassificationReport,
+		"summary":               result.Summary,
+		"via":                   moduleVia,
 	})
 }
 

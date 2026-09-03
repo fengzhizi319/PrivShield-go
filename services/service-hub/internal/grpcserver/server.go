@@ -489,6 +489,98 @@ func (s *GRPCServer) PipelineStatus(ctx context.Context, req *pb.PipelineStatusR
 	}, nil
 }
 
+// FetchAndDesensitize synchronously fetches a record by ID card from datasource-mgr,
+// runs engine classification + desensitization, and returns the result.
+// FetchAndDesensitize gRPC 同步端到端接口：按身份证号从 datasource-mgr 拉取单条记录，
+// 调用 engine 完成 3-Layer 分类分级 + PII 脱敏，同步返回脱敏结果与分类报告。
+func (s *GRPCServer) FetchAndDesensitize(ctx context.Context, req *pb.FetchAndDesensitizeRequest) (*pb.FetchAndDesensitizeResponse, error) {
+	datasourceID := strings.TrimSpace(req.DatasourceId)
+	if datasourceID == "" {
+		return nil, status.Error(codes.InvalidArgument, "datasource_id is required")
+	}
+	idCardNo := strings.TrimSpace(req.IdCardNo)
+	if len(idCardNo) != 18 {
+		return nil, status.Error(codes.InvalidArgument, "id_card_no must be exactly 18 characters")
+	}
+
+	normID, err := naming.ResolveInbound(datasourceID)
+	if err != nil {
+		if naming.IsReserved(err) {
+			return nil, status.Errorf(codes.FailedPrecondition, "reserved datasource: %v", err)
+		}
+		return nil, status.Errorf(codes.InvalidArgument, "invalid datasource: %v", err)
+	}
+
+	requestID := extractRequestID(ctx)
+	rpcCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	rpcCtx = pkgobs.ContextWithRequestID(rpcCtx, requestID)
+
+	// ① 从 datasource-mgr 按身份证号拉取单条记录
+	if s.datasource == nil {
+		return nil, status.Error(codes.Unavailable, "datasource client not configured")
+	}
+
+	fetchResult, err := s.datasource.FetchRecordByIDCard(rpcCtx, normID, idCardNo)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "failed to fetch record: %v", err)
+	}
+
+	found, _ := fetchResult["found"].(bool)
+	if !found {
+		return &pb.FetchAndDesensitizeResponse{
+			DatasourceId: normID,
+			IdCardNo:     idCardNo,
+			Found:        false,
+			Via:          moduleVia,
+		}, nil
+	}
+
+	record, ok := fetchResult["record"].(map[string]any)
+	if !ok || len(record) == 0 {
+		return &pb.FetchAndDesensitizeResponse{
+			DatasourceId: normID,
+			IdCardNo:     idCardNo,
+			Found:        false,
+			Via:          moduleVia,
+		}, nil
+	}
+
+	// ② 调用 engine 完成分类分级 + 脱敏
+	records := agent.ToRecords(record)
+	if len(records) == 0 {
+		return nil, status.Error(codes.Internal, "failed to convert record for engine processing")
+	}
+
+	idempotencyKey := fmt.Sprintf("hub-fad-%s-%s", normID, idCardNo)
+	rpcCtx = agent.ContextWithIdempotencyKey(rpcCtx, idempotencyKey)
+
+	result, err := s.agent.ProcessAgent(rpcCtx, records, normID)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "engine processing failed: %v", err)
+	}
+
+	level := result.Level
+	if level == "" {
+		level = audit.MaxSensitivityLevel(result.ClassificationReport)
+	}
+
+	sanitizedJSON, _ := json.Marshal(result.SanitizedData)
+	classifyJSON, _ := json.Marshal(result.ClassificationReport)
+	summaryJSON, _ := json.Marshal(result.Summary)
+
+	return &pb.FetchAndDesensitizeResponse{
+		DatasourceId:          normID,
+		IdCardNo:              idCardNo,
+		Found:                 true,
+		Level:                 level,
+		SanitizedDataJson:     string(sanitizedJSON),
+		ClassificationReportJson: string(classifyJSON),
+		SummaryJson:           string(summaryJSON),
+		Via:                   moduleVia,
+	}, nil
+}
+
 // ─────────────────────────────────────────────────────────────
 // Internal helpers / 内部辅助方法
 // ─────────────────────────────────────────────────────────────

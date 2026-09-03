@@ -1,6 +1,6 @@
 # 数据服务调度中枢 (service-hub) — 接口规范与运维对接指南
 
-> **版本**：v2.4.0 (对齐 6 阶段数据安全流通流水线与国密/TLS 1.3 标准)  
+> **版本**：v2.5.0 (新增按身份证号端到端查询+脱敏同步 API FetchAndDesensitize)  
 > **文档定位**：本规范为 **数联天下 · 数盾 (`PrivShield`)** 体系中「数据服务调度中枢（Service Hub）」的标准化通信与数据交互规约。  
 > **面向对象**：**前端控制台研发团队、BFF 网关开发团队、运维 SRE 团队、第三方系统对接方**。  
 > **重要说明**：`service-hub` 是 PrivShield 隐私计算治理平台的**核心调度中枢**，负责串联上游隐私计算引擎 (`engine-go`)、下游数据源服务 (`datasource-mgr`) 与独立审计存证节点 (`audit-log`)，提供 **REST (Gin :8082) + gRPC (mTLS :50052)** 双协议接入能力，支持多副本 PostgreSQL 租约并发争抢与 SQLite WAL 自愈降级。
@@ -29,6 +29,7 @@
   - [3.3 任务分发与流水线调度端点](#33-任务分发与流水线调度端点)
     - [3.3.1 手动分发任务 (POST /api/hub/dispatch)](#331-手动分发任务-post-apihubdispatch)
     - [3.3.2 流水线监控遥测 (GET /api/hub/pipeline)](#332-流水线监控遥测-get-apihubpipeline)
+  - [3.4 按身份证号查询并脱敏端点 (POST /api/hub/fetch-and-desensitize)](#34-按身份证号查询并脱敏端点-post-apihubfetch-and-desensitize)
 - [4. gRPC API 规范与 Protobuf 定义](#4-grpc-api-规范与-protobuf-定义)
   - [4.1 Protobuf 契约文件 (servicehub.proto)](#41-protobuf-契约文件-servicehubproto)
   - [4.2 gRPC 服务接口与方法规约](#42-grpc-服务接口与方法规约)
@@ -80,7 +81,7 @@ flowchart LR
     External -->|REST/gRPC| ServiceHub
     ServiceHub -->|隐私流水线调度| Engine
     ServiceHub -->|元数据查询 / 连通性探测| DatasourceMgr
-    ServiceHub -.->|“出域存证 (P0-6)| AuditLog
+    ServiceHub -.->|"出域存证 (P0-6)"| AuditLog
 ```
 
 ### 1.2 通信协议与端口规划
@@ -492,6 +493,88 @@ flowchart LR
 
 ---
 
+### 3.4 按身份证号查询并脱敏端点 (POST /api/hub/fetch-and-desensitize)
+
+- **功能说明**：端到端同步 API。调用方只需提供数据源标识与 18 位公民身份证号，调度中枢自动完成以下全链路：
+  1. 向下游 `datasource-mgr` 按身份证号精确拉取单条记录；
+  2. 调用上游 `engine-go` 隐私计算引擎执行 3-Layer 分类分级 + PII 掩码脱敏；
+  3. 同步返回脱敏后数据、分类级别与分类报告。
+- **请求方法**：`POST`
+- **请求路径**：`/api/hub/fetch-and-desensitize`
+- **鉴权要求**：需要有效 Bearer Token（`write:dispatch` 权限）
+- **请求体**：
+  ```json
+  {
+    "datasource_id": "ds_yibao",
+    "id_card_no": "510101198503151234"
+  }
+  ```
+- **请求体字段说明**：
+
+  | 字段名 | 类型 | 必填 | 说明 |
+  |---|---|---|---|
+  | `datasource_id` | string | 是 | 规范数据源标识（`ds_yibao` / `ds_kangyang` 等），支持别名归一化 |
+  | `id_card_no` | string | 是 | 18 位公民身份证号码（严格校验长度必须为 18） |
+
+- **成功响应**：`HTTP 200 OK`
+  ```json
+  {
+    "datasource_id": "ds_yibao",
+    "id_card_no": "510101198503151234",
+    "found": true,
+    "level": "L4",
+    "sanitized_data": {
+      "name": "李*",
+      "id_card": "5101***********234",
+      "phone": "138****8000",
+      "diagnosis": "J18.9"
+    },
+    "classification_report": {
+      "layer1_rule_hits": ["PII::ID_CARD", "PII::PHONE"],
+      "layer2_ner_entities": ["PER", "TEL"],
+      "layer3_llm_fields": ["diagnosis"],
+      "max_sensitivity": "L4"
+    },
+    "summary": {
+      "total_fields": 4,
+      "sanitized_fields": 3,
+      "entities_detected": 5
+    },
+    "via": "service-hub"
+  }
+  ```
+- **响应字段说明**：
+
+  | 字段名 | 类型 | 必填 | 说明 |
+  |---|---|---|---|
+  | `datasource_id` | string | 是 | 归一化后的规范数据源标识 |
+  | `id_card_no` | string | 是 | 查询的身份证号（原样回传） |
+  | `found` | boolean | 是 | 是否在数据源中找到匹配记录，固定为 `true` |
+  | `level` | string | 是 | 分类分级结果（`L1` ~ `L5`），由引擎 3-Layer 漏斗定级 |
+  | `sanitized_data` | object | 是 | 脱敏后的数据对象（PII 字段已掩码） |
+  | `classification_report` | object | 是 | 3-Layer 分类分级报告（规则命中、NER 实体、LLM 字段） |
+  | `summary` | object | 是 | 处理摘要（总字段数、脱敏字段数、检出实体数） |
+  | `via` | string | 是 | 响应节点标识符 |
+
+- **错误响应**：
+  - `HTTP 400 Bad Request` (`INVALID_ARGUMENT`)：`datasource_id` 或 `id_card_no` 缺失，或身份证号长度不为 18
+  - `HTTP 400 Bad Request` (`INVALID_DATASOURCE_ID`)：`datasource_id` 无法归一化识别
+  - `HTTP 404 Not Found` (`RECORD_NOT_FOUND`)：数据源中未找到该身份证号对应的记录
+  - `HTTP 409 Conflict` (`RESERVED_DATASOURCE`)：尝试访问已登记但未上线的预留数据源
+  - `HTTP 502 Bad Gateway` (`UPSTREAM_UNAVAILABLE`)：上游 `datasource-mgr` 拉取失败或 `engine-go` 处理失败
+
+- **完整 curl 端到端示例**：
+  ```bash
+  # 按身份证号从医保数据源查询记录并自动执行分类分级+脱敏
+  curl -s -X POST \
+    -H "Authorization: Bearer <API_KEY>" \
+    -H "Content-Type: application/json" \
+    -d '{"datasource_id":"ds_yibao","id_card_no":"510101198503151234"}' \
+    http://127.0.0.1:8082/api/hub/fetch-and-desensitize | jq .
+  ```
+
+---
+
 ## 4. gRPC API 规范与 Protobuf 定义
 
 ### 4.1 Protobuf 契约文件 (servicehub.proto)
@@ -528,6 +611,9 @@ service ServiceHubService {
 
   // PipelineStatus 流水线各阶段状态
   rpc PipelineStatus(PipelineStatusRequest) returns (PipelineStatusResponse);
+
+  // FetchAndDesensitize 按身份证号同步拉取数据并执行分类分级+脱敏（端到端）
+  rpc FetchAndDesensitize(FetchAndDesensitizeRequest) returns (FetchAndDesensitizeResponse);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -646,6 +732,26 @@ message PipelineStageProto {
   string status = 2;         // "idle" | "processing" | "error"
   int32  active_count = 3;   // 当前阶段活跃任务数
 }
+
+// ─────────────────────────────────────────────────────────────
+// FetchAndDesensitize / 按身份证号端到端查询+脱敏
+// ─────────────────────────────────────────────────────────────
+
+message FetchAndDesensitizeRequest {
+  string datasource_id = 1;    // 规范数据源标识（如 ds_yibao, ds_kangyang）
+  string id_card_no = 2;       // 18 位公民身份证号
+}
+
+message FetchAndDesensitizeResponse {
+  string datasource_id = 1;              // 规范数据源标识符
+  string id_card_no = 2;                 // 查询的身份证号
+  bool found = 3;                        // 是否找到匹配记录
+  string level = 4;                      // 分类分级结果（L1-L5）
+  string sanitized_data_json = 5;        // 脱敏后数据（JSON 序列化）
+  string classification_report_json = 6; // 分类分级报告（JSON 序列化）
+  string summary_json = 7;              // 处理摘要（JSON 序列化）
+  string via = 8;                        // 模块标识
+}
 ```
 
 ### 4.2 gRPC 服务接口与方法规约
@@ -659,6 +765,7 @@ message PipelineStageProto {
 | `GetTask` | `GetTaskRequest` | `TaskProto` | BFF 网关、前端控制台 | 查询单个任务状态与执行结果 |
 | `ListTasks` | `ListTasksRequest` | `ListTasksResponse` | BFF 网关、前端控制台 | 列出全部任务（可选按状态过滤） |
 | `PipelineStatus` | `PipelineStatusRequest` | `PipelineStatusResponse` | 运维控制台 | 流水线各阶段实时活跃任务统计 |
+| `FetchAndDesensitize` | `FetchAndDesensitizeRequest` | `FetchAndDesensitizeResponse` | BFF 网关、前端控制台 | 按身份证号同步拉取数据并执行分类分级+脱敏（端到端） |
 
 ### 4.3 gRPC 消息结构体字段详细定义
 
@@ -851,7 +958,14 @@ curl -s -H "Authorization: Bearer <API_KEY>" http://127.0.0.1:8082/api/hub/tasks
 # 7. 流水线各阶段实时监控
 curl -s -H "Authorization: Bearer <API_KEY>" http://127.0.0.1:8082/api/hub/pipeline | jq .
 
-# 8. 异常测试：缺少数据源标识（应返回 400 及标准 5 字段信封）
+# 8. 按身份证号查询并脱敏（端到端同步 API）
+curl -s -X POST \
+  -H "Authorization: Bearer <API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"datasource_id":"ds_yibao","id_card_no":"510101198503151234"}' \
+  http://127.0.0.1:8082/api/hub/fetch-and-desensitize | jq .
+
+# 9. 异常测试：缺少数据源标识（应返回 400 及标准 5 字段信封）
 curl -s -i -X POST \
   -H "Authorization: Bearer <API_KEY>" \
   -H "Content-Type: application/json" \
@@ -882,6 +996,10 @@ grpcurl -plaintext -d '{"status_filter":"completed"}' \
 
 # 6. gRPC 流水线各阶段状态
 grpcurl -plaintext 127.0.0.1:50052 servicehub.ServiceHubService/PipelineStatus
+
+# 7. gRPC 按身份证号查询并脱敏（端到端同步）
+grpcurl -plaintext -d '{"datasource_id":"ds_yibao","id_card_no":"510101198503151234"}' \
+  127.0.0.1:50052 servicehub.ServiceHubService/FetchAndDesensitize
 ```
 
 #### 3. 交付验收清单 (Delivery Checklist)

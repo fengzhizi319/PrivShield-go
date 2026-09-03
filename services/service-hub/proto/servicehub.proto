@@ -27,6 +27,9 @@ service ServiceHubService {
 
   // PipelineStatus 流水线各阶段状态
   rpc PipelineStatus(PipelineStatusRequest) returns (PipelineStatusResponse);
+
+  // FetchAndDesensitize 按身份证号同步拉取数据并执行分类分级+脱敏（端到端）
+  rpc FetchAndDesensitize(FetchAndDesensitizeRequest) returns (FetchAndDesensitizeResponse);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -146,4 +149,24 @@ message PipelineStageProto {
   string name = 1;           // 阶段名称
   string status = 2;         // "idle" | "processing" | "error"
   int32  active_count = 3;   // 当前阶段活跃任务数
+}
+
+// ─────────────────────────────────────────────────────────────
+// FetchAndDesensitize / 按身份证号端到端查询+脱敏
+// ─────────────────────────────────────────────────────────────
+
+message FetchAndDesensitizeRequest {
+  string datasource_id = 1;    // 规范数据源标识（如 ds_yibao, ds_kangyang）
+  string id_card_no = 2;       // 18 位公民身份证号
+}
+
+message FetchAndDesensitizeResponse {
+  string datasource_id = 1;              // 规范数据源标识符
+  string id_card_no = 2;                 // 查询的身份证号
+  bool found = 3;                        // 是否找到匹配记录
+  string level = 4;                      // 分类分级结果（L1-L5）
+  string sanitized_data_json = 5;        // 脱敏后数据（JSON 序列化）
+  string classification_report_json = 6; // 分类分级报告（JSON 序列化）
+  string summary_json = 7;              // 处理摘要（JSON 序列化）
+  string via = 8;                        // 模块标识
 }
