@@ -15,9 +15,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 	"github.com/fengzhizi319/PrivShield-go/privacy-go-sdk/medical"
 )
 
@@ -50,14 +50,9 @@ const (
 	TagPixelData              uint32 = 0x7FE00010
 )
 
-// maxDICOMFileSize 返回可配置的 DICOM 文件大小上限。
+// maxDICOMFileSize 返回可配置的 DICOM 文件大小上限（复用 pkg/config）。
 func maxDICOMFileSize() int64 {
-	if env := os.Getenv("PRIVACY_DICOM_MAX_FILE_SIZE"); env != "" {
-		if n, err := strconv.ParseInt(env, 10, 64); err == nil && n > 0 {
-			return n
-		}
-	}
-	return defaultMaxDICOMFileSize
+	return pkgconfig.EnvInt64("PRIVACY_DICOM_MAX_FILE_SIZE", defaultMaxDICOMFileSize)
 }
 
 // IsDICOM 检查字节流是否为合法的 DICOM 格式。

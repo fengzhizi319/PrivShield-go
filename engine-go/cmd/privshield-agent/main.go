@@ -1,55 +1,73 @@
-// Package main 提供 PrivShield Go 引擎的双协议（REST + gRPC）服务端入口。
+// Package main 提供 PrivShield Go 核心隐私与动态分类分级引擎（Core Agent / Sidecar）的服务端入口。
 //
-// 架构：
-//   - REST API (Gin)：面向外部调用方，端口 8079
-//   - gRPC Server：面向内部微服务，端口 50051
-//   - 信号处理：SIGINT/SIGTERM 优雅停机
+// ─────────────────────────────────────────────────────────────────────────────
+// 【系统架构定位与模块化多协议支持】
+// PrivShield Agent 是数盾数据安全与隐私治理体系的核心执行实体（Sidecar / Agent），负责下发与执行：
+//   - 44 项前沿隐私数学原语（SM3/SM4 掩码、单趟融合向量差分隐私、多核分块局部差分隐私、Mondrian K-匿名、查询置乱等）；
+//   - 3 层动态敏感特征分类分级漏斗（AC 规则引擎 → Small-NER ONNX 推理 → 外部 LLM 熔断治理）；
+//   - 无锁原子 CAS 隐私预算会计与医学 DICOM 二进制合规重构流水线。
 //
-// 环境变量：
-//   - PRIVACY_REST_HOST / PRIVACY_REST_PORT：REST 监听地址（默认 127.0.0.1，容器编排显式注入 0.0.0.0）
-//   - PRIVACY_GRPC_HOST / PRIVACY_GRPC_PORT：gRPC 监听地址（默认 127.0.0.1）
-//   - PRIVACY_LOG_LEVEL：日志级别（DEBUG/INFO/WARN/ERROR）
-//   - PRIVACY_TLS_ENABLED：是否启用 TLS (HTTPS / gRPC TLS)
-//   - PRIVACY_REQUIRE_TLS：生产编排声明「必须加密」，TLS 关闭时启动即失败
-//   - PRIVACY_TLS_CERT_FILE / PRIVACY_TLS_KEY_FILE / PRIVACY_TLS_CA_FILE：证书路径
-//   - PRIVACY_AUTH_ENABLED + PRIVACY_AUTH_INTERNAL_API_KEYS：入站 API Key 鉴权
-//   - PRIVACY_AUTH_INTERNAL_MTLS_ENABLED：是否启用 mTLS 客户端双向认证
-//   - PRIVACY_AUTH_MTLS_WHITELIST_FILE：gRPC 客户端证书 CN 白名单（启用 TLS/mTLS 时必填）
+// 进程支持 REST 与 gRPC 模块解耦与动态选择性启停（默认双协议并发，100% 向下兼容）：
+//  1. REST API 模块 (Gin 驱动，默认端口 :8079，由 PRIVACY_REST_ENABLED 控制)：
+//     面向控制台 (BFF) 及外部 HTTP 业务调用方，提供 DataFrame 批处理、文件脱敏、合规探针、动态分类及诊断端点；
+//  2. gRPC Server 模块 (低延迟 RPC，默认端口 :50051，由 PRIVACY_GRPC_ENABLED 控制)：
+//     面向微服务调度中枢 (service-hub) 与内部集群节点，基于 Protobuf 协议与 RawCodec 实现高吞吐零拷贝的数据交换。
 //
-// 启动门禁（P0-1 零信任默认态，见 internal/config.Validate）：非环回监听且未配置入站凭据、
-// 声明需要 TLS 却未启用、启用 gRPC TLS 却缺少 CN 白名单文件，均直接终止进程而非静默降级。
+// ─────────────────────────────────────────────────────────────────────────────
+// 【Agent 启动与运行全生命周期（7 大执行阶段）】
+//
+//	[阶段 1: 配置与门禁] ── LoadAgent() + P0-1 零信任门禁校验 (Validate)
+//	       │
+//	[阶段 2: 核心引擎初始化] ── slog 日志 + PrivacyService 隐私编排器 + Prometheus 指标 + 命名观测器
+//	       │
+//	[阶段 3: REST 模块按需装配] ── 若 PRIVACY_REST_ENABLED=true，构造 RESTServerRunner 并协程启动
+//	       │
+//	[阶段 4: gRPC 模块按需装配] ── 若 PRIVACY_GRPC_ENABLED=true，构造 GRPCServerRunner 并协程启动
+//	       │
+//	[阶段 5: 启动摘要与告警] ── 输出运行状态、监听地址与预算快照；对本地明文或单协议模式输出提示
+//	       │
+//	[阶段 6: 信号捕获与探针置位] ── 捕获 SIGINT/SIGTERM → K8s 就绪探针置 false → 流量排空等待
+//	       │
+//	[阶段 7: 确定性优雅停机] ── 优雅关闭已开启的 REST Server 与 gRPC Server（带看门狗兜底）
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// 【核心环境变量矩阵】
+//   - PRIVACY_REST_ENABLED: 是否启用 REST 服务（默认 true）
+//   - PRIVACY_GRPC_ENABLED: 是否启用 gRPC 服务（默认 true）
+//   - PRIVACY_REST_HOST / PRIVACY_REST_PORT: REST 监听地址与端口（默认 127.0.0.1:8079，生产编排注入 0.0.0.0）
+//   - PRIVACY_GRPC_HOST / PRIVACY_GRPC_PORT: gRPC 监听地址与端口（默认 127.0.0.1:50051）
+//   - PRIVACY_LOG_LEVEL: 日志级别（DEBUG/INFO/WARN/ERROR，默认 INFO）
+//   - PRIVACY_TLS_ENABLED: 是否启用 TLS 通信加密 (HTTPS 与 gRPC TLS)
+//   - PRIVACY_REQUIRE_TLS: 强制加密红线标志，若为 true 但 TLS 未成功开启则阻断启动
+//   - PRIVACY_TLCP_ENABLED: 是否启用 GM/T 0024 国密通信协议 (TLCP 双证书模式)
+//   - PRIVACY_TLS_CERT_FILE / PRIVACY_TLS_KEY_FILE / PRIVACY_TLS_CA_FILE: 标准 TLS 证书、私钥与根 CA 路径
+//   - PRIVACY_AUTH_ENABLED + PRIVACY_AUTH_INTERNAL_API_KEYS: 入站 API Key 鉴权开关与密钥列表 (逗号分隔)
+//   - PRIVACY_AUTH_INTERNAL_MTLS_ENABLED: 是否开启 gRPC 客户端双向证书认证 (mTLS)
+//   - PRIVACY_AUTH_MTLS_WHITELIST_FILE: 客户端证书 CN 白名单配置文件路径 (支持 5s 无依赖热重载)
+//   - PRIVACY_RATE_LIMIT_RPS / BURST: 入站全局令牌桶限流速率与突发容量
+//   - PRIVACY_SHUTDOWN_DRAIN_SECONDS: 收到停机信号后等待网络流量排空的等待秒数（默认 5s）
+//   - PRIVACY_GRPC_GRACEFUL_STOP_SECONDS: gRPC 优雅停机看门狗超时时间（默认 15s，超时则强制关闭）
 package main
 
 import (
 	"context"
 	"log"
 	"log/slog"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/keepalive"
-
 	engineconfig "github.com/fengzhizi319/PrivShield-go/engine-go/internal/config"
-	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/grpcserver"
 	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/observability"
 	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/rest"
-	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/security"
 	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/service"
 	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
-	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
-	"github.com/fengzhizi319/PrivShield-go/pkg/tlsutil"
 )
 
 // ──────────────────────────────────────────────
-// 版本信息（编译时注入）
+// 版本信息（编译时通过 -ldflags 注入）
 // ──────────────────────────────────────────────
 
 var (
@@ -59,11 +77,11 @@ var (
 )
 
 // ──────────────────────────────────────────────
-// 配置
+// 配置结构体与加载
 // ──────────────────────────────────────────────
 
 type Config struct {
-	// Runtime 承载监听面与安全开关，并提供 P0-1 fail-closed 门禁 Validate()。
+	// Runtime 承载监听面（Host/Port/Enabled）与安全开关，并提供 P0-1 fail-closed 门禁 Validate()。
 	*engineconfig.Runtime
 	LogLevel       string
 	RateLimitRPS   int
@@ -73,195 +91,114 @@ type Config struct {
 func loadConfig() Config {
 	return Config{
 		Runtime:        engineconfig.LoadAgent(),
-		LogLevel:       pkgconfig.EnvString("PRIVACY_LOG_LEVEL", "INFO"),
-		RateLimitRPS:   pkgconfig.EnvInt("PRIVACY_RATE_LIMIT_RPS", 1000),
-		RateLimitBurst: pkgconfig.EnvInt("PRIVACY_RATE_LIMIT_BURST", 2000),
+		LogLevel:       pkgconfig.EnvString("AGENT_LOG_LEVEL", "INFO"),
+		RateLimitRPS:   pkgconfig.EnvInt("AGENT_RATE_LIMIT_RPS", 1000),
+		RateLimitBurst: pkgconfig.EnvInt("AGENT_RATE_LIMIT_BURST", 2000),
 	}
 }
 
 // ──────────────────────────────────────────────
-// 主入口
+// 主入口：生命周期统一编排
 // ──────────────────────────────────────────────
 
 func main() {
+	// =========================================================================
+	// 【阶段 1：环境配置加载与 P0-1 零信任启动门禁】
+	// =========================================================================
+	// 1. 从环境变量加载运行时配置（含 REST/gRPC 开关、监听地址、TLS、mTLS 等）；
+	// 2. 默认绑定 127.0.0.1 环回地址（开发安全态），生产容器显式注入 0.0.0.0；
+	// 3. 执行 cfg.Validate() 实施严格的 fail-closed 门禁校验：
+	//    - 至少启用 REST 或 gRPC 之一，禁止两协议全关；
+	//    - 非环回暴露面必须配置凭证；
+	//    - PRIVACY_REQUIRE_TLS=true 时若 TLS 未启用直接阻断；
+	//    - mTLS 启用但白名单文件不可达直接阻断。
 	cfg := loadConfig()
 
-	// P0-1 零信任默认态：在打开任何监听端口之前通过 fail-closed 门禁，
-	// 命中红线（远端无密钥 / 声明 TLS 却未启用 / mTLS 白名单缺失 / 证书不可读）直接终止进程。
 	if err := cfg.Validate(); err != nil {
-		log.Fatalf("invalid configuration: %v", err)
+		log.Fatalf("[FATAL] 启动门禁拦截失败 (P0-1 零信任安全原则): %v", err)
 	}
 
-	// 初始化日志
+	// =========================================================================
+	// 【阶段 2：可观测性底座与隐私计算编排核心初始化】
+	// =========================================================================
+	// 1. 初始化标准库 log/slog 结构化日志系统；
+	// 2. 构造 PrivacyService 核心服务编排器（44 项隐私原语、3 层分类漏斗、预算会计、DICOM）；
+	// 3. 构造 Prometheus 引擎指标收集器；
+	// 4. 注册 pkg/naming 观测器：实时监控非标准 API 别名调用并双写日志与指标。
 	observability.InitLogger(cfg.LogLevel)
 
 	slog.Info("Starting PrivShield Go Engine",
 		"version", Version,
 		"build_time", BuildTime,
 		"git_commit", GitCommit,
+		"rest_enabled", cfg.RESTEnabled,
+		"grpc_enabled", cfg.GRPCEnabled,
 	)
 
-	// 初始化 PrivacyService 统一编排层
 	svcCfg := service.DefaultConfig()
 	svc, err := service.NewPrivacyService(svcCfg)
 	if err != nil {
-		slog.Error("Failed to init PrivacyService", "err", err)
+		slog.Error("Failed to init PrivacyService core orchestration", "err", err)
 		os.Exit(1)
 	}
 
-	// 初始化 Prometheus 指标收集器（设计文档 §11.1）
 	engineMetrics := observability.NewEngineMetrics()
-
-	// 注册 pkg/naming 观测器（P2-5）：别名命中与归一化失败既以结构化告警入日志，
-	// 也计入 privshield_api_alias_requests_total / privshield_datasource_normalize_errors_total，
-	// 与中台四服务同名同标签，直连枚举探测不再在指标面静默。
 	naming.SetObserver(namingObserver{metrics: engineMetrics})
 
-	// ── REST API (Gin) ──
-	gin.SetMode(gin.ReleaseMode)
-	router := gin.New()
-	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv()) // G-02
-	router.Use(middleware.IPAllowlist(middleware.AllowedCIDRsFromEnv()))           // IP access control
-	router.Use(gin.Recovery())
-	router.Use(middleware.TraceMiddleware()) // 全链路分布式追踪 (X-Request-ID + X-Trace-ID)
-	router.Use(security.SecurityHeadersMiddleware())
-	router.Use(middleware.WAF(slog.Default())) // 三级等保 G-12：Web 攻击载荷检测
-	router.Use(security.AuthMiddleware())
-	router.Use(security.RateLimitMiddleware())
-
-	// 可选限流中间件（设计文档 §12.7 / §13.4）
-	if cfg.RateLimitRPS > 0 {
-		router.Use(middleware.RateLimit(cfg.RateLimitRPS, cfg.RateLimitBurst))
-		slog.Info("Rate limiting enabled", "rps", cfg.RateLimitRPS, "burst", cfg.RateLimitBurst)
-	}
-
-	router.Use(observability.RequestLogger())
-	router.Use(engineMetrics.PrometheusMiddleware()) // Prometheus 实际指标注册
-
-	// 注册全部 REST API 路由
-	rest.RegisterRoutes(router, svc)
-
-	// Prometheus /metrics 端点（设计文档 §11.1）
-	router.GET("/metrics", engineMetrics.Handler())
-
-	restAddr := cfg.RESTAddress()
-	restServer := &http.Server{
-		Addr:         restAddr,
-		Handler:      router,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  120 * time.Second,
-	}
-
-	go func() {
-		if tlsutil.IsTLCPEnabled() {
-			tlcpCfg := tlsutil.TLCPConfigFromEnv()
-			gmtlsConfig, tlcpErr := tlsutil.BuildTLCPConfig(tlcpCfg)
-			if tlcpErr != nil {
-				slog.Error("failed to build TLCP config", "err", tlcpErr)
-				os.Exit(1)
-			}
-			tlcpLis, tlcpErr := tlsutil.NewTLCPListener("tcp", restAddr, gmtlsConfig)
-			if tlcpErr != nil {
-				slog.Error("failed to create TLCP listener", "err", tlcpErr)
-				os.Exit(1)
-			}
-			slog.Info("REST TLCP (国密) server starting", "addr", restAddr, "sign_cert", tlcpCfg.SignCertFile)
-			if err := restServer.Serve(tlcpLis); err != nil && err != http.ErrServerClosed {
-				slog.Error("REST TLCP server error", "err", err)
-				os.Exit(1)
-			}
-		} else if cfg.TLSEnabled {
-			slog.Info("REST HTTPS server starting", "addr", restAddr, "cert", cfg.TLSCertFile)
-			if err := restServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && err != http.ErrServerClosed {
-				slog.Error("REST HTTPS server error", "err", err)
-				os.Exit(1)
-			}
-		} else {
-			slog.Info("REST server starting", "addr", restAddr)
-			if err := restServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				slog.Error("REST server error", "err", err)
-				os.Exit(1)
-			}
-		}
-	}()
-
-	// ── gRPC Server ──
-	grpcAddr := cfg.GRPCAddress()
-	grpcLis, err := net.Listen("tcp", grpcAddr)
-	if err != nil {
-		slog.Error("gRPC listen failed", "err", err)
-		os.Exit(1)
-	}
-
-	// 生产级 gRPC Keepalive 保活策略配置
-	var grpcOpts = []grpc.ServerOption{
-		grpc.KeepaliveParams(keepalive.ServerParameters{
-			MaxConnectionIdle: 5 * time.Minute,
-			MaxConnectionAge:  2 * time.Hour,
-			Time:              2 * time.Minute,
-			Timeout:           20 * time.Second,
-		}),
-		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
-			MinTime:             5 * time.Second,
-			PermitWithoutStream: true,
-		}),
-	}
-
-	if cfg.TLSEnabled {
-		clientAuth := ""
-		if cfg.MTLSEnabled {
-			clientAuth = "require"
-		}
-		tlsCfg, err := tlsutil.BuildServerTLSConfig(&tlsutil.ServerTLSConfig{
-			Enabled:    true,
-			CertFile:   cfg.TLSCertFile,
-			KeyFile:    cfg.TLSKeyFile,
-			CAFile:     cfg.TLSCAFile,
-			ClientAuth: clientAuth,
-		})
+	// =========================================================================
+	// 【阶段 3：REST 模块按需构建与异步启动】
+	// =========================================================================
+	var restRunner *RESTServerRunner
+	if cfg.RESTEnabled {
+		runner, err := newRESTServerRunner(cfg, svc, engineMetrics)
 		if err != nil {
-			slog.Error("Failed to build gRPC TLS credentials", "err", err)
+			slog.Error("Failed to build REST server runner", "err", err)
 			os.Exit(1)
 		}
-		grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsCfg)))
-		slog.Info("gRPC TLS credentials enabled", "mtls", cfg.MTLSEnabled)
+		restRunner = runner
+
+		go func() {
+			if err := restRunner.Start(); err != nil {
+				slog.Error("REST server fatal error", "err", err)
+				os.Exit(1)
+			}
+		}()
+	} else {
+		slog.Warn("REST server is DISABLED by configuration (PRIVACY_REST_ENABLED=false); " +
+			"HTTP endpoints (/readyz, /healthz, /metrics) will not be served over HTTP")
 	}
 
-	// mTLS CN 白名单拦截器：路径已由门禁保证「启用 gRPC TLS / internal mTLS 时必然存在」，
-	// 这里再对「已给路径却拿不到拦截器」的情形显式终止，杜绝静默跳过注册。
-	whitelistPath := cfg.MTLSWhitelistFile
-	if whitelistPath != "" {
-		unaryInter, streamInter, _, err := tlsutil.NewWhitelistInterceptor(whitelistPath)
+	// =========================================================================
+	// 【阶段 4：gRPC 模块按需构建与异步启动】
+	// =========================================================================
+	var grpcRunner *GRPCServerRunner
+	if cfg.GRPCEnabled {
+		runner, err := newGRPCServerRunner(cfg, svc, engineMetrics)
 		if err != nil {
-			slog.Error("Failed to init mTLS whitelist interceptor", "err", err)
+			slog.Error("Failed to build gRPC server runner", "err", err)
 			os.Exit(1)
 		}
-		if unaryInter == nil || streamInter == nil {
-			slog.Error("mTLS whitelist interceptor was not registered; refusing to serve gRPC without CN authorization",
-				"path", whitelistPath)
-			os.Exit(1)
-		}
-		grpcOpts = append(grpcOpts,
-			grpc.ChainUnaryInterceptor(unaryInter),
-			grpc.ChainStreamInterceptor(streamInter),
-		)
-		slog.Info("mTLS CN whitelist interceptor enabled", "path", whitelistPath)
+		grpcRunner = runner
+
+		go func() {
+			if err := grpcRunner.Start(); err != nil {
+				slog.Error("gRPC server fatal error", "err", err)
+				os.Exit(1)
+			}
+		}()
+	} else {
+		slog.Info("gRPC server is DISABLED by configuration (PRIVACY_GRPC_ENABLED=false)")
 	}
 
-	grpcSrv := grpcserver.NewServer(svc, grpcOpts...).WithMetrics(engineMetrics)
-	go func() {
-		slog.Info("gRPC server starting", "addr", grpcAddr)
-		if err := grpcSrv.Serve(grpcLis); err != nil {
-			slog.Error("gRPC server error", "err", err)
-		}
-	}()
-
-	// ── 启动配置摘要 ──
+	// =========================================================================
+	// 【阶段 5：运行时配置自检、隐私预算快照与安全告警】
+	// =========================================================================
 	budgetStatus := svc.BudgetStatus()
 	slog.Info("Configuration summary",
-		"rest_addr", restAddr,
-		"grpc_addr", grpcAddr,
+		"rest_enabled", cfg.RESTEnabled,
+		"rest_addr", cfg.RESTAddress(),
+		"grpc_enabled", cfg.GRPCEnabled,
+		"grpc_addr", cfg.GRPCAddress(),
 		"tls_enabled", cfg.TLSEnabled,
 		"require_tls", cfg.RequireTLS,
 		"mtls_enabled", cfg.MTLSEnabled,
@@ -273,57 +210,58 @@ func main() {
 		"budget_remaining_epsilon", budgetStatus["remaining_epsilon"],
 	)
 
-	// 本地环回无密钥开发形态：门禁已放行，但必须显式告警，防止被误当作生产形态长期运行。
 	if !cfg.AuthEffectivelyEnabled() && !cfg.TLSEnabled {
-		slog.Warn("running with authentication and TLS DISABLED on a loopback bind; " +
+		slog.Warn("Running with authentication and TLS DISABLED on a loopback bind; " +
 			"for any exposed deployment set PRIVACY_AUTH_ENABLED=true with PRIVACY_AUTH_INTERNAL_API_KEYS " +
 			"and PRIVACY_TLS_ENABLED=true (plus PRIVACY_AUTH_MTLS_WHITELIST_FILE)")
 	}
 
-	// 等待退出信号
+	// =========================================================================
+	// 【阶段 6：信号捕获与流量平滑排空】
+	// =========================================================================
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-quit
 	slog.Info("Shutdown signal received, starting graceful draining", "signal", sig)
 
-	// 1. 标记 K8s 就绪探针为 unready
-	rest.SetReady(false)
+	// 1. 将 K8s 就绪探针置为 unready，触发集群 Endpoint 控制器剔除当前实例
+	if restRunner != nil {
+		rest.SetReady(false)
+	}
 
-	// 2. 流量排空等待窗口
-	drainSec := pkgconfig.EnvInt("PRIVACY_SHUTDOWN_DRAIN_SECONDS", 5)
+	// 2. 流量排空等待窗口（等待 kube-proxy 刷新路由规则，让在途请求完成处理）
+	drainSec := pkgconfig.EnvInt("AGENT_SHUTDOWN_DRAIN_SECONDS", 5)
 	if drainSec > 0 {
 		slog.Info("Draining in-flight traffic", "seconds", drainSec)
 		time.Sleep(time.Duration(drainSec) * time.Second)
 	}
 
-	// 3. 优雅停止 REST 与 gRPC Server
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	if err := restServer.Shutdown(ctx); err != nil {
-		slog.Error("REST server shutdown error", "err", err)
+	// =========================================================================
+	// 【阶段 7：确定性分步优雅停机】
+	// =========================================================================
+	// 3. 优雅停止 REST Server
+	if restRunner != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := restRunner.Shutdown(ctx); err != nil {
+			slog.Error("REST server shutdown error", "err", err)
+		}
 	}
 
-	// gRPC GracefulStop 带超时回退：若 RPC 不结束则强制停止，防止挂死
-	grpcDone := make(chan struct{})
-	go func() {
-		grpcSrv.GracefulStop()
-		close(grpcDone)
-	}()
-	grpcGraceSec := pkgconfig.EnvInt("PRIVACY_GRPC_GRACEFUL_STOP_SECONDS", 15)
-	select {
-	case <-grpcDone:
-		slog.Info("gRPC server stopped gracefully")
-	case <-time.After(time.Duration(grpcGraceSec) * time.Second):
-		slog.Warn("gRPC graceful stop timed out, forcing stop", "timeout_sec", grpcGraceSec)
-		grpcSrv.Stop()
+	// 4. 优雅停止 gRPC Server（带看门狗超时强制停机保护）
+	if grpcRunner != nil {
+		grpcGraceSec := pkgconfig.EnvInt("AGENT_GRPC_GRACEFUL_STOP_SECONDS", 15)
+		timeout := time.Duration(grpcGraceSec) * time.Second
+		if err := grpcRunner.Shutdown(timeout); err != nil {
+			slog.Warn("gRPC server shutdown warning", "err", err)
+		}
 	}
 
-	slog.Info("Server stopped gracefully")
+	slog.Info("Engine stopped gracefully")
 }
 
 // ──────────────────────────────────────────────
-// 辅助函数
+// 辅助类型与方法
 // ──────────────────────────────────────────────
 
 // namingObserver 同时以结构化日志与 Prometheus 计数承载 pkg/naming 的漂移事件（P2-5）。

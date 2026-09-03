@@ -18,6 +18,7 @@
 package middleware
 
 import (
+	"bytes"
 	"io"
 	"log/slog"
 	"net/http"
@@ -220,11 +221,12 @@ func WAF(logger *slog.Logger) gin.HandlerFunc {
 			}
 		}
 
-		// 4. 请求体（仅扫描表单类型，避免对二进制大文件产生无效开销）
+		// 4. 请求体（扫描表单与 JSON 类型，并限制最大扫描长度以防内存消耗）
 		if ct := c.GetHeader("Content-Type"); ct != "" {
 			ctLower := strings.ToLower(ct)
 			if strings.Contains(ctLower, "application/x-www-form-urlencoded") ||
-				strings.Contains(ctLower, "multipart/form-data") {
+				strings.Contains(ctLower, "multipart/form-data") ||
+				strings.Contains(ctLower, "application/json") {
 				if c.Request.Body != nil {
 					bodyBytes, err := io.ReadAll(io.LimitReader(c.Request.Body, maxBodyScanSize))
 					if err == nil && len(bodyBytes) > 0 {
@@ -233,7 +235,7 @@ func WAF(logger *slog.Logger) gin.HandlerFunc {
 					// 重建请求体，保证后续 Handler 可正常读取
 					c.Request.Body = io.NopCloser(
 						io.MultiReader(
-							strings.NewReader(string(bodyBytes)),
+							bytes.NewReader(bodyBytes),
 							c.Request.Body,
 						),
 					)
@@ -242,8 +244,14 @@ func WAF(logger *slog.Logger) gin.HandlerFunc {
 		}
 
 		// ── 执行多规则多维度扫描 ───────────────────────────────
-		for _, rule := range wafRules {
-			for _, target := range targets {
+		for _, target := range targets {
+			if len(target.content) == 0 {
+				continue
+			}
+			for _, rule := range wafRules {
+				if !canMatchRule(rule.category, target.content) {
+					continue
+				}
 				for _, pattern := range rule.patterns {
 					if pattern.MatchString(target.content) {
 						requestID := GetTraceID(c)
@@ -299,3 +307,25 @@ const (
 	// maxPayloadLogLen 日志中载荷摘要最大截断长度，防止超长 Payload 引发日志膨胀。
 	maxPayloadLogLen = 512
 )
+
+// canMatchRule 基于快速字符预检（ASCII Fast-Path Precheck）判定 content 是否可能命中该类别规则。
+// 若内容中不包含该类别所需的特征触发字符，直接跳过数十个正则匹配，使 99% 的合规流量在微秒内放行。
+func canMatchRule(category, content string) bool {
+	if len(content) == 0 {
+		return false
+	}
+	switch category {
+	case "SQL_INJECTION":
+		return strings.ContainsAny(content, " '\"=;()#/*\t\r\n")
+	case "XSS":
+		return strings.ContainsAny(content, "<>:(.=")
+	case "COMMAND_INJECTION":
+		return strings.ContainsAny(content, "|;&`$()")
+	case "PATH_TRAVERSAL":
+		return strings.ContainsAny(content, ".%\\")
+	case "EXPLOIT":
+		return strings.ContainsAny(content, "${(#")
+	default:
+		return true
+	}
+}

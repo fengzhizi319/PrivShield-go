@@ -79,14 +79,17 @@ type WhitelistConfig struct {
 		Description string   `yaml:"description,omitempty"`
 		Enabled     *bool    `yaml:"enabled,omitempty"`
 	} `yaml:"entries"`
+	DefaultScopes []string `yaml:"default_scopes"`
 }
 
 // DynamicWhitelist manages a hot-reloadable CN → scopes mapping.
 // DynamicWhitelist 管理线程安全、可热重载的客户端 CN 到 AllowedScopes 的映射字典。
 type DynamicWhitelist struct {
-	mu      sync.RWMutex
-	clients map[string][]string // CN → allowed scopes 切片
-	path    string              // 配置文件物理路径
+	mu            sync.RWMutex
+	clients       map[string][]string // CN → allowed scopes 切片
+	defaultScopes []string            // 默认 scope
+	path          string              // 配置文件物理路径
+	lastModTime   time.Time
 
 	// 轮询与停机状态
 	stopCh  chan struct{}
@@ -112,6 +115,19 @@ func NewDynamicWhitelist(path string) (*DynamicWhitelist, error) {
 	}
 	go dw.poll()
 	return dw, nil
+}
+
+// NewStaticWhitelist creates an in-memory whitelist from a static slice of CNs with wildcard scopes.
+func NewStaticWhitelist(cns []string) *DynamicWhitelist {
+	clients := make(map[string][]string, len(cns))
+	for _, cn := range cns {
+		if cn != "" {
+			clients[cn] = []string{"*"}
+		}
+	}
+	return &DynamicWhitelist{
+		clients: clients,
+	}
 }
 
 // reload reads and parses the YAML whitelist configuration file.
@@ -152,10 +168,45 @@ func (dw *DynamicWhitelist) reload() error {
 	}
 
 	dw.mu.Lock()
-	defer dw.mu.Unlock()
 	dw.clients = newClients
-	log.Printf("[mTLS Whitelist] Reloaded %d authorized CN entries from %s", len(dw.clients), dw.path)
+	dw.defaultScopes = conf.DefaultScopes
+	if info, err := os.Stat(dw.path); err == nil {
+		dw.lastModTime = info.ModTime()
+	}
+	dw.mu.Unlock()
+	log.Printf("[mTLS Whitelist] Reloaded %d authorized CN entries from %s", len(newClients), dw.path)
 	return nil
+}
+
+// CheckReload checks whether the whitelist file on disk was modified, and reloads if so.
+func (dw *DynamicWhitelist) CheckReload() bool {
+	if dw.path == "" {
+		return false
+	}
+	info, err := os.Stat(dw.path)
+	if err != nil {
+		return false
+	}
+	dw.mu.RLock()
+	lastMod := dw.lastModTime
+	dw.mu.RUnlock()
+
+	if info.ModTime().After(lastMod) {
+		return dw.reload() == nil
+	}
+	return false
+}
+
+// DefaultScopes returns a copy of configured default scopes.
+func (dw *DynamicWhitelist) DefaultScopes() []string {
+	dw.mu.RLock()
+	defer dw.mu.RUnlock()
+	if dw.defaultScopes == nil {
+		return nil
+	}
+	res := make([]string, len(dw.defaultScopes))
+	copy(res, dw.defaultScopes)
+	return res
 }
 
 // poll watches for file changes by polling modification time.
@@ -249,6 +300,19 @@ func (dw *DynamicWhitelist) GetScopes(clientCN string) ([]string, bool) {
 	defer dw.mu.RUnlock()
 	scopes, exists := dw.clients[clientCN]
 	return scopes, exists
+}
+
+// AuthorizedClients returns a copy of the authorized CN to scopes mapping.
+func (dw *DynamicWhitelist) AuthorizedClients() map[string][]string {
+	dw.mu.RLock()
+	defer dw.mu.RUnlock()
+	res := make(map[string][]string, len(dw.clients))
+	for k, v := range dw.clients {
+		scopesCopy := make([]string, len(v))
+		copy(scopesCopy, v)
+		res[k] = scopesCopy
+	}
+	return res
 }
 
 // matchScopePattern performs simple wildcard pattern matching.

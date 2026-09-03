@@ -42,14 +42,15 @@ func (s State) String() string {
 //   - HalfOpen → Closed：探测成功次数达到 halfOpenMax 后恢复；
 //   - HalfOpen → Open：任何一次探测失败立即回退。
 type Breaker struct {
-	state       State         // 当前熔断状态（Closed / Open / HalfOpen）
-	failures    int           // 连续失败计数（Closed 状态下累计，达到 threshold 触发熔断）
-	successes   int           // 探测成功计数（HalfOpen 状态下累计，达到 halfOpenMax 恢复 Closed）
-	threshold   int           // 触发熔断的连续失败次数阈值
-	halfOpenMax int           // HalfOpen 状态下允许放行的最大探测请求数
-	openedAt    time.Time     // 熔断开启时间戳（用于计算冷却期是否已过）
-	cooldown    time.Duration // Open 状态最短持续时间（冷却期）
-	mu          sync.Mutex    // 保护所有状态字段的互斥锁
+	state          State         // 当前熔断状态（Closed / Open / HalfOpen）
+	failures       int           // 连续失败计数（Closed 状态下累计，达到 threshold 触发熔断）
+	successes      int           // 探测成功计数（HalfOpen 状态下累计，达到 halfOpenMax 恢复 Closed）
+	inFlightProbes int           // HalfOpen 状态下当前正在执行的在途探测请求数
+	threshold      int           // 触发熔断的连续失败次数阈值
+	halfOpenMax    int           // HalfOpen 状态下允许放行的最大探测请求数
+	openedAt       time.Time     // 熔断开启时间戳（用于计算冷却期是否已过）
+	cooldown       time.Duration // Open 状态最短持续时间（冷却期）
+	mu             sync.Mutex    // 保护所有状态字段的互斥锁
 }
 
 // NewBreaker 创建指定失败阈值与冷却时间的熔断器。
@@ -73,8 +74,8 @@ func NewBreaker(threshold int, cooldown time.Duration) *Breaker {
 //
 // 状态转移逻辑：
 //   - StateClosed：始终放行；
-//   - StateOpen：冷却期已过则转为 StateHalfOpen 并放行探测，否则拒绝；
-//   - StateHalfOpen：放行不超过 halfOpenMax 个探测请求。
+//   - StateOpen：冷却期已过则转为 StateHalfOpen 并放行首个探测请求，否则拒绝；
+//   - StateHalfOpen：严格限制在途并发探测数与成功数之和不超过 halfOpenMax，防并发击穿。
 func (b *Breaker) Allow() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -86,11 +87,16 @@ func (b *Breaker) Allow() bool {
 		if time.Since(b.openedAt) >= b.cooldown {
 			b.state = StateHalfOpen
 			b.successes = 0
+			b.inFlightProbes = 1
 			return true
 		}
 		return false
 	case StateHalfOpen:
-		return b.successes < b.halfOpenMax
+		if b.successes+b.inFlightProbes < b.halfOpenMax {
+			b.inFlightProbes++
+			return true
+		}
+		return false
 	}
 	return true
 }
@@ -103,10 +109,14 @@ func (b *Breaker) RecordSuccess() {
 
 	switch b.state {
 	case StateHalfOpen:
+		if b.inFlightProbes > 0 {
+			b.inFlightProbes--
+		}
 		b.successes++
 		if b.successes >= b.halfOpenMax {
 			b.state = StateClosed
 			b.failures = 0
+			b.inFlightProbes = 0
 		}
 	case StateClosed:
 		b.failures = 0
@@ -129,6 +139,7 @@ func (b *Breaker) RecordFailure() {
 		}
 	case StateHalfOpen:
 		b.state = StateOpen
+		b.inFlightProbes = 0
 	}
 }
 

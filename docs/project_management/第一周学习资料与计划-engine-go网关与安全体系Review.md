@@ -3972,67 +3972,78 @@ curl -H "Authorization: Bearer <admin-key>" http://localhost:8082/api/hub/dispat
 
 ### Engine-go Agent 启动全流程
 
-**源码位置**：`engine-go/cmd/privshield-agent/main.go` (324 行)
+**源码位置**：`engine-go/cmd/privshield-agent/main.go` (~420 行)
 
-Agent 是 PrivShield 的核心隐私计算引擎，同时暴露 REST (:8079) 和 gRPC (:50051) 双协议端口。启动流程分为 7 个阶段：
+Agent 是 PrivShield 的核心隐私计算与分类分级引擎，同时暴露 REST (:8079) 和 gRPC (:50051) 双协议端口。启动流程分为 7 个严格阶段：
 
 ```
-阶段 1：配置加载
-├── loadConfig() → 从环境变量加载 Runtime + 日志/限流配置
-├── cfg.Validate() → P0-1 零信任门禁（fail-closed）
-│   ├── 非环回监听必须配置入站凭据
-│   ├── 声明 TLS 却未启用 → 终止进程
-│   └── 启用 mTLS 却缺少白名单文件 → 终止进程
-└── 门禁失败 → log.Fatalf() 立即终止（不打开任何端口）
+阶段 1：环境配置加载与 P0-1 零信任启动门禁
+├── loadConfig() → 从环境变量加载 Runtime + 日志/限流配置 (默认绑定 127.0.0.1 环回保护)
+├── cfg.Validate() → P0-1 零信任门禁（fail-closed 机制，宁可终止不可降级）
+│   ├── 红线 A：非环回监听 (0.0.0.0) 必须配置 API Key 或 mTLS 凭据 → 违规直接退出
+│   ├── 红线 B：声明 PRIVACY_REQUIRE_TLS 却未启用 TLS → 违规直接退出
+│   ├── 红线 C：启用 mTLS 却缺少白名单文件路径或文件不可达 → 违规直接退出
+│   └── 红线 D：配置 TLS 但证书或私钥文件不可读 → 违规直接退出
+└── 门禁失败 → log.Fatalf() 立即终止（不打开任何网络端口）
 
-阶段 2：日志与业务服务初始化
-├── observability.InitLogger(level) → slog 结构化日志（JSON 格式）
-├── service.NewPrivacyService(cfg) → 隐私计算引擎（脱敏/DP/K-匿名/...）
-├── observability.NewEngineMetrics() → Prometheus 指标收集器
-└── naming.SetObserver(...) → 注册命名观测器（别名/归一化事件）
+阶段 2：可观测性底座与隐私计算编排核心初始化
+├── observability.InitLogger(level) → slog 结构化日志（JSON 格式输出）
+├── service.NewPrivacyService(cfg) → 核心编排器（串联 44 隐私原语/3层漏斗/预算会计/DICOM流水线）
+├── observability.NewEngineMetrics() → Prometheus 指标收集器（RED指标 + 预算消耗指标）
+└── naming.SetObserver(...) → 注册命名观测器（实时监控 API 别名漂移与数据源归一化异常）
 
-阶段 3：REST API 构建
-├── gin.New() → ReleaseMode
-├── 中间件链（按执行顺序）：
-│   ├── gin.Recovery()              → panic 恢复
-│   ├── TraceMiddleware()           → X-Request-ID + X-Trace-ID
-│   ├── SecurityHeadersMiddleware() → CSP/HSTS/X-Frame-Options
-│   ├── AuthMiddleware()            → API Key 认证
-│   ├── RateLimitMiddleware()       → 32 分片令牌桶限流
-│   ├── RequestLogger()             → 请求日志
-│   └── PrometheusMiddleware()      → RED 指标埋点
-├── rest.RegisterRoutes(router, svc) → 注册全部隐私原语 API
-└── router.GET("/metrics", ...)      → Prometheus 抓取端点
+阶段 3：REST API (Gin) 管道构建与防御性中间件链路装配
+├── gin.New() → 生产 ReleaseMode（关闭调试输出，完全控制中间件顺序）
+├── [G-02] ConfigureTrustedProxies() → 严格校验反向代理 CIDR，防止伪造 X-Forwarded-For 来源 IP
+├── 基础设施层中间件链（按执行顺序）：
+│   ├── ① IPAllowlist()             → 网络层 CIDR 准入白名单，非法 IP 立即 403 阻断
+│   ├── ② gin.Recovery()            → 捕获下游任何 panic，记录堆栈并返回标准 500 信封
+│   ├── ③ TraceMiddleware()         → 全链路分布式追踪（X-Request-ID + X-Trace-ID 上下文透传）
+│   ├── ④ RateLimit() (可选)        → 全局粗粒度令牌桶限流，用于入口流量总削峰防雪崩
+│   ├── ⑤ RequestLogger()           → 结构化请求访问日志（记录方法/路径/状态/耗时/TraceID）
+│   └── ⑥ PrometheusMiddleware()    → 实时采集 HTTP QPS、延迟分布与状态码指标
+├── 安全防护层中间件链 (rest.RegisterRoutes 内部前置装配)：
+│   ├── ⑦ SecurityHeadersMiddleware() → 注入 HSTS, CSP, X-Frame-Options 等安全标头
+│   ├── ⑧ MaxBodySize(64MB)           → 限制报文体上限，防御大报文内存耗尽 DoS
+│   ├── ⑨ WAF(nil) (G-12)             → 预编译正则引擎扫描，拦截 SQLi/XSS/路径穿越/命令注入
+│   ├── ⑩ AuthMiddleware()            → 双模式 API Key 认证（常量时间 subtle.ConstantTime 比较）
+│   └── ⑪ RateLimitMiddleware()       → 32 分片高并发令牌桶细粒度限流（按身份/IP/路径）
+├── rest.RegisterRoutes(router, svc) → 挂载全部隐私原语计算与治理端点
+└── router.GET("/metrics", ...)      → Prometheus 内部免鉴权监控抓取端点
 
-阶段 4：REST Server 启动
-├── http.Server{ReadTimeout: 30s, WriteTimeout: 30s, IdleTimeout: 120s}
-├── TLS 模式：ListenAndServeTLS(cert, key)
-└── 非 TLS 模式：ListenAndServe()
+阶段 4：REST 服务端生命周期（TLCP / TLS / HTTP 自适应启动）
+├── http.Server 配置超时（ReadTimeout 30s, WriteTimeout 30s, IdleTimeout 120s 防 Slowloris 慢速连接攻击）
+├── 协议三模自适应：
+│   ├── 国密模式：tlsutil.IsTLCPEnabled() → GM/T 0024 TLCP 签名/加密双证书监听器
+│   ├── 标准模式：cfg.TLSEnabled → ListenAndServeTLS (HTTPS, TLS 1.2/1.3)
+│   └── 明文模式：ListenAndServe (仅环回或服务网格私有环境运行)
+└── 放入独立后台 goroutine 异步监听
 
-阶段 5：gRPC Server 构建
-├── Keepalive 配置：
-│   ├── MaxConnectionIdle: 5m    → 空闲连接超时
-│   ├── MaxConnectionAge: 2h     → 连接最大生命周期
-│   ├── Time: 2m                 → Ping 间隔
-│   └── Timeout: 20s             → Ping 超时
-├── TLS/mTLS 凭证（如启用）
-├── mTLS CN 白名单拦截器（如配置白名单文件）
-│   ├── NewWhitelistInterceptor(path) → 一元 + 流式拦截器
-│   └── ChainUnaryInterceptor + ChainStreamInterceptor
-└── grpcserver.NewServer(svc, opts...) → 注册 PrivacyService
+阶段 5：高性能 gRPC 服务端构建与双向认证 (mTLS) 治理
+├── net.Listen("tcp", grpcAddr) → 创建 TCP 监听端口 (:50051)
+├── 生产级 Keepalive 保活配置：
+│   ├── MaxConnectionIdle: 5m    → 回收空闲连接，防连接池泄漏
+│   ├── MaxConnectionAge: 2h     → 定期重连促使 L4 负载均衡器重新均衡流量
+│   ├── Time: 2m / Timeout: 20s  → 主动心跳探测死连接
+│   └── EnforcementPolicy: MinTime 5s, PermitWithoutStream true → 防范恶意客户端 Ping 风暴
+├── TLS/mTLS 凭证：BuildServerTLSConfig() 验证客户端证书链
+├── mTLS CN 动态白名单拦截器：
+│   ├── 委托复用 pkg/tlsutil.DynamicWhitelist 底座（支持 5 秒无依赖热重载）
+│   ├── 覆盖 Unary 与 Stream 拦截器，校验方法级 Scope 权限（精确匹配 + 通配符）
+│   └── 严格 fail-closed：白名单文件配置但初始化拦截器失败直接终止进程
+└── grpcserver.NewServer(svc, opts...).WithMetrics() → 挂载指标并后台异步 Serve
 
-阶段 6：启动配置摘要
-└── slog.Info("Configuration summary", ...)
-    ├── 监听地址、TLS/mTLS 状态
-    ├── 认证状态、限流参数
-    └── 隐私预算总量/剩余量
+阶段 6：运行时配置自检与隐私预算安全快照
+├── 输出当前配置摘要（REST/gRPC 地址、TLS/mTLS 状态、鉴权状态、限流参数、日志级别）
+├── svc.BudgetStatus() → 输出原子差分隐私总预算与剩余可用 epsilon
+└── 本地开发模式安全告警：若检测到环回绑定且无鉴权无 TLS，输出 WARN 级别安全提示
 
-阶段 7：信号处理与优雅停机
-├── signal.Notify(quit, SIGINT, SIGTERM)
-├── 收到信号 → rest.SetReady(false) → K8s 就绪探针失败
-├── 流量排空等待（PRIVACY_SHUTDOWN_DRAIN_SECONDS, 默认 5s）
-├── REST 优雅停止（30s 超时）
-└── gRPC 优雅停止（15s 超时 → 强制停止回退）
+阶段 7：确定性三级优雅排空与安全停机
+├── signal.Notify(quit, SIGINT, SIGTERM) → 捕获操作系统停机信号
+├── Step 1: rest.SetReady(false) → K8s 就绪探针 (/readyz) 返回 503，促使 K8s Endpoints 摘除该 Pod
+├── Step 2: 流量排空等待（PRIVACY_SHUTDOWN_DRAIN_SECONDS, 默认 5s），消化集群 kube-proxy 刷新延迟期间的在途请求
+├── Step 3: REST Server 优雅停止（30s 超时 context）
+└── Step 4: gRPC Server 优雅停止（独立协程 GracefulStop() + 15s 看门狗超时回退强制 Stop()，防僵死进程）
 ```
 
 ### P0-1 零信任门禁 Validate() 设计分析
@@ -4040,28 +4051,41 @@ Agent 是 PrivShield 的核心隐私计算引擎，同时暴露 REST (:8079) 和
 门禁是整个安全体系的第一道防线，其核心哲学是：**宁可拒绝启动，不可静默降级**。
 
 ```go
-// engine-go/internal/config/ 中 Validate() 的检查逻辑（简化）
-func (c *Runtime) Validate() error {
-    // 检查 1：非环回监听必须配置凭据
-    if !c.isLoopback() && !c.hasCredentials() {
-        return errors.New("non-loopback bind without authentication")
+// engine-go/internal/config/ 中 Validate() 的检查逻辑（对齐最新实现）
+func (r *Runtime) Validate() error {
+    // 检查 1：若启用 TLS，证书与私钥路径必须有效且物理文件可读
+    if r.TLSEnabled {
+        if r.TLSCertFile == "" || r.TLSKeyFile == "" || !fileExists(r.TLSCertFile) || !fileExists(r.TLSKeyFile) {
+            return fmt.Errorf("TLS enabled but cert/key file invalid or inaccessible")
+        }
     }
-    // 检查 2：声明必须加密但未启用 TLS
-    if c.RequireTLS && !c.TLSEnabled {
-        return errors.New("PRIVACY_REQUIRE_TLS=true but TLS not enabled")
+    // 检查 2：零信任通用门禁（非环回绑定必须配置凭据；声明必须加密未启用 TLS 阻断）
+    if err := pkgconfig.ValidateFailClosed(pkgconfig.SecurityRequirements{
+        ServiceName:       r.ServiceName,
+        Hosts:             r.Hosts(),
+        APIKey:            r.inboundCredential(),
+        AuthEnabled:       r.AuthEnabled,
+        TLSEnabled:        r.TLSEnabled,
+        RequireTLS:        r.RequireTLS,
+        GRPCEnabled:       r.GRPCEnabled,
+        MTLSWhitelistFile: r.MTLSWhitelistFile,
+    }); err != nil {
+        return err
     }
-    // 检查 3：启用 mTLS 但白名单文件不存在
-    if c.MTLSEnabled && !fileExists(c.MTLSWhitelistFile) {
-        return errors.New("mTLS enabled but whitelist file missing")
+    // 检查 3：声明启用 internal mTLS，白名单文件必须物理存在且不可为目录
+    if r.MTLSEnabled {
+        if r.MTLSWhitelistFile == "" || !fileExists(r.MTLSWhitelistFile) {
+            return fmt.Errorf("mTLS enabled but whitelist file missing or inaccessible")
+        }
     }
     return nil
 }
 ```
 
 **设计决策解读**：
-- **为何用 `log.Fatalf` 而非返回 error**：`main()` 中直接 `os.Exit(1)`，确保进程不会在缺少安全配置的情况下运行
-- **为何环回地址可以无密钥**：开发环境便利性与安全性的平衡。但启动时会输出 WARN 级别日志提醒
-- **`AuthEffectivelyEnabled()`**：综合判断认证是否「实际生效」——即使 `AUTH_ENABLED=false`，如果配置了 API Key 或 mTLS，也视为认证已启用
+- **为何用 `log.Fatalf` 而非返回 error**：`main()` 中捕获门禁失败直接 `log.Fatalf`，确保进程在缺少安全配置的情况下 100% 拒绝监听任何网络端口；
+- **为何环回地址可以无密钥**：本地单机开发 (127.0.0.1) 允许免密以便于快速调试，但控制台会显式输出 WARN 级别安全提示；生产部署只要监听 0.0.0.0 就必须配置凭据；
+- **`AuthEffectivelyEnabled()`**：综合判断认证是否「实际生效」——不仅检查 `AUTH_ENABLED` 开关，还核验是否至少配置了一把有效 API Key 或启用了 mTLS，杜绝配置空 Key 产生鉴权虚标。
 
 ### Gateway 启动全流程
 

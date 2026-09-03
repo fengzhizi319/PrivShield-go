@@ -120,3 +120,54 @@ func TestEnvStringSlice(t *testing.T) {
 		t.Errorf("EnvStringSlice(missing) = %v, want empty", got2)
 	}
 }
+
+// ──────────────────────────────────────────────
+// 5. 双键回退读取测试 (Fallback)
+// ──────────────────────────────────────────────
+
+func TestEnvFallbacks(t *testing.T) {
+	// String fallback
+	t.Setenv("PRIMARY_STR", "p_val")
+	t.Setenv("FALLBACK_STR", "f_val")
+	if got := EnvStringFallback("PRIMARY_STR", "FALLBACK_STR", "def"); got != "p_val" {
+		t.Errorf("expected primary, got %s", got)
+	}
+	t.Setenv("PRIMARY_STR", "")
+	if got := EnvStringFallback("PRIMARY_STR", "FALLBACK_STR", "def"); got != "f_val" {
+		t.Errorf("expected fallback, got %s", got)
+	}
+	t.Setenv("FALLBACK_STR", "")
+	if got := EnvStringFallback("PRIMARY_STR", "FALLBACK_STR", "def"); got != "def" {
+		t.Errorf("expected default, got %s", got)
+	}
+
+	// Int fallback
+	t.Setenv("PRIMARY_INT", "100")
+	t.Setenv("FALLBACK_INT", "200")
+	if got := EnvIntFallback("PRIMARY_INT", "FALLBACK_INT", 300); got != 100 {
+		t.Errorf("expected 100, got %d", got)
+	}
+	t.Setenv("PRIMARY_INT", "")
+	if got := EnvIntFallback("PRIMARY_INT", "FALLBACK_INT", 300); got != 200 {
+		t.Errorf("expected 200, got %d", got)
+	}
+	t.Setenv("FALLBACK_INT", "")
+	if got := EnvIntFallback("PRIMARY_INT", "FALLBACK_INT", 300); got != 300 {
+		t.Errorf("expected 300, got %d", got)
+	}
+
+	// Bool fallback
+	t.Setenv("PRIMARY_BOOL", "true")
+	t.Setenv("FALLBACK_BOOL", "false")
+	if got := EnvBoolFallback("PRIMARY_BOOL", "FALLBACK_BOOL", false); got != true {
+		t.Errorf("expected true, got %v", got)
+	}
+	t.Setenv("PRIMARY_BOOL", "")
+	if got := EnvBoolFallback("PRIMARY_BOOL", "FALLBACK_BOOL", true); got != false {
+		t.Errorf("expected false, got %v", got)
+	}
+	t.Setenv("FALLBACK_BOOL", "")
+	if got := EnvBoolFallback("PRIMARY_BOOL", "FALLBACK_BOOL", true); got != true {
+		t.Errorf("expected default true, got %v", got)
+	}
+}

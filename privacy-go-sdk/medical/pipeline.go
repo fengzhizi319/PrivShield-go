@@ -149,6 +149,43 @@ func NewKangyangPipeline() *Pipeline {
 	return NewPipeline(specs)
 }
 
+// NewFullMedicalPipeline 创建合并了医保 19、康养 27、体征及民政档案全部规格矩阵的统一全量医疗隐私流水线。
+func NewFullMedicalPipeline() *Pipeline {
+	specs := make([]FieldSpec, 0, len(YibaoFields)+len(KangyangFields)+len(VitalSignFields)+len(GovCareExtraFields))
+	specs = append(specs, YibaoFields...)
+	specs = append(specs, KangyangFields...)
+	specs = append(specs, VitalSignFields...)
+	specs = append(specs, GovCareExtraFields...)
+	return NewPipeline(specs)
+}
+
+// RegisterFields 向流水线动态注册或更新字段规格矩阵（线程安全）。
+// 允许在运行时通过外部配置（如 rules/domains/medical.yaml）扩展新字段或调整既有字段处置策略。
+func (p *Pipeline) RegisterFields(specs ...FieldSpec) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i := range specs {
+		spec := specs[i]
+		key := normalizeFieldName(spec.Name)
+		p.fieldMap[key] = &spec
+		found := false
+		for _, name := range p.specNames {
+			if normalizeFieldName(name) == key {
+				found = true
+				break
+			}
+		}
+		if !found {
+			p.specNames = append(p.specNames, spec.Name)
+		}
+		if canon := CanonicalizePIIField(key); canon != key {
+			if _, exists := p.fieldMap[canon]; !exists {
+				p.fieldMap[canon] = &spec
+			}
+		}
+	}
+}
+
 // SetUnlistedFieldPolicy 设置未登记字段的默认拒绝策略。
 //
 // 只接受限制性策略（mask / drop）；无法识别的取值回落到 [DefaultUnlistedFieldPolicy]，

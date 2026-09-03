@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/fengzhizi319/PrivShield-go/pkg/envelope"
 	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 )
 
@@ -33,23 +34,13 @@ var AuthForbiddenTotal = prometheus.NewCounter(
 // IdentityContextKey 用于在 gin.Context 中存储认证身份。
 const IdentityContextKey = "security_identity"
 
-// errorEnvelope 是 pkg/auth 内部使用的统一错误响应体结构。
-// 与 pkg/middleware.ErrorEnvelope 字段完全一致，避免 pkg/auth 反向依赖 pkg/middleware。
-type errorEnvelope struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	Detail    any    `json:"detail,omitempty"`
-	TraceID   string `json:"trace_id"`
-	Timestamp string `json:"timestamp"`
-}
-
 // abortWithError 中断请求并以统一错误信封格式输出 JSON 错误响应。
-// 等价于 pkg/middleware.AbortWithError，但提取 traceID 使用 pkg/observability.GetTraceID。
+// 统一复用 pkg/envelope.ErrorEnvelope 标准 5 字段信封模型。
 func abortWithError(c *gin.Context, httpStatus int, code string, message string, detail any) {
 	traceID := pkgobs.GetTraceID(c)
 	c.Header("X-Request-ID", traceID)
 	c.Header("X-Trace-ID", traceID)
-	c.AbortWithStatusJSON(httpStatus, errorEnvelope{
+	c.AbortWithStatusJSON(httpStatus, envelope.ErrorEnvelope{
 		Code:      code,
 		Message:   message,
 		Detail:    detail,
@@ -70,19 +61,39 @@ func ExtractBearerToken(header string) string {
 // ConstantTimeLookup 常量时间查找 token，防止计时攻击。
 // 对 key 进行排序以确保确定性迭代顺序（Go map 迭代顺序随机），
 // 遍历全部 key 且始终比较所有 key，避免时序侧信道泄漏。
+// 栈上切片优化：8 个 key 以内使用栈数组，消除高并发堆分配与 GC 压力。
 // 三级等保 G-14：跳过已过期的密钥。
 func ConstantTimeLookup(keys map[string]*KeyConfig, token string) *KeyConfig {
 	if len(keys) == 0 {
 		return nil
 	}
-	// 排序 key 确保确定性迭代顺序
-	sortedKeys := make([]string, 0, len(keys))
+	tokenBytes := []byte(token)
+
+	// 单 Key 快速常量路径：无需排序，直接恒定时间比对，零内存分配
+	if len(keys) == 1 {
+		for k, v := range keys {
+			if subtle.ConstantTimeCompare([]byte(k), tokenBytes) == 1 {
+				if v != nil && !v.IsExpired() {
+					return v
+				}
+			}
+		}
+		return nil
+	}
+
+	// 栈缓冲区小切片：8 个 key 以内栈上完成，避免每次 HTTP 请求在堆上分配切片
+	var stackBuf [8]string
+	var sortedKeys []string
+	if len(keys) <= len(stackBuf) {
+		sortedKeys = stackBuf[:0]
+	} else {
+		sortedKeys = make([]string, 0, len(keys))
+	}
 	for k := range keys {
 		sortedKeys = append(sortedKeys, k)
 	}
 	sort.Strings(sortedKeys)
 
-	tokenBytes := []byte(token)
 	var matched *KeyConfig
 	for _, key := range sortedKeys {
 		// subtle.ConstantTimeCompare 确保每次比较耗时恒定

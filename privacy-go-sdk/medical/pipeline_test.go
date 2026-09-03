@@ -236,3 +236,49 @@ func TestGetFieldSpec(t *testing.T) {
 		t.Errorf("id_card_no category = %q, want 'identity'", spec.Category)
 	}
 }
+
+func TestDynamicRegisterFieldsAndAliases(t *testing.T) {
+	p := NewYibaoPipeline()
+
+	// 1. 未注册的新字段默认被拒绝（按照默认策略 mask）
+	rawVal := "88"
+	unlistedRes := p.SanitizeField("patient_age", rawVal)
+	if unlistedRes == rawVal {
+		t.Fatalf("unlisted field patient_age should not be kept as raw value %q", rawVal)
+	}
+
+	// 2. 动态注册字段规格 (treatment: TreatmentAgeBand)
+	p.RegisterFields(FieldSpec{
+		Name:      "patient_age",
+		Category:  CategoryIdentity,
+		Level:     2,
+		Treatment: TreatmentAgeBand,
+	})
+
+	spec := p.GetFieldSpec("patient_age")
+	if spec == nil {
+		t.Fatal("patient_age should be registered")
+	}
+	if spec.Treatment != TreatmentAgeBand {
+		t.Errorf("patient_age treatment = %v, want TreatmentAgeBand", spec.Treatment)
+	}
+
+	// 再次脱敏，应当命中 TreatmentAgeBand
+	sanitized := p.SanitizeField("patient_age", "88")
+	if sanitized != "[88-90)" {
+		t.Errorf("expected age band '[88-90)', got %q", sanitized)
+	}
+
+	// 3. 动态注册别名
+	RegisterFieldAlias("cust_phone", "phone")
+	defer ResetCustomFieldAliases()
+
+	if canon := CanonicalizePIIField("cust_phone"); canon != "phone" {
+		t.Errorf("expected CanonicalizePIIField(cust_phone) = 'phone', got %q", canon)
+	}
+
+	phoneRes := p.SanitizeField("cust_phone", "13812345678")
+	if phoneRes != "138****5678" {
+		t.Errorf("expected masked phone '138****5678', got %q", phoneRes)
+	}
+}

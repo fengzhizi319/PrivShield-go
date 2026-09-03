@@ -264,3 +264,37 @@ redaction_strategy:
     "MALIGNANT_NEOPLASM": "MALIGNANT_NEOPLASM"
     "HEPATITIS_VIRUS": "HEPATITIS_VIRUS"
     "SEVERE_ORGAN_DAMAGE": "SEVERE_ORGAN_DAMAGE"
+
+# ==============================================================================
+# 5. 字段规格扩展与别名映射 (field_specs / aliases)
+# 供医疗脱敏流水线与分类引擎动态扩展字段规格矩阵与别名字典。
+# 修改本文件后，引擎通过 5s 文件监控热重载自动生效，无需重启服务。
+# ==============================================================================
+field_specs: []
+#  # 示例 1: 新增自费就诊挂号费（数值区间泛化分箱，步长 50 元）
+#  - name: "consultation_fee"
+#    category: "financial"
+#    level: 3
+#    treatment: "bounding"
+#    band: 50.0
+#    description: "门诊挂号费（按 50 元分箱泛化）"
+#
+#  # 示例 2: 字段重命名为 patient_age（年龄段泛化，如 20-29）
+#  - name: "patient_age"
+#    category: "identity"
+#    level: 2
+#    treatment: "age_band"
+#    description: "患者年龄（泛化至年龄段）"
+#
+#  # 示例 3: 新增公开等级的业务标识（允许原样保留出域）
+#  - name: "vip_level"
+#    category: "other"
+#    level: 1
+#    treatment: "keep"
+#    description: "会员等级标签（公开数据，原样保留）"
+
+# 字段别名映射（将业务自拟别名动态映射到规范字段名）
+aliases: {}
+#  "cust_name": "name"
+#  "patient_age": "age"
+#  "sfz_card": "id_card_no"

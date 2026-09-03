@@ -476,16 +476,23 @@ func (c *Client) PostWithRequestID(ctx context.Context, path string, payload any
 		return nil, err
 	}
 	var body io.Reader
+	var reqBodyBytes []byte
 	if payload != nil {
 		b, err := json.Marshal(payload)
 		if err != nil {
 			return nil, fmt.Errorf("marshal payload: %w", err)
 		}
+		reqBodyBytes = b
 		body = bytes.NewReader(b)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+path, body)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
+	}
+	if reqBodyBytes != nil {
+		req.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(reqBodyBytes)), nil
+		}
 	}
 	c.setHeaders(req)
 	req.Header.Set("Content-Type", "application/json")
@@ -584,10 +591,12 @@ func (c *Client) do(req *http.Request, endpoint string) (map[string]any, error) 
 				"backoff", sleepDur.String(),
 			)
 
+			timer := time.NewTimer(sleepDur)
 			select {
 			case <-req.Context().Done():
+				timer.Stop()
 				return nil, fmt.Errorf("retry cancelled: %w", req.Context().Err())
-			case <-time.After(sleepDur):
+			case <-timer.C:
 			}
 
 			// Re-create request body for retry (body was consumed on first attempt)

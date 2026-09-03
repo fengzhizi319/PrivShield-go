@@ -49,7 +49,8 @@ func ParseSecurityLevel(s string) SecurityLevel {
 	case "S4", "L4", "RESTRICTED", "TOP_SECRET", "LEVEL4":
 		return LevelRestricted
 	default:
-		return LevelInternal
+		// fail-closed：未识别密级默认归入最高受限密级 LevelRestricted (S4)，防止降级越权
+		return LevelRestricted
 	}
 }
 

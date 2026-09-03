@@ -19,7 +19,7 @@ package tlsutil
 
 import (
 	"context"
-	"log"
+	"log/slog"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -94,7 +94,7 @@ func (dw *DynamicWhitelist) authorizeClientIdentities(identities []string, fullM
 	}
 
 	if !found {
-		log.Printf("[mTLS Auth] Unauthorized Client identities: %v", identities)
+		slog.Warn("mTLS Auth: unauthorized client identities", "identities", identities, "method", fullMethod)
 		return status.Errorf(codes.PermissionDenied, "client identities '%v' are not authorized", identities)
 	}
 
@@ -104,7 +104,7 @@ func (dw *DynamicWhitelist) authorizeClientIdentities(identities []string, fullM
 			return nil
 		}
 	}
-	log.Printf("[mTLS Auth] Identity %s lacks scope for method %s", matchedIdentity, fullMethod)
+	slog.Warn("mTLS Auth: identity lacks scope for method", "identity", matchedIdentity, "method", fullMethod, "allowed_scopes", allowedScopes)
 	return status.Errorf(codes.PermissionDenied, "client '%s' lacks scope for method '%s'", matchedIdentity, fullMethod)
 }
 

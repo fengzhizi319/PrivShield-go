@@ -44,10 +44,22 @@ func SetReady(ready bool) {
 
 // RegisterRoutes 注册所有 REST API 路由（与 Python engine URL 方案完全对齐）。
 func RegisterRoutes(r *gin.Engine, svc *service.PrivacyService) {
-	// 全局安全与防护中间件
+	// 【安全防护层中间件】以下 Use() 均在注册任何路由之前调用，会与 main.go 中先行注册的「基础设施层」
+	// 合并为同一条有序处理链，执行顺序紧接在 Prometheus 之后、业务 Handler 之前：
+	//   SecurityHeaders → MaxBodySize → WAF → Auth → RateLimit(身份级) → Handler
+	// ① 安全响应头：注入 HSTS、X-Content-Type-Options、X-Frame-Options=DENY 等，加固浏览器侧防护。
 	r.Use(security.SecurityHeadersMiddleware())
-	r.Use(maxBodyBytesMiddleware(64 * 1024 * 1024)) // 默认 64MB 限制
+	// ② 请求体上限：将 Body 包裹为 http.MaxBytesReader，限制最大可读 64MB，超限读取即失败中断，
+	//    防御超大载荷耗尽内存（复用 pkg/middleware）。
+	r.Use(middleware.MaxBodySize(64 * 1024 * 1024))
+	// ③ 增强版 WAF：对 URL / 查询串 / 关键请求头 / 请求体做多规则扫描，拦截 SQLi、XSS、路径穿越、
+	//    命令注入，命中即以 403 短路并记录告警日志。
+	r.Use(middleware.WAF(nil))
+	// ④ 认证与接口级鉴权：健康端点按配置豁免；启用鉴权时校验 Bearer Token(API Key)，再按路径所需
+	//    scope 校验权限，缺失/非法凭证返回 401，权限不足返回 403。
 	r.Use(security.AuthMiddleware())
+	// ⑤ 身份级限流：按「身份 + 归一化路径(+匿名客户端 IP)」分片的令牌桶，健康端点豁免，
+	//    防止单身份 / 单 IP 洪泛（与 main.go 的全局限流互补）。
 	r.Use(security.RateLimitMiddleware())
 
 	// 性能分析端点（环境变量控制，生产环境默认关闭）
@@ -1380,15 +1392,6 @@ func clipValues(vals []float64, clipLower, clipUpper float64) []float64 {
 		}
 	}
 	return clipped
-}
-
-func maxBodyBytesMiddleware(maxBytes int64) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if c.Request.Body != nil {
-			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
-		}
-		c.Next()
-	}
 }
 
 func registerPprof(r *gin.Engine) {

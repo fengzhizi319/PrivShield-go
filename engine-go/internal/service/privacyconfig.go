@@ -405,8 +405,8 @@ func (s *PrivacyService) safetyFloorDiagnostics() map[string]interface{} {
 			"raw_min_level": floor.RawLevel,
 			"default":       "deny",
 			"spec_field_count": map[string]int{
-				naming.DSYibao:    s.medicalYibao.FieldCount(),
-				naming.DSKangyang: s.medicalKang.FieldCount(),
+				naming.DSYibao:    s.medicalPipeline.FieldCount(),
+				naming.DSKangyang: s.medicalPipeline.FieldCount(),
 			},
 		},
 	}

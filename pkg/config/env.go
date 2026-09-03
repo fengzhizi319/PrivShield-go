@@ -57,6 +57,20 @@ func EnvInt(name string, def int) int {
 	return i
 }
 
+// EnvInt64 reads an environment variable as int64, returning def on missing or invalid.
+// EnvInt64 以 64 位整数形式读取环境变量，缺失或无效时返回默认值。
+func EnvInt64(name string, def int64) int64 {
+	v := os.Getenv(name)
+	if v == "" {
+		return def
+	}
+	i, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return def
+	}
+	return i
+}
+
 // EnvFloat reads an environment variable as float64, returning def on missing or invalid.
 // EnvFloat 以浮点数形式读取环境变量，缺失或无效时返回默认值。
 func EnvFloat(name string, def float64) float64 {
@@ -80,6 +94,70 @@ func EnvBool(name string, def bool) bool {
 	if v == "" {
 		return def
 	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "true", "1", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+// EnvStringFallback reads primary env var; if unset or empty, falls back to fallback env var; if still unset, returns def.
+// EnvStringFallback 优先读取主环境变量；若未设置或为空则回退读取次环境变量；仍未设置则返回默认值。
+func EnvStringFallback(primary, fallback, def string) string {
+	if v := os.Getenv(primary); v != "" {
+		return v
+	}
+	if v := os.Getenv(fallback); v != "" {
+		return v
+	}
+	return def
+}
+
+// EnvIntFallback reads primary env var as int; if unset or invalid, falls back to fallback env var; if still unset, returns def.
+// EnvIntFallback 优先读取主环境变量为整数；若未设置或无效则回退读取次环境变量；仍未设置则返回默认值。
+func EnvIntFallback(primary, fallback string, def int) int {
+	if v := os.Getenv(primary); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			return i
+		}
+	}
+	if v := os.Getenv(fallback); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			return i
+		}
+	}
+	return def
+}
+
+// EnvBoolFallback reads primary env var as bool; if unset or empty, falls back to fallback env var; if still unset, returns def.
+// EnvBoolFallback 优先读取主环境变量为布尔值；若未设置或为空则回退读取次环境变量；仍未设置则返回默认值。
+func EnvBoolFallback(primary, fallback string, def bool) bool {
+	if v := os.Getenv(primary); v != "" {
+		return parseBool(v)
+	}
+	if v := os.Getenv(fallback); v != "" {
+		return parseBool(v)
+	}
+	return def
+}
+
+// EnvFloatFallback reads primary env var as float64; if unset or invalid, falls back to fallback env var; if still unset, returns def.
+func EnvFloatFallback(primary, fallback string, def float64) float64 {
+	if v := os.Getenv(primary); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	if v := os.Getenv(fallback); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return def
+}
+
+func parseBool(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "true", "1", "yes", "on":
 		return true

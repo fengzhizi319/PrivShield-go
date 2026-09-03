@@ -35,18 +35,12 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/fengzhizi319/PrivShield-go/pkg/envelope"
 	"github.com/gin-gonic/gin"
 )
 
-// ErrorEnvelope is the unified error response body structure.
-// ErrorEnvelope 统一错误响应体结构（标准 5 字段信封）。
-type ErrorEnvelope struct {
-	Code      string `json:"code"`             // 机器可读标准错误码（如 "INVALID_ARGUMENT", "UNAUTHORIZED"）
-	Message   string `json:"message"`          // 人类可读错误摘要
-	Detail    any    `json:"detail,omitempty"` // 详细上下文或字段级错误（可选，若为 nil 则不序列化）
-	TraceID   string `json:"trace_id"`         // 分布式链路追踪 ID
-	Timestamp string `json:"timestamp"`        // UTC 纳秒级时间戳（RFC3339Nano 格式）
-}
+// ErrorEnvelope is the unified error response body structure (type alias to pkg/envelope.ErrorEnvelope).
+type ErrorEnvelope = envelope.ErrorEnvelope
 
 // AbortWithError aborts the request and responds with a unified error envelope.
 //
@@ -75,15 +69,8 @@ func AbortWithError(c *gin.Context, httpStatus int, code string, message string,
 	})
 }
 
-// SuccessEnvelope is the unified success response body structure (optional).
-// SuccessEnvelope 统一成功响应体结构。
-type SuccessEnvelope struct {
-	Code      string `json:"code"`           // 固定为 "OK"
-	Message   string `json:"message"`        // 人类可读成功摘要
-	Data      any    `json:"data,omitempty"` // 成功返回的业务载荷（若为 nil 则忽略）
-	TraceID   string `json:"trace_id"`       // 分布式链路追踪 ID
-	Timestamp string `json:"timestamp"`      // UTC 纳秒级时间戳
-}
+// SuccessEnvelope is the unified success response body structure (type alias to pkg/envelope.SuccessEnvelope).
+type SuccessEnvelope = envelope.SuccessEnvelope
 
 // RespondWithSuccess responds with a unified success envelope.
 //

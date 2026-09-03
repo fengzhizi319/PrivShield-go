@@ -1,5 +1,17 @@
 # PrivShield Go 引擎隐私服务配置
-# 对应 engine-go/internal/service/service.go 的 Config 结构
+# 对应 engine-go/internal/service/service.go 的 Config 结构与 engine-go/internal/config 的 Agent 配置
+
+# ── Agent 基础网络与协议配置 ──
+agent:
+  rest_enabled: true
+  rest_host: "127.0.0.1"
+  rest_port: 8079
+  grpc_enabled: true
+  grpc_host: "127.0.0.1"
+  grpc_port: 50051
+  log_level: "INFO"
+  tls_enabled: false
+  auth_enabled: false
 
 # ── 隐私预算 ──
 budget:

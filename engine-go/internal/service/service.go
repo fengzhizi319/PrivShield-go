@@ -6,7 +6,6 @@ package service
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/csv"
 	"encoding/hex"
@@ -25,6 +24,7 @@ import (
 	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/profile"
 	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 	"github.com/fengzhizi319/PrivShield-go/pkg/crypto"
+	"github.com/fengzhizi319/PrivShield-go/pkg/fileparse"
 	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
 	"github.com/fengzhizi319/PrivShield-go/privacy-go-sdk/budget"
 	"github.com/fengzhizi319/PrivShield-go/privacy-go-sdk/dp"
@@ -41,16 +41,15 @@ import (
 
 // PrivacyService 隐私服务编排器
 type PrivacyService struct {
-	classifier   atomic.Pointer[dynclassification.RuleEngine]
-	funnel       *dynclassification.ClassificationFunnel
-	safetyFloor  *dynclassification.SafetyFloor
-	budget       *budget.BudgetAccountant
-	medicalYibao *medical.Pipeline
-	medicalKang  *medical.Pipeline
-	resolver     *profile.Resolver
-	namespace    string
-	rulesDir     string // 领域规则目录
-	privacyYAML  string // 隐私策略配置文件
+	classifier      atomic.Pointer[dynclassification.RuleEngine]
+	funnel          *dynclassification.ClassificationFunnel
+	safetyFloor     *dynclassification.SafetyFloor
+	budget          *budget.BudgetAccountant
+	medicalPipeline *medical.Pipeline
+	resolver        *profile.Resolver
+	namespace       string
+	rulesDir        string // 领域规则目录
+	privacyYAML     string // 隐私策略配置文件
 
 	// ── P2-2 配置绑定 + P0-2 默认拒绝（绑定态快照，供仲裁与诊断读取）──
 	// safetyFloorConfig 当前生效的安全底线配置（可能来自 config/privacy.yaml）。
@@ -212,11 +211,12 @@ func NewPrivacyService(cfg Config) (*PrivacyService, error) {
 		}
 	}
 
-	// ── 6. 医疗流水线：下发具名默认拒绝策略（P0-2 白名单反转）──
-	medicalYibao := medical.NewYibaoPipeline()
-	medicalYibao.SetUnlistedFieldPolicy(floor.Policy)
-	medicalKang := medical.NewKangyangPipeline()
-	medicalKang.SetUnlistedFieldPolicy(floor.Policy)
+	// ── 6. 医疗流水线：统一医疗全域脱敏流水线（医保 ∪ 康养 ∪ 体征 ∪ 扩展槽位）──
+	medicalPipe := medical.NewFullMedicalPipeline()
+	medicalPipe.SetUnlistedFieldPolicy(floor.Policy)
+
+	// ── 7. 从领域规则目录 (rulesDir) 动态装配手动配置的字段规格与别名 (方案 2) ──
+	loadAndRegisterDomainSpecs(cfg.RulesDir, medicalPipe)
 
 	svc := &PrivacyService{
 		llmEndpoint:       llmEndpoint,
@@ -227,8 +227,7 @@ func NewPrivacyService(cfg Config) (*PrivacyService, error) {
 		safetyFloorConfig: sfCfg,
 		unlistedFloor:     floor,
 		budget:            budget.NewBudgetAccountant(cfg.TotalEpsilon, cfg.TotalDelta, cfg.BudgetWindowSec),
-		medicalYibao:      medicalYibao,
-		medicalKang:       medicalKang,
+		medicalPipeline:   medicalPipe,
 		resolver:          res,
 		namespace:         ns,
 		rulesDir:          cfg.RulesDir,
@@ -654,10 +653,8 @@ func (s *PrivacyService) SanitizeMedicalRecord(record map[string]string, domain 
 		return nil, fmt.Errorf("INVALID_DATASOURCE_ID: %w", err)
 	}
 	switch dsID {
-	case naming.DSYibao:
-		return s.medicalYibao.SanitizeRecord(record), nil
-	case naming.DSKangyang:
-		return s.medicalKang.SanitizeRecord(record), nil
+	case naming.DSYibao, naming.DSKangyang:
+		return s.medicalPipeline.SanitizeRecord(record), nil
 	default:
 		return nil, fmt.Errorf("unsupported datasource: %s", dsID)
 	}
@@ -670,10 +667,8 @@ func (s *PrivacyService) SanitizeMedicalBatch(records []map[string]string, domai
 		return nil, fmt.Errorf("INVALID_DATASOURCE_ID: %w", err)
 	}
 	switch dsID {
-	case naming.DSYibao:
-		return s.medicalYibao.SanitizeBatch(records), nil
-	case naming.DSKangyang:
-		return s.medicalKang.SanitizeBatch(records), nil
+	case naming.DSYibao, naming.DSKangyang:
+		return s.medicalPipeline.SanitizeBatch(records), nil
 	default:
 		return nil, fmt.Errorf("unsupported datasource: %s", dsID)
 	}
@@ -793,10 +788,8 @@ func (s *PrivacyService) ProcessAgentData(records []map[string]interface{}, apiC
 		}
 		reports[idx] = localReport
 		switch dsID {
-		case naming.DSYibao:
-			sanitized[idx] = s.medicalYibao.SanitizeRecord(strRecord)
-		case naming.DSKangyang:
-			sanitized[idx] = s.medicalKang.SanitizeRecord(strRecord)
+		case naming.DSYibao, naming.DSKangyang:
+			sanitized[idx] = s.medicalPipeline.SanitizeRecord(strRecord)
 		default:
 			sanitized[idx] = s.MaskRecord(strRecord)
 		}
@@ -875,56 +868,11 @@ func (s *PrivacyService) ProcessMedicalData(records []map[string]interface{}) (*
 // 文件上传脱敏处理 API (P1)
 // ──────────────────────────────────────────────
 
-// ProcessFile 解析 CSV/JSON 数据文件并执行 DataFrame 脱敏或 K-匿名。
+// ProcessFile 解析 CSV/JSON/XLSX 数据文件并执行 DataFrame 脱敏或 K-匿名（复用 pkg/fileparse）。
 func (s *PrivacyService) ProcessFile(content []byte, filename, operation string, options map[string]interface{}) (map[string]interface{}, error) {
-	name := strings.ToLower(filename)
-	var records []map[string]string
-
-	switch {
-	case strings.HasSuffix(name, ".csv"):
-		cleanContent := bytes.TrimPrefix(content, []byte("\xef\xbb\xbf"))
-		r := csv.NewReader(bytes.NewReader(cleanContent))
-		rows, err := r.ReadAll()
-		if err != nil {
-			return nil, fmt.Errorf("CSV parse error: %w", err)
-		}
-		if len(rows) < 1 {
-			return nil, fmt.Errorf("CSV file is empty")
-		}
-		headers := rows[0]
-		records = make([]map[string]string, 0, len(rows)-1)
-		for _, row := range rows[1:] {
-			rec := make(map[string]string, len(headers))
-			for i, h := range headers {
-				if i < len(row) {
-					rec[h] = row[i]
-				} else {
-					rec[h] = ""
-				}
-			}
-			records = append(records, rec)
-		}
-	case strings.HasSuffix(name, ".json"):
-		var rawList []map[string]interface{}
-		if err := json.Unmarshal(content, &rawList); err != nil {
-			return nil, fmt.Errorf("JSON parse error: %w", err)
-		}
-		records = make([]map[string]string, 0, len(rawList))
-		for _, m := range rawList {
-			rec := make(map[string]string, len(m))
-			for k, v := range m {
-				rec[k] = fmt.Sprintf("%v", v)
-			}
-			records = append(records, rec)
-		}
-	case strings.HasSuffix(name, ".xlsx") || strings.HasSuffix(name, ".xls"):
-		xlsxRecords, err := ParseXLSXRecords(content)
-		if err != nil {
-			return nil, fmt.Errorf("Excel parse error: %w", err)
-		}
-		records = xlsxRecords
-	default:
-		return nil, fmt.Errorf("unsupported file type: %s (supported: .csv, .json, .xlsx, .xls)", filename)
+	records, _, err := fileparse.Parse(filename, content)
+	if err != nil {
+		return nil, err
 	}
 
 	rowsIn := len(records)
@@ -1603,6 +1551,8 @@ func (s *PrivacyService) ReloadDynamicProfiles() error {
 	if newEngine, err := dynclassification.NewRuleEngine(mergeDomainRules(s.baseRules, s.rulesDir)); err == nil {
 		s.classifier.Store(newEngine)
 	}
+	// 重新加载并更新领域字段规格与别名 (方案 2)
+	loadAndRegisterDomainSpecs(s.rulesDir, s.medicalPipeline)
 	// P2-2 + P0-2：安全底线与默认拒绝策略随配置热更新。
 	s.rebindPolicyLocked()
 	if s.funnel != nil {
@@ -1631,11 +1581,8 @@ func (s *PrivacyService) rebindPolicyLocked() {
 	if s.safetyFloor != nil {
 		s.safetyFloor.UpdateConfig(sfCfg)
 	}
-	if s.medicalYibao != nil {
-		s.medicalYibao.SetUnlistedFieldPolicy(floor.Policy)
-	}
-	if s.medicalKang != nil {
-		s.medicalKang.SetUnlistedFieldPolicy(floor.Policy)
+	if s.medicalPipeline != nil {
+		s.medicalPipeline.SetUnlistedFieldPolicy(floor.Policy)
 	}
 	slog.Info("privacy policy rebound",
 		"path", s.privacyYAML,

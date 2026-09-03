@@ -129,6 +129,7 @@ func RegisterKeyVersion(version string, key []byte, active bool) {
 	// 若已有同版本，更新之
 	for _, kv := range keyRegistry {
 		if kv.Version == version {
+			Zeroize(kv.Key)
 			kv.Key = key
 			kv.Active = active
 			return
@@ -227,6 +228,7 @@ func DeriveKey(secret string) []byte {
 // 使同一口令在不同记录上产出互不相同的加密密钥，并抵抗短语令的离线暴破。
 func DeriveKeyHKDF(secret string, salt []byte) []byte {
 	prk := hkdfExtract(salt, []byte(secret))
+	defer Zeroize(prk)
 	return hkdfExpand(prk, []byte(hkdfInfo), KeySize)
 }
 
@@ -238,32 +240,33 @@ func hkdfExtract(salt, ikm []byte) []byte {
 
 func hkdfExpand(prk, info []byte, length int) []byte {
 	out := make([]byte, 0, length+SM3Size)
-	var prev []byte
-	for i := byte(1); len(out) < length; i++ {
+	var t []byte
+	var counter byte = 1
+	for len(out) < length {
 		mac := hmac.New(NewSM3, prk)
-		mac.Write(prev)
+		if len(t) > 0 {
+			mac.Write(t)
+		}
 		mac.Write(info)
-		mac.Write([]byte{i})
-		prev = mac.Sum(nil)
-		out = append(out, prev...)
+		mac.Write([]byte{counter})
+		t = mac.Sum(nil)
+		out = append(out, t...)
+		counter++
 	}
 	return out[:length]
 }
 
-// EncryptString encrypts a plaintext string with SM4-GCM (GB/T 32907-2016) and returns
-// the v2 envelope format. An empty secret is rejected with ErrEmptyKey.
+// EncryptString encrypts plaintext into a versioned envelope string.
 //
-// EncryptString 使用 SM4-GCM 加密明文并输出 `enc:v2:` 信封格式：
-//  1. secret 为空 → 返回 ErrEmptyKey（不再原样返回明文，消除静默明文落盘）；
-//  2. 生成 16 字节随机 salt 与 12 字节随机 nonce，密钥由 DeriveKeyHKDF 派生；
-//  3. 以版本前缀作为 AAD 执行 Seal，使密文与所属版本强绑定；
-//  4. 输出 `enc:v2:<Base64(salt || nonce || ciphertext || tag)>`。
+// EncryptString 执行信封加密：
+//  1. 若已注册多版本且存在活跃版本（ActiveKeyVersion），优先产出 v3 密文；
+//  2. 否则产出带逐记录 salt 的 v2 密文（HKDF-SM3 派生密钥）；
+//  3. 若 secret 为空且无活跃版本，返回 ErrEmptyKey；
+//  4. 空串直接返回空串（与 DecryptString 保持对称，避免空密文膨胀）。
 func EncryptString(plaintext, secret string) (string, error) {
-	// G-08 密钥轮换：优先使用密钥注册表中的活跃版本；未注册时回退到传入的 secret。
 	if active := ActiveKeyVersion(); active != nil {
 		return encryptV3(plaintext, active)
 	}
-
 	if secret == "" {
 		auditCrypto("sm4_encrypt", "", len(plaintext), false, ErrEmptyKey)
 		return "", ErrEmptyKey
@@ -289,7 +292,9 @@ func encryptV2(plaintext, secret string) (string, error) {
 		return "", fmt.Errorf("generate salt: %w", err)
 	}
 
-	block, err := NewCipher(DeriveKeyHKDF(secret, salt))
+	derivedKey := DeriveKeyHKDF(secret, salt)
+	defer Zeroize(derivedKey)
+	block, err := NewCipher(derivedKey)
 	if err != nil {
 		auditCrypto("sm4_encrypt", "v2", len(plaintext), false, err)
 		return "", fmt.Errorf("create sm4 cipher: %w", err)
@@ -327,7 +332,9 @@ func encryptV3(plaintext string, kv *KeyVersion) (string, error) {
 		return "", fmt.Errorf("generate salt: %w", err)
 	}
 
-	block, err := NewCipher(DeriveKeyHKDF(string(kv.Key), salt))
+	derivedKey := DeriveKeyHKDF(string(kv.Key), salt)
+	defer Zeroize(derivedKey)
+	block, err := NewCipher(derivedKey)
 	if err != nil {
 		auditCrypto("sm4_encrypt", kv.Version, len(plaintext), false, err)
 		return "", fmt.Errorf("create sm4 cipher: %w", err)
@@ -414,7 +421,9 @@ func decryptV3(ciphertext, secret string) (string, error) {
 	}
 	salt, rest := data[:saltSize], data[saltSize:]
 
-	gcm, err := newGCM(DeriveKeyHKDF(string(kv.Key), salt))
+	derivedKey := DeriveKeyHKDF(string(kv.Key), salt)
+	defer Zeroize(derivedKey)
+	gcm, err := newGCM(derivedKey)
 	if err != nil {
 		auditCrypto("sm4_decrypt", version, len(ciphertext), false, err)
 		return "", err
@@ -446,7 +455,9 @@ func decryptV2(ciphertext, secret string) (string, error) {
 	}
 	salt, rest := data[:saltSize], data[saltSize:]
 
-	gcm, err := newGCM(DeriveKeyHKDF(secret, salt))
+	derivedKey := DeriveKeyHKDF(secret, salt)
+	defer Zeroize(derivedKey)
+	gcm, err := newGCM(derivedKey)
 	if err != nil {
 		auditCrypto("sm4_decrypt", "", len(ciphertext), false, err)
 		return "", err
@@ -471,7 +482,9 @@ func decryptV1(ciphertext, secret string) (string, error) {
 		auditCrypto("sm4_decrypt", "v1", len(ciphertext), false, err)
 		return "", err
 	}
-	gcm, err := newGCM(DeriveKey(secret))
+	legacyKey := DeriveKey(secret)
+	defer Zeroize(legacyKey)
+	gcm, err := newGCM(legacyKey)
 	if err != nil {
 		auditCrypto("sm4_decrypt", "v1", len(ciphertext), false, err)
 		return "", err

@@ -106,9 +106,9 @@ func TestPermissionForRESTPath(t *testing.T) {
 		// pprof
 		{"/debug/pprof", "ops:admin"},
 		{"/debug/pprof/heap", "ops:admin"},
-		// 未知路径
-		{"/unknown", ""},
-		{"/api/v2/something", ""},
+		// 未知路径（fail-closed：默认归入 admin 权限）
+		{"/unknown", "admin"},
+		{"/api/v2/something", "admin"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
@@ -125,7 +125,7 @@ func TestPermissionForRESTPath(t *testing.T) {
 
 // TestPermissionForGRPCMethod 验证 gRPC 全限定方法名到权限字符串的映射。
 // 执行逻辑：覆盖 Mask、DPCount、Health 等已知方法及 Unknown 未知方法，
-// 断言已知方法映射到正确权限，未知方法返回空串。
+// 断言已知方法映射到正确权限，未知方法返回 admin（fail-closed）。
 func TestPermissionForGRPCMethod(t *testing.T) {
 	tests := []struct {
 		method string
@@ -134,7 +134,7 @@ func TestPermissionForGRPCMethod(t *testing.T) {
 		{"privacy.local.PrivacyService/Mask", "privacy:mask"},
 		{"privacy.local.PrivacyService/DPCount", "privacy:dp"},
 		{"privacy.local.PrivacyService/Health", "health:read"},
-		{"privacy.local.PrivacyService/Unknown", ""},
+		{"privacy.local.PrivacyService/Unknown", "admin"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.method, func(t *testing.T) {

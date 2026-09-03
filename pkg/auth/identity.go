@@ -127,8 +127,10 @@ func PermissionForRESTPath(path string) string {
 		return "privacy:qol"
 	case strings.HasPrefix(normalized, "/v1/ldp/"):
 		return "privacy:dp"
+	default:
+		// fail-closed：未显式映射的非豁免路径默认归入最高 admin 权限，防止空 scope 绕过
+		return "admin"
 	}
-	return ""
 }
 
 // PermissionForGRPCMethod 将 gRPC 方法名映射为权限字符串。
@@ -166,7 +168,8 @@ func PermissionForGRPCMethod(method string) string {
 	if p, ok := mapping[short]; ok {
 		return p
 	}
-	return ""
+	// fail-closed：未显式映射的 gRPC 方法默认归入最高 admin 权限
+	return "admin"
 }
 
 // ParseAPIKeysEnv 解析 "token:name:scope1,scope2;token2:name2:scope3:2025-12-31T23:59:59Z" 格式的 API Key 配置。

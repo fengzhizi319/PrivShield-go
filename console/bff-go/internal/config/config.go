@@ -240,11 +240,11 @@ func Load() *Config {
 		// 认证 API Key，默认为空（不启用认证）
 		AgentAPIKey: pkgconfig.EnvString("PRIVACY_AGENT_API_KEY", ""),
 		// 本代理 HTTP 监听地址，默认 127.0.0.1
-		ConsoleHost: pkgconfig.EnvString("PRIVACY_CONSOLE_HOST", "127.0.0.1"),
+		ConsoleHost: pkgconfig.EnvStringFallback("BFF_HOST", "PRIVACY_CONSOLE_HOST", "127.0.0.1"),
 		// 本代理 HTTP 监听端口，默认 8081
-		ConsolePort: pkgconfig.EnvInt("PRIVACY_CONSOLE_PORT", 8081),
+		ConsolePort: pkgconfig.EnvIntFallback("BFF_PORT", "PRIVACY_CONSOLE_PORT", 8081),
 		// 前端静态文件目录，使用 EnvStringOptional 以支持"设为空即禁用"语义
-		StaticDistDir: pkgconfig.EnvStringOptional("PRIVACY_CONSOLE_STATIC_DIR", "../web/dist"),
+		StaticDistDir: pkgconfig.EnvStringOptional("BFF_STATIC_DIR", pkgconfig.EnvStringOptional("PRIVACY_CONSOLE_STATIC_DIR", "../web/dist")),
 		// 是否启用上游 gRPC 连接的 TLS/mTLS，默认关闭（非安全传输）
 		AgentTLSEnabled: pkgconfig.EnvBool("PRIVACY_AGENT_TLS_ENABLED", false) || pkgconfig.EnvBool("PRIVACY_AGENT_MTLS_ENABLED", false),
 		// 客户端证书文件（mTLS 双向认证），默认空
@@ -258,9 +258,9 @@ func Load() *Config {
 		// 是否跳过服务端证书校验（仅测试用），默认关闭
 		AgentTLSInsecureSkipVerify: pkgconfig.EnvBool("PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY", false),
 		// 可选控制台 API Key，默认空（不鉴权）
-		ConsoleAPIKey: pkgconfig.EnvString("CONSOLE_API_KEY", ""),
+		ConsoleAPIKey: pkgconfig.EnvStringFallback("BFF_API_KEY", "CONSOLE_API_KEY", ""),
 		// 限流：每分钟每 IP 最大请求数，默认 600（0 关闭）
-		ConsoleRateLimit: pkgconfig.EnvInt("CONSOLE_RATE_LIMIT", 600),
+		ConsoleRateLimit: pkgconfig.EnvIntFallback("BFF_RATE_LIMIT", "CONSOLE_RATE_LIMIT", 600),
 		// 上传文件大小上限，默认 10MB
 		MaxUploadBytes: int64(pkgconfig.EnvInt("CONSOLE_MAX_UPLOAD_BYTES", 10*1024*1024)),
 		// 负载均衡探测 host 白名单，默认空（不限制）
@@ -270,18 +270,18 @@ func Load() *Config {
 		AgentRetryInitialBackoff: pkgconfig.EnvInt("PRIVACY_AGENT_RETRY_INITIAL_BACKOFF", 1),
 		AgentRetryMaxBackoff:     pkgconfig.EnvInt("PRIVACY_AGENT_RETRY_MAX_BACKOFF", 8),
 		// BFF 入站 HTTPS/TLS 配置
-		ConsoleTLSEnabled:          pkgconfig.EnvBool("PRIVACY_CONSOLE_TLS_ENABLED", false),
-		ConsoleRequireTLS:          pkgconfig.EnvBool("PRIVACY_CONSOLE_REQUIRE_TLS", false),
-		ConsoleTLSCertFile:         pkgconfig.EnvString("PRIVACY_CONSOLE_TLS_CERT_FILE", ""),
-		ConsoleTLSKeyFile:          pkgconfig.EnvString("PRIVACY_CONSOLE_TLS_KEY_FILE", ""),
-		ConsoleTLSCAFile:           pkgconfig.EnvString("PRIVACY_CONSOLE_TLS_CA_FILE", ""),
-		ConsoleTLSClientAuth:       pkgconfig.EnvString("PRIVACY_CONSOLE_TLS_CLIENT_AUTH", ""),
-		ConsoleTLSPinnedPubKeyFile: pkgconfig.EnvString("PRIVACY_CONSOLE_TLS_PINNED_PUBKEY_FILE", ""),
+		ConsoleTLSEnabled:          pkgconfig.EnvBoolFallback("BFF_TLS_ENABLED", "PRIVACY_CONSOLE_TLS_ENABLED", false),
+		ConsoleRequireTLS:          pkgconfig.EnvBoolFallback("BFF_REQUIRE_TLS", "PRIVACY_CONSOLE_REQUIRE_TLS", false),
+		ConsoleTLSCertFile:         pkgconfig.EnvStringFallback("BFF_TLS_CERT_FILE", "PRIVACY_CONSOLE_TLS_CERT_FILE", ""),
+		ConsoleTLSKeyFile:          pkgconfig.EnvStringFallback("BFF_TLS_KEY_FILE", "PRIVACY_CONSOLE_TLS_KEY_FILE", ""),
+		ConsoleTLSCAFile:           pkgconfig.EnvStringFallback("BFF_TLS_CA_FILE", "PRIVACY_CONSOLE_TLS_CA_FILE", ""),
+		ConsoleTLSClientAuth:       pkgconfig.EnvStringFallback("BFF_TLS_CLIENT_AUTH", "PRIVACY_CONSOLE_TLS_CLIENT_AUTH", ""),
+		ConsoleTLSPinnedPubKeyFile: pkgconfig.EnvStringFallback("BFF_TLS_PINNED_PUBKEY_FILE", "PRIVACY_CONSOLE_TLS_PINNED_PUBKEY_FILE", ""),
 		ConsoleMTLSWhitelistFile:   pkgconfig.EnvString("PRIVACY_AUTH_MTLS_WHITELIST_FILE", ""),
 		// BFF 入站 gRPC 服务端配置
-		ConsoleGRPCEnabled: pkgconfig.EnvBool("PRIVACY_CONSOLE_GRPC_ENABLED", false),
-		ConsoleGRPCHost:    pkgconfig.EnvString("PRIVACY_CONSOLE_GRPC_HOST", "127.0.0.1"),
-		ConsoleGRPCPort:    pkgconfig.EnvInt("PRIVACY_CONSOLE_GRPC_PORT", 50055),
+		ConsoleGRPCEnabled: pkgconfig.EnvBoolFallback("BFF_GRPC_ENABLED", "PRIVACY_CONSOLE_GRPC_ENABLED", false),
+		ConsoleGRPCHost:    pkgconfig.EnvStringFallback("BFF_GRPC_HOST", "PRIVACY_CONSOLE_GRPC_HOST", "127.0.0.1"),
+		ConsoleGRPCPort:    pkgconfig.EnvIntFallback("BFF_GRPC_PORT", "PRIVACY_CONSOLE_GRPC_PORT", 50055),
 
 		// 直连 Go 微服务配置
 		HubURL:           pkgconfig.EnvString("BFF_HUB_URL", "http://127.0.0.1:8082"),

@@ -93,16 +93,65 @@ var PIIFieldAliases = map[string]string{
 	"入院病情":         "admission_condition",
 }
 
+var (
+	customAliasesMu sync.RWMutex
+	customAliases   = make(map[string]string)
+)
+
+// RegisterFieldAlias 动态注册字段别名映射（线程安全）。
+func RegisterFieldAlias(alias, canonical string) {
+	customAliasesMu.Lock()
+	defer customAliasesMu.Unlock()
+	customAliases[strings.ToLower(strings.TrimSpace(alias))] = strings.ToLower(strings.TrimSpace(canonical))
+}
+
+// RegisterFieldAliases 批量动态注册字段别名映射（线程安全）。
+func RegisterFieldAliases(aliases map[string]string) {
+	if len(aliases) == 0 {
+		return
+	}
+	customAliasesMu.Lock()
+	defer customAliasesMu.Unlock()
+	for k, v := range aliases {
+		customAliases[strings.ToLower(strings.TrimSpace(k))] = strings.ToLower(strings.TrimSpace(v))
+	}
+}
+
+// ResetCustomFieldAliases 重置自定义字段别名映射（仅用于测试或清理）。
+func ResetCustomFieldAliases() {
+	customAliasesMu.Lock()
+	defer customAliasesMu.Unlock()
+	customAliases = make(map[string]string)
+}
+
+func lookupAlias(cleaned string) (string, bool) {
+	customAliasesMu.RLock()
+	if c, ok := customAliases[cleaned]; ok {
+		customAliasesMu.RUnlock()
+		return c, true
+	}
+	if c, ok := customAliases[strings.ToLower(cleaned)]; ok {
+		customAliasesMu.RUnlock()
+		return c, true
+	}
+	customAliasesMu.RUnlock()
+
+	if canonical, ok := PIIFieldAliases[cleaned]; ok {
+		return canonical, true
+	}
+	if canonical, ok := PIIFieldAliases[strings.ToLower(cleaned)]; ok {
+		return canonical, true
+	}
+	return "", false
+}
+
 // CanonicalizePIIField 将字段名转换为规范字段名。
 func CanonicalizePIIField(fieldName string) string {
 	if fieldName == "" {
 		return fieldName
 	}
 	cleaned := strings.TrimSpace(fieldName)
-	if canonical, ok := PIIFieldAliases[cleaned]; ok {
-		return canonical
-	}
-	if canonical, ok := PIIFieldAliases[strings.ToLower(cleaned)]; ok {
+	if canonical, ok := lookupAlias(cleaned); ok {
 		return canonical
 	}
 
@@ -116,10 +165,7 @@ func CanonicalizePIIField(fieldName string) string {
 			if p == "" {
 				continue
 			}
-			if canonical, ok := PIIFieldAliases[p]; ok {
-				return canonical
-			}
-			if canonical, ok := PIIFieldAliases[strings.ToLower(p)]; ok {
+			if canonical, ok := lookupAlias(p); ok {
 				return canonical
 			}
 		}

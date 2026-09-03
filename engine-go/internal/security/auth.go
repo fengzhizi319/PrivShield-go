@@ -1,6 +1,8 @@
 package security
 
 import (
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 
 	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
@@ -65,10 +67,7 @@ func hotReloadAuthMiddleware(settings *Settings) gin.HandlerFunc {
 }
 
 func abortWithAuthError(c *gin.Context, code, msg string) {
-	c.AbortWithStatusJSON(401, map[string]any{
-		"code":    code,
-		"message": msg,
-	})
+	pkgmiddleware.AbortWithError(c, http.StatusUnauthorized, code, msg, nil)
 }
 
 // RequirePermission 返回需要指定权限的 Gin 中间件。

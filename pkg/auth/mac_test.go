@@ -35,7 +35,7 @@ func TestParseSecurityLevel(t *testing.T) {
 	if got := ParseSecurityLevel("l2"); got != LevelInternal {
 		t.Errorf("ParseSecurityLevel(l2) = %v, want LevelInternal", got)
 	}
-	if got := ParseSecurityLevel("unknown"); got != LevelInternal {
-		t.Errorf("ParseSecurityLevel(unknown) = %v, want LevelInternal default", got)
+	if got := ParseSecurityLevel("unknown"); got != LevelRestricted {
+		t.Errorf("ParseSecurityLevel(unknown) = %v, want LevelRestricted fail-closed default", got)
 	}
 }
