@@ -29,42 +29,7 @@ func (s *mockDSPBServer) Health(ctx context.Context, _ *dspb.HealthRequest) (*ds
 	return &dspb.HealthResponse{Status: "ok", LatencyMs: 1, Via: "datasource-mgr"}, nil
 }
 
-func (s *mockDSPBServer) GetYibaoData(ctx context.Context, req *dspb.DataQueryRequest) (*dspb.DataQueryResponse, error) {
-	return &dspb.DataQueryResponse{
-		SourceId:   "ds_yibao",
-		SourceName: "医保就医结算",
-		Total:      50,
-		Records:    []*dspb.DataRowProto{{Fields: map[string]string{"name": "张三", "id_card": "110101199001011234"}}},
-		Via:        "datasource-mgr",
-	}, nil
-}
-
-func (s *mockDSPBServer) GetKangyangData(ctx context.Context, req *dspb.DataQueryRequest) (*dspb.DataQueryResponse, error) {
-	return &dspb.DataQueryResponse{
-		SourceId:   "ds_kangyang",
-		SourceName: "康养健康档案",
-		Total:      50,
-		Records:    []*dspb.DataRowProto{{Fields: map[string]string{"name": "李四", "phone": "13800138000"}}},
-		Via:        "datasource-mgr",
-	}, nil
-}
-
-func (s *mockDSPBServer) GetMockData3(ctx context.Context, req *dspb.DataQueryRequest) (*dspb.DataQueryResponse, error) {
-	return &dspb.DataQueryResponse{SourceId: "ds_mock3", Total: 10, Via: "datasource-mgr"}, nil
-}
-
-func (s *mockDSPBServer) GetMockData4(ctx context.Context, req *dspb.DataQueryRequest) (*dspb.DataQueryResponse, error) {
-	return &dspb.DataQueryResponse{SourceId: "ds_mock4", Total: 10, Via: "datasource-mgr"}, nil
-}
-
-func (s *mockDSPBServer) GetDataBySource(ctx context.Context, req *dspb.SourceDataQueryRequest) (*dspb.DataQueryResponse, error) {
-	if req.SourceId == "ds_kangyang" {
-		return s.GetKangyangData(ctx, &dspb.DataQueryRequest{})
-	}
-	return s.GetYibaoData(ctx, &dspb.DataQueryRequest{})
-}
-
-func (s *mockDSPBServer) ListMockSources(ctx context.Context, _ *dspb.ListMockSourcesRequest) (*dspb.ListMockSourcesResponse, error) {
+func (s *mockDSPBServer) ListDataSources(ctx context.Context, _ *dspb.ListMockSourcesRequest) (*dspb.ListMockSourcesResponse, error) {
 	return &dspb.ListMockSourcesResponse{
 		Total: 2,
 		Sources: []*dspb.DataSourceProto{
@@ -96,95 +61,7 @@ func setupMockDatasourceServer(t *testing.T) (*httptest.Server, *grpc.Server, ne
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "backend": "ok"})
 	})
 
-	// 2. 注册 API 1: Yibao 医保数据端点
-	mux.HandleFunc("/api/v1/yibao", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(DataQueryResult{
-			DatasourceID: "ds_yibao",
-			SourceID:     "ds_yibao",
-			SourceName:   "医保就医结算",
-			Total:        50,
-			Records:      []map[string]any{{"person_id": "110101", "name": "张三"}},
-			Via:          "datasource-mgr",
-		})
-	})
-	mux.HandleFunc("/api/datasources/ds_yibao/records", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(DataQueryResult{
-			DatasourceID: "ds_yibao",
-			SourceID:     "ds_yibao",
-			SourceName:   "医保就医结算",
-			Total:        50,
-			Records:      []map[string]any{{"person_id": "110101", "name": "张三"}},
-			Via:          "datasource-mgr",
-		})
-	})
-
-	// 3. 注册 API 2: Kangyang 康养档案端点
-	mux.HandleFunc("/api/v1/kangyang", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(DataQueryResult{
-			DatasourceID: "ds_kangyang",
-			SourceID:     "ds_kangyang",
-			SourceName:   "康养健康档案",
-			Total:        50,
-			Records:      []map[string]any{{"elder_id": "KY001", "name": "李四"}},
-			Via:          "datasource-mgr",
-		})
-	})
-	mux.HandleFunc("/api/datasources/ds_kangyang/records", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(DataQueryResult{
-			DatasourceID: "ds_kangyang",
-			SourceID:     "ds_kangyang",
-			SourceName:   "康养健康档案",
-			Total:        50,
-			Records:      []map[string]any{{"elder_id": "KY001", "name": "李四"}},
-			Via:          "datasource-mgr",
-		})
-	})
-
-	// 4. 注册 API 3: Mock3 预留政务端点
-	mux.HandleFunc("/api/v1/mock3", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(DataQueryResult{
-			DatasourceID: "ds_mock3",
-			SourceID:     "ds_mock3",
-			Total:        10,
-			Records:      []map[string]any{{"service_code": "GOV_01"}},
-		})
-	})
-	mux.HandleFunc("/api/datasources/ds_mock3/records", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(DataQueryResult{
-			DatasourceID: "ds_mock3",
-			SourceID:     "ds_mock3",
-			Total:        10,
-			Records:      []map[string]any{{"service_code": "GOV_01"}},
-		})
-	})
-
-	// 5. 注册 API 4: Mock4 预留企业端点
-	mux.HandleFunc("/api/v1/mock4", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(DataQueryResult{
-			DatasourceID: "ds_mock4",
-			SourceID:     "ds_mock4",
-			Total:        10,
-			Records:      []map[string]any{{"dept_code": "FIN_01"}},
-		})
-	})
-	mux.HandleFunc("/api/datasources/ds_mock4/records", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(DataQueryResult{
-			DatasourceID: "ds_mock4",
-			SourceID:     "ds_mock4",
-			Total:        10,
-			Records:      []map[string]any{{"dept_code": "FIN_01"}},
-		})
-	})
-
-	// 6. 注册数据源列表端点
+	// 2. 注册数据源列表端点
 	mux.HandleFunc("/api/datasources", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -246,101 +123,44 @@ func TestDatasourceClient(t *testing.T) {
 	defer client.Close()
 	ctx := context.Background()
 
-	// ── A. HTTP REST 端点测试 ──
-	// 1. Health 健康检查
+	// 2. Health 健康检查
 	h, err := client.Health(ctx)
 	if err != nil || h["status"] != "ok" {
 		t.Fatalf("Health failed: %v, resp: %+v", err, h)
 	}
 
-	// 2. FetchYibaoData 医保数据抽取
-	yb, err := client.FetchYibaoData(ctx, 10, 0)
-	if err != nil || yb.SourceID != "ds_yibao" {
-		t.Fatalf("FetchYibaoData failed: %v, resp: %+v", err, yb)
-	}
-
-	// 3. FetchKangyangData 康养数据抽取
-	ky, err := client.FetchKangyangData(ctx, 10, 0)
-	if err != nil || ky.SourceID != "ds_kangyang" {
-		t.Fatalf("FetchKangyangData failed: %v, resp: %+v", err, ky)
-	}
-
-	// 4. FetchMockData3 & FetchMockData4 预留数据源抽取
-	m3, err := client.FetchMockData3(ctx, 5, 0)
-	if err != nil || m3.SourceID != "ds_mock3" {
-		t.Fatalf("FetchMockData3 failed: %v", err)
-	}
-	m4, err := client.FetchMockData4(ctx, 5, 0)
-	if err != nil || m4.SourceID != "ds_mock4" {
-		t.Fatalf("FetchMockData4 failed: %v", err)
-	}
-
-	// 5. FetchDataBySource 中文/英文关键字自动分发路由
-	bySrc, err := client.FetchDataBySource(ctx, "医保数据库", 5, 0)
-	if err != nil || bySrc.SourceID != "ds_yibao" {
-		t.Fatalf("FetchDataBySource dispatch failed: %v", err)
-	}
-
-	// 6. ListDataSources 数据源列表
+	// 3. ListDataSources 数据源列表
 	list, err := client.ListDataSources(ctx)
 	if err != nil || list["total"].(float64) != 2 {
 		t.Fatalf("ListDataSources failed: %v", err)
 	}
 
-	// 7. TestConnection 连通性测试
+	// 4. TestConnection 连通性测试
 	conn, err := client.TestConnection(ctx, "ds_yibao")
 	if err != nil || conn["success"] != true {
 		t.Fatalf("TestConnection failed: %v", err)
 	}
 
 	// ── B. gRPC 远程过程调用测试 ──
-	// 8. HealthGRPC gRPC 健康检查
+	// 5. HealthGRPC gRPC 健康检查
 	grpcHealth, err := client.HealthGRPC(ctx)
 	if err != nil || grpcHealth.Status != "ok" {
 		t.Fatalf("HealthGRPC failed: %v", err)
 	}
 
-	// 9. FetchYibaoDataGRPC gRPC 医保数据抽取
-	ybGRPC, err := client.FetchYibaoDataGRPC(ctx, 10, 0)
-	if err != nil || ybGRPC.SourceID != "ds_yibao" || len(ybGRPC.Records) == 0 {
-		t.Fatalf("FetchYibaoDataGRPC failed: %v", err)
-	}
-
-	// 10. FetchKangyangDataGRPC gRPC 康养数据抽取
-	kyGRPC, err := client.FetchKangyangDataGRPC(ctx, 10, 0)
-	if err != nil || kyGRPC.SourceID != "ds_kangyang" || len(kyGRPC.Records) == 0 {
-		t.Fatalf("FetchKangyangDataGRPC failed: %v", err)
-	}
-
-	// 11. FetchMockData3GRPC & FetchMockData4GRPC gRPC 预留数据源抽取
-	m3GRPC, err := client.FetchMockData3GRPC(ctx, 5, 0)
-	if err != nil || m3GRPC.SourceID != "ds_mock3" {
-		t.Fatalf("FetchMockData3GRPC failed: %v", err)
-	}
-	m4GRPC, err := client.FetchMockData4GRPC(ctx, 5, 0)
-	if err != nil || m4GRPC.SourceID != "ds_mock4" {
-		t.Fatalf("FetchMockData4GRPC failed: %v", err)
-	}
-
-	// 12. FetchDataBySourceGRPC gRPC 动态源数据抽取
-	bySrcGRPC, err := client.FetchDataBySourceGRPC(ctx, "ds_kangyang", 5, 0)
-	if err != nil || bySrcGRPC.SourceID != "ds_kangyang" {
-		t.Fatalf("FetchDataBySourceGRPC failed: %v", err)
-	}
-
-	// 13. ListMockSourcesGRPC gRPC 数据源列表获取
-	listGRPC, err := client.ListMockSourcesGRPC(ctx)
+	// 6. ListDataSourcesGRPC gRPC 数据源列表获取
+	listGRPC, err := client.ListDataSourcesGRPC(ctx)
 	if err != nil || listGRPC.Total != 2 {
-		t.Fatalf("ListMockSourcesGRPC failed: %v", err)
+		t.Fatalf("ListDataSourcesGRPC failed: %v", err)
 	}
 
-	// 14. GetDataSourceGRPC gRPC 数据源元数据详情获取
+	// 7. GetDataSourceGRPC gRPC 数据源元数据详情获取
 	dsInfo, err := client.GetDataSourceGRPC(ctx, "ds_yibao")
 	if err != nil || dsInfo.Id != "ds_yibao" {
 		t.Fatalf("GetDataSourceGRPC failed: %v", err)
 	}
 
-	// 15. TestConnectionGRPC gRPC 连通性测试探针
+	// 8. TestConnectionGRPC gRPC 连通性测试探针
 	connGRPC, err := client.TestConnectionGRPC(ctx, "ds_yibao")
 	if err != nil || !connGRPC.Success {
 		t.Fatalf("TestConnectionGRPC failed: %v", err)

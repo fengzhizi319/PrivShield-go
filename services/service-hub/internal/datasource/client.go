@@ -25,7 +25,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,7 +38,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/fengzhizi319/PrivShield-go/pkg/circuitbreaker"
-	naming "github.com/fengzhizi319/PrivShield-go/pkg/naming"
 	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 	dspb "github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/proto"
 	"github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/config"
@@ -261,64 +259,6 @@ func (c *Client) Health(ctx context.Context) (map[string]any, error) {
 	return result, nil
 }
 
-// DataQueryResult represents the query result from datasource-mgr.
-// DataQueryResult 结构体表示从 datasource-mgr 查询抽样获取的标准数据集对象。
-type DataQueryResult struct {
-	DatasourceID string           `json:"datasource_id"` // canonical 数据源标识（如 "ds_yibao"）
-	SourceID     string           `json:"source_id"`     // DEPRECATED 历史字段，兼容双写
-	SourceName   string           `json:"source_name"`   // 数据源名称（如 "医保结算高敏数据"）
-	Total        int              `json:"total"`         // 数据集总记录条数
-	Limit        int              `json:"limit"`         // 分页限制每页大小
-	Offset       int              `json:"offset"`        // 分页偏移游标
-	Records      []map[string]any `json:"records"`       // 结构化样本数据行切片
-	Via          string           `json:"via"`           // 模块来源标识
-}
-
-// FetchData requests records from datasource-mgr using the canonical path:
-// GET /api/datasources/{id}/records?limit=&offset=
-func (c *Client) FetchData(ctx context.Context, datasourceID string, limit, offset int) (*DataQueryResult, error) {
-	normID, err := naming.NormalizeDataSourceID(datasourceID)
-	if err != nil {
-		normID = datasourceID
-	}
-	res, err := c.fetchEndpoint(ctx, fmt.Sprintf("/api/datasources/%s/records", url.PathEscape(normID)), limit, offset)
-	if err != nil {
-		return nil, err
-	}
-	if res.DatasourceID == "" {
-		res.DatasourceID = normID
-	}
-	if res.SourceID == "" {
-		res.SourceID = normID
-	}
-	return res, nil
-}
-
-// FetchYibaoData requests mock yibao data (API 1) via HTTP REST.
-func (c *Client) FetchYibaoData(ctx context.Context, limit, offset int) (*DataQueryResult, error) {
-	return c.fetchEndpoint(ctx, "/api/v1/yibao", limit, offset)
-}
-
-// FetchKangyangData requests mock kangyang data (API 2) via HTTP REST.
-func (c *Client) FetchKangyangData(ctx context.Context, limit, offset int) (*DataQueryResult, error) {
-	return c.fetchEndpoint(ctx, "/api/v1/kangyang", limit, offset)
-}
-
-// FetchMockData3 requests mock data 3 (API 3) via HTTP REST.
-func (c *Client) FetchMockData3(ctx context.Context, limit, offset int) (*DataQueryResult, error) {
-	return c.fetchEndpoint(ctx, "/api/v1/mock3", limit, offset)
-}
-
-// FetchMockData4 requests mock data 4 (API 4) via HTTP REST.
-func (c *Client) FetchMockData4(ctx context.Context, limit, offset int) (*DataQueryResult, error) {
-	return c.fetchEndpoint(ctx, "/api/v1/mock4", limit, offset)
-}
-
-// FetchDataBySource dispatches to FetchData via canonical /api/datasources/{id}/records.
-func (c *Client) FetchDataBySource(ctx context.Context, sourceID string, limit, offset int) (*DataQueryResult, error) {
-	return c.FetchData(ctx, sourceID, limit, offset)
-}
-
 // ListDataSources fetches the list of mock datasources via HTTP REST.
 func (c *Client) ListDataSources(ctx context.Context) (map[string]any, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/datasources", nil)
@@ -374,38 +314,6 @@ func (c *Client) TestConnection(ctx context.Context, id string) (map[string]any,
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	return result, nil
-}
-
-// fetchEndpoint executes an HTTP GET request with limit and offset query parameters.
-func (c *Client) fetchEndpoint(ctx context.Context, path string, limit, offset int) (*DataQueryResult, error) {
-	u, err := url.Parse(c.baseURL + path)
-	if err != nil {
-		return nil, fmt.Errorf("parse url: %w", err)
-	}
-	q := u.Query()
-	if limit > 0 {
-		q.Set("limit", strconv.Itoa(limit))
-	}
-	if offset > 0 {
-		q.Set("offset", strconv.Itoa(offset))
-	}
-	u.RawQuery = q.Encode()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-
-	bodyBytes, err := c.doHTTP(req)
-	if err != nil {
-		return nil, fmt.Errorf("do request %s: %w", path, err)
-	}
-
-	var result DataQueryResult
-	if err := json.Unmarshal(bodyBytes, &result); err != nil {
-		return nil, fmt.Errorf("decode response from %s: %w", path, err)
-	}
-	return &result, nil
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -523,8 +431,8 @@ func (c *Client) HealthGRPC(ctx context.Context) (*dspb.HealthResponse, error) {
 	return resp, nil
 }
 
-// FetchYibaoDataGRPC requests mock yibao data (API 1) via gRPC.
-func (c *Client) FetchYibaoDataGRPC(ctx context.Context, limit, offset int) (*DataQueryResult, error) {
+// ListDataSourcesGRPC lists data sources via gRPC.
+func (c *Client) ListDataSourcesGRPC(ctx context.Context) (*dspb.ListMockSourcesResponse, error) {
 	if err := c.checkCircuit(); err != nil {
 		return nil, err
 	}
@@ -534,133 +442,7 @@ func (c *Client) FetchYibaoDataGRPC(ctx context.Context, limit, offset int) (*Da
 		return nil, err
 	}
 	outCtx := c.wrapGRPCContext(ctx)
-	resp, err := client.GetYibaoData(outCtx, &dspb.DataQueryRequest{
-		Limit:  int32(limit),
-		Offset: int32(offset),
-	})
-	if err != nil {
-		if isRetryableGRPCCode(err) {
-			c.recordFailure()
-		}
-		return nil, fmt.Errorf("grpc GetYibaoData: %w", err)
-	}
-	c.recordSuccess()
-	return protoToQueryResult(resp), nil
-}
-
-// FetchKangyangDataGRPC requests mock kangyang data (API 2) via gRPC.
-func (c *Client) FetchKangyangDataGRPC(ctx context.Context, limit, offset int) (*DataQueryResult, error) {
-	if err := c.checkCircuit(); err != nil {
-		return nil, err
-	}
-	client, err := c.getGRPCClient(ctx)
-	if err != nil {
-		c.recordFailure()
-		return nil, err
-	}
-	outCtx := c.wrapGRPCContext(ctx)
-	resp, err := client.GetKangyangData(outCtx, &dspb.DataQueryRequest{
-		Limit:  int32(limit),
-		Offset: int32(offset),
-	})
-	if err != nil {
-		if isRetryableGRPCCode(err) {
-			c.recordFailure()
-		}
-		return nil, fmt.Errorf("grpc GetKangyangData: %w", err)
-	}
-	c.recordSuccess()
-	return protoToQueryResult(resp), nil
-}
-
-// FetchMockData3GRPC requests mock data 3 (API 3) via gRPC.
-func (c *Client) FetchMockData3GRPC(ctx context.Context, limit, offset int) (*DataQueryResult, error) {
-	if err := c.checkCircuit(); err != nil {
-		return nil, err
-	}
-	client, err := c.getGRPCClient(ctx)
-	if err != nil {
-		c.recordFailure()
-		return nil, err
-	}
-	outCtx := c.wrapGRPCContext(ctx)
-	resp, err := client.GetMockData3(outCtx, &dspb.DataQueryRequest{
-		Limit:  int32(limit),
-		Offset: int32(offset),
-	})
-	if err != nil {
-		if isRetryableGRPCCode(err) {
-			c.recordFailure()
-		}
-		return nil, fmt.Errorf("grpc GetMockData3: %w", err)
-	}
-	c.recordSuccess()
-	return protoToQueryResult(resp), nil
-}
-
-// FetchMockData4GRPC requests mock data 4 (API 4) via gRPC.
-func (c *Client) FetchMockData4GRPC(ctx context.Context, limit, offset int) (*DataQueryResult, error) {
-	if err := c.checkCircuit(); err != nil {
-		return nil, err
-	}
-	client, err := c.getGRPCClient(ctx)
-	if err != nil {
-		c.recordFailure()
-		return nil, err
-	}
-	outCtx := c.wrapGRPCContext(ctx)
-	resp, err := client.GetMockData4(outCtx, &dspb.DataQueryRequest{
-		Limit:  int32(limit),
-		Offset: int32(offset),
-	})
-	if err != nil {
-		if isRetryableGRPCCode(err) {
-			c.recordFailure()
-		}
-		return nil, fmt.Errorf("grpc GetMockData4: %w", err)
-	}
-	c.recordSuccess()
-	return protoToQueryResult(resp), nil
-}
-
-// FetchDataBySourceGRPC requests mock data by source ID via gRPC.
-func (c *Client) FetchDataBySourceGRPC(ctx context.Context, sourceID string, limit, offset int) (*DataQueryResult, error) {
-	if err := c.checkCircuit(); err != nil {
-		return nil, err
-	}
-	client, err := c.getGRPCClient(ctx)
-	if err != nil {
-		c.recordFailure()
-		return nil, err
-	}
-	outCtx := c.wrapGRPCContext(ctx)
-	resp, err := client.GetDataBySource(outCtx, &dspb.SourceDataQueryRequest{
-		SourceId: sourceID,
-		Limit:    int32(limit),
-		Offset:   int32(offset),
-	})
-	if err != nil {
-		if isRetryableGRPCCode(err) {
-			c.recordFailure()
-		}
-		return nil, fmt.Errorf("grpc GetDataBySource: %w", err)
-	}
-	c.recordSuccess()
-	return protoToQueryResult(resp), nil
-}
-
-// ListMockSourcesGRPC lists mock sources via gRPC.
-func (c *Client) ListMockSourcesGRPC(ctx context.Context) (*dspb.ListMockSourcesResponse, error) {
-	if err := c.checkCircuit(); err != nil {
-		return nil, err
-	}
-	client, err := c.getGRPCClient(ctx)
-	if err != nil {
-		c.recordFailure()
-		return nil, err
-	}
-	outCtx := c.wrapGRPCContext(ctx)
-	resp, err := client.ListMockSources(outCtx, &dspb.ListMockSourcesRequest{})
+	resp, err := client.ListDataSources(outCtx, &dspb.ListMockSourcesRequest{})
 	if err != nil {
 		if isRetryableGRPCCode(err) {
 			c.recordFailure()
@@ -715,31 +497,4 @@ func (c *Client) TestConnectionGRPC(ctx context.Context, id string) (*dspb.TestC
 	return resp, nil
 }
 
-// protoToQueryResult converts a Protobuf DataQueryResponse to a standard DataQueryResult domain model.
-func protoToQueryResult(resp *dspb.DataQueryResponse) *DataQueryResult {
-	if resp == nil {
-		return nil
-	}
-	records := make([]map[string]any, len(resp.Records))
-	for i, r := range resp.Records {
-		m := make(map[string]any, len(r.Fields))
-		for k, v := range r.Fields {
-			m[k] = v
-		}
-		records[i] = m
-	}
-	canonID, _ := naming.NormalizeDataSourceID(resp.SourceId)
-	if canonID == "" {
-		canonID = resp.SourceId
-	}
-	return &DataQueryResult{
-		DatasourceID: canonID,
-		SourceID:     canonID,
-		SourceName:   resp.SourceName,
-		Total:        int(resp.Total),
-		Limit:        int(resp.Limit),
-		Offset:       int(resp.Offset),
-		Records:      records,
-		Via:          resp.Via,
-	}
-}
+

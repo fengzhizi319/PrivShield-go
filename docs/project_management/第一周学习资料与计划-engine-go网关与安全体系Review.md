@@ -1359,6 +1359,7 @@ func (lb *LoadBalancer) selectP2C() *BackendNode {
 - **EWMA 下限 0.001**：新节点 EWMA 初始为 0，若不做下限保护，`score = (InFlight+1) * 0 = 0`，新节点会获得不合理的优先选择权
 
 **5 种调度策略**：
+
 | 策略 | 方法 | 无锁化设计 | 适用场景 |
 |---|---|---|---|
 | `p2c` (默认) | `selectP2C()` | `rand.IntN` + 原子读 InFlight | 通用生产环境 |

@@ -10,14 +10,8 @@ service DataSourceManagerService {
   // Health 健康检查
   rpc Health(HealthRequest) returns (HealthResponse);
 
-  // Canonical RPC: 通用获取数据源切片数据
-  rpc GetData(SourceDataQueryRequest) returns (DataQueryResponse);
-
   // Canonical RPC: 列出已注册数据源目录
   rpc ListDataSources(ListMockSourcesRequest) returns (ListMockSourcesResponse);
-
-  // 通用按数据源 ID 获取模拟数据 (alias of GetData)
-  rpc GetDataBySource(SourceDataQueryRequest) returns (DataQueryResponse);
 
   // 获取单个模拟数据源基本信息
   rpc GetDataSource(GetDataSourceRequest) returns (DataSourceProto);
@@ -27,13 +21,6 @@ service DataSourceManagerService {
 
   // 按身份证号查询单条记录
   rpc GetRecordByIDCard(GetRecordByIDCardRequest) returns (SingleRecordResponse);
-
-  // DEPRECATED RPCs (Sunset: 2027-02-01)
-  rpc GetYibaoData(DataQueryRequest) returns (DataQueryResponse) { option deprecated = true; }
-  rpc GetKangyangData(DataQueryRequest) returns (DataQueryResponse) { option deprecated = true; }
-  rpc GetMockData3(DataQueryRequest) returns (DataQueryResponse) { option deprecated = true; }
-  rpc GetMockData4(DataQueryRequest) returns (DataQueryResponse) { option deprecated = true; }
-  rpc ListMockSources(ListMockSourcesRequest) returns (ListMockSourcesResponse) { option deprecated = true; }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -48,29 +35,8 @@ message HealthResponse {
   string via = 3;          // "datasource-mgr"
 }
 
-message DataQueryRequest {
-  int32 limit = 1;         // 返回条数（默认 20）
-  int32 offset = 2;        // 偏移量（默认 0）
-}
-
-message SourceDataQueryRequest {
-  string source_id = 1;    // "ds_yibao" | "ds_kangyang" | "ds_mock3" | "ds_mock4"
-  int32 limit = 2;
-  int32 offset = 3;
-}
-
 message DataRowProto {
   map<string, string> fields = 1;
-}
-
-message DataQueryResponse {
-  string source_id = 1;
-  string source_name = 2;
-  int32 total = 3;
-  int32 limit = 4;
-  int32 offset = 5;
-  repeated DataRowProto records = 6;
-  string via = 7;
 }
 
 message DataSourceProto {

@@ -6,15 +6,14 @@
 // ==============================================================================
 // 1. 服务初始化与生命周期测试 (TestGRPCHealth):
 //    - 验证健康检查接口返回 "ok" 状态以及正确的 moduleVia 标识。
-// 2. 模拟数据源查询接口全覆盖 (TestGRPCApis):
-//    - API 1 ~ 4 专用接口验证 (GetYibaoData, GetKangyangData, GetMockData3, GetMockData4)；
-//    - 通用路由查询与资产元数据接口验证 (GetDataBySource, ListMockSources, GetDataSource, TestConnection)。
+// 2. 模拟数据源管理接口全覆盖 (TestGRPCManagementApis):
+//    - ListMockSources（数据源资产目录列表）；
+//    - GetDataSource（单个数据源元数据详情）；
+//    - TestConnection（数据源连通性测试）。
 // 3. 入参校验与错误码防御测试 (TestGRPCValidationErrors):
 //    - 校验空参数时的 codes.InvalidArgument 错误拦截；
 //    - 校验不存在的数据源 ID 时的 codes.NotFound 错误拦截。
-// 4. mTLS 安全凭证与公钥指纹固定测试 (TestBuildServerCredentials):
-//    - 动态生成内存临时 CA 根证书与 RSA 2048 密钥对；
-//    - 覆盖 TLS 关闭、证书缺失、单向 TLS、双向 mTLS（ClientAuth）以及公钥指纹固定（Key Pinning）场景。
+// 4. mTLS 安全凭证与公钥指纹固定测试 (TestBuildServerCredentials)。
 // ==============================================================================
 
 package grpcserver
@@ -105,63 +104,18 @@ func TestGRPCHealth(t *testing.T) {
 	}
 }
 
-// TestGRPCApis tests all functional mock data query endpoints through the gRPC interface.
-// TestGRPCApis 测试 gRPC 暴露的所有业务查询接口（医保、康养、预留政务数据、通用数据源动态查询及连通性测试）。
-func TestGRPCApis(t *testing.T) {
+// TestGRPCManagementApis tests all management and probe endpoints through the gRPC interface.
+// TestGRPCManagementApis 测试 gRPC 暴露的所有管理与探针接口。
+func TestGRPCManagementApis(t *testing.T) {
 	client, cleanup := setupTestGRPCServer(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
-	// ── API 1: 医保就医与结算模拟数据 (GetYibaoData) ──────────────────────
-	yibaoResp, err := client.GetYibaoData(ctx, &pb.DataQueryRequest{Limit: 5, Offset: 0})
+	// ── 模拟数据源资产目录列表 (ListDataSources) ───────────────────────────
+	listResp, err := client.ListDataSources(ctx, &pb.ListMockSourcesRequest{})
 	if err != nil {
-		t.Fatalf("GetYibaoData failed: %v", err)
-	}
-	if yibaoResp.SourceId != "ds_yibao" || yibaoResp.Limit != 5 {
-		t.Errorf("unexpected yibao response: %+v", yibaoResp)
-	}
-
-	// ── API 2: 康养体检与慢病模拟数据 (GetKangyangData) ───────────────────
-	kangResp, err := client.GetKangyangData(ctx, &pb.DataQueryRequest{Limit: 5, Offset: 0})
-	if err != nil {
-		t.Fatalf("GetKangyangData failed: %v", err)
-	}
-	if kangResp.SourceId != "ds_kangyang" || kangResp.Limit != 5 {
-		t.Errorf("unexpected kangyang response: %+v", kangResp)
-	}
-
-	// ── API 3: 预留政务模拟数据源 3 (GetMockData3) ─────────────────────────
-	m3Resp, err := client.GetMockData3(ctx, &pb.DataQueryRequest{Limit: 5})
-	if err != nil {
-		t.Fatalf("GetMockData3 failed: %v", err)
-	}
-	if m3Resp.SourceId != "ds_mock3" || len(m3Resp.Records) == 0 {
-		t.Errorf("unexpected mock3 response: %+v", m3Resp)
-	}
-
-	// ── API 4: 预留政务模拟数据源 4 (GetMockData4) ─────────────────────────
-	m4Resp, err := client.GetMockData4(ctx, &pb.DataQueryRequest{Limit: 5})
-	if err != nil {
-		t.Fatalf("GetMockData4 failed: %v", err)
-	}
-	if m4Resp.SourceId != "ds_mock4" || len(m4Resp.Records) == 0 {
-		t.Errorf("unexpected mock4 response: %+v", m4Resp)
-	}
-
-	// ── 通用数据源按 ID 路由查询 (GetDataBySource) ──────────────────────────
-	bySrcResp, err := client.GetDataBySource(ctx, &pb.SourceDataQueryRequest{SourceId: "ds_yibao", Limit: 3})
-	if err != nil {
-		t.Fatalf("GetDataBySource failed: %v", err)
-	}
-	if bySrcResp.SourceId != "ds_yibao" {
-		t.Errorf("unexpected GetDataBySource response: %+v", bySrcResp)
-	}
-
-	// ── 模拟数据源资产目录列表 (ListMockSources) ───────────────────────────
-	listResp, err := client.ListMockSources(ctx, &pb.ListMockSourcesRequest{})
-	if err != nil {
-		t.Fatalf("ListMockSources failed: %v", err)
+		t.Fatalf("ListDataSources failed: %v", err)
 	}
 	if listResp.Total < 2 {
 		t.Errorf("expected at least 2 sources, got %d", listResp.Total)
@@ -194,31 +148,19 @@ func TestGRPCValidationErrors(t *testing.T) {
 
 	ctx := context.Background()
 
-	// 1. GetDataBySource 空 source_id 应返回 InvalidArgument 错误
-	_, err := client.GetDataBySource(ctx, &pb.SourceDataQueryRequest{SourceId: ""})
-	if status.Code(err) != codes.InvalidArgument {
-		t.Errorf("expected InvalidArgument for empty source_id, got: %v", err)
-	}
-
-	// 2. GetDataBySource 不存在的数据源 ID 应返回 NotFound 错误
-	_, err = client.GetDataBySource(ctx, &pb.SourceDataQueryRequest{SourceId: "unknown_123"})
-	if status.Code(err) != codes.NotFound {
-		t.Errorf("expected NotFound for unknown source_id, got: %v", err)
-	}
-
-	// 3. GetDataSource 空 id 应返回 InvalidArgument 错误
-	_, err = client.GetDataSource(ctx, &pb.GetDataSourceRequest{Id: ""})
+	// 1. GetDataSource 空 id 应返回 InvalidArgument 错误
+	_, err := client.GetDataSource(ctx, &pb.GetDataSourceRequest{Id: ""})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Errorf("expected InvalidArgument for empty id, got: %v", err)
 	}
 
-	// 4. GetDataSource 不存在的 id 应返回 NotFound 错误
+	// 2. GetDataSource 不存在的 id 应返回 NotFound 错误
 	_, err = client.GetDataSource(ctx, &pb.GetDataSourceRequest{Id: "non_existent"})
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("expected NotFound for non-existent id, got: %v", err)
 	}
 
-	// 5. TestConnection 空 id 应返回 InvalidArgument 错误
+	// 3. TestConnection 空 id 应返回 InvalidArgument 错误
 	_, err = client.TestConnection(ctx, &pb.TestConnectionRequest{Id: ""})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Errorf("expected InvalidArgument for empty test id, got: %v", err)

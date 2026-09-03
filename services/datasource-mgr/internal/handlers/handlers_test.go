@@ -3,15 +3,14 @@
 //
 // 测试覆盖：
 // 1. 存活健康探针（TestHealth）；
-// 2. 专用模拟数据源接口 API 1 ~ 4（TestAPI1YibaoData, TestAPI2KangyangData, TestAPI3Mock3Data, TestAPI4Mock4Data）；
-// 3. 数据源资产列表查询（TestListDataSources）；
-// 4. 单个数据源详情查询与 404 错误处理（TestGetDataSource, TestGetDataSourceNotFound）；
-// 5. 数据源记录动态分页采样（TestGetDataSourceRecords）；
-// 6. 数据源连通性测试（TestTestConnection）；
-// 7. Schema 元数据探查（TestGetMetadata）；
-// 8. 访问审计日志（TestGetAccessAudit）；
-// 9. 模拟数据重新播种端点（TestSeedDataSources）。
-// 10. P0-4 数据完整性严格模式：样本全量可读 + 损坏行拒绝静音降级（TestLoadCSVRecords_*Strict*）。
+// 2. 数据源资产列表查询（TestListDataSources）；
+// 3. 单个数据源详情查询与 404 错误处理（TestGetDataSource, TestGetDataSourceNotFound）；
+// 4. 数据源连通性测试（TestTestConnection）；
+// 5. Schema 元数据探查（TestGetMetadata）；
+// 6. 访问审计日志（TestGetAccessAudit）；
+// 7. 模拟数据重新播种端点（TestSeedDataSources）。
+// 8. 按身份证号查询单条记录（TestGetRecordByIDCard）。
+// 9. P0-4 数据完整性严格模式：样本全量可读 + 损坏行拒绝静音降级（TestLoadCSVRecords_*Strict*）。
 package handlers
 
 import (
@@ -69,94 +68,6 @@ func TestHealth(t *testing.T) {
 	}
 }
 
-// TestAPI1YibaoData verifies dedicated API 1 for healthcare/settlement dataset.
-// TestAPI1YibaoData 验证专用 API 1（医保就医与结算模拟数据）：
-// 1. 请求 GET /api/v1/yibao?limit=5；
-// 2. 断言状态码 200 OK；
-// 3. 校验返回的 SourceID 为 "ds_yibao"，且 Limit 为 5。
-func TestAPI1YibaoData(t *testing.T) {
-	r := newTestRouter()
-	req, _ := http.NewRequest("GET", "/api/v1/yibao?limit=5", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var resp models.DataQueryResponse
-	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp.SourceID != "ds_yibao" || resp.Limit != 5 {
-		t.Errorf("unexpected yibao response: %+v", resp)
-	}
-}
-
-// TestAPI2KangyangData verifies dedicated API 2 for elderly care dataset.
-// TestAPI2KangyangData 验证专用 API 2（康养体检与慢病管理模拟数据）：
-// 1. 请求 GET /api/v1/kangyang?limit=5；
-// 2. 断言状态码 200 OK；
-// 3. 校验返回的 SourceID 为 "ds_kangyang"，且 Limit 为 5。
-func TestAPI2KangyangData(t *testing.T) {
-	r := newTestRouter()
-	req, _ := http.NewRequest("GET", "/api/v1/kangyang?limit=5", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var resp models.DataQueryResponse
-	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp.SourceID != "ds_kangyang" || resp.Limit != 5 {
-		t.Errorf("unexpected kangyang response: %+v", resp)
-	}
-}
-
-// TestAPI3Mock3Data verifies dedicated API 3 for reserved municipal dataset 3.
-// TestAPI3Mock3Data 验证专用 API 3（预留政务数据源 3）：
-// 1. 请求 GET /api/v1/mock3；
-// 2. 断言状态码 200 OK；
-// 3. 校验 SourceID 为 "ds_mock3" 且非空记录。
-func TestAPI3Mock3Data(t *testing.T) {
-	r := newTestRouter()
-	req, _ := http.NewRequest("GET", "/api/v1/mock3", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	var resp models.DataQueryResponse
-	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp.SourceID != "ds_mock3" || len(resp.Records) == 0 {
-		t.Errorf("unexpected mock3 response: %+v", resp)
-	}
-}
-
-// TestAPI4Mock4Data verifies dedicated API 4 for reserved municipal dataset 4.
-// TestAPI4Mock4Data 验证专用 API 4（预留政务数据源 4）：
-// 1. 请求 GET /api/v1/mock4；
-// 2. 断言状态码 200 OK；
-// 3. 校验 SourceID 为 "ds_mock4" 且非空记录。
-func TestAPI4Mock4Data(t *testing.T) {
-	r := newTestRouter()
-	req, _ := http.NewRequest("GET", "/api/v1/mock4", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	var resp models.DataQueryResponse
-	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp.SourceID != "ds_mock4" || len(resp.Records) == 0 {
-		t.Errorf("unexpected mock4 response: %+v", resp)
-	}
-}
-
 // TestListDataSources verifies GET /api/datasources returns the full mock directory.
 // TestListDataSources 验证数据源列表查询端点：
 // 1. 请求 GET /api/datasources；
@@ -210,27 +121,6 @@ func TestGetDataSourceNotFound(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", w.Code)
-	}
-}
-
-// TestGetDataSourceRecords verifies GET /api/datasources/:id/records returns paginated data rows.
-// TestGetDataSourceRecords 验证通用数据源分页采样端点：
-// 1. 请求 GET /api/datasources/ds_yibao/records?limit=3；
-// 2. 验证响应状态码 200 OK 且 datasource_id 为 "ds_yibao"。
-func TestGetDataSourceRecords(t *testing.T) {
-	r := newTestRouter()
-	req, _ := http.NewRequest("GET", "/api/datasources/ds_yibao/records?limit=3", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	var resp map[string]any
-	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp["datasource_id"] != "ds_yibao" {
-		t.Errorf("unexpected records response: %+v", resp)
 	}
 }
 
@@ -379,7 +269,7 @@ func TestLoadCSVRecords_PathTraversal(t *testing.T) {
 	}
 
 	for _, name := range malicious {
-		if _, _, err := LoadCSVRecords(name, 10, 0); err == nil {
+		if _, _, err := LoadCSVRecords(name); err == nil {
 			t.Errorf("expected error for path traversal attempt %q, got nil", name)
 		}
 	}
@@ -388,7 +278,7 @@ func TestLoadCSVRecords_PathTraversal(t *testing.T) {
 func TestLoadCSVRecords_AllowedFiles(t *testing.T) {
 	// The two official mock datasets must continue to load successfully.
 	for _, name := range []string{"yibao.csv", "kangyang.csv"} {
-		records, total, err := LoadCSVRecords(name, 5, 0)
+		records, total, err := LoadCSVRecords(name)
 		if err != nil {
 			t.Fatalf("unexpected error loading %s: %v", name, err)
 		}
@@ -410,7 +300,7 @@ func TestLoadCSVRecords_ShippedSamplesSurviveStrictMode(t *testing.T) {
 	SetStrictDataIntegrity(false)
 	baseline := map[string]int{}
 	for _, name := range []string{"yibao.csv", "kangyang.csv"} {
-		_, total, err := LoadCSVRecords(name, 1000, 0)
+		_, total, err := LoadCSVRecords(name)
 		if err != nil {
 			t.Fatalf("lenient load of %s failed: %v", name, err)
 		}
@@ -419,7 +309,7 @@ func TestLoadCSVRecords_ShippedSamplesSurviveStrictMode(t *testing.T) {
 
 	SetStrictDataIntegrity(true)
 	for _, name := range []string{"yibao.csv", "kangyang.csv"} {
-		records, total, err := LoadCSVRecords(name, 1000, 0)
+		records, total, err := LoadCSVRecords(name)
 		if err != nil {
 			t.Fatalf("strict load of %s failed: %v", name, err)
 		}
@@ -451,14 +341,14 @@ func TestLoadCSVRecords_StrictModeAbortsOnCorruptRow(t *testing.T) {
 	t.Chdir(dir)
 
 	SetStrictDataIntegrity(true)
-	if _, _, err := LoadCSVRecords("yibao.csv", 10, 0); err == nil {
+	if _, _, err := LoadCSVRecords("yibao.csv"); err == nil {
 		t.Fatal("strict mode must abort on a corrupt row, got nil error")
 	} else if !strings.Contains(err.Error(), "malformed record") {
 		t.Errorf("expected malformed-record error, got %v", err)
 	}
 
 	SetStrictDataIntegrity(false)
-	records, total, err := LoadCSVRecords("yibao.csv", 10, 0)
+	records, total, err := LoadCSVRecords("yibao.csv")
 	if err != nil {
 		t.Fatalf("lenient mode should skip the corrupt row, got %v", err)
 	}

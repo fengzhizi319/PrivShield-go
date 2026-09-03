@@ -12,16 +12,11 @@ func TestDatasourceMgrPermissionForGRPCMethod(t *testing.T) {
 		want   string
 	}{
 		{"/datasource.DataSourceManagerService/Health", ""},
-		{"/datasource.DataSourceManagerService/GetData", "datasource:read"},
-		{"/datasource.DataSourceManagerService/GetDataBySource", "datasource:read"},
 		{"/datasource.DataSourceManagerService/GetDataSource", "datasource:read"},
 		{"/datasource.DataSourceManagerService/ListDataSources", "datasource:read"},
-		{"/datasource.DataSourceManagerService/GetYibaoData", "datasource:read"},
-		{"/datasource.DataSourceManagerService/GetKangyangData", "datasource:read"},
-		{"/datasource.DataSourceManagerService/GetMockData3", "datasource:read"},
-		{"/datasource.DataSourceManagerService/GetMockData4", "datasource:read"},
 		{"/datasource.DataSourceManagerService/ListMockSources", "datasource:read"},
 		{"/datasource.DataSourceManagerService/TestConnection", "datasource:admin"},
+		{"/datasource.DataSourceManagerService/GetRecordByIDCard", "datasource:read"},
 		{"/unknown.Service/Foo", ""},
 	}
 	for _, tc := range cases {

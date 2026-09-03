@@ -19,19 +19,6 @@ type MockDataSource struct {
 	Tags         []string `json:"tags"`        // 业务与敏感分类标签列表（如 ["医保", "结算流水", "敏感数据"]）
 }
 
-// DataQueryResponse represents the query result of mock data records.
-// DataQueryResponse 结构体封装了数据源记录分页查询的标准响应载荷。
-type DataQueryResponse struct {
-	DatasourceID string           `json:"datasource_id"` // canonical 数据源唯一标识符
-	SourceID     string           `json:"source_id"`     // DEPRECATED: 历史字段名，兼容双写
-	SourceName   string           `json:"source_name"`   // 查询的目标数据源名称
-	Total        int              `json:"total"`         // 符合查询条件的总记录数（用于前端分页计算）
-	Limit        int              `json:"limit"`         // 本次查询请求返回的最大条数限制
-	Offset       int              `json:"offset"`        // 本次查询的记录起始偏移量
-	Records      []map[string]any `json:"records"`       // 实际查询得到的数据行列表（动态键值映射，每行为一组字段名到属性值的对应）
-	Via          string           `json:"via"`           // 响应生成服务节点标识（固定为 "datasource-mgr"，用于全链路追踪）
-}
-
 // DataSourceListResponse is the response for listing mock datasources.
 // DataSourceListResponse 结构体用于承载数据源资产目录列表查询的统一响应。
 type DataSourceListResponse struct {

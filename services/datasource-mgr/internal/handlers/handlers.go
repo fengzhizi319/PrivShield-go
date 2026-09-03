@@ -3,18 +3,15 @@
 //
 // 该文件通过 Gin 框架暴露了一系列 RESTful API 端点：
 // 1. 健康检查与探针（/health, /api/health）；
-// 2. 专用模拟数据集抽取端点（/api/v1/yibao, /api/v1/kangyang, /api/v1/mock3, /api/v1/mock4）；
-// 3. 通用数据源资产查询、记录采样、Schema 元数据探测与连通性测试接口（/api/datasources/*）。
+// 2. 通用数据源资产查询、记录采样、Schema 元数据探测与连通性测试接口（/api/datasources/*）。
 package handlers
 
 import (
 	"crypto/subtle"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -31,26 +28,6 @@ import (
 
 // moduleVia 是响应体中的服务标识常量，用于全链路追踪定位请求处理节点。
 const moduleVia = "datasource-mgr"
-
-// setDeprecationHeaders 注入专用端点的弃用响应头（api_rename_design.md §7.1），
-// 并上报一次别名流量（§7.2 privshield_api_alias_requests_total，下线门槛 §7.3 的依据）。
-// 标签只取路由模板 c.FullPath()（有界），绝不取原始 URL（无界基数）。
-func (s *Server) setDeprecationHeaders(c *gin.Context, canonicalID string) {
-	c.Header("Deprecation", "true")
-	c.Header("Sunset", "Mon, 01 Feb 2027 00:00:00 GMT")
-	canonicalPath := fmt.Sprintf("/api/datasources/%s/records", canonicalID)
-	c.Header("Link", fmt.Sprintf("<%s>; rel=\"successor-version\"", canonicalPath))
-	c.Header("X-PrivShield-Canonical-Path", canonicalPath)
-	c.Header("X-PrivShield-Canonical-Source", canonicalID)
-
-	if s.mc != nil {
-		alias := c.FullPath()
-		if alias == "" {
-			alias = "legacy-endpoint"
-		}
-		s.mc.RecordAPIAlias(alias, canonicalID, naming.TargetPath)
-	}
-}
 
 // Server aggregates HTTP handler dependencies.
 // Server 结构体聚合了 HTTP 处理器层所需的运行配置、结构化日志与监控指标组件。
@@ -97,11 +74,7 @@ func DatasourceMgrPermissionForPath(path string) string {
 	switch {
 	case path == "/health" || path == "/readyz" || path == "/api/health", path == "/metrics":
 		return ""
-	case path == "/api/v1/yibao" || path == "/api/v1/kangyang" ||
-		path == "/api/v1/mock3" || path == "/api/v1/mock4" ||
-		path == "/api/datasources" || path == "/api/datasources/:id" ||
-		strings.HasPrefix(path, "/api/datasources/") && strings.HasSuffix(path, "/records") ||
-		strings.HasPrefix(path, "/api/datasources/") && strings.HasSuffix(path, "/sample") ||
+	case path == "/api/datasources" || path == "/api/datasources/:id" ||
 		strings.HasPrefix(path, "/api/datasources/") && strings.HasSuffix(path, "/record-by-id") ||
 		strings.HasPrefix(path, "/api/datasources/") && strings.HasSuffix(path, "/metadata") ||
 		strings.HasPrefix(path, "/api/datasources/") && strings.HasSuffix(path, "/audit"):
@@ -186,8 +159,6 @@ func (s *Server) scopeAuthMiddleware() gin.HandlerFunc {
 //   - Auth: 基于 Header API Key 的身份认证（如果配置了 APIKey）。
 //
 // 2. 路由分组注册：
-//   - 存活健康探针（Health Check）；
-//   - 专用模拟数据集端点（API 1 ~ 4）；
 //   - 数据源管理与元数据探测端点。
 func (s *Server) RegisterRoutes(r *gin.Engine) {
 	// 装配中间件栈
@@ -214,45 +185,14 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 		r.GET("/metrics", s.mc.Handler())
 	}
 
-	// API 1, 2, 3, 4: 专用模拟数据源访问端点
-	r.GET("/api/v1/yibao", s.GetYibaoData)       // API 1: 医保就医与结算
-	r.GET("/api/v1/kangyang", s.GetKangyangData) // API 2: 康养体检与慢病
-	r.GET("/api/v1/mock3", s.GetMock3Data)       // API 3: 预留政务数据源 3
-	r.GET("/api/v1/mock4", s.GetMock4Data)       // API 4: 预留政务数据源 4
-
 	// 通用数据源资产与采样端点
 	r.GET("/api/datasources", s.ListDataSources)                          // 数据源目录列表
 	r.GET("/api/datasources/:id", s.GetDataSource)                        // 单个数据源详情
-	r.GET("/api/datasources/:id/records", s.GetDataSourceRecords)         // 动态分页查询记录
-	r.GET("/api/datasources/:id/sample", s.GetDataSourceRecords)          // 兼容样本数据接口别名
 	r.GET("/api/datasources/:id/record-by-id", s.GetDataSourceRecordByID) // 按身份证号查询单条记录
 	r.POST("/api/datasources/:id/test", s.TestConnection)                 // 数据源连通性测试
 	r.GET("/api/datasources/:id/metadata", s.GetMetadata)                 // Schema 元数据查询
 	r.GET("/api/datasources/:id/audit", s.GetAccessAudit)                 // 数据访问审计日志查询
 	r.POST("/api/datasources/seed", s.SeedDataSourcesEndpoint)            // 初始化/重置模拟数据源
-}
-
-// parsePagination parses limit and offset query parameters with safety bounds.
-// parsePagination 从 HTTP GET 请求的 URL Query 参数中解析 limit 与 offset 分页参数：
-// 1. 若 limit 缺省或非法，使用 defaultLimit；若超过 maxLimit 则截断至 maxLimit；
-// 2. 若 offset 缺省或非法，重置为 0；
-// 3. 返回安全校验后的 limit 与 offset。
-func parsePagination(c *gin.Context, defaultLimit, maxLimit int) (int, int) {
-	limitStr := c.Query("limit")
-	limit := defaultLimit
-	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
-		limit = l
-	}
-	if limit > maxLimit {
-		limit = maxLimit
-	}
-
-	offsetStr := c.Query("offset")
-	offset := 0
-	if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
-		offset = o
-	}
-	return limit, offset
 }
 
 // Health returns mock service status.
@@ -277,94 +217,6 @@ func (s *Server) Readyz(c *gin.Context) {
 		"mode":       "mock_datasource_provider",
 		"latency_ms": 0,
 		"via":        moduleVia,
-	})
-}
-
-// GetYibaoData implements API 1: queries mock healthcare and settlement records.
-// GetYibaoData 处理 API 1 请求：分页读取并返回医保就医与结算模拟数据（yibao.csv）。
-func (s *Server) GetYibaoData(c *gin.Context) {
-	s.setDeprecationHeaders(c, naming.DSYibao)
-	limit, offset := parsePagination(c, 20, 500)
-	records, total, err := GetYibaoRecords(limit, offset)
-	if err != nil {
-		middleware.AbortWithError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error(), nil)
-		return
-	}
-	c.JSON(http.StatusOK, models.DataQueryResponse{
-		DatasourceID: naming.DSYibao,
-		SourceID:     naming.DSYibao,
-		SourceName:   "医保就医与结算模拟数据库 (yibao.csv)",
-		Total:        total,
-		Limit:        limit,
-		Offset:       offset,
-		Records:      records,
-		Via:          moduleVia,
-	})
-}
-
-// GetKangyangData implements API 2: queries mock elderly care and chronic disease records.
-// GetKangyangData 处理 API 2 请求：分页读取并返回康养体检与慢病管理模拟数据（kangyang.csv）。
-func (s *Server) GetKangyangData(c *gin.Context) {
-	s.setDeprecationHeaders(c, naming.DSKangyang)
-	limit, offset := parsePagination(c, 20, 500)
-	records, total, err := GetKangyangRecords(limit, offset)
-	if err != nil {
-		middleware.AbortWithError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error(), nil)
-		return
-	}
-	c.JSON(http.StatusOK, models.DataQueryResponse{
-		DatasourceID: naming.DSKangyang,
-		SourceID:     naming.DSKangyang,
-		SourceName:   "康养体检与慢病模拟数据库 (kangyang.csv)",
-		Total:        total,
-		Limit:        limit,
-		Offset:       offset,
-		Records:      records,
-		Via:          moduleVia,
-	})
-}
-
-// GetMock3Data implements API 3: queries reserved municipal dataset 3.
-// GetMock3Data 处理 API 3 请求：分页读取并返回预留政务模拟数据源 3 的记录。
-func (s *Server) GetMock3Data(c *gin.Context) {
-	s.setDeprecationHeaders(c, naming.DSMock3)
-	limit, offset := parsePagination(c, 20, 500)
-	records, total, err := GetMock3Records(limit, offset)
-	if err != nil {
-		middleware.AbortWithError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error(), nil)
-		return
-	}
-	c.JSON(http.StatusOK, models.DataQueryResponse{
-		DatasourceID: naming.DSMock3,
-		SourceID:     naming.DSMock3,
-		SourceName:   "预留政务数据源 3",
-		Total:        total,
-		Limit:        limit,
-		Offset:       offset,
-		Records:      records,
-		Via:          moduleVia,
-	})
-}
-
-// GetMock4Data implements API 4: queries reserved municipal dataset 4.
-// GetMock4Data 处理 API 4 请求：分页读取并返回预留政务模拟数据源 4 的记录。
-func (s *Server) GetMock4Data(c *gin.Context) {
-	s.setDeprecationHeaders(c, naming.DSMock4)
-	limit, offset := parsePagination(c, 20, 500)
-	records, total, err := GetMock4Records(limit, offset)
-	if err != nil {
-		middleware.AbortWithError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error(), nil)
-		return
-	}
-	c.JSON(http.StatusOK, models.DataQueryResponse{
-		DatasourceID: naming.DSMock4,
-		SourceID:     naming.DSMock4,
-		SourceName:   "预留政务数据源 4",
-		Total:        total,
-		Limit:        limit,
-		Offset:       offset,
-		Records:      records,
-		Via:          moduleVia,
 	})
 }
 
@@ -404,37 +256,6 @@ func (s *Server) recordDatasourceRequest(datasourceID, status string) {
 		datasourceID = unknownDatasourceLabel
 	}
 	s.mc.RecordDatasourceRequest(datasourceID, naming.APICodeForDataSource(datasourceID), status)
-}
-
-// GetDataSourceRecords returns records for a given datasource ID with pagination.
-// GetDataSourceRecords 根据 URL 路径参数 :id 动态路由并分页查询对应数据源的数据记录。
-func (s *Server) GetDataSourceRecords(c *gin.Context) {
-	id := c.Param("id")
-	limit, offset := parsePagination(c, 20, 500)
-
-	canonID, _ := naming.NormalizeDataSourceID(id)
-	if canonID == "" {
-		canonID = id
-	}
-
-	records, total, sourceName, err := GetDataBySource(id, limit, offset)
-	if err != nil {
-		s.recordDatasourceRequest(canonID, "error")
-		middleware.AbortWithError(c, http.StatusNotFound, "NOT_FOUND", err.Error(), nil)
-		return
-	}
-	s.recordDatasourceRequest(canonID, "success")
-
-	c.JSON(http.StatusOK, gin.H{
-		"datasource_id": canonID,
-		"source_id":     canonID,
-		"name":          sourceName,
-		"total":         total,
-		"limit":         limit,
-		"offset":        offset,
-		"records":       records,
-		"via":           moduleVia,
-	})
 }
 
 // GetDataSourceRecordByID returns a single record from a datasource by ID card number.

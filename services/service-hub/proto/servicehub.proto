@@ -104,9 +104,8 @@ message GetTaskRequest {
 
 message ListTasksRequest {
   string status_filter = 1;    // 可选状态过滤: pending/running/completed/failed
-  // P20 fix: pagination fields (limit/offset) are enforced server-side with safe defaults.
-  // 分页参数（limit/offset）由服务端强制执行安全默认值。
-  // When protoc is available, add: int32 limit = 2; int32 offset = 3;
+  // P20 fix: limit/offset are enforced server-side with safe defaults.
+  // 任务列表查询参数由服务端强制执行安全默认值。
 }
 
 message ListTasksResponse {

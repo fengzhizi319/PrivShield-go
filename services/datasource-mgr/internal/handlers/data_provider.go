@@ -5,8 +5,8 @@
 // 1. 模拟数据源注册表（MockDataSources）与其元数据维护；
 // 2. CSV 文件跨层级自适应搜索与安全路径解析（findCSVFile）；
 // 3. 通用 CSV 文件解析器与动态类型推断（LoadCSVRecords：字符串、整数、浮点数自动转换）；
-// 4. 专用与通用数据源查询接口（医保 yibao.csv、康养 kangyang.csv、预留政务 3 与 4）；
-// 5. 内存数据集切片分页器（paginateSlice）与数据源 Schema 元数据构建器（GetMetadata）。
+// 4. 按身份证号查询单条记录（GetRecordByIDCard）；
+// 5. 数据源 Schema 元数据构建器（GetMetadata）。
 package handlers
 
 import (
@@ -179,8 +179,8 @@ func init() { strictDataIntegrity.Store(true) }
 // SetStrictDataIntegrity enables or disables strict sample-data integrity for the whole process.
 func SetStrictDataIntegrity(strict bool) { strictDataIntegrity.Store(strict) }
 
-// LoadCSVRecords loads CSV records from disk with dynamic type inference and pagination.
-// LoadCSVRecords 加载并解析指定的 CSV 数据文件，执行动态类型推断与分页切片，执行逻辑如下：
+// LoadCSVRecords loads CSV records from disk with dynamic type inference.
+// LoadCSVRecords 加载并解析指定的 CSV 数据文件，执行动态类型推断，执行逻辑如下：
 // 1. 定位文件：调用 findCSVFile(filename) 获取文件物理路径；
 // 2. 打开文件：以只读方式打开文件并注册 defer file.Close()；
 // 3. 解析表头：使用 csv.NewReader 读取首行作为字段名映射表（设置 FieldsPerRecord = -1 支持变长字段）；
@@ -191,12 +191,8 @@ func SetStrictDataIntegrity(strict bool) { strictDataIntegrity.Store(strict) }
 //   - 将解析后的 map[string]any 追加至 allRows；
 //   - 严格存储模式（DATASOURCE_MGR_STRICT_STORAGE=true，默认）下损坏行直接报错，不静默丢弃；
 //
-// 5. 分页窗口截取：
-//   - 纠正非法 offset（小于 0 时重置为 0）；
-//   - 若 offset 超出总记录数，返回空切片与总行数；
-//   - 计算结束边界 end = offset + limit（若 limit <= 0 或 end > total 则截断为 total）；
-//   - 返回当前分页切片 allRows[offset:end]、数据集总行数 total 以及可能的错误。
-func LoadCSVRecords(filename string, limit, offset int) ([]map[string]any, int, error) {
+// 5. 返回全部数据行与总行数。
+func LoadCSVRecords(filename string) ([]map[string]any, int, error) {
 	// 1. 定位物理文件路径
 	filePath, err := findCSVFile(filename)
 	if err != nil {
@@ -261,79 +257,7 @@ func LoadCSVRecords(filename string, limit, offset int) ([]map[string]any, int, 
 		allRows = append(allRows, rowMap)
 	}
 
-	// 5. 分页区间安全计算与切片
-	total := len(allRows)
-	if offset < 0 {
-		offset = 0
-	}
-	if offset >= total {
-		return []map[string]any{}, total, nil
-	}
-
-	end := offset + limit
-	if end > total || limit <= 0 {
-		end = total
-	}
-
-	return allRows[offset:end], total, nil
-}
-
-// GetYibaoRecords (API 1: 医保数据)
-// GetYibaoRecords 读取并返回医保就医与结算模拟数据（yibao.csv），支持分页。
-func GetYibaoRecords(limit, offset int) ([]map[string]any, int, error) {
-	return LoadCSVRecords("yibao.csv", limit, offset)
-}
-
-// GetKangyangRecords (API 2: 康养数据)
-// GetKangyangRecords 读取并返回康养体检与慢病管理模拟数据（kangyang.csv），支持分页。
-func GetKangyangRecords(limit, offset int) ([]map[string]any, int, error) {
-	return LoadCSVRecords("kangyang.csv", limit, offset)
-}
-
-// GetMock3Records (API 3: 预留数据 3)
-// GetMock3Records 返回预留政务数据源 3 的内存模拟数据（政务服务审批流水），支持分页。
-func GetMock3Records(limit, offset int) ([]map[string]any, int, error) {
-	rows := []map[string]any{
-		{"id": 1, "service_code": "GOV_001", "name": "政务服务审批流水 1", "amount": 1000.0, "status": "approved"},
-		{"id": 2, "service_code": "GOV_002", "name": "政务服务审批流水 2", "amount": 2500.0, "status": "pending"},
-		{"id": 3, "service_code": "GOV_003", "name": "政务服务审批流水 3", "amount": 320.5, "status": "approved"},
-	}
-	return paginateSlice(rows, limit, offset), len(rows), nil
-}
-
-// GetMock4Records (API 4: 预留数据 4)
-// GetMock4Records 返回预留政务数据源 4 的内存模拟数据（季度税收与财务报表），支持分页。
-func GetMock4Records(limit, offset int) ([]map[string]any, int, error) {
-	rows := []map[string]any{
-		{"id": 101, "dept_code": "FIN_001", "report_name": "季度税收与财务报表 A", "value": 982000.0},
-		{"id": 102, "dept_code": "FIN_002", "report_name": "季度税收与财务报表 B", "value": 431000.0},
-	}
-	return paginateSlice(rows, limit, offset), len(rows), nil
-}
-
-// GetDataBySource retrieves records by source ID with unified name and error handling.
-// GetDataBySource 根据传入的数据源唯一标识符（或别名）查注册表动态路由并调用对应的数据提取函数。
-func GetDataBySource(sourceID string, limit, offset int) ([]map[string]any, int, string, error) {
-	normID, err := naming.NormalizeDataSourceID(sourceID)
-	if err != nil {
-		return nil, 0, "", fmt.Errorf("unknown mock source: %s", sourceID)
-	}
-	switch normID {
-	case naming.DSYibao:
-		rows, total, err := GetYibaoRecords(limit, offset)
-		return rows, total, "医保就医与结算模拟数据库 (yibao.csv)", err
-	case naming.DSKangyang:
-		rows, total, err := GetKangyangRecords(limit, offset)
-		return rows, total, "康养体检与慢病模拟数据库 (kangyang.csv)", err
-	case naming.DSMock3:
-		rows, total, err := GetMock3Records(limit, offset)
-		return rows, total, "预留政务数据源 3", err
-	case naming.DSMock4:
-		rows, total, err := GetMock4Records(limit, offset)
-		return rows, total, "预留政务数据源 4", err
-	default:
-		return nil, 0, "", fmt.Errorf("unknown mock source: %s", sourceID)
-	}
+	return allRows, len(allRows), nil
 }
 
 // ErrRecordNotFound is returned when no record matches the given ID card number.
@@ -361,8 +285,8 @@ func GetRecordByIDCard(sourceID, idCardNo string) (map[string]any, string, error
 		return nil, normID, fmt.Errorf("datasource %s does not support ID card lookup", normID)
 	}
 
-	// 加载全部数据（limit 足够大以覆盖全部行）
-	rows, _, err := LoadCSVRecords(csvFile, 10000, 0)
+	// 加载全部数据
+	rows, _, err := LoadCSVRecords(csvFile)
 	if err != nil {
 		return nil, normID, fmt.Errorf("load csv records: %w", err)
 	}
@@ -378,23 +302,6 @@ func GetRecordByIDCard(sourceID, idCardNo string) (map[string]any, string, error
 	}
 
 	return nil, normID, ErrRecordNotFound
-}
-
-// paginateSlice applies offset and limit pagination on an in-memory row slice.
-// paginateSlice 对内存切片执行安全的分页截取计算，防止越界 panic。
-func paginateSlice(rows []map[string]any, limit, offset int) []map[string]any {
-	total := len(rows)
-	if offset < 0 {
-		offset = 0
-	}
-	if offset >= total {
-		return []map[string]any{}
-	}
-	end := offset + limit
-	if end > total || limit <= 0 {
-		end = total
-	}
-	return rows[offset:end]
 }
 
 // GetMetadata returns table schema for a mock source.

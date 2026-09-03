@@ -47,15 +47,10 @@ func DatasourceMgrPermissionForGRPCMethod(fullMethod string) string {
 	switch {
 	case strings.HasSuffix(fullMethod, "/Health"):
 		return ""
-	case strings.HasSuffix(fullMethod, "/GetData"),
-		strings.HasSuffix(fullMethod, "/GetDataBySource"),
-		strings.HasSuffix(fullMethod, "/GetDataSource"),
+	case strings.HasSuffix(fullMethod, "/GetDataSource"),
 		strings.HasSuffix(fullMethod, "/ListDataSources"),
-		strings.HasSuffix(fullMethod, "/GetYibaoData"),
-		strings.HasSuffix(fullMethod, "/GetKangyangData"),
-		strings.HasSuffix(fullMethod, "/GetMockData3"),
-		strings.HasSuffix(fullMethod, "/GetMockData4"),
-		strings.HasSuffix(fullMethod, "/ListMockSources"):
+		strings.HasSuffix(fullMethod, "/ListMockSources"),
+		strings.HasSuffix(fullMethod, "/GetRecordByIDCard"):
 		return "datasource:read"
 	case strings.HasSuffix(fullMethod, "/TestConnection"):
 		return "datasource:admin"

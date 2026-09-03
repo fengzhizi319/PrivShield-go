@@ -322,8 +322,7 @@ func (s *GRPCServer) Dispatch(ctx context.Context, req *pb.DispatchRequest) (*pb
 
 // ClassifyAndDispatch performs classification first, then auto-dispatches based on sensitivity.
 // ClassifyAndDispatch 动态分类定级并自动分发 RPC 方法：
-// 1. 若载荷为空，自动从数据源服务拉取样本；
-// 2. 调用 Agent Classify 接口完成敏感等级评估；
+// 1. 调用 Agent Classify 接口完成敏感等级评估；
 // 3. 自适应决策脱敏算子并启动流水线任务。
 func (s *GRPCServer) ClassifyAndDispatch(ctx context.Context, req *pb.ClassifyAndDispatchRequest) (*pb.ClassifyAndDispatchResponse, error) {
 	if strings.TrimSpace(req.Source) == "" {
@@ -345,15 +344,6 @@ func (s *GRPCServer) ClassifyAndDispatch(ctx context.Context, req *pb.ClassifyAn
 	requestID := extractRequestID(ctx)
 
 	payloadJSON := req.PayloadJson
-	if (payloadJSON == "" || payloadJSON == "{}" || payloadJSON == "null") && s.datasource != nil {
-		dsCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		dsCtx = pkgobs.ContextWithRequestID(dsCtx, requestID)
-		if res, err := s.datasource.FetchData(dsCtx, normID, 5, 0); err == nil && len(res.Records) > 0 {
-			b, _ := json.Marshal(res.Records[0])
-			payloadJSON = string(b)
-		}
-		cancel()
-	}
 
 	classifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	classifyCtx = pkgobs.ContextWithRequestID(classifyCtx, requestID)
@@ -562,23 +552,7 @@ func (s *GRPCServer) processTask(task *store.Task, operation, payloadJSON string
 			return
 		}
 
-		// Stage 2: fetch → 若载荷为空，从数据源微服务拉取
-		if stage == "fetch" && s.datasource != nil {
-			if payloadJSON == "" || payloadJSON == "{}" || payloadJSON == "null" {
-				ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
-				ctx = pkgobs.ContextWithRequestID(ctx, requestID)
-				if res, err := s.datasource.FetchDataBySource(ctx, task.Source, 10, 0); err == nil && len(res.Records) > 0 {
-					b, _ := json.Marshal(res.Records)
-					payloadJSON = string(b)
-					task.PayloadJSON = payloadJSON
-					if err := s.persistTask(task, "payload fetched"); err != nil {
-						cancel()
-						return
-					}
-				}
-				cancel()
-			}
-		}
+		// Stage 2: fetch → 数据源拉取阶段保留（分页抽取接口已移除，需由调用方在提交任务时携带载荷）
 
 		// Stage 3: classify → 分类+脱敏一体化，一次调用 engine 医疗流水线
 		//
@@ -807,20 +781,7 @@ func (s *GRPCServer) executeLeasedTask(ctx context.Context, task *store.Task) (f
 			return &store.TaskFailure{Error: "lease worker shutting down", Retryable: true, ErrorClass: retry.ClassShutdown}
 		}
 
-		if stage == "fetch" && s.datasource != nil && (payloadJSON == "" || payloadJSON == "{}" || payloadJSON == "null") {
-			fetchCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			fetchCtx = pkgobs.ContextWithRequestID(fetchCtx, task.ID)
-			result, err := s.datasource.FetchDataBySource(fetchCtx, task.Source, 10, 0)
-			cancel()
-			if err != nil {
-				class, canRetry := retry.Classify(err, retry.BiasDownstream)
-				return &store.TaskFailure{Error: fmt.Sprintf("fetch data: %v", err), Retryable: canRetry, ErrorClass: class}
-			}
-			if len(result.Records) > 0 {
-				payload, _ := json.Marshal(result.Records)
-				payloadJSON = string(payload)
-			}
-		}
+		// Stage 2: fetch → 数据源拉取阶段保留（分页抽取接口已移除，需由调用方在提交任务时携带载荷）
 
 		if stage == "classify" {
 			records := agent.ToRecords(payloadJSON)

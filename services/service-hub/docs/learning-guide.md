@@ -119,7 +119,7 @@ flowchart TB
 | 序号 | 阶段标识 (`stage`) | 具体动作 | 协同模块与关键实现 |
 |---|---|---|---|
 | **1** | `ingest` | 任务已由 HTTP 或 gRPC `Dispatch` 创建为 `pending/queued`；流水线随后写入 `running/ingest` | `internal/handlers/handlers.go`: `Dispatch` / `processTask` |
-| **2** | `fetch` | 若请求未显式携带 Payload，自动调用数据源服务抽取记录 | `internal/datasource/client.go`: `FetchData` / `FetchDataBySource` |
+| **2** | `fetch` | 数据源拉取阶段保留，分页抽取接口已移除，需由调用方在提交任务时携带载荷 | `internal/datasource/client.go`: `Health` / `ListDataSources` / `GetDataSource` |
 | **3** | `classify` | 调用 Agent `POST /v1/agent/process`，404 时回退 `POST /v1/medical/process`；一次完成分类与脱敏 | `internal/agent/client.go`: `ProcessAgent` |
 | **4** | `desensitize` | 不执行独立脱敏调用；处理已在 `classify` 一体化完成 | `processTask` 状态机快速流转 |
 | **5** | `return` | 当前为状态追踪标签，不组装或持久化额外结果对象 | `processTask` 状态机快速流转 |
@@ -356,9 +356,10 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 
 ### 5.5 数据源客户端 (`internal/datasource/client.go`)
 
-当调用方发起请求但未内嵌明文数据时，`datasource.Client` 会主动发起调用：
-- `GET http://127.0.0.1:8083/api/datasources/:id/data` 抽取指定数据源的分页记录。
-- 数据抽取成功后，无缝转交后续分类分级与脱敏流水线。
+当调用方发起请求时，`datasource.Client` 提供数据源元数据查询与健康检查能力：
+- `GET http://127.0.0.1:8083/api/datasources` 查询数据源列表。
+- `GET http://127.0.0.1:8083/api/datasources/:id` 查询单个数据源详情。
+- 调用方需在提交任务时显式携带载荷数据，流水线不再自动抽取分页记录。
 
 ### 5.6 gRPC 服务与零信任 mTLS / 公钥固定 (`internal/grpcserver/server.go`)
 

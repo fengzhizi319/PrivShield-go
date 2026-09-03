@@ -42,39 +42,6 @@ func TestMockDataSourceSerialization(t *testing.T) {
 	}
 }
 
-// TestDataQueryResponseSerialization verifies JSON serialization roundtrip for DataQueryResponse.
-// TestDataQueryResponseSerialization 验证数据查询响应结构体 DataQueryResponse 的 JSON 编解码：
-// 1. 构造包含动态记录切片 Records 的 DataQueryResponse 实例；
-// 2. 执行 json.Marshal 与 json.Unmarshal；
-// 3. 验证数据源 ID、返回记录数及嵌套动态 map 能够正确恢复。
-func TestDataQueryResponseSerialization(t *testing.T) {
-	resp := DataQueryResponse{
-		SourceID:   "ds_kangyang",
-		SourceName: "康养体检与慢病模拟数据库",
-		Total:      50,
-		Limit:      20,
-		Offset:     0,
-		Records: []map[string]any{
-			{"name": "张三", "age": 65},
-		},
-		Via: "datasource-mgr",
-	}
-
-	data, err := json.Marshal(resp)
-	if err != nil {
-		t.Fatalf("failed to marshal DataQueryResponse: %v", err)
-	}
-
-	var parsed DataQueryResponse
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		t.Fatalf("failed to unmarshal DataQueryResponse: %v", err)
-	}
-
-	if parsed.SourceID != resp.SourceID || len(parsed.Records) != 1 {
-		t.Errorf("unmarshaled DataQueryResponse mismatch: %+v", parsed)
-	}
-}
-
 // TestMetadataResponseSerialization verifies JSON serialization roundtrip for MetadataResponse.
 // TestMetadataResponseSerialization 验证 Schema 元数据探查响应结构体 MetadataResponse 的 JSON 编解码：
 // 1. 构造包含嵌套 TableMetadata 及字段清单 MetadataField 的 MetadataResponse 对象；

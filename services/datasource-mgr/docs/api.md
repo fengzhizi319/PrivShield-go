@@ -29,14 +29,9 @@
     - [3.2.4 数据源物理/逻辑连通性测试 (POST /api/datasources/:id/test)](#324-数据源物理逻辑连通性测试-post-apidatasourcesidtest)
     - [3.2.5 数据访问审计日志查询 (GET /api/datasources/:id/audit)](#325-数据访问审计日志查询-get-apidatasourcesidaudit)
     - [3.2.6 数据源初始化与重置 (POST /api/datasources/seed)](#326-数据源初始化与重置-post-apidatasourcesseed)
-  - [3.3 核心业务数据抽取与分页端点](#33-核心业务数据抽取与分页端点)
-    - [3.3.1 通用数据源分页查询 (GET /api/datasources/:id/records) 【推荐规范】](#331-通用数据源分页查询-get-apidatasourcesidrecords-推荐规范)
-    - [3.3.2 医保就医与结算数据抽取 (GET /api/v1/yibao) 【API 1 专用端点】](#332-医保就医与结算数据抽取-get-apiv1yibao-api-1-专用端点)
-    - [3.3.3 康养体检与慢病数据抽取 (GET /api/v1/kangyang) 【API 2 专用端点】](#333-康养体检与慢病数据抽取-get-apiv1kangyang-api-2-专用端点)
-    - [3.3.4 预留政务数据源 3 抽取 (GET /api/v1/mock3) 【API 3 专用端点】](#334-预留政务数据源-3-抽取-get-apiv1mock3-api-3-专用端点)
-    - [3.3.5 预留企业数据源 4 抽取 (GET /api/v1/mock4) 【API 4 专用端点】](#335-预留企业数据源-4-抽取-get-apiv1mock4-api-4-专用端点)
-    - [3.3.6 按身份证号查询单条记录 (GET /api/datasources/:id/record-by-id)](#336-按身份证号查询单条记录-get-apidatasourcesidrecord-by-id)
-    - [3.3.7 按身份证号查询与完整 HTTP 请求-响应示例（端到端）](#337-按身份证号查询与完整-http-请求-响应示例端到端)
+  - [3.3 核心业务数据抽取端点](#33-核心业务数据抽取端点)
+    - [3.3.1 按身份证号查询单条记录 (GET /api/datasources/:id/record-by-id)](#331-按身份证号查询单条记录-get-apidatasourcesidrecord-by-id)
+    - [3.3.2 按身份证号查询与完整 HTTP 请求-响应示例（端到端）](#332-按身份证号查询与完整-http-请求-响应示例端到端)
 - [4. gRPC API 规范与 Protobuf 定义](#4-grpc-api-规范与-protobuf-定义)
   - [4.1 Protobuf 契约文件 (datasourcemgr.proto)](#41-protobuf-契约文件-datasourcemgrproto)
   - [4.2 gRPC 服务接口与方法规约](#42-grpc-服务接口与方法规约)
@@ -52,9 +47,8 @@
   - [6.3 gRPC 状态码映射标准](#63-grpc-状态码映射标准)
 - [7. 非功能性需求与开发交付验收标准](#7-非功能性需求与开发交付验收标准)
   - [7.1 性能与高并发 SLA 指标](#71-性能与高并发-sla-指标)
-  - [7.2 分页安全与单包保护约束](#72-分页安全与单包保护约束)
-  - [7.3 推荐环境变量配置表](#73-推荐环境变量配置表)
-  - [7.4 数据局端联调自测命令与验收清单](#74-数据局端联调自测命令与验收清单)
+  - [7.2 推荐环境变量配置表](#72-推荐环境变量配置表)
+  - [7.3 数据局端联调自测命令与验收清单](#73-数据局端联调自测命令与验收清单)
 
 ---
 
@@ -96,7 +90,7 @@ flowchart LR
 | 协议类型 | 默认监听端口 | 适用调用方 | 传输安全与认证机制 | 业务用途 |
 |---|---|---|---|---|
 | **gRPC (HTTP/2)** | `50053` | 数盾调度中枢 (`service-hub`) 【推荐生产首选】 | TLS 1.3 / 国密 SM2 双向 mTLS + 证书 CN 白名单 | 大批量数据记录高速流式抽取、低延迟连通性自检 |
-| **HTTP/HTTPS REST** | `8083` | 数盾调度中枢 (`service-hub` HTTP 模式) / 专网运维调试 | TLS 1.3 / 国密 SM2 双向 mTLS + API Key / Bearer Token | 数据源资产检索、连通性探测、元数据 Schema 探查、分页抽取 |
+| **HTTP/HTTPS REST** | `8083` | 数盾调度中枢 (`service-hub` HTTP 模式) / 专网运维调试 | TLS 1.3 / 国密 SM2 双向 mTLS + API Key / Bearer Token | 数据源资产检索、连通性探测、元数据 Schema 探查、按身份证号查询 |
 | **Prometheus Metrics** | `8083` (`/metrics`) | 运维监控 Prometheus 集群 | 内网隔离 / 局方网关鉴权 | 暴露 QPS、P99 延迟、在途请求数、错误率指标 |
 
 ### 1.3 核心数据源唯一标识 (Canonical IDs)
@@ -453,224 +447,9 @@ flowchart LR
 
 ---
 
-### 3.3 核心业务数据抽取与分页端点
+### 3.3 核心业务数据抽取端点
 
-#### 3.3.1 通用数据源分页查询 (GET /api/datasources/:id/records) 【推荐规范】
-
-- **功能说明**：**（核心接口，推荐首选）** 通用动态数据抽取端点。根据路径中的 `datasource_id`（如 `ds_yibao`、`ds_kangyang`）动态分发并分页读取对应数据源的真实/模拟数据。
-- **兼容别名**：`GET /api/datasources/:id/sample`
-- **请求方法**：`GET`
-- **请求路径**：`/api/datasources/:id/records`
-- **Query 参数**：
-
-  | 参数名 | 类型 | 必填 | 默认值 | 取值范围 | 说明 |
-  |---|---|---|---|---|---|
-  | `limit` | integer | 否 | `20` | 1 ~ 500 | 本次查询期望获取的最大记录行数，超过 500 会被自动截断至 500 |
-  | `offset` | integer | 否 | `0` | >= 0 | 分页起始偏移量游标 |
-- **成功响应**：`HTTP 200 OK`
-  ```json
-  {
-    "datasource_id": "ds_yibao",
-    "source_id": "ds_yibao",
-    "name": "医保就医与结算模拟数据库 (yibao.csv)",
-    "total": 50,
-    "limit": 20,
-    "offset": 0,
-    "records": [
-      {
-        "insurance_settlement_id": "YB202511040001",
-        "person_id": "PID66453983",
-        "gender": "男",
-        "birth_date": "1968-09-17",
-        "admission_date": "2025-11-04",
-        "discharge_date": "2025-11-13",
-        "length_of_stay": 9,
-        "admission_dept": "急诊科",
-        "discharge_dept": "急诊科",
-        "hospital_code": "H4201020015",
-        "medical_category": "日间手术",
-        "discharge_mode": "医嘱转院",
-        "settlement_seq_no": "MX202511049975",
-        "diagnosis_seq": 1,
-        "diagnosis_type": "主要诊断",
-        "icd10_code": "A51.000",
-        "diagnosis_name": "硬下疳伴TPPA滴度1:64阳性(早期梅毒)",
-        "admission_condition": "一般"
-      }
-    ],
-    "via": "datasource-mgr"
-  }
-  ```
-- **响应字段说明**：
-
-  | 字段名 | 类型 | 说明 |
-  |---|---|---|
-  | `datasource_id` | string | canonical 规范数据源标识符（如 `"ds_yibao"`） |
-  | `source_id` | string | 兼容历史字段，与 `datasource_id` 同值 |
-  | `name` / `source_name` | string | 数据源展示名称 |
-  | `total` | integer | 符合条件的总记录条数（用于前端分页计算） |
-  | `limit` | integer | 本次请求实际生效的每页条数限制 |
-  | `offset` | integer | 本次请求生效的偏移量 |
-  | `records` | array[object] | 数据行列表，每行为一个由字段名到字段值的键值对映射 |
-  | `via` | string | 服务处理节点标识符 |
-
----
-
-#### 3.3.2 医保就医与结算数据抽取 (GET /api/v1/yibao) 【API 1 专用端点】
-
-- **功能说明**：专门针对医保就医与费用结算数据集的读取端点（API 1，19 字段）。
-- **请求方法**：`GET`
-- **请求路径**：`/api/v1/yibao`
-- **弃用过渡期响应头 (Deprecation Headers)**：
-  为了引导调用方平滑迁移至规范通用路径，服务端在响应此专用端点时会注入以下头信息：
-  ```http
-  Deprecation: true
-  Sunset: Mon, 01 Feb 2027 00:00:00 GMT
-  Link: </api/datasources/ds_yibao/records>; rel="successor-version"
-  X-PrivShield-Canonical-Path: /api/datasources/ds_yibao/records
-  X-PrivShield-Canonical-Source: ds_yibao
-  ```
-- **Query 参数**：`limit` (默认 20, 最大 500), `offset` (默认 0)
-- **成功响应**：`HTTP 200 OK`
-  ```json
-  {
-    "datasource_id": "ds_yibao",
-    "source_id": "ds_yibao",
-    "source_name": "医保就医与结算模拟数据库 (yibao.csv)",
-    "total": 50,
-    "limit": 20,
-    "offset": 0,
-    "records": [
-      {
-        "insurance_settlement_id": "YB202511040001",
-        "person_id": "PID66453983",
-        "gender": "男",
-        "birth_date": "1968-09-17",
-        "admission_date": "2025-11-04",
-        "discharge_date": "2025-11-13",
-        "length_of_stay": 9,
-        "admission_dept": "急诊科",
-        "discharge_dept": "急诊科",
-        "hospital_code": "H4201020015",
-        "medical_category": "日间手术",
-        "discharge_mode": "医嘱转院",
-        "settlement_seq_no": "MX202511049975",
-        "diagnosis_seq": 1,
-        "diagnosis_type": "主要诊断",
-        "icd10_code": "A51.000",
-        "diagnosis_name": "硬下疳伴TPPA滴度1:64阳性(早期梅毒)",
-        "admission_condition": "一般"
-      }
-    ],
-    "via": "datasource-mgr"
-  }
-  ```
-
----
-
-#### 3.3.3 康养体检与慢病数据抽取 (GET /api/v1/kangyang) 【API 2 专用端点】
-
-- **功能说明**：专门针对康养中心体检、慢病随访与健康档案数据集的读取端点（API 2，27 字段）。
-- **请求方法**：`GET`
-- **请求路径**：`/api/v1/kangyang`
-- **弃用过渡头**：自动注入指向 `/api/datasources/ds_kangyang/records` 的 Deprecation Headers。
-- **Query 参数**：`limit` (默认 20, 最大 500), `offset` (默认 0)
-- **成功响应**：`HTTP 200 OK`
-  ```json
-  {
-    "datasource_id": "ds_kangyang",
-    "source_id": "ds_kangyang",
-    "source_name": "康养体检与慢病模拟数据库 (kangyang.csv)",
-    "total": 50,
-    "limit": 20,
-    "offset": 0,
-    "records": [
-      {
-        "gender": "男",
-        "age": 45,
-        "diagnosis_name": "急性心肌梗死",
-        "chief_complaint": "反复胸闷胸痛半年，加重2小时",
-        "present_illness": "患者2小时前突发胸骨后剧烈压榨样疼痛，向左肩背部放射，伴大汗及濒死感。心电图示V1-V5导联ST段抬高0.3-0.5mV。急诊行冠脉造影提示前降支100%闭塞，予行PCI术及支架植入术。",
-        "past_history": "高脂血症病史5年，口服阿托伐他汀20mg qn。高血压病史3年，最高160/100mmHg。",
-        "personal_history": "吸烟20年，每日20支(20包年)。饮酒15年。",
-        "is_smoking": "是",
-        "smoking_duration": "20年",
-        "family_history": "父亲因'恶性肿瘤'去世(65岁)，母亲健在。一弟患'重度精神分裂症'、'2型糖尿病'。否认其他家族遗传病史。",
-        "allergic_history": "青霉素过敏(皮疹)。",
-        "department": "心内科",
-        "height": 175,
-        "weight": 78,
-        "disability_category": "肢体残疾",
-        "disability_level": "二级",
-        "assess_type_name": "心功能综合评估",
-        "assess_result_name": "需辅助工具与护理",
-        "assess_score": 65,
-        "assess_time": "2025-01-10",
-        "progress_note": "今日查房：患者神志清楚，心前区无不适。查体：BP 125/80mmHg，HR 72次/分，律齐。继续予双抗及他汀治疗。",
-        "progress_note_time": "2025-01-10 10:30:00",
-        "name": "萧志明_1",
-        "id_card_no": "110105198402151071",
-        "registered_address": "北京市东城区景山前街4号",
-        "disability_cert_no": "11010119800512123401",
-        "medical_insurance_no": "3301030127183297"
-      }
-    ],
-    "via": "datasource-mgr"
-  }
-  ```
-
----
-
-#### 3.3.4 预留政务数据源 3 抽取 (GET /api/v1/mock3) 【API 3 专用端点】
-
-- **功能说明**：预留扩展政务数据源 3（政务审批与办事流水）读取端点。
-- **请求方法**：`GET`
-- **请求路径**：`/api/v1/mock3`
-- **成功响应**：`HTTP 200 OK`
-  ```json
-  {
-    "datasource_id": "ds_mock3",
-    "source_id": "ds_mock3",
-    "source_name": "预留政务数据源 3",
-    "total": 3,
-    "limit": 20,
-    "offset": 0,
-    "records": [
-      {"id": 1, "service_code": "GOV_001", "name": "政务服务审批流水 1", "amount": 1000.0, "status": "approved"},
-      {"id": 2, "service_code": "GOV_002", "name": "政务服务审批流水 2", "amount": 2500.0, "status": "pending"},
-      {"id": 3, "service_code": "GOV_003", "name": "政务服务审批流水 3", "amount": 320.5, "status": "approved"}
-    ],
-    "via": "datasource-mgr"
-  }
-  ```
-
----
-
-#### 3.3.5 预留企业数据源 4 抽取 (GET /api/v1/mock4) 【API 4 专用端点】
-
-- **功能说明**：预留扩展企业/金融数据源 4（季度税收与财务报表）读取端点。
-- **请求方法**：`GET`
-- **请求路径**：`/api/v1/mock4`
-- **成功响应**：`HTTP 200 OK`
-  ```json
-  {
-    "datasource_id": "ds_mock4",
-    "source_id": "ds_mock4",
-    "source_name": "预留政务数据源 4",
-    "total": 2,
-    "limit": 20,
-    "offset": 0,
-    "records": [
-      {"id": 101, "dept_code": "FIN_001", "report_name": "季度税收与财务报表 A", "value": 982000.0},
-      {"id": 102, "dept_code": "FIN_002", "report_name": "季度税收与财务报表 B", "value": 431000.0}
-    ],
-    "via": "datasource-mgr"
-  }
-  ```
-
----
-
-#### 3.3.6 按身份证号查询单条记录 (GET /api/datasources/:id/record-by-id)
+#### 3.3.1 按身份证号查询单条记录 (GET /api/datasources/:id/record-by-id)
 
 - **功能说明**：根据身份证号从指定数据源中精确查询单条记录。支持 `ds_yibao` 和 `ds_kangyang` 两个核心数据源，均按 `id_card_no` 字段匹配。
 - **请求方法**：`GET`
@@ -737,11 +516,10 @@ flowchart LR
 
 ---
 
-#### 3.3.7 按身份证号查询与完整 HTTP 请求-响应示例（端到端）
+#### 3.3.2 按身份证号查询与完整 HTTP 请求-响应示例（端到端）
 
 > 本节提供 `ds_yibao`（医保）和 `ds_kangyang`（康养）两个核心数据集的**完整 HTTP 请求与响应报文示例**。
-> 当前数盾调度流水线已切换为**按身份证号查询单条记录**模式（参见 §3.3.6），调度中枢 (`service-hub`) 通过 `/api/datasources/:id/record-by-id?id_card_no=xxx` 按身份证号精确抽取单条记录，而非旧版的 `limit/offset` 分页批量抽取。
-> 历史分页端点仍可用但已标记弃用，详见 [历史分页端点示例（已弃用）](#历史分页端点示例已弃用)。
+> 当前数盾调度流水线已切换为**按身份证号查询单条记录**模式（参见 §3.3.1），调度中枢 (`service-hub`) 通过 `/api/datasources/:id/record-by-id?id_card_no=xxx` 按身份证号精确抽取单条记录。
 
 ##### 示例 1：ds_yibao 按身份证号查询单条记录（推荐）
 
@@ -921,71 +699,6 @@ Content-Length: 98
 > - 身份证号格式合法（18 位）但在数据源中未找到匹配记录时，仍返回 `HTTP 200 OK`；
 > - `found` 为 `false`，`record` 为 `null`，调用方应据此判断是否需要降级处理。
 
----
-
-##### 历史分页端点示例（已弃用）
-
-> **弃用说明**：以下 `/api/datasources/:id/records` 与 `/api/v1/*` 分页端点仍可使用，但已标记为弃用（Sunset: 2027-02-01）。
-> 当前数盾调度流水线已切换为按身份证号查询单条记录模式（`/api/datasources/:id/record-by-id`），请数据局开发团队优先对接新端点。
-
-**curl 命令**（ds_yibao 规范分页路径）：
-
-```bash
-curl -s -i \
-  -H "Authorization: Bearer sec_privshield_token_2026" \
-  -H "Accept: application/json" \
-  -H "X-Request-ID: req-20260902-yibao-legacy-d4e5f6" \
-  "http://127.0.0.1:8083/api/datasources/ds_yibao/records?limit=3&offset=0"
-```
-
-**完整 HTTP 响应报文**（摘要）：
-
-```http
-HTTP/1.1 200 OK
-Content-Type: application/json; charset=utf-8
-X-Request-ID: req-20260902-yibao-legacy-d4e5f6
-X-Trace-ID: req-20260902-yibao-legacy-d4e5f6
-Date: Tue, 02 Sep 2026 08:33:00 GMT
-Content-Length: 2847
-
-{
-  "datasource_id": "ds_yibao",
-  "source_id": "ds_yibao",
-  "source_name": "医保就医与结算模拟数据库 (yibao.csv)",
-  "total": 50,
-  "limit": 3,
-  "offset": 0,
-  "records": [
-    {
-      "insurance_settlement_id": "YB202511040001",
-      "person_id": "PID66453983",
-      "gender": "男",
-      "birth_date": "1968-09-17",
-      "admission_date": "2025-11-04",
-      "discharge_date": "2025-11-13",
-      "length_of_stay": "9",
-      "admission_dept": "急诊科",
-      "discharge_dept": "急诊科",
-      "hospital_code": "H4201020015",
-      "medical_category": "日间手术",
-      "discharge_mode": "医嘱转院",
-      "settlement_seq_no": "MX202511049975",
-      "diagnosis_seq": "1",
-      "diagnosis_type": "主要诊断",
-      "icd10_code": "A51.000",
-      "diagnosis_name": "硬下疳伴TPPA滴度1:64阳性(早期梅毒)",
-      "admission_condition": "一般"
-    },
-    ...
-  ],
-  "via": "datasource-mgr"
-}
-```
-
-> **要点说明**：
-> - 分页端点 `/api/datasources/:id/records` 与 `/api/v1/yibao`、`/api/v1/kangyang` 等专用端点仍返回分页数据结构（`total`/`limit`/`offset`/`records`）；
-> - 专用端点响应头中额外注入 `Deprecation: true`、`Sunset`、`Link` 等迁移引导头（参见 §3.3.2 / §3.3.3）；
-> - 数据局应优先迁移至 `/api/datasources/:id/record-by-id` 按身份证号查询端点。
 
 ---
 
@@ -1084,19 +797,13 @@ package datasourcemgr;
 option go_package = "github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/proto";
 
 // DataSourceManagerService 数据源管理与提供服务
-// 对外提供高性能数据记录分页抽取、目录清单与连通性探针
+// 对外提供高性能数据记录查询、目录清单与连通性探针
 service DataSourceManagerService {
   // Health 服务可用性探针
   rpc Health(HealthRequest) returns (HealthResponse);
 
-  // GetData 规范通用 RPC：根据 source_id 查询指定数据源记录切片
-  rpc GetData(SourceDataQueryRequest) returns (DataQueryResponse);
-
   // ListDataSources 规范通用 RPC：获取当前已注册数据源目录列表
   rpc ListDataSources(ListMockSourcesRequest) returns (ListMockSourcesResponse);
-
-  // GetDataBySource 动态路由按 source_id 查询数据源记录 (GetData 别名)
-  rpc GetDataBySource(SourceDataQueryRequest) returns (DataQueryResponse);
 
   // GetDataSource 获取单个数据源详细元数据
   rpc GetDataSource(GetDataSourceRequest) returns (DataSourceProto);
@@ -1107,23 +814,6 @@ service DataSourceManagerService {
   // GetRecordByIDCard 按身份证号查询单条记录
   rpc GetRecordByIDCard(GetRecordByIDCardRequest) returns (SingleRecordResponse);
 
-  // ─────────────────────────────────────────────────────────────
-  // 业务专用/历史兼容 RPC 方法 (Sunset: 2027-02-01)
-  // ─────────────────────────────────────────────────────────────
-  // GetYibaoData API 1 医保就医结算数据抽取 (19 字段)
-  rpc GetYibaoData(DataQueryRequest) returns (DataQueryResponse) { option deprecated = true; }
-
-  // GetKangyangData API 2 康养体检慢病数据抽取 (27 字段)
-  rpc GetKangyangData(DataQueryRequest) returns (DataQueryResponse) { option deprecated = true; }
-
-  // GetMockData3 API 3 预留政务数据源 3 抽取
-  rpc GetMockData3(DataQueryRequest) returns (DataQueryResponse) { option deprecated = true; }
-
-  // GetMockData4 API 4 预留企业数据源 4 抽取
-  rpc GetMockData4(DataQueryRequest) returns (DataQueryResponse) { option deprecated = true; }
-
-  // ListMockSources 列出模拟数据源清单 (ListDataSources 别名)
-  rpc ListMockSources(ListMockSourcesRequest) returns (ListMockSourcesResponse) { option deprecated = true; }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1138,29 +828,8 @@ message HealthResponse {
   string via = 3;          // 节点标识，如 "datasource-mgr"
 }
 
-message DataQueryRequest {
-  int32 limit = 1;         // 每页返回记录数（默认 20，最大 500）
-  int32 offset = 2;        // 游标偏移量（默认 0）
-}
-
-message SourceDataQueryRequest {
-  string source_id = 1;    // 数据源标识，如 "ds_yibao", "ds_kangyang", "ds_mock3", "ds_mock4"
-  int32 limit = 2;         // 每页返回记录数
-  int32 offset = 3;        // 游标偏移量
-}
-
 message DataRowProto {
   map<string, string> fields = 1; // 动态键值对数据行，Key 为字段英文名，Value 为字符串格式化值
-}
-
-message DataQueryResponse {
-  string source_id = 1;               // 规范数据源标识符 (如 "ds_yibao")
-  string source_name = 2;             // 数据源中文名称
-  int32 total = 3;                    // 满足条件的总记录数
-  int32 limit = 4;                    // 每页限制条数
-  int32 offset = 5;                   // 起始偏移量
-  repeated DataRowProto records = 6;  // 数据行列表
-  string via = 7;                     // 服务节点标识
 }
 
 message DataSourceProto {
@@ -1214,21 +883,15 @@ message SingleRecordResponse {
 | RPC 方法名 | 请求消息 | 响应消息 | 建议调用方 | 说明 |
 |---|---|---|---|---|
 | `Health` | `HealthRequest` | `HealthResponse` | `service-hub` 探活、K8s gRPC 探针 | 检查 gRPC 服务端及底层连接池健康状况 |
-| `GetData` | `SourceDataQueryRequest` | `DataQueryResponse` | `service-hub` 调度流水线 | **【规范推荐】** 按 `source_id` 通用分页抽取数据 |
 | `ListDataSources` | `ListMockSourcesRequest` | `ListMockSourcesResponse` | `service-hub` 资产探查流水线 | **【规范推荐】** 列出所有已就绪数据源资产元数据 |
-| `GetDataBySource` | `SourceDataQueryRequest` | `DataQueryResponse` | `service-hub` | `GetData` 兼容别名方法 |
 | `GetDataSource` | `GetDataSourceRequest` | `DataSourceProto` | `service-hub` | 查询指定数据源元数据 |
 | `TestConnection` | `TestConnectionRequest` | `TestConnectionResponse` | `service-hub` 连通性检测 | 执行真实数据源连通性测试 |
 | `GetRecordByIDCard` | `GetRecordByIDCardRequest` | `SingleRecordResponse` | `service-hub` 调度流水线 | **【规范推荐】** 按身份证号查询单条记录 |
-| `GetYibaoData` | `DataQueryRequest` | `DataQueryResponse` | `service-hub` 专用流水线 (过渡) | 医保数据源专有抽取 RPC |
-| `GetKangyangData` | `DataQueryRequest` | `DataQueryResponse` | `service-hub` 专用流水线 (过渡) | 康养数据源专有抽取 RPC |
-| `GetMockData3` | `DataQueryRequest` | `DataQueryResponse` | `service-hub` 联合调试 | 预留政务数据源 3 抽取 RPC |
-| `GetMockData4` | `DataQueryRequest` | `DataQueryResponse` | `service-hub` 联合调试 | 预留企业数据源 4 抽取 RPC |
 
 ### 4.3 gRPC 消息结构体字段详细定义
 
-以核心的 `DataQueryResponse` 为例：
-- `records` 为 `repeated DataRowProto`，每个 `DataRowProto` 包含一个 `map<string, string> fields`。
+以核心的 `SingleRecordResponse` 为例：
+- `record` 为 `DataRowProto`，包含一个 `map<string, string> fields`。
 - **值序列化规范**：
   - 数值型（如 `length_of_stay: 9`、`age: 45`、`assess_score: 65`）需格式化为对应的字符串（如 `"9"`, `"45"`, `"65"`）放入 map，确保传输的通用性与跨平台一致性。
   - 空值字段映射为空字符串 `""`，不得直接忽略 Key，以保证表结构列名完整。
@@ -1332,7 +995,7 @@ message SingleRecordResponse {
 ```json
 {
   "code": "INVALID_ARGUMENT",
-  "message": "分页参数 limit 超出允许的最大上限 (500)",
+  "message": "请求参数非法：缺少 id_card_no",
   "detail": {
     "field": "limit",
     "received": 1000,
@@ -1359,7 +1022,7 @@ message SingleRecordResponse {
 
 | HTTP 状态码 | 业务错误代码 (`code`) | 触发场景说明 |
 |---|---|---|
-| `400 Bad Request` | `INVALID_ARGUMENT` | 请求参数缺失、格式错误、`limit`/`offset` 非法或超限 |
+| `400 Bad Request` | `INVALID_ARGUMENT` | 请求参数缺失、格式错误（如 `id_card_no` 非法） |
 | `400 Bad Request` | `INVALID_DATASOURCE_ID` | 请求的 `datasource_id` 格式错误或无法归一化识别 |
 | `401 Unauthorized` | `UNAUTHORIZED` | 未携带 `Authorization` 头或 API Key / Bearer 校验失败 |
 | `403 Forbidden` | `FORBIDDEN` | 客户端证书 CN 不在白名单中或无权访问该数据源 |
@@ -1395,20 +1058,12 @@ message SingleRecordResponse {
 为了保障 PrivShield 隐私计算流水线（DP/LDP/K-Anonymity）的高效运转，数据局端程序应满足以下性能指标：
 
 1. **响应延迟 SLA**：
-   - 数据源单次采样/分页查询（`limit=20`）：**P95 延迟 < 20ms，P99 延迟 < 50ms**；
+   - 数据源单次查询（按身份证号）：**P95 延迟 < 20ms，P99 延迟 < 50ms**；
    - 连通性测试与健康检查：**P99 延迟 < 5ms**；
 2. **吞吐能力**：单实例支持 **500+ QPS** 并发抽取能力；
 3. **并发在途上限**：单服务实例建议支持最大 **1000** 个并发在途请求，超出时通过快速失败返回 `503 Service Unavailable` 保护底层数据库。
 
-### 7.2 分页安全与单包保护约束
-
-1. **分页截断防御**：
-   - 默认分页：未传 `limit` 时默认为 `20`；
-   - 最大单页保护：若调用方传入 `limit > 500`，服务端**必须自动截断为 500**，严禁支持单次无界 `SELECT *` 导致内存溢出 (OOM)；
-   - 偏移量纠错：若 `offset < 0` 自动重置为 `0`；若 `offset >= total` 返回空切片 `[]`，不得报数组越界异常。
-2. **单响应体上限保护**：单次 HTTP 响应 Body 或 gRPC 帧应控制在 **32 MiB ~ 64 MiB** 以内。
-
-### 7.3 推荐环境变量配置表
+### 7.2 推荐环境变量配置表
 
 建议数据局在开发该程序时，支持通过环境变量进行运行时参数配置：
 
@@ -1430,7 +1085,7 @@ message SingleRecordResponse {
 
 ---
 
-### 7.4 数据局端联调自测命令与验收清单
+### 7.3 数据局端联调自测命令与验收清单
 
 在完成数据局端服务程序的开发后，请按照以下命令进行接口自测与交付验收：
 
@@ -1449,14 +1104,14 @@ curl -s -X POST http://127.0.0.1:8083/api/datasources/ds_yibao/test | jq .
 # 4. 探查医保数据源 Schema 结构 (必须包含 19 字段)
 curl -s http://127.0.0.1:8083/api/datasources/ds_yibao/metadata | jq .
 
-# 5. 抽取医保数据源前 5 条记录 (规范路径)
-curl -s "http://127.0.0.1:8083/api/datasources/ds_yibao/records?limit=5&offset=0" | jq .
+# 5. 按身份证号查询医保数据源单条记录 (推荐规范)
+curl -s "http://127.0.0.1:8083/api/datasources/ds_yibao/record-by-id?id_card_no=110101196809171010" | jq .
 
-# 6. 抽取康养数据源前 5 条记录 (规范路径，必须包含 27 字段)
-curl -s "http://127.0.0.1:8083/api/datasources/ds_kangyang/records?limit=5&offset=0" | jq .
+# 6. 按身份证号查询康养数据源单条记录 (推荐规范，必须包含 27 字段)
+curl -s "http://127.0.0.1:8083/api/datasources/ds_kangyang/record-by-id?id_card_no=110105198402151071" | jq .
 
 # 7. 异常测试：查询未知数据源 (应返回 404 及标准 5 字段信封)
-curl -s -i "http://127.0.0.1:8083/api/datasources/ds_unknown/records"
+curl -s -i "http://127.0.0.1:8083/api/datasources/ds_unknown/record-by-id?id_card_no=110101196809171010"
 ```
 
 #### 2. gRPC 接口自测命令 (使用 `grpcurl`)
@@ -1465,9 +1120,9 @@ curl -s -i "http://127.0.0.1:8083/api/datasources/ds_unknown/records"
 # 1. gRPC 服务存活性探测
 grpcurl -plaintext 127.0.0.1:50053 datasourcemgr.DataSourceManagerService/Health
 
-# 2. gRPC 通用按 ID 查询医保数据切片
-grpcurl -plaintext -d '{"source_id": "ds_yibao", "limit": 2, "offset": 0}' \
-  127.0.0.1:50053 datasourcemgr.DataSourceManagerService/GetData
+# 2. gRPC 按身份证号查询医保数据记录
+grpcurl -plaintext -d '{"source_id": "ds_yibao", "id_card_no": "110101196809171010"}' \
+  127.0.0.1:50053 datasourcemgr.DataSourceManagerService/GetRecordByIDCard
 
 # 3. gRPC 列出数据源资产
 grpcurl -plaintext 127.0.0.1:50053 datasourcemgr.DataSourceManagerService/ListDataSources
@@ -1480,7 +1135,6 @@ grpcurl -plaintext 127.0.0.1:50053 datasourcemgr.DataSourceManagerService/ListDa
 - [ ] **核心数据集字段对齐**：
   - [ ] 医保数据集 (`ds_yibao`) 严格输出本规范第 5.1 节定义的 **19 个字段**，字段名与含义完全一致；
   - [ ] 康养数据集 (`ds_kangyang`) 严格输出本规范第 5.2 节定义的 **27 个字段**，字段名与含义完全一致；
-- [ ] **分页边界防崩**：`limit=0`、`limit=1000`、`offset=99999` 等边界输入测试通过，无 panic 或无界查询；
 - [ ] **统一错误信封**：所有 HTTP 4xx/5xx 错误均返回包含 `code`, `message`, `detail`, `trace_id`, `timestamp` 的标准 JSON；
 - [ ] **全链路追踪**：成功透传并返回 `X-Request-ID` 与 `X-Trace-ID` 响应头；
 - [ ] **安全加固**：生产环境支持 TLS 1.3 / 国密 SM2 双向 mTLS 证书校验。

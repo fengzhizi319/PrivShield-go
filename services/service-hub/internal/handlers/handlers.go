@@ -5,7 +5,7 @@
 // 6 阶段数据流通与安全治理调度流水线 (6-Stage Governance Pipeline)：
 // ==============================================================================
 //
-//	① 请求接入 (ingest)   ──▶ ② 申请原数 (fetch)    ──▶ ③ 分类分级 (classify)
+//	① 请求接入 (ingest)   ──▶ ② 数据拉取 (fetch)    ──▶ ③ 分类分级 (classify)
 //	       │                           │                           │
 //	       ▼                           ▼                           ▼
 //	④ 下发脱敏 (desensitize) ──▶ ⑤ 结果返回 (return)   ──▶ ⑥ 审计存证 (audit / done)
@@ -578,7 +578,7 @@ func (s *Server) Dispatch(c *gin.Context) {
 //
 // 流水线执行逻辑（API1/2/3/4 医疗数据核心场景）：
 // ① 请求接入 (ingest)：更新状态为 running，初始化任务元数据；
-// ② 申请原数 (fetch)：若 Payload 为空，自动向 datasource-mgr 发起远程抽样获取数据；
+// ② 数据拉取 (fetch)：分页抽取接口已移除，需由调用方在提交任务时显式携带载荷；
 // ③ 分类+脱敏 (classify)：一次调用 engine /v1/medical/process 医疗流水线，
 //
 //	同时完成 3-Layer 分类分级 + L4/L5 高敏文本剥离 + PII 强掩码 + ICD-10 脱敏 + 诊断残留清除；
@@ -647,23 +647,7 @@ func (s *Server) processTask(task *store.Task, req dispatchRequest, requestID st
 			return
 		}
 
-		// 阶段 ②：申请原数 (fetch) ── 若载荷为空，自动向数据源微服务拉取数据
-		if stage == "fetch" && s.datasource != nil {
-			if req.Payload == nil || isEmptyPayload(req.Payload) {
-				ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
-				ctx = pkgobs.ContextWithRequestID(ctx, requestID)
-				if res, err := s.datasource.FetchData(ctx, req.DatasourceID, 10, 0); err == nil && len(res.Records) > 0 {
-					req.Payload = res.Records
-					payloadBytes, _ := json.Marshal(req.Payload)
-					task.PayloadJSON = string(payloadBytes)
-					if err := s.persistTask(task, "payload fetched"); err != nil {
-						cancel()
-						return
-					}
-				}
-				cancel()
-			}
-		}
+		// 阶段 ②：数据源拉取阶段保留（分页抽取接口已移除，需由调用方在提交任务时携带载荷）
 
 		// 阶段 ③：分类+脱敏一体化 (classify) ── 一次调用 engine 医疗流水线
 		//
@@ -843,21 +827,3 @@ func (s *Server) recordDatasourceRequest(datasourceID, status string) {
 	s.mc.RecordDatasourceRequest(datasourceID, naming.APICodeForDataSource(datasourceID), status)
 }
 
-// isEmptyPayload checks whether a generic payload is nil or empty.
-// isEmptyPayload 检查通用 Payload 是否为空（nil、空字符串、空 JSON 对象或空切片）。
-func isEmptyPayload(p any) bool {
-	if p == nil {
-		return true
-	}
-	switch v := p.(type) {
-	case string:
-		return v == "" || v == "{}" || v == "[]"
-	case map[string]any:
-		return len(v) == 0
-	case []any:
-		return len(v) == 0
-	case []map[string]any:
-		return len(v) == 0
-	}
-	return false
-}

@@ -5,10 +5,8 @@
 // Design & Capabilities / 设计定位与核心能力：
 // ==============================================================================
 // 1. 数据服务接口暴露 (Data Query APIs)：
-//    - 专用接口：GetYibaoData（医保数据源 API 1）、GetKangyangData（康养数据源 API 2）、
-//      GetMockData3（预留数据源 API 3）、GetMockData4（预留数据源 API 4）；
-//    - 通用接口：GetDataBySource（根据数据源 ID 动态路由查询）、ListMockSources（数据源资产目录列表）、
-//      GetDataSource（单个数据源元数据详情）、TestConnection（数据源连通性探测）；
+//    - ListDataSources（数据源资产目录列表）、GetDataSource（单个数据源元数据详情）、
+//      TestConnection（数据源连通性探测）、GetRecordByIDCard（按身份证号查询单条记录）；
 //    - 运维接口：Health（自检健康探针与服务标识上报）。
 // 2. 零信任与双向 TLS 认证 (Zero-Trust mTLS & Key Pinning)：
 //    - 支持 TLS 1.3 强加密基线；
@@ -36,8 +34,6 @@ import (
 	"github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/internal/config"
 	"github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/internal/handlers"
 	pb "github.com/fengzhizi319/PrivShield-go/services/datasource-mgr/proto"
-
-	naming "github.com/fengzhizi319/PrivShield-go/pkg/naming"
 )
 
 // moduleVia 是在所有 gRPC 响应体中携带的服务节点标识，用于全链路追踪与调试来源识别。
@@ -88,129 +84,13 @@ func (s *GRPCServer) Health(ctx context.Context, _ *pb.HealthRequest) (*pb.Healt
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Dedicated Mock Data Endpoints / 专用模拟数据源查询接口 (API 1 ~ 4)
+// Datasource Management & Probes / 数据源管理、元数据与连通性探针
 // ─────────────────────────────────────────────────────────────────────────────
-
-// GetYibaoData implements API 1: queries mock healthcare/insurance records from yibao.csv.
-// GetYibaoData 实现专用 API 1：查询医保就医与结算模拟数据集（包含姓名、身份证号、病案号、诊断等高敏感字段）。
-func (s *GRPCServer) GetYibaoData(ctx context.Context, req *pb.DataQueryRequest) (*pb.DataQueryResponse, error) {
-	// 参数安全归一化处理：限制分页单页上限与下限
-	limit := int(req.Limit)
-	if limit <= 0 {
-		limit = 20
-	}
-	offset := int(req.Offset)
-	if offset < 0 {
-		offset = 0
-	}
-
-	// 调用内部数据加载层读取记录
-	rows, total, err := handlers.GetYibaoRecords(limit, offset)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "get yibao records: %v", err)
-	}
-
-	return toDataQueryResponse(naming.DSYibao, "医保就医与结算模拟数据库 (yibao.csv)", total, limit, offset, rows), nil
-}
-
-// GetKangyangData implements API 2: queries mock elderly care/physical exam records from kangyang.csv.
-// GetKangyangData 实现专用 API 2：查询康养体检与慢病管理模拟数据集（包含体检指标、慢病类别、用药记录等）。
-func (s *GRPCServer) GetKangyangData(ctx context.Context, req *pb.DataQueryRequest) (*pb.DataQueryResponse, error) {
-	limit := int(req.Limit)
-	if limit <= 0 {
-		limit = 20
-	}
-	offset := int(req.Offset)
-	if offset < 0 {
-		offset = 0
-	}
-
-	rows, total, err := handlers.GetKangyangRecords(limit, offset)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "get kangyang records: %v", err)
-	}
-
-	return toDataQueryResponse(naming.DSKangyang, "康养体检与慢病模拟数据库 (kangyang.csv)", total, limit, offset, rows), nil
-}
-
-// GetMockData3 implements API 3: queries reserved municipal dataset 3.
-// GetMockData3 实现预留政务数据源 3 的模拟数据查询。
-func (s *GRPCServer) GetMockData3(ctx context.Context, req *pb.DataQueryRequest) (*pb.DataQueryResponse, error) {
-	limit := int(req.Limit)
-	if limit <= 0 {
-		limit = 20
-	}
-	offset := int(req.Offset)
-	if offset < 0 {
-		offset = 0
-	}
-
-	rows, total, err := handlers.GetMock3Records(limit, offset)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "get mock3 records: %v", err)
-	}
-
-	return toDataQueryResponse(naming.DSMock3, "预留政务数据源 3", total, limit, offset, rows), nil
-}
-
-// GetMockData4 implements API 4: queries reserved municipal dataset 4.
-// GetMockData4 实现预留政务数据源 4 的模拟数据查询。
-func (s *GRPCServer) GetMockData4(ctx context.Context, req *pb.DataQueryRequest) (*pb.DataQueryResponse, error) {
-	limit := int(req.Limit)
-	if limit <= 0 {
-		limit = 20
-	}
-	offset := int(req.Offset)
-	if offset < 0 {
-		offset = 0
-	}
-
-	rows, total, err := handlers.GetMock4Records(limit, offset)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "get mock4 records: %v", err)
-	}
-
-	return toDataQueryResponse(naming.DSMock4, "预留政务数据源 4", total, limit, offset, rows), nil
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Generic Datasource Query & Management / 通用数据源动态查询与元数据管理
-// ─────────────────────────────────────────────────────────────────────────────
-
-// GetData implements canonical RPC for fetching dataset slice.
-// GetData 实现规范 RPC：查询指定数据源的数据切片。
-func (s *GRPCServer) GetData(ctx context.Context, req *pb.SourceDataQueryRequest) (*pb.DataQueryResponse, error) {
-	return s.GetDataBySource(ctx, req)
-}
 
 // ListDataSources implements canonical RPC for listing registered data sources.
 // ListDataSources 实现规范 RPC：列出所有已注册的数据源资产目录。
 func (s *GRPCServer) ListDataSources(ctx context.Context, req *pb.ListMockSourcesRequest) (*pb.ListMockSourcesResponse, error) {
 	return s.ListMockSources(ctx, req)
-}
-
-// GetDataBySource dynamically routes query requests by source_id.
-// GetDataBySource 根据入参的 source_id 动态分发并路由查询对应的数据集。
-func (s *GRPCServer) GetDataBySource(ctx context.Context, req *pb.SourceDataQueryRequest) (*pb.DataQueryResponse, error) {
-	if strings.TrimSpace(req.SourceId) == "" {
-		return nil, status.Error(codes.InvalidArgument, "source_id is required")
-	}
-
-	limit := int(req.Limit)
-	if limit <= 0 {
-		limit = 20
-	}
-	offset := int(req.Offset)
-	if offset < 0 {
-		offset = 0
-	}
-
-	rows, total, name, err := handlers.GetDataBySource(req.SourceId, limit, offset)
-	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "%v", err)
-	}
-
-	return toDataQueryResponse(req.SourceId, name, total, limit, offset, rows), nil
 }
 
 // ListMockSources returns the full directory of available mock data sources.
@@ -313,28 +193,6 @@ func (s *GRPCServer) GetRecordByIDCard(ctx context.Context, req *pb.GetRecordByI
 		Found:        true,
 		Via:          moduleVia,
 	}, nil
-}
-
-// toDataQueryResponse transforms raw map rows into standard protobuf DataQueryResponse.
-// toDataQueryResponse 将底层的动态键值对数据行（[]map[string]any）转换为强类型的 Protobuf DataQueryResponse 响应对象。
-func toDataQueryResponse(id, name string, total, limit, offset int, rows []map[string]any) *pb.DataQueryResponse {
-	recordsProto := make([]*pb.DataRowProto, 0, len(rows))
-	for _, row := range rows {
-		fieldMap := make(map[string]string, len(row))
-		for k, v := range row {
-			fieldMap[k] = fmt.Sprintf("%v", v)
-		}
-		recordsProto = append(recordsProto, &pb.DataRowProto{Fields: fieldMap})
-	}
-	return &pb.DataQueryResponse{
-		SourceId:   id,
-		SourceName: name,
-		Total:      int32(total),
-		Limit:      int32(limit),
-		Offset:     int32(offset),
-		Records:    recordsProto,
-		Via:        moduleVia,
-	}
 }
 
 // ==============================================================================
