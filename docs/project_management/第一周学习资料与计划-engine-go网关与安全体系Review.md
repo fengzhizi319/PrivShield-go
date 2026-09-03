@@ -17,29 +17,57 @@
   - [P3：mTLS 双向认证基础](#p3mtls-双向认证基础)
   - [P4：Prometheus 指标类型](#p4prometheus-指标类型)
   - [P5：令牌桶限流算法](#p5令牌桶限流算法)
-- [第 2 章：Day 1-2 网关与流量治理 Review](#第-2-章day-1-2-网关与流量治理-review)
-- [第 3 章：Day 3-4 安全体系 Review](#第-3-章day-3-4-安全体系-reviewmtls认证权限)
+- [第 2 章：`privshield-gateway` 与 `privshield-agent` 双进程架构详解](#第-2-章privshield-gateway-与-privshield-agent-双进程架构详解)
+  - [2.1 一句话定位](#21-一句话定位)
+  - [2.2 代码文件清单对比](#22-代码文件清单对比)
+  - [2.3 架构全景图](#23-架构全景图)
+  - [2.4 六大维度对比](#24-六大维度对比)
+  - [2.5 共享代码依赖](#25-共享代码依赖)
+  - [2.6 请求流转全链路](#26-请求流转全链路)
+  - [2.7 配置体系对比](#27-配置体系对比)
+  - [2.8 启动流程对比](#28-启动流程对比7-阶段-vs-单阶段)
+  - [2.9 独立部署 vs 同机部署](#29-独立部署-vs-同机部署)
+  - [2.10 一句话总结](#210-一句话总结)
+- [第 3 章：Day 1-2 网关与流量治理 Review](#第-3-章day-1-2-网关与流量治理-review)
   - [3.1 审查文件清单](#31-审查文件清单)
   - [3.2 核心知识点详解](#32-核心知识点详解)
-  - [3.3 Day 3-4 Review 方法](#33-day-3-4-review-方法)
-  - [3.4 安全体系纵深分析](#34-安全体系纵深分析)
-  - [3.5 接口权限控制漏洞修复案例](#35-接口权限控制漏洞修复案例sec-09--sec-13)
-- [第 4 章：三级等保/密评合规增强](#第-4-章三级等保密评合规增强)
-  - [4.1 G-03 登录失败处理与账号锁定](#41-g-03-登录失败处理与账号锁定)
-  - [4.2 G-04 密码策略强化](#42-g-04-密码策略强化)
-  - [4.3 G-05 JWT 令牌吊销](#43-g-05-jwt-令牌吊销)
-  - [4.4 G-11 TOTP 双因素认证](#44-g-11-totp-双因素认证)
-  - [4.5 G-12 WAF Web 攻击防护](#45-g-12-waf-web-攻击防护)
-  - [4.6 G-14 API Key 过期与自动轮换](#46-g-14-api-key-过期与自动轮换)
-  - [4.7 G-02 可信代理与源地址校验](#47-g-02-可信代理与源地址校验)
-- [第 5 章：Day 5 可观测性 Review](#第-5-章day-5-可观测性-review日志指标追踪)
-- [第 6 章：代码走读指南](#第-6-章代码走读指南)
-- [第 7 章：常见问题与排查指南](#第-7-章常见问题与排查指南)
-- [第 8 章：术语表](#第-8-章术语表)
-- [第 9 章：Engine-go 启动流程与配置加载链路深度分析](#第-9-章engine-go-启动流程与配置加载链路深度分析)
-- [第 10 章：gRPC 透明代理完整代码走读](#第-10-章grpc-透明代理完整代码走读)
-- [第 11 章：网关部署拓扑与运维指南](#第-11-章网关部署拓扑与运维指南)
-- [第 12 章：Review 检查清单详细版](#第-12-章review-检查清单详细版)
+  - [3.3 Day 1-2 Review 方法](#33-day-1-2-review-方法)
+  - [3.4 网关架构深度解析](#34-网关架构深度解析)
+  - [3.5 service-hub 应用层编排代理深度解析](#35-service-hub-应用层编排代理深度解析)
+- [第 4 章：Day 3-4 安全体系 Review](#第-4-章day-3-4-安全体系-reviewmtls认证权限)
+  - [4.1 审查文件清单](#41-审查文件清单)
+  - [4.2 核心知识点详解](#42-核心知识点详解)
+  - [4.3 Day 3-4 Review 方法](#43-day-3-4-review-方法)
+  - [4.4 安全体系纵深分析](#44-安全体系纵深分析)
+  - [4.5 接口权限控制漏洞修复案例](#45-接口权限控制漏洞修复案例sec-09--sec-13)
+- [第 5 章：三级等保/密评合规增强](#第-5-章三级等保密评合规增强)
+  - [5.1 G-03 登录失败处理与账号锁定](#51-g-03-登录失败处理与账号锁定)
+  - [5.2 G-04 密码策略强化](#52-g-04-密码策略强化)
+  - [5.3 G-05 JWT 令牌吊销](#53-g-05-jwt-令牌吊销)
+  - [5.4 G-11 TOTP 双因素认证](#54-g-11-totp-双因素认证)
+  - [5.5 G-12 WAF Web 攻击防护](#55-g-12-waf-web-攻击防护)
+  - [5.6 G-14 API Key 过期与自动轮换](#56-g-14-api-key-过期与自动轮换)
+  - [5.7 G-02 可信代理与源地址校验](#57-g-02-可信代理与源地址校验)
+- [第 6 章：Day 5 可观测性 Review](#第-6-章day-5-可观测性-review日志指标追踪)
+- [第 7 章：代码走读指南](#第-7-章代码走读指南)
+- [第 8 章：常见问题与排查指南](#第-8-章常见问题与排查指南)
+- [第 9 章：术语表](#第-9-章术语表)
+- [第 10 章：Engine-go 启动流程与配置加载链路深度分析](#第-10-章engine-go-启动流程与配置加载链路深度分析)
+- [第 11 章：gRPC 透明代理完整代码走读](#第-11-章grpc-透明代理完整代码走读)
+- [第 12 章：网关部署拓扑与运维指南](#第-12-章网关部署拓扑与运维指南)
+- [第 13 章：Review 检查清单详细版](#第-13-章review-检查清单详细版)
+- [第 14 章：周交付物清单](#第-14-章周交付物清单)
+- [第 15 章：微服务群全景——datasource-mgr 与 audit-log 深度解析](#第-15-章微服务群全景datasource-mgr-与-audit-log-深度解析)
+  - [15.1 微服务群拓扑与职责分工](#151-微服务群拓扑与职责分工)
+  - [15.2 datasource-mgr 架构详解](#152-datasource-mgr-架构详解)
+  - [15.3 audit-log 架构详解](#153-audit-log-架构详解)
+  - [15.4 三服务安全中间件对齐](#154-三服务安全中间件对齐)
+- [第 16 章：privacy-go-sdk 与 rules 规则体系概览](#第-16-章privacy-go-sdk-与-rules-规则体系概览)
+  - [16.1 privacy-go-sdk 模块全景](#161-privacy-go-sdk-模块全景)
+  - [16.2 各模块核心能力](#162-各模块核心能力)
+  - [16.3 差分隐私数学基础](#163-差分隐私数学基础)
+  - [16.4 rules/ 规则体系架构](#164-rules-规则体系架构)
+  - [16.5 config/privacy.yaml 隐私策略配置](#165-configprivacyyaml-隐私策略配置)
 - [附录 A：关键环境变量速查表](#附录-a关键环境变量速查表)
 - [附录 B：核心数据结构关系图](#附录-b核心数据结构关系图)
 - [附录 C：安全认证链路全景图](#附录-c安全认证链路全景图)
@@ -973,6 +1001,258 @@ func (gb *GatewayBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 > `ErrorHandler` 决定**"后端挂了怎么办"**（政务云要求优雅降级而非裸奔 502）。  
 > 三者全部共享全局实例，是支撑 `service-hub` 万级并发、毫秒延迟的底层基石。
 
+---
+
+#### 六、项目实战：`server_rest.go` 与网关反向代理的协作架构
+
+上面五节讲的是 `httputil.ReverseProxy` 的通用原理。这一节结合项目实际代码，完整拆解 **"客户端 → 网关反向代理 → Agent REST 服务"** 的全链路请求流转过程。
+
+##### 1. 整体架构：谁代理谁？
+
+```
+                          ┌──────────────────────────────────────────────────────────────┐
+                          │              privshield-gateway (网关进程)                    │
+                          │  :8000 (HTTP 反向代理)         :50000 (gRPC 透明流代理)       │
+                          │                                                              │
+ 客户端/浏览器/BFF ──────▶ │  Gin Router ─ NoRoute() ──▶ NewHTTPProxyHandler(lb, metrics) │
+                          │                              ├─ SelectNode() → P2C-EWMA 选节点│
+                          │                              ├─ node.ReverseProxy() → 获取代理│
+                          │                              └─ proxy.ServeHTTP() → 转发     │
+                          └──────────────────────┬───────────────────────────────────────┘
+                                                 │ HTTP 请求
+                                                 ▼
+                          ┌──────────────────────────────────────────────────────────────┐
+                          │              privshield-agent (Agent 进程)                    │
+                          │  server_rest.go → RESTServerRunner                           │
+                          │  :8079 (REST)    中间件漏斗 → 44 项隐私原语路由               │
+                          │  :50051 (gRPC)   gRPC Servicer → RawCodec 统一分发            │
+                          └──────────────────────────────────────────────────────────────┘
+```
+
+**关键区分**：
+
+| 文件 | 所属进程 | 角色 |
+|------|---------|------|
+| `engine-go/cmd/privshield-gateway/main.go` | 网关进程 | **反向代理方**：接收外部流量，负载均衡转发到后端 Agent |
+| `engine-go/cmd/privshield-agent/server_rest.go` | Agent 进程 | **被代理方**：实际执行脱敏/DP/K-匿名等隐私计算逻辑 |
+| `pkg/gateway/balancer.go` | 共享库 | 反向代理核心构建逻辑（`BackendNode.ReverseProxy()`） |
+| `engine-go/internal/gateway/http_proxy.go` | 网关内部 | HTTP 代理处理器（`NewHTTPProxyHandler`） |
+| `engine-go/internal/gateway/grpc_proxy.go` | 网关内部 | gRPC 透明流代理（`TransparentStreamDirector`） |
+
+`server_rest.go` 的职责是**构建 Agent 端的 REST 服务**——装配中间件漏斗、注册业务路由、管理 TLS/TLCP 监听与优雅停机。它本身不包含任何反向代理代码。反向代理的能力全部由网关进程 (`privshield-gateway`) 提供。
+
+##### 2. 网关启动：反向代理的装配过程
+
+以下是网关进程启动时反向代理的完整装配链路（`privshield-gateway/main.go`）：
+
+```go
+// ① 解析后端 Agent 地址列表（逗号分隔）
+backends := pkgconfig.EnvString("GATEWAY_BACKENDS", "127.0.0.1:8079")
+addresses := strings.Split(backends, ",")
+
+// ② 选择调度策略（默认 P2C-EWMA）
+strategy := pkgconfig.EnvString("GATEWAY_STRATEGY", "p2c")
+
+// ③ 创建负载均衡器（每个后端地址封装为 BackendNode）
+lb := gateway.NewLoadBalancer(addresses, strategy)
+
+// ④ 初始化 Prometheus 指标
+gwMetrics := observability.NewGatewayMetrics()
+
+// ⑤ 装配 Gin 中间件管道（安全 + 可观测）
+r := gin.New()
+r.Use(middleware.IPAllowlist(...))    // IP 准入
+r.Use(gin.Recovery())                 // Panic 恢复
+r.Use(middleware.WAF(slog.Default())) // Web 攻击检测
+r.Use(middleware.SecurityHeaders())   // 安全响应头
+r.Use(middleware.MaxBodySize(...))    // 请求体限制
+r.Use(observability.RequestLogger())  // 请求日志
+r.Use(gwMetrics.PrometheusMiddleware()) // 网关指标
+
+// ⑥ 注册反向代理：所有未匹配路由 → 转发给后端
+r.NoRoute(gateway.NewHTTPProxyHandler(lb, gwMetrics))
+```
+
+**核心设计**：`r.NoRoute()` 是 Gin 的"兜底路由"——只有当请求不匹配任何已注册路由（如 `/health`、`/metrics`、`/gateway/backends`）时，才会进入反向代理。这意味着网关自身的管理端点与代理流量共用同一个 `:8000` 端口，但互不干扰。
+
+##### 3. 单次请求的完整生命周期
+
+下面逐步拆解一个 HTTP 请求从进入网关到被 Agent 处理的完整链路：
+
+```text
+客户端 GET /api/mask ──▶ 网关 :8000
+    │
+    ├─① Gin 中间件管道（IP白名单 → Recovery → WAF → SecurityHeaders → MaxBody → Logger → Metrics）
+    │
+    ├─② 无匹配路由 → 进入 NoRoute → NewHTTPProxyHandler 返回的 HandlerFunc
+    │
+    ├─③ lb.SelectNode() → P2C-EWMA 算法选最优节点
+    │     ├─ 收集熔断器 Closed 的可用节点
+    │     ├─ 随机选两个节点 a, b
+    │     └─ score = (InFlight + 1) × max(EWMA, 0.001)，选 score 小的
+    │
+    ├─④ node.CB.Allow() → 检查熔断器是否允许请求通过
+    │
+    ├─⑤ node.IncrementInFlight() → 原子 +1（atomic.Int64）
+    │
+    ├─⑥ node.ReverseProxy(metrics) → sync.Once 惰性创建（首次创建后缓存）
+    │     ├─ httputil.NewSingleHostReverseProxy(target)
+    │     ├─ proxy.Transport = sharedTransport  （全局共享连接池）
+    │     ├─ proxy.BufferPool = globalBufferPool （sync.Pool 32KB 复用）
+    │     └─ proxy.ErrorHandler = 自定义错误处理 （触发熔断器 + 结构化 JSON）
+    │
+    ├─⑦ proxy.ServeHTTP(c.Writer, c.Request) → 标准库执行实际转发
+    │     ├─ Director: 重写 Host/Scheme/RequestURI
+    │     ├─ Transport.RoundTrip: 通过共享连接池发送到 Agent :8079
+    │     └─ io.CopyBuffer: 用 BufferPool 的 32KB 缓冲区流式拷贝响应体
+    │
+    ├─⑧ Agent (server_rest.go) 处理请求
+    │     └─ 中间件漏斗 → 业务 Handler → 执行脱敏/DP/K-匿名 → 返回响应
+    │
+    ├─⑨ 网关收到 Agent 响应，记录延迟并更新指标
+    │     ├─ node.UpdateEWMA(latency, 0.3) → 指数移动加权平均
+    │     ├─ status < 500 → node.CB.RecordSuccess()
+    │     └─ status >= 500 → node.CB.RecordFailure()
+    │
+    ├─⑩ node.DecrementInFlight() → CAS 循环原子 -1（防负数）
+    │
+    └─⑪ Prometheus 指标上报
+          ├─ SetBackendInFlight → 当前在途请求数
+          ├─ SetBackendEWMALatency → EWMA 延迟
+          ├─ SetCircuitBreakerState → 熔断器状态
+          └─ RecordForwarded → 转发计数 + 状态码分布
+```
+
+##### 4. 反向代理实例的内聚设计（`BackendNode.ReverseProxy()`）
+
+项目采用**"反向代理实例内聚到 BackendNode"**的设计——每个后端节点持有一个惰性创建的 `ReverseProxy` 实例，而非全局缓存或每次新建。
+
+```go
+// pkg/gateway/balancer.go
+
+type BackendNode struct {
+    Address       string
+    InFlight      atomic.Int64            // 在途请求数（原子操作）
+    EWMA          float64                 // 指数移动加权平均延迟
+    CB            *circuitbreaker.Breaker // 三态熔断器
+    eWMAMu        sync.Mutex              // 仅保护 EWMA 字段
+
+    // 反向代理实例与节点生命周期绑定
+    proxyOnce sync.Once              // 确保只创建一次
+    proxy     *httputil.ReverseProxy // 缓存的代理实例
+    proxyErr  error
+}
+
+func (n *BackendNode) ReverseProxy(metrics MetricsRecorder) (*httputil.ReverseProxy, error) {
+    n.proxyOnce.Do(func() {
+        target, _ := url.Parse(fmt.Sprintf("http://%s", n.Address))
+        proxy := httputil.NewSingleHostReverseProxy(target)
+        proxy.Transport = sharedTransport    // 全局共享连接池
+        proxy.BufferPool = globalBufferPool  // 全局共享缓冲池
+        proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+            n.CB.RecordFailure()             // 后端不可达时触发熔断
+            // ... 输出结构化 JSON 错误信封 ...
+        }
+        n.proxy = proxy
+    })
+    return n.proxy, n.proxyErr
+}
+```
+
+**设计优势**：
+
+| 对比维度 | 早期方案（sync.Map + TTL 清理） | 当前方案（sync.Once 内聚到节点） |
+|---------|-------------------------------|-------------------------------|
+| 并发安全 | `sync.Map` 的 Load/Store 有额外开销 | `sync.Once` 零竞争，编译期保证单次执行 |
+| 内存管理 | 需要后台 goroutine 定期扫描 TTL | 无后台协程，随节点创建/回收 |
+| 适用场景 | 后端动态伸缩 | 后端集合启动时静态确定（本项目场景） |
+| 代码复杂度 | 高（Map + Timer + 清理逻辑） | 低（一个 `Do` 块搞定） |
+
+##### 5. 共享 Transport 与 BufferPool 的实际配置
+
+```go
+// pkg/gateway/balancer.go — 全局共享资源
+
+var (
+    // 32KB 缓冲区池，sync.Pool 自动在 GC 时清理空闲对象
+    globalBufferPool = newByteBufferPool()
+
+    // 全局共享 HTTP Transport（所有反向代理实例共用同一连接池）
+    sharedTransport = &http.Transport{
+        MaxIdleConns:        2048,              // 全局最多 2048 个空闲连接
+        MaxIdleConnsPerHost: 256,               // 到每个后端最多 256 个空闲连接
+        IdleConnTimeout:     90 * time.Second,  // 空闲连接 90 秒后回收
+        DisableCompression:  false,             // 启用 gzip 压缩（节省带宽）
+    }
+)
+```
+
+**为什么 `sharedTransport` 必须全局共享？** 每个 `http.Transport` 内部维护独立的连接池和后台 goroutine（用于连接健康检查、空闲回收）。如果每个 `BackendNode` 创建独立的 Transport，N 个后端就有 N 个连接池，连接无法跨池复用，内存和文件描述符浪费严重。共享后，所有到同一后端的请求复用同一批 TCP Keep-Alive 连接。
+
+##### 6. ErrorHandler：熔断器联动与结构化错误
+
+当 `Transport.RoundTrip` 失败（连接拒绝、超时、DNS 错误等），反向代理不会返回默认的空白 502，而是执行精细化错误处理：
+
+```go
+proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+    // ① 触发熔断器计数（联动熔断器状态机）
+    n.CB.RecordFailure()
+
+    // ② 上报 Prometheus 指标
+    metrics.SetCircuitBreakerState(n.Address, n.CB.StateString())
+    metrics.RecordForwarded(n.Address, http.StatusBadGateway)
+
+    // ③ 输出标准 5 字段错误信封（与 pkg/middleware 格式一致）
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusBadGateway)
+    fmt.Fprintf(w, `{"code":"BAD_GATEWAY","message":"后端 %s 不可达",`+
+        `"detail":"%s","trace_id":"","timestamp":"%s"}`,
+        n.Address, err.Error(), time.Now().UTC().Format(time.RFC3339Nano))
+}
+```
+
+**与 `server_rest.go` 的呼应**：Agent 端 (`server_rest.go`) 的中间件漏斗中也使用了 `middleware.AbortWithError` 输出相同格式的错误信封。网关的 `ErrorHandler` 保持了格式一致性，确保客户端无论遇到"网关层错误"还是"Agent 层错误"，都能得到统一结构的响应。
+
+##### 7. HTTP 反向代理 vs gRPC 透明流代理对比
+
+网关同时提供两种协议的反向代理，设计思路有显著差异：
+
+| 维度 | HTTP 反向代理 (`http_proxy.go`) | gRPC 透明流代理 (`grpc_proxy.go`) |
+|------|-------------------------------|----------------------------------|
+| **核心机制** | `httputil.ReverseProxy` (标准库) | `grpc.UnknownServiceHandler` + `rawCodec` |
+| **编解码** | HTTP/1.1 文本协议，无需编解码 | `rawCodec` 零编解码字节透传（不 marshal/unmarshal protobuf） |
+| **连接管理** | `sharedTransport` 共享连接池 | `GrpcProxyServer.connPool` (map + RWMutex) |
+| **代理粒度** | 请求级（每个 HTTP Request 独立转发） | RPC 级（per-RPC 选择后端，双向流并发转发） |
+| **流转发** | 标准库内部 `io.CopyBuffer` 流式拷贝 | 两个 goroutine 双向并发 `RecvMsg/SendMsg` |
+| **EWMA 更新** | 响应返回后同步更新 (alpha=0.3) | 流结束后 defer 更新 (alpha=0.2) |
+| **优雅停机** | `http.Server.Shutdown(ctx)` | `grpc.Server.GracefulStop()` + 10s 超时回退 `Stop()` |
+
+##### 8. `server_rest.go` 在反向代理体系中的定位
+
+虽然 `server_rest.go` 本身不包含反向代理代码，但它是整个代理链路的**最终目的地**。它的中间件管道设计直接影响网关转发过来的请求的处理质量：
+
+```
+网关转发请求 ──▶ Agent server_rest.go 中间件漏斗
+                    │
+                    ├─ G-02 ConfigureTrustedProxies ← 信任网关的 X-Forwarded-For
+                    ├─ ① IPAllowlist ← 网关 IP 必须在白名单内
+                    ├─ ② gin.Recovery ← 兜底 panic 保护
+                    ├─ ③ TraceMiddleware ← 透传/生成 X-Request-ID
+                    ├─ ④ RateLimit ← 全局粗粒度限流（第二道防线）
+                    ├─ ⑤ RequestLogger ← 结构化访问日志
+                    ├─ ⑥ PrometheusMiddleware ← RED 指标采集
+                    ├─ ⑦ SecurityHeaders ← 安全响应头
+                    ├─ ⑧ MaxBodySize ← 请求体 ≤64MB
+                    ├─ ⑨ WAF ← SQLi/XSS/路径穿越检测
+                    ├─ ⑩ AuthMiddleware ← API Key 认证（常量时间比较）
+                    ├─ ⑪ RateLimitMiddleware ← 32 分片细粒度限流
+                    └─ ⑫ 业务 Handler ← 执行隐私计算
+```
+
+**注意 `ConfigureTrustedProxies`**：这是 `server_rest.go` 与反向代理协作的关键衔接点。Agent 必须将网关的 IP 配置为可信代理（通过 `AGENT_TRUSTED_PROXY` 环境变量），才能正确解析经过网关转发后 `X-Forwarded-For` 中的真实客户端 IP。否则，Agent 会把网关 IP 当作客户端 IP，导致 IP 白名单和限流策略失效。
+
+---
+
 ### P2：gRPC 流式通信模型
 
 gRPC 支持四种通信模式：
@@ -1278,11 +1558,272 @@ func (sh *bucketShard) allow() bool {
 > **令牌桶 = "以 rps 的速率往桶里算账，以 burst 的容量允许瞬间透支"。**  
 > **32 分片 = "把一个大账本拆成 32 个小账本，各记各的账，各锁各的锁"。**  
 > 单桶的 `sync.Mutex` 在万级 QPS 下是性能瓶颈，32 分片通过轮询将竞争概率降到 1/32，是支撑 `service-hub` 高并发限流的工程基石。
+
 ---
 
-## 第 2 章：Day 1-2 网关与流量治理 Review
+## 第 2 章：`privshield-gateway` 与 `privshield-agent` 双进程架构详解
 
-### 1.1 审查文件清单
+在进入具体的网关与安全体系 Review 之前，必须先理解 `engine-go/cmd/` 下两个独立可执行入口的关系。它们是整个数盾体系的**流量入口双塔**，职责截然不同但又紧密协作。
+
+### 2.1 一句话定位
+
+| 进程 | 二进制 | 一句话定位 |
+|------|--------|----------|
+| **privshield-agent** | `engine-go/cmd/privshield-agent/` | **隐私计算执行实体**：承载 44 项隐私原语、3 层分类漏斗、预算会计等全部业务逻辑 |
+| **privshield-gateway** | `engine-go/cmd/privshield-gateway/` | **L7 自适应流量网关**：自身不含任何业务逻辑，仅负责将外部流量智能路由到后端 Agent 集群 |
+
+**类比**：Agent 是"厨房里的厨师"（做菜），Gateway 是"餐厅前台+调度员"（接客、分桌、传菜）。
+
+### 2.2 代码文件清单对比
+
+```
+engine-go/cmd/
+├── privshield-agent/                    # Agent 进程（4 个源文件）
+│   ├── main.go                          # 7 阶段生命周期编排（配置→引擎→REST→gRPC→摘要→信号→停机）
+│   ├── server_rest.go                   # REST 服务：Gin 中间件漏斗 + 44 项隐私路由 + TLS/TLCP 自适应
+│   ├── server_grpc.go                   # gRPC 服务：Keepalive 保活 + mTLS CN 白名单 + 看门狗停机
+│   └── server_test.go                   # REST/gRPC 完整生命周期集成测试
+│
+└── privshield-gateway/                  # Gateway 进程（1 个源文件）
+    └── main.go                          # 全部逻辑：负载均衡 → HTTP 反向代理 → gRPC 透明流代理 → 优雅停机
+```
+
+**代码量差异**：Agent 约 700+ 行（4 文件），Gateway 约 235 行（1 文件）。这体现了**"重计算、轻代理"**的设计哲学——所有复杂性都在 Agent 侧，Gateway 尽量保持简单透明。
+
+### 2.3 架构全景图
+
+```text
+                              ┌─────────────────────────────────────────────────┐
+                              │        外部调用方（浏览器 / BFF / service-hub）    │
+                              └──────────────┬──────────────┬───────────────────┘
+                                             │              │
+                                     HTTP :8000        gRPC :50000
+                                             │              │
+                              ┌──────────────▼──────────────▼───────────────────┐
+                              │          privshield-gateway（网关进程）           │
+                              │                                                 │
+                              │  HTTP 反向代理            gRPC 透明流代理         │
+                              │  ┌─────────────────┐    ┌──────────────────┐   │
+                              │  │ Gin NoRoute()    │    │ UnknownService   │   │
+                              │  │ → P2C-EWMA 选节点│    │ → rawCodec 透传  │   │
+                              │  │ → ReverseProxy() │    │ → 双向流转发     │   │
+                              │  │ → 熔断器联动     │    │ → 熔断器联动     │   │
+                              │  └────────┬────────┘    └────────┬─────────┘   │
+                              │           │   共享 LoadBalancer   │             │
+                              └───────────┼──────────────────────┼─────────────┘
+                                          │                      │
+                            ┌─────────────▼──────────────────────▼─────────────┐
+                            │            privshield-agent（Agent 进程）          │
+                            │                                                  │
+                            │  REST :8079               gRPC :50051            │
+                            │  ┌─────────────────┐    ┌──────────────────┐    │
+                            │  │ 12 层中间件漏斗  │    │ Keepalive 保活   │    │
+                            │  │ → 44 项隐私原语  │    │ → mTLS CN 白名单 │    │
+                            │  │ → 3 层分类漏斗   │    │ → 64MB 报文限制  │    │
+                            │  │ → 预算会计       │    │ → RawCodec 分发  │    │
+                            │  │ → DICOM 脱敏     │    │ → 同一 Privacy   │    │
+                            │  └─────────────────┘    │   Service        │    │
+                            │                          └──────────────────┘    │
+                            └──────────────────────────────────────────────────┘
+```
+
+### 2.4 六大维度对比
+
+| 维度 | privshield-agent | privshield-gateway |
+|------|-----------------|-------------------|
+| **核心职责** | 执行隐私计算（脱敏/DP/K-匿名/分类分级/DICOM） | L7 流量代理（负载均衡/熔断/EWMA 调度） |
+| **监听端口** | REST `:8079` + gRPC `:50051` | HTTP `:8000` + gRPC `:50000` |
+| **业务逻辑** | 全部 44 项隐私原语 + 3 层分类漏斗 + 预算会计 | **零业务逻辑**，纯流量转发 |
+| **安全体系** | API Key 鉴权 + mTLS CN 白名单 + WAF + IP 白名单 | IP 白名单 + WAF + SecurityHeaders（**不终止 TLS、不校验凭据**） |
+| **状态管理** | PrivacyService（分类缓存、预算计数器、熔断器） | LoadBalancer（InFlight 计数器、EWMA 延迟、熔断器） |
+| **配置来源** | `LoadAgent()`：YAML + .env + 环境变量三级驱动 | `LoadGateway()`：纯环境变量 |
+
+### 2.5 共享代码依赖
+
+两个进程虽然是独立的可执行文件，但共享大量底层代码：
+
+```text
+engine-go/cmd/
+├── privshield-agent/main.go ──────┐
+└── privshield-gateway/main.go ────┤
+                                   │
+                    ┌──────────────▼──────────────────┐
+                    │   engine-go/internal/config/     │  ← 共享配置加载与 P0-1 门禁
+                    │   ├── config.go                  │     LoadAgent() / LoadGateway()
+                    │   └── Validate()                 │     复用 pkg/config 的 fail-closed 不变式
+                    ├──────────────────────────────────┤
+                    │   engine-go/internal/observability/ │  ← 共享可观测性初始化
+                    │   ├── InitLogger()               │     slog 结构化日志
+                    │   ├── EngineMetrics              │     Agent 专用指标
+                    │   └── GatewayMetrics             │     Gateway 专用指标
+                    ├──────────────────────────────────┤
+                    │   pkg/                           │  ← 共享基础库
+                    │   ├── gateway/balancer.go        │     P2C-EWMA 负载均衡 + BackendNode
+                    │   ├── circuitbreaker/            │     三态熔断器
+                    │   ├── middleware/                │     IP 白名单、WAF、限流、追踪
+                    │   ├── auth/                      │     Bearer Token 提取、常量时间比较
+                    │   ├── config/                    │     环境变量解析、.env 加载、门禁原语
+                    │   └── tlsutil/                   │     TLS/mTLS/TLCP 证书构建
+                    └──────────────────────────────────┘
+```
+
+**关键设计**：`pkg/gateway/balancer.go` 是两者最核心的共享模块。Agent 不直接使用它（Agent 是被代理方），但 Gateway 的 `engine-go/internal/gateway/balancer.go` 只是对 `pkg/gateway` 的类型别名桥接：
+
+```go
+// engine-go/internal/gateway/balancer.go
+type BackendNode = pgateway.BackendNode
+type LoadBalancer = pgateway.LoadBalancer
+```
+
+这保证了负载均衡逻辑只有一份实现，避免网关与 Agent 之间的行为不一致。
+
+### 2.6 请求流转全链路
+
+一个完整的请求从客户端到最终处理，经过两个进程的全部中间件：
+
+```text
+客户端 POST /api/mask
+    │
+    ▼
+[Gateway :8000] ──────────────────────────────────────────────────────────
+    │
+    ├─ ConfigureTrustedProxies     ← 信任上游 Ingress/LB 的 XFF
+    ├─ IPAllowlist                 ← 网关层 IP 准入
+    ├─ gin.Recovery                ← Panic 恢复
+    ├─ WAF                         ← SQLi/XSS/路径穿越检测
+    ├─ SecurityHeaders             ← HSTS/CSP/X-Frame-Options
+    ├─ MaxBodySize (32MB)          ← 请求体限制
+    ├─ [可选] HTTPS 强制校验        ← X-Forwarded-Proto: https
+    ├─ [可选] RateLimit (令牌桶)    ← 全局粗粒度限流
+    ├─ RequestLogger               ← 结构化访问日志
+    ├─ PrometheusMiddleware         ← 网关 RED 指标
+    │
+    ├─ 无匹配路由 → NoRoute
+    │     ├─ SelectNode() → P2C-EWMA 选最优 Agent
+    │     ├─ node.CB.Allow() → 熔断器检查
+    │     ├─ node.IncrementInFlight() → 在途 +1
+    │     ├─ proxy.ServeHTTP() → 标准库反向代理转发
+    │     └─ 更新 EWMA + 熔断器 + Prometheus
+    │
+    ▼
+[Agent :8079] ────────────────────────────────────────────────────────────
+    │
+    ├─ ConfigureTrustedProxies     ← 信任 Gateway 的 XFF（关键衔接点！）
+    ├─ IPAllowlist                 ← Agent 层 IP 准入（Gateway IP 须在白名单）
+    ├─ gin.Recovery                ← Panic 恢复
+    ├─ TraceMiddleware             ← X-Request-ID 透传/生成
+    ├─ RateLimit (全局粗粒度)       ← 第二道限流防线
+    ├─ RequestLogger               ← 结构化访问日志
+    ├─ PrometheusMiddleware         ← Agent RED 指标
+    ├─ SecurityHeaders             ← 安全响应头
+    ├─ MaxBodySize (64MB)          ← 请求体限制
+    ├─ WAF                         ← 第二道 WAF 防线
+    ├─ AuthMiddleware              ← API Key 认证（常量时间比较）
+    ├─ RateLimitMiddleware (32分片) ← 细粒度限流
+    │
+    ├─ 匹配业务路由 → /api/mask
+    │     └─ PrivacyService.Mask() → 执行脱敏原语 → 返回结果
+    │
+    ▼
+响应原路返回：Agent → Gateway → 客户端
+```
+
+**注意双重安全防线**：Gateway 和 Agent 各自独立部署了一套安全中间件（IP 白名单、WAF、限流）。这是**纵深防御**设计——即使 Gateway 层被绕过（如直连 Agent），Agent 自身的安全机制仍然有效。
+
+### 2.7 配置体系对比
+
+| 配置项 | Agent (`LoadAgent()`) | Gateway (`LoadGateway()`) |
+|--------|----------------------|--------------------------|
+| 配置加载 | YAML → .env → 环境变量（三级驱动） | 纯环境变量 |
+| 默认绑定 | `127.0.0.1`（开发安全态） | `127.0.0.1`（开发安全态） |
+| REST 端口 | `8079`（可关闭） | `8000`（始终开启） |
+| gRPC 端口 | `50051`（可关闭） | `50000`（始终开启） |
+| TLS | 支持标准 TLS + 国密 TLCP 双证书 | **不终止 TLS**（`TLSEnabled: false`） |
+| mTLS | 支持 CN 白名单 5s 热重载 | 不支持（由后端 Agent 处理） |
+| API Key 鉴权 | 支持（`PRIVACY_AUTH_ENABLED`） | 不校验（由后端 Agent 强制） |
+| RequireTLS | 强制 TLS 否则拒绝启动 | 仅声明"必须加密"，不自行终止 TLS |
+
+**设计哲学**：Gateway 采用**"零信任透传"**原则——自身不终止 TLS、也不校验入站凭据，所有安全校验推迟到 Agent 端执行。这避免了"Gateway 解密 → 明文传输 → Agent 再加密"的冗余开销和安全风险。
+
+### 2.8 启动流程对比（7 阶段 vs 单阶段）
+
+**Agent 的 7 阶段启动**（`main.go`）：
+
+```text
+阶段 1: 配置加载 + P0-1 零信任门禁 (Validate)
+    │
+阶段 2: 核心引擎初始化 (slog + PrivacyService + Prometheus + naming 观测器)
+    │
+阶段 3: REST 模块按需装配 (PRIVACY_REST_ENABLED=true → RESTServerRunner)
+    │
+阶段 4: gRPC 模块按需装配 (PRIVACY_GRPC_ENABLED=true → GRPCServerRunner)
+    │
+阶段 5: 启动摘要 + 预算快照 + 安全告警
+    │
+阶段 6: 信号捕获 → K8s 就绪探针置 false → 流量排空等待
+    │
+阶段 7: 确定性分步优雅停机 (REST → gRPC，带看门狗超时)
+```
+
+**Gateway 的单阶段启动**（`main.go`）：
+
+```text
+配置加载 → Validate → 创建 LoadBalancer → 装配 Gin 中间件
+    → 注册 NoRoute(反向代理) → 启动 HTTP + gRPC → 等待信号 → 优雅停机
+```
+
+**差异原因**：Agent 需要初始化 PrivacyService（包含分类缓存、预算会计、DICOM 引擎等重量级组件），且 REST/gRPC 可独立开关，因此启动流程复杂。Gateway 是纯代理，无需初始化业务组件，因此启动极其轻量。
+
+### 2.9 独立部署 vs 同机部署
+
+两个进程可以灵活组合部署：
+
+```text
+模式 A：独立部署（生产推荐）
+┌──────────────┐          ┌──────────────┐
+│   Gateway    │ ──TCP──▶ │    Agent     │
+│   :8000      │          │    :8079     │
+│   :50000     │          │    :50051    │
+└──────────────┘          └──────────────┘
+   独立 Pod                   独立 Pod（可多副本）
+
+模式 B：同机 Sidecar 部署
+┌──────────────────────────────────────┐
+│              K8s Pod                  │
+│  ┌──────────────┐  ┌──────────────┐ │
+│  │   Gateway    │  │    Agent     │ │
+│  │   :8000      │──│    :8079     │ │  ← 通过 127.0.0.1 通信，零网络开销
+│  │   :50000     │  │    :50051    │ │
+│  └──────────────┘  └──────────────┘ │
+└──────────────────────────────────────┘
+
+模式 C：直连模式（开发/测试）
+┌──────────────┐
+│    Agent     │  ← 直接暴露 :8079/:50051，不经过 Gateway
+│   :8079      │
+│   :50051     │
+└──────────────┘
+```
+
+环境变量 `GATEWAY_BACKENDS` 控制 Gateway 连接哪些 Agent：
+
+```bash
+# 单 Agent（开发模式）
+GATEWAY_BACKENDS=127.0.0.1:8079
+
+# 多 Agent 集群（生产模式）
+GATEWAY_BACKENDS=10.0.1.10:8079,10.0.1.11:8079,10.0.1.12:8079
+```
+
+### 2.10 一句话总结
+
+> **`privshield-agent` 是"做事的"**（隐私计算引擎，承载全部业务逻辑与安全体系），**`privshield-gateway` 是"派活的"**（L7 流量网关，只做负载均衡 + 熔断 + 指标上报）。两者是独立的 Go 二进制进程，通过 TCP 通信，共享 `pkg/gateway` 负载均衡库和 `engine-go/internal/config` 配置门禁。Gateway 采用零信任透传原则，不终止 TLS、不校验凭据，所有安全校验推迟到 Agent 端执行——这是典型的**"纵深防御 + 关注点分离"**架构。
+
+---
+
+## 第 3 章：Day 1-2 网关与流量治理 Review
+
+### 3.1 审查文件清单
 
 | 文件路径 | 行数 | 核心职责 |
 |---|:---:|---|
@@ -1294,9 +1835,9 @@ func (sh *bucketShard) allow() bool {
 | `engine-go/internal/gateway/backend_tls.go` | 65 | 东西向 mTLS 回源 TLS 配置构建 |
 | 对应 `_test.go` 文件 | ~400 | 全部网关组件的单元测试 |
 
-### 1.2 核心知识点详解
+### 3.2 核心知识点详解
 
-#### 1.2.1 P2C-EWMA 负载均衡算法
+#### 3.2.1 P2C-EWMA 负载均衡算法
 
 **源码位置**：`pkg/gateway/balancer.go` `selectP2C()` (L186-222)
 
@@ -1402,7 +1943,7 @@ func (lb *LoadBalancer) selectWeightedRoundRobin() *BackendNode {
 }
 ```
 
-#### 1.2.2 BackendNode 数据模型
+#### 3.2.2 BackendNode 数据模型
 
 **源码位置**：`pkg/gateway/balancer.go` (L26-42)
 
@@ -1447,7 +1988,7 @@ func (n *BackendNode) GetEWMA() float64 {
 }
 ```
 
-#### 1.2.3 BufferPool 零分配机制
+#### 3.2.3 BufferPool 零分配机制
 
 **源码位置**：`pkg/gateway/balancer.go` (L54-87)
 
@@ -1531,7 +2072,7 @@ func (n *BackendNode) ReverseProxy(metrics MetricsRecorder) (*httputil.ReversePr
 }
 ```
 
-#### 1.2.4 三态熔断器
+#### 3.2.4 三态熔断器
 
 **源码位置**：`pkg/circuitbreaker/circuitbreaker.go` (L39-141)
 
@@ -1604,7 +2145,7 @@ func (b *Breaker) Allow() bool {
 - 冷却时间 `cooldown` 默认 30s 是否适合所有后端场景？
 - `RecordFailure()` 中 `openedAt` 在每次失败时都更新（L123），而非仅在状态转换时更新 — 这是否影响冷却期计算？
 
-#### 1.2.5 HTTP 反向代理处理器
+#### 3.2.5 HTTP 反向代理处理器
 
 **源码位置**：`engine-go/internal/gateway/http_proxy.go` (L19-77)
 
@@ -1690,7 +2231,7 @@ func NewHTTPProxyHandler(lb *LoadBalancer, metrics *observability.GatewayMetrics
         └─ DecrementInFlight() (defer)
 ```
 
-#### 1.2.6 gRPC 透明流式代理
+#### 3.2.6 gRPC 透明流式代理
 
 **源码位置**：`engine-go/internal/gateway/grpc_proxy.go` (L59-310)
 
@@ -1822,7 +2363,7 @@ go func() {
 - gRPC 代理使用 `insecure.NewCredentials()` — 后端连接是否应升级为 mTLS？
 - 双向转发中 `RecvMsg(&frame)` 的 `frame` 是 `[]byte` 类型 — 大消息场景下的内存占用
 
-#### 1.2.7 东西向 mTLS 回源 TLS
+#### 3.2.7 东西向 mTLS 回源 TLS
 
 **源码位置**：`engine-go/internal/gateway/backend_tls.go` (L24-65)
 
@@ -1865,7 +2406,7 @@ func BuildBackendTLSConfig(caCertPath, clientCertPath, clientKeyPath string) (*t
 - `BuildBackendTLSConfigWithMinVersion`：支持降级到 TLS 1.2
 - `BuildInsecureBackendTLSConfig`：仅加密不验证（开发/测试用）
 
-### 1.3 Day 1-2 Review 方法
+### 3.3 Day 1-2 Review 方法
 
 1. **先读测试**：`http_proxy_test.go` → `grpc_proxy_test.go` → `balancer_test.go`，理解预期行为
 2. **再读实现**：对照测试用例理解边界条件
@@ -1876,15 +2417,15 @@ func BuildBackendTLSConfig(caCertPath, clientCertPath, clientKeyPath string) (*t
 
 | 天 | 主题 | 对应章节 | 核心产出 |
 |---|---|---|---|
-| Day 1 | 前置知识 + 网关负载均衡器 | 第 1 章 P0-P3 + 第 2 章 §2.1-2.2 | P2C-EWMA 算法笔记、5 种调度策略对比 |
-| Day 2 | gRPC 透明代理 + 熔断器 + BufferPool | 第 2 章剩余 + 第 7 章 | 双向流时序图、RawCodec 设计分析 |
-| Day 3 | 安全体系：认证/权限/限流 | 第 3 章 §3.1-3.4 | 常量时间认证分析、32 分片限流性能分析 |
-| Day 4 | 安全体系：合规增强 + 漏洞案例 | 第 4 章 + §3.5 | 7 项合规修复理解、SEC-09~13 案例 |
-| Day 5 | 可观测性 + 部署运维 + 总结 | 第 5 章 + 第 8 章 + 交付物 | RED 指标验证、Prometheus 告警规则、交付物汇总 |
+| Day 1 | 前置知识 + 双进程架构 + 网关负载均衡器 | 第 1 章 P0-P3 + 第 2 章 + 第 3 章 §3.1-3.2 | P2C-EWMA 算法笔记、5 种调度策略对比、双进程架构理解 |
+| Day 2 | gRPC 透明代理 + 熔断器 + BufferPool | 第 3 章剩余 + 第 8 章 | 双向流时序图、RawCodec 设计分析 |
+| Day 3 | 安全体系：认证/权限/限流 | 第 4 章 §4.1-4.4 | 常量时间认证分析、32 分片限流性能分析 |
+| Day 4 | 安全体系：合规增强 + 漏洞案例 | 第 5 章 + §3.5 | 7 项合规修复理解、SEC-09~13 案例 |
+| Day 5 | 可观测性 + 部署运维 + 总结 | 第 6 章 + 第 9 章 + 交付物 | RED 指标验证、Prometheus 告警规则、交付物汇总 |
 
-### 1.4 网关架构深度解析
+### 3.4 网关架构深度解析
 
-#### 1.4.1 网关在整体架构中的位置
+#### 3.4.1 网关在整体架构中的位置
 
 ```
                     外部客户端 / 其他微服务
@@ -1918,7 +2459,7 @@ func BuildBackendTLSConfig(caCertPath, clientCertPath, clientKeyPath string) (*t
 2. 引擎可以就近部署，减少隐私数据传输距离
 3. 网关升级不影响隐私计算逻辑，反之亦然
 
-#### 1.4.2 HTTP 代理请求完整生命周期
+#### 3.4.2 HTTP 代理请求完整生命周期
 
 以一次 POST `/v1/privacy/mask` 请求为例，完整经过的组件：
 
@@ -1962,7 +2503,7 @@ func BuildBackendTLSConfig(caCertPath, clientCertPath, clientKeyPath string) (*t
 13. node.DecrementInFlight() → defer 原子计数 -1
 ```
 
-#### 1.4.3 gRPC 代理与 HTTP 代理的关键差异
+#### 3.4.3 gRPC 代理与 HTTP 代理的关键差异
 
 | 维度 | HTTP 代理 | gRPC 代理 |
 |---|---|---|
@@ -1980,7 +2521,7 @@ func BuildBackendTLSConfig(caCertPath, clientCertPath, clientKeyPath string) (*t
 - 需要支持双向流（Bidirectional Streaming），标准反向代理不支持
 - `rawCodec` 避免了「反序列化 → 重新序列化」的双重开销
 
-#### 1.4.4 熔断器设计决策深度分析
+#### 3.4.4 熔断器设计决策深度分析
 
 **决策 1：为何 `halfOpenMax` 硬编码为 3？**
 
@@ -2027,7 +2568,7 @@ if len(available) == 0 {
 - 返回 `nodes[0]` 让调用方正常执行，熔断器会拒绝请求并返回 503
 - 错误处理逻辑统一在代理层，而非分散在选择层
 
-#### 1.4.5 BufferPool 性能分析
+#### 3.4.5 BufferPool 性能分析
 
 **为何需要 BufferPool**：
 
@@ -2064,7 +2605,7 @@ func (p *byteBufferPool) Put(b []byte) {
 
 如果不检查，可能被缩容的 slice（如 `b[:100]`）污染池，导致后续取出的缓冲区容量不足，引发代理错误。
 
-#### 1.4.6 共享 Transport 的连接池策略
+#### 3.4.6 共享 Transport 的连接池策略
 
 ```go
 sharedTransport = &http.Transport{
@@ -2087,9 +2628,232 @@ sharedTransport = &http.Transport{
 
 ---
 
-## 第 3 章：Day 3-4 安全体系 Review（mTLS、认证、权限）
+### 3.5 service-hub 应用层编排代理深度解析
 
-### 2.1 审查文件清单
+前面几节讲的 `privshield-gateway` 使用的是 **传输层反向代理**（`httputil.ReverseProxy`）——网关不解析业务数据，只把 HTTP 请求原封不动地转发给后端。而 `services/service-hub` 采用的是一种完全不同的代理模式：**应用层编排代理（Application-Level Orchestration Proxy）**。
+
+#### 1. 两种代理模式的本质区别
+
+| 维度 | 传输层反向代理 (`privshield-gateway`) | 应用层编排代理 (`service-hub`) |
+|------|--------------------------------------|-------------------------------|
+| **代理层级** | L7 传输层（HTTP 报文级转发） | L7 应用层（业务语义级编排） |
+| **核心组件** | `httputil.ReverseProxy` | 自研 HTTP/gRPC 客户端 + 6 阶段流水线 |
+| **数据可见性** | 不解析 Body，透传字节流 | 完全解析 JSON/Protobuf，理解业务语义 |
+| **后端调用** | 单一后端（选中节点直接转发） | 多后端编排（Agent + datasource-mgr + audit-log） |
+| **状态管理** | 无状态（InFlight/EWMA 仅用于调度） | 有状态（TaskStore 持久化、崩溃恢复、租约） |
+| **错误处理** | 熔断器 + 结构化错误信封 | 6 阶段流水线状态机 + 指数退避重试 + 审计存证 |
+| **适用场景** | 同构后端集群的负载均衡 | 异构微服务群的数据流通安全治理 |
+
+**类比**：传输层代理是“快递中转站”（包裹原封不动转发），应用层代理是“海关+加工厂”（拆开包裹检查、加工、重新包装再发出）。
+
+#### 2. service-hub 的流量拓扑
+
+```text
+                          ┌─────────────────────────────────────────┐
+                          │  外部调用方（React Web UI / BFF-Go / app-lz）│
+                          └───────────────────┬─────────────────────┘
+                                              │ HTTP :8082 / gRPC :50052
+                                              ▼
+                ┌──────────────────────────────────────────────────────────┐
+                │                 service-hub 数据服务调度中枢                  │
+                │                                                          │
+                │  ┌─────────────────────────────────────────────────┐  │
+                │  │ 6 阶段数据安全流通流水线 (processTask)              │  │
+                │  │                                                   │  │
+                │  │  ① ingest ─▶ ② fetch ─▶ ③ classify              │  │
+                │  │       │                              │            │  │
+                │  │       ▼                              ▼            │  │
+                │  │  ④ desensitize ─▶ ⑤ return ─▶ ⑥ audit           │  │
+                │  └─────────┬────────────────────────────┬───────────┘  │
+                │            │                            │              │
+                └────────────┼────────────────────────────┼──────────────┘
+                             │                            │
+              ┌──────────────▼──────────┐   ┌─────────────▼────────────┐
+              │ PrivShield Agent (:8079) │   │ datasource-mgr (:8083)   │
+              │ 分类分级 + 脱敏引擎       │   │ 模拟数据源服务             │
+              └─────────────────────────┘   └──────────────────────────┘
+                             │
+              ┌──────────────▼──────────┐
+              │ audit-log (:8084)        │
+              │ 不可篡改审计存证服务       │
+              └─────────────────────────┘
+```
+
+#### 3. 三种下游客户端的代理模式
+
+service-hub 通过三个专职客户端分别代理与三类下游服务的通信，每个客户端根据下游特性采用不同的代理策略：
+
+##### 3.1 Agent 客户端 (`internal/agent/client.go`) —— 薄封装 + 共享库
+
+```go
+// 底层复用 pkg/agent.Client 共享库，天然享有：
+// - 多 Agent 实例自动负载均衡与健康探测
+// - 自动注入 Authorization Bearer API Key
+// - 熔断器模式 + 超时自动重试
+type Client struct {
+    *pkgagent.Client  // 嵌入共享库客户端
+}
+
+// 核心调用：一次 HTTP 调用同时完成分类分级 + 脱敏
+func (c *Client) ProcessAgent(ctx context.Context, records []map[string]any, datasourceID string) (*MedicalProcessResult, error) {
+    payload := map[string]any{"records": records, "datasource_id": datasourceID}
+    result, err := c.Post(ctx, "/v1/agent/process", payload)
+    // 404 时自动回退到兼容别名 /v1/medical/process
+    ...
+}
+```
+
+**代理特点**：Agent 是“计算密集型”后端，调用频率低但单次耗时长（涉及 3 层分类漏斗 + 脱敏原语），因此客户端侧重**幂等性保障**（`ContextWithIdempotencyKey`）和**404 自动回退**。
+
+##### 3.2 Datasource 客户端 (`internal/datasource/client.go`) —— 双协议 + 三态熔断
+
+```go
+type Client struct {
+    baseURL    string                   // HTTP REST 基础 URL
+    grpcAddr   string                   // gRPC 监听地址
+    httpClient *http.Client             // 带 mTLS 的 HTTP 客户端
+    breaker    *circuitbreaker.Breaker  // 三态熔断器（5 次失败熔断，30s 冷却）
+    maxRetries int                      // 最大重试次数 3
+    mu         sync.RWMutex             // 保护 gRPC 连接的读写锁
+    grpcConn   *grpc.ClientConn         // 懒加载 gRPC 长连接
+}
+
+// doHTTP 核心方法：熔断器 + 指数退避重试 + 64MB 响应体限制
+func (c *Client) doHTTP(req *http.Request) ([]byte, error) {
+    // ① 熔断器检查
+    if err := c.checkCircuit(); err != nil { return nil, err }
+    // ② 链路追踪头透传 (X-Request-ID / X-Trace-ID)
+    // ③ 出站 API Key 注入（零信任服务间认证）
+    // ④ 指数退避重试循环（500ms → 1s → 2s + 随机抖动）
+    // ⑤ 64MB 响应体防溢出保护
+    // ⑥ 5xx 触发熔断，4xx 不触发（客户端错误不应熔断）
+}
+```
+
+**代理特点**：datasource-mgr 是“数据密集型”后端，需要双协议（HTTP + gRPC）支持，客户端侧重**弹性容灾**（熔断 + 退避重试 + 响应体限制）和**连接复用**（gRPC 懒加载长连接 + Keepalive）。
+
+##### 3.3 Audit 客户端 (`internal/audit/client.go`) —— 出域强绑定
+
+```go
+// 审计存证客户端：每次出域必须留痕，存证不可写 = 任务必然失败
+// P0-6 fail-closed：绝不允许「已出域但无存证仍标 done」
+func (s *Server) processTask(task *store.Task, ...) {
+    // 阶段 ⑥ audit：
+    _, evErr := audit.RecordOutboundEvidence(evCtx, s.audit, audit.OutboundFlow{
+        Task:          task,
+        SecurityLevel: egressLevel,
+        Input:         req.Payload,       // 输入指纹
+        Output:        egressOutput,      // 输出指纹
+        InputHash:     egressHashIn,      // 引擎侧 SM3 指纹
+        OutputHash:    egressHashOut,
+    })
+    if evErr != nil {
+        task.Status = "failed"  // 存证失败 = 任务失败，无例外
+        return
+    }
+}
+```
+
+**代理特点**：audit-log 是“合规强制型”后端，客户端侧重**不可绕过性**——存证端点未配置、网络不可达、4xx/5xx 一律判定任务失败。
+
+#### 4. 代理端点分类
+
+service-hub 的 REST API 中，有两种截然不同的代理模式：
+
+##### 4.1 直通代理端点（Thin Proxy）
+
+直接透传请求到单一下游服务，仅附加认证和链路追踪：
+
+| 端点 | 下游服务 | 代理方式 |
+|------|---------|----------|
+| `GET /api/hub/audit/logs` | audit-log | HTTP GET 透传 + 分页参数转发 |
+| `POST /api/hub/audit/logs` | audit-log | HTTP POST 透传 + Body 转发 |
+| `POST /api/hub/audit/verify` | audit-log | HTTP POST 透传（Merkle 树验真） |
+| `GET /api/hub/datasources` | datasource-mgr | HTTP GET 透传 |
+
+这些端点的代码模式统一：
+
+```go
+func (s *Server) GetAuditLogs(c *gin.Context) {
+    // ① 检查下游是否已配置
+    if s.audit == nil || !s.audit.Configured() {
+        middleware.AbortWithError(c, 503, "UPSTREAM_UNAVAILABLE", ...)
+        return
+    }
+    // ② 设置超时 context
+    ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+    defer cancel()
+    // ③ 调用下游客户端
+    result, err := s.audit.GetLogs(ctx, ...)
+    if err != nil {
+        middleware.AbortWithError(c, 502, "UPSTREAM_UNAVAILABLE", ...)
+        return
+    }
+    // ④ 附加 "via" 标识后返回
+    result["via"] = moduleVia
+    c.JSON(http.StatusOK, result)
+}
+```
+
+##### 4.2 编排代理端点（Orchestration Proxy）
+
+跨多个下游服务编排 6 阶段流水线，是 service-hub 的核心价值：
+
+| 端点 | 编排流程 | 涉及下游 |
+|------|---------|----------|
+| `POST /api/hub/dispatch` | 异步 6 阶段流水线 | Agent + audit-log |
+| `POST /api/hub/fetch-and-desensitize` | 同步端到端：拉取 → 分类脱敏 → 存证 | datasource-mgr + Agent + audit-log |
+| `GET /api/hub/topology` | 探测全链路状态 | Agent + datasource-mgr + audit-log |
+
+**`FetchAndDesensitize` 同步编排流程**：
+
+```text
+客户端 POST /api/hub/fetch-and-desensitize
+    │
+    ├─① 参数校验 + 数据源标识归一化 (yibao → ds_yibao)
+    │
+    ├─② datasource.FetchRecordByIDCard()
+    │     └─ HTTP GET datasource-mgr/api/datasources/ds_yibao/record-by-id?id_card_no=xxx
+    │     └─ 内置：熔断器检查 → 链路追踪头注入 → 指数退避重试 → 64MB 响应限制
+    │
+    ├─③ agent.ProcessAgent()
+    │     └─ HTTP POST Agent /v1/agent/process
+    │     └─ 一次调用完成：3-Layer 分类 + L4/L5 高敏剥离 + PII 强掩码 + 诊断残留清除
+    │     └─ 内置：幂等性 Key + 404 自动回退 + 多 Agent 负载均衡
+    │
+    ├─④ audit.RecordOutbound() (P0-6 fail-closed)
+    │     └─ HTTP POST audit-log 存证（含输入/输出 SM3 指纹）
+    │     └─ 失败 = 整个请求失败，绝不静默放行
+    │
+    └─⑤ 同步返回脱敏结果 + 分类级别 + 分类报告 + 审计任务 ID
+```
+
+#### 5. 与 gateway 传输层代理的协作关系
+
+在实际部署中，service-hub 和 gateway 是串联关系：
+
+```text
+客户端 → privshield-gateway (:8000) → privshield-agent (:8079)
+                                      ↑
+客户端 → service-hub (:8082) ─────────┘
+                │
+                ├─→ datasource-mgr (:8083)
+                └─→ audit-log (:8084)
+```
+
+- **gateway** 代理的是“纯隐私计算”流量（客户端直接调用 Agent 的脱敏/DP/K-匿名接口）
+- **service-hub** 代理的是“数据流通流水线”流量（拉取 → 分类 → 脱敏 → 存证的完整链路）
+- 两者共享同一套 `pkg/middleware`（IP 白名单、WAF、限流）和 `pkg/circuitbreaker`（三态熔断器）
+
+#### 6. 一句话总结
+
+> **`service-hub` 不是传统意义上的反向代理**，它是一个**应用层编排代理**：不依赖 `httputil.ReverseProxy` 做字节流转发，而是通过三个专职 HTTP/gRPC 客户端（Agent/datasource/audit）主动调用下游服务，在 6 阶段流水线中完成“拉取 → 分类 → 脱敏 → 存证”的完整数据流通安全治理。它的核心价值不是“转发”，而是**“编排 + 合规强制”**——确保每一条出域数据都经过分类分级、脱敏处理并留下不可篡改的审计存证。
+
+---
+
+## 第 4 章：Day 3-4 安全体系 Review（mTLS、认证、权限）
+
+### 4.1 审查文件清单
 
 | 文件路径 | 行数 | 核心职责 |
 |---|:---:|---|
@@ -2107,9 +2871,9 @@ sharedTransport = &http.Transport{
 | `pkg/middleware/trace.go` | 53 | 分布式追踪上下文传播中间件 |
 | `services/service-hub/internal/handlers/handlers.go` | ~300 | `scopeAuthMiddleware` 双模式鉴权 + `constantTimeLookupKeys` |
 
-### 2.2 核心知识点详解
+### 4.2 核心知识点详解
 
-#### 2.2.1 mTLS CN 白名单热重载机制
+#### 4.2.1 mTLS CN 白名单热重载机制
 
 **两套实现并存**（须理解差异）：
 
@@ -2167,7 +2931,7 @@ clients:
     enabled: true
 ```
 
-#### 2.2.2 API Key 常量时间认证
+#### 4.2.2 API Key 常量时间认证
 
 **源码位置**：`pkg/auth/middleware.go` `ConstantTimeLookup()` (L55-75)
 
@@ -2233,7 +2997,7 @@ AuthMiddleware(settings)
     └─ c.Set(IdentityContextKey, identity) → c.Next()
 ```
 
-#### 2.2.3 Scope-based 权限模型
+#### 4.2.3 Scope-based 权限模型
 
 **源码位置**：`pkg/auth/identity.go` (L1-236)
 
@@ -2315,7 +3079,7 @@ mapping := map[string]string{
 }
 ```
 
-#### 2.2.3.1 Scope-based 鉴权完整请求生命周期（深度解析）
+#### 4.2.3.1 Scope-based 鉴权完整请求生命周期（深度解析）
 
 本节以一个具体请求为例，逐步拆解 Scope-based 鉴权从「环境变量配置」到「请求放行/拒绝」的 7 个阶段。理解这条完整链路是掌握 PrivShield 安全体系的核心。
 
@@ -2724,7 +3488,7 @@ if identity.ServiceType == "internal" {
 | **gRPC 鉴权** | mTLS CN 白名单拦截器 | 无 gRPC 端口 |
 | **匿名模式** | `AuthEnabled=false` → `AnonymousIdentity` | 无匿名模式（必须认证） |
 
-#### 2.2.3.2 service-hub 对外接口 Scope-based 权限控制
+#### 4.2.3.2 service-hub 对外接口 Scope-based 权限控制
 
 **背景**：service-hub 是整个 PrivShield 微服务群中**唯一对外网提供服务**的组件（其他服务如 datasource-mgr、audit-log 均部署在政务云内网 VPC），其鉴权强度直接关系到整个政务云数据流通链路的安全性。
 
@@ -2817,7 +3581,7 @@ func ParseAPIKeysEnv(raw string) map[string]*KeyConfig {
 - `external` 身份：由外部客户端持有，scope 受最小权限约束
 - 认证时先查 internal keys，再查 external keys — internal 优先
 
-#### 2.2.4 32 分片令牌桶限流
+#### 4.2.4 32 分片令牌桶限流
 
 **源码位置**：`pkg/middleware/ratelimit.go` (L80-224)
 
@@ -2906,7 +3670,7 @@ func (l *shardedRateLimiter) allow(key string, rps, burst float64) bool {
 // /api/orders/550e8400-... → /api/orders/:id
 ```
 
-#### 2.2.5 安全头中间件
+#### 4.2.5 安全头中间件
 
 **源码位置**：`engine-go/internal/security/auth.go` (L33-39)
 
@@ -2929,7 +3693,7 @@ func SecurityHeadersMiddleware() gin.HandlerFunc {
 | `Strict-Transport-Security` | `max-age=31536000` | SSL 降级攻击 |
 | `Content-Security-Policy` | `default-src 'none'` | XSS / 数据注入 |
 
-#### 2.2.6 gRPC mTLS CN 拦截器
+#### 4.2.6 gRPC mTLS CN 拦截器
 
 **源码位置**：`pkg/tlsutil/grpc_interceptor.go` (L38-134)
 
@@ -2946,7 +3710,7 @@ unaryInt, streamInt, whitelist, err := tlsutil.NewWhitelistInterceptor(path)
 // path 非空 → 自动加载 YAML + 启动热重载 + 返回拦截器
 ```
 
-### 2.3 Day 3-4 Review 方法
+### 4.3 Day 3-4 Review 方法
 
 1. **对照配置加载**：从 `config.go` 的 `loadSettings()` 开始，追踪每个环境变量的加载路径
 2. **追踪认证链路**：HTTP 请求 → `AuthMiddleware` → `ExtractBearerToken` → `ConstantTimeLookup` → `authenticateAPIKey` → `PermissionForRESTPath` → `HasPermission`
@@ -2960,9 +3724,9 @@ unaryInt, streamInt, whitelist, err := tlsutil.NewWhitelistInterceptor(path)
    - [ ] 限流完全基于内存，多实例部署时无法共享限流状态
    - [ ] 新增端点时是否同步添加权限映射（需代码 Review 流程保障，防止 SEC-09/12/13 类问题复发）
 
-### 2.4 安全体系纵深分析
+### 4.4 安全体系纵深分析
 
-#### 2.4.1 时序攻击与常量时间比较详解
+#### 4.4.1 时序攻击与常量时间比较详解
 
 **什么是时序攻击？**
 
@@ -3030,7 +3794,7 @@ func ConstantTimeLookup(keys map[string]*KeyConfig, token string) *KeyConfig {
 
 为何需要排序？Go map 的迭代顺序是随机的，如果不排序，每次请求遍历 key 的顺序可能不同，导致响应时间有微小差异。排序确保每次迭代的顺序完全一致。
 
-#### 2.4.2 权限模型设计哲学
+#### 4.4.2 权限模型设计哲学
 
 **为何选择 Scope-based 而非 RBAC？**
 
@@ -3078,7 +3842,7 @@ func PermissionForRESTPath(path string) string {
 - 风险：如果某个端点需要权限保护但忘记添加映射，会被意外开放
 - 缓解：通过代码 Review 和测试用例（50+ 路径覆盖）确保所有敏感端点都有映射
 
-#### 2.4.3 32 分片限流器性能分析
+#### 4.4.3 32 分片限流器性能分析
 
 **分片策略的数学分析**：
 
@@ -3125,7 +3889,7 @@ func (l *shardedRateLimiter) cleanup(ttl time.Duration) {
 - 清理间隔 = 3 分钟：平衡清理频率和 CPU 开销
 - 逐分片加锁：清理某个分片时不影响其他分片的限流服务
 
-#### 2.4.4 mTLS 白名单热重载对比分析
+#### 4.4.4 mTLS 白名单热重载对比分析
 
 **两套实现的设计差异根源**：
 
@@ -3156,7 +3920,7 @@ pkg/tlsutil/whitelist.go
 2. 请求驱动重载可以通过在 `CheckScope` 中增加 mtime 检查来实现
 3. 消除两套实现的语义漂移风险
 
-#### 2.4.5 DDoS 纵深防御策略详解
+#### 4.4.5 DDoS 纵深防御策略详解
 
 ```
 攻击类型                    防御层                    响应
@@ -3194,7 +3958,7 @@ func MaxConcurrent(limit int) gin.HandlerFunc {
 
 ---
 
-### 2.5 接口权限控制漏洞修复案例（SEC-09 ~ SEC-13）
+### 4.5 接口权限控制漏洞修复案例（SEC-09 ~ SEC-13）
 
 以下漏洞在安全 Review 中发现并已修复，作为权限控制学习的实战案例。
 
@@ -3246,7 +4010,7 @@ func MaxConcurrent(limit int) gin.HandlerFunc {
 
 ---
 
-## 第 4 章：三级等保/密评合规增强
+## 第 5 章：三级等保/密评合规增强
 
 > 本章记录对标 GB/T 22239-2019（三级等保）与 GM/T 0115-2023（密评）标准完成的 7 项合规修复。详见 `docs/production_security/compliance_gap_analysis.md`。
 
@@ -3346,7 +4110,7 @@ type JWTManager struct {
 
 ---
 
-## 第 5 章：Day 5 可观测性 Review（日志、指标、追踪）
+## 第 6 章：Day 5 可观测性 Review（日志、指标、追踪）
 
 ### 5.1 审查文件清单
 
@@ -3784,7 +4548,7 @@ func (m *REDMetrics) PrometheusMiddleware() gin.HandlerFunc {
 
 ---
 
-## 第 6 章：代码走读指南
+## 第 7 章：代码走读指南
 
 ### 推荐读码顺序
 
@@ -3849,7 +4613,7 @@ func (m *REDMetrics) PrometheusMiddleware() gin.HandlerFunc {
 
 ---
 
-## 第 7 章：常见问题与排查指南
+## 第 8 章：常见问题与排查指南
 
 ### Q1: 网关返回 503 SERVICE_UNAVAILABLE
 
@@ -3932,7 +4696,7 @@ curl -H "Authorization: Bearer <admin-key>" http://localhost:8082/api/hub/dispat
 
 ---
 
-## 第 8 章：术语表
+## 第 9 章：术语表
 
 | 术语 | 英文 | 说明 |
 |---|---|---|
@@ -3966,7 +4730,7 @@ curl -H "Authorization: Bearer <admin-key>" http://localhost:8082/api/hub/dispat
 
 ---
 
-## 第 9章：Engine-go 启动流程与配置加载链路深度分析
+## 第 10 章：Engine-go 启动流程与配置加载链路深度分析
 
 理解进程启动流程是 Review 的基础——它揭示了各组件的初始化顺序、依赖关系和故障模式。
 
@@ -4226,7 +4990,7 @@ K8s 的 Endpoints 更新和 iptables 规则传播有延迟（通常 1-3 秒）�
 
 ---
 
-## 第 10 章：gRPC 透明代理完整代码走读
+## 第 11 章：gRPC 透明代理完整代码走读
 
 gRPC 透明代理是网关中最复杂的组件（310 行），理解它需要掌握 gRPC 底层流式通信模型。
 
@@ -4375,7 +5139,7 @@ func isConnReady(conn *grpc.ClientConn) bool {
 
 ---
 
-## 第 11 章：网关部署拓扑与运维指南
+## 第 12 章：网关部署拓扑与运维指南
 
 ### Docker Compose 部署拓扑
 
@@ -4528,7 +5292,7 @@ go tool pprof block.prof
 
 ---
 
-## 第 12 章：Review 检查清单详细版
+## 第 13 章：Review 检查清单详细版
 
 以下清单为每个模块的具体检查点，Review 时逐项确认。
 
@@ -4632,7 +5396,7 @@ go tool pprof block.prof
 
 ---
 
-## 第 13 章：周交付物清单
+## 第 14 章：周交付物清单
 
 ### 交付物 1：engine-go 网关与安全模块 Review 笔记
 
@@ -4675,6 +5439,292 @@ go tool pprof block.prof
 - [ ] 审计关键事件标准化日志格式
 - [ ] Prometheus 告警规则补充（`deploy/prometheus/rules/`）
 - [ ] Grafana 网关监控看板（InFlight/EWMA/熔断器状态）
+
+---
+
+## 第 15 章：微服务群全景——datasource-mgr 与 audit-log 深度解析
+
+> 第 3.5 节已详细解析了 service-hub 编排代理。本章补全微服务群的另外两个核心成员：`datasource-mgr`（数据源资产管理）与 `audit-log`（审计存证），建立对三个微服务协作全貋的理解。
+
+### 15.1 微服务群拓扑与职责分工
+
+```text
+    React 前端 / BFF 网关
+           │
+           │ HTTPS REST + Scope-based Auth
+           ▼
+    ┌─────────────────┐
+    │  service-hub     │ ← 唯一编排入口（流水线调度 :8082）
+    │  调度中枢         │
+    └───────┬─────────┘
+            │
+     ┌──────┴──────┐
+     │                │
+     ▼                ▼
+┌──────────┐   ┌──────────┐
+│datasource│   │audit-log │
+│  -mgr    │   │ 审计存证  │
+│ :8083    │   │ :8084    │
+│ gRPC     │   │ gRPC     │
+│ :50053   │   │ :50054   │
+└──────────┘   └──────────┘
+     │                │
+     │                └──▶ Agent (:8079) ← 脱敏执行
+     │
+     └──▶ 模拟数据集（医保/康养/测试）
+```
+
+**核心原则**：前端控制台与 BFF 网关**不直连** datasource-mgr 与 audit-log，所有请求统一经 service-hub 编排调度。
+
+| 服务 | 端口 | 核心职责 | 数据流向 |
+|------|------|----------|----------|
+| service-hub | :8082 / :50052 | 流水线编排（ingest → fetch → classify → desensitize → return → audit） | 前端 → hub → agent/datasource/audit |
+| datasource-mgr | :8083 / :50053 | 数据源资产管理、记录采样、Schema 探查、连通性测试 | hub → datasource → 模拟数据集 |
+| audit-log | :8084 / :50054 | 脱敏审计日志写入、SHA-256/SM3 哈希链存证、完整性校验 | hub → audit → SQLite/PostgreSQL |
+
+### 15.2 datasource-mgr 架构详解
+
+**文件结构**：
+
+```
+services/datasource-mgr/
+├── cmd/server/main.go          # 400 行：配置→日志→路由→HTTP/gRPC→优雅停机
+├── internal/
+│   ├── config/config.go        # 环境变量配置加载
+│   ├── handlers/handlers.go    # 376 行：REST API 端点 + Scope-based 鉴权
+│   ├── grpcserver/             # gRPC 服务实现 + mTLS CN 白名单拦截
+│   └── models/                 # 数据源模型定义
+├── proto/                      # Protobuf 服务定义
+└── Dockerfile
+```
+
+**REST API 端点分类**：
+
+| 类别 | 端点 | 说明 |
+|------|------|------|
+| Class A（核心生产） | `GET /api/datasources/:id/record-by-id` | 按身份证号精确抽取记录 |
+| Class A | `POST /api/datasources/:id/test` | 数据源连通性测试 |
+| Class B（元数据探查） | `GET /api/datasources` | 数据源目录列表 |
+| Class B | `GET /api/datasources/:id` | 单个数据源详情 |
+| Class B | `GET /api/datasources/:id/metadata` | Schema 元数据探查 |
+| Class D（开发测试） | `GET /api/datasources/:id/audit` | 模拟访问审计（生产禁用） |
+| Class D | `POST /api/datasources/seed` | 模拟数据源初始化（生产禁用） |
+
+**中间件栈**（与 service-hub 对齐）：
+
+```
+请求 → TrustedProxies → IPAllowlist → TraceMiddleware → RequestLogger
+     → Recovery → SecurityHeaders → WAF → MaxBodySize(32MiB)
+     → MaxConcurrent(1000) → RateLimit(可选) → CORS → ScopeAuth
+```
+
+**关键设计**：
+- **P0-4 禁静音降级**：`StrictStorage` 模式默认开启，样本数据损坏时直接报错，不静默丢弃记录
+- **双协议**：HTTP REST + gRPC（mTLS 双向认证），gRPC 消息限制 64MiB
+- **API Key 热轮转**：支持 K8s Secret 投影场景的 `KeyStore` 文件监控
+
+### 15.3 audit-log 架构详解
+
+**文件结构**：
+
+```
+services/audit-log/
+├── cmd/server/main.go          # 571 行：配置→密钥注册→存储→指标→HTTP/gRPC→停机
+├── internal/
+│   ├── config/config.go        # 环境变量配置加载
+│   ├── handlers/handlers.go    # 765 行：REST API + 权责分离鉴权
+│   ├── agent/client.go         # Agent HTTP 客户端（脱敏执行）
+│   ├── archive/                # 存证归档（加密 + 独立验真）
+│   └── grpcserver/             # gRPC 服务实现
+├── proto/                      # Protobuf 服务定义
+└── Dockerfile
+```
+
+**REST API 端点**：
+
+| 端点 | 方法 | 说明 | 权限 |
+|------|------|------|------|
+| `/api/audit/logs` | GET | 审计日志列表查询 | 所有 Key |
+| `/api/audit/logs` | POST | 写入存证（哈希链） | 写入 Key |
+| `/api/audit/logs/:id` | GET | 单条日志查询 | 所有 Key |
+| `/api/audit/stats` | GET | 统计概览 | 所有 Key |
+| `/api/audit/snapshots` | GET | 快照列表 | 所有 Key |
+| `/api/audit/snapshots/verify` | POST | 快照完整性校验 | 只读核验员 Key |
+| `/api/audit/chain/verify` | GET/POST | 哈希链连续性完整性校验 | 只读核验员 Key |
+| `/api/audit/report` | POST | 报表导出 | 写入 Key |
+
+**安全特性深度解析**：
+
+1. **P1-6 权责分离**：数据局核验专区持「只读核验员 Key」，只能访问查询与验真端点，**写入端点（POST /api/audit/logs）与报表导出（POST /api/audit/report）被严格排除**——核验专区是「被查者」，不得具备任何写入能力
+2. **SM3 哈希链存证**：每条记录包含前一条记录的哈希，形成不可篡改链；支持密钥化哈希（`AUDIT_LOG_HASH_KEY`），防止重算攻击
+3. **SM2 国密签名**：支持 SM2 非对称签名/验签，实现不可否认性（G-10）
+4. **信封加密多版本密钥轮换**：`AUDIT_LOG_CRYPTO_KEY_<VERSION>` 支持多版本密钥，活跃版本用于加密写入，历史版本用于解密读取
+5. **数据留存策略**：`RetentionDays > 0` 时启动后台协程，每 6 小时执行「先归档后删除」——到期存证先写成加密且可独立验真的归档段，再删除
+
+### 15.4 三服务安全中间件对齐
+
+三个微服务共享 `pkg/middleware` 中间件库，安全栈完全对齐：
+
+| 中间件 | service-hub | datasource-mgr | audit-log |
+|--------|:-----------:|:--------------:|:----------:|
+| TrustedProxies (G-02) | ✅ | ✅ | ✅ |
+| IPAllowlist | ✅ | ✅ | ✅ |
+| WAF (G-12) | ✅ | ✅ | ✅ |
+| MaxBodySize (32MiB) | ✅ | ✅ | ✅ |
+| MaxConcurrent (1000) | ✅ | ✅ | ✅ |
+| RateLimit | ✅ | ✅ | ✅ |
+| Scope-based Auth | ✅ | ✅ | ✅ |
+| mTLS CN 白名单 (gRPC) | ✅ | ✅ | ✅ |
+| KeyStore 热轮转 | ✅ | ✅ | ✅ |
+
+### 15.5 一句话总结
+
+> **service-hub 是唯一编排入口**，datasource-mgr 是数据提供者（只读数据源），audit-log 是不可篡改存证（写后只读）。三者共享 `pkg/middleware` 安全中间件栈、`pkg/auth` 鉴权体系和 `pkg/tlsutil` mTLS 基础设施，形成安全策略统一、职责分离的微服务群。
+
+---
+
+## 第 16 章：privacy-go-sdk 与 rules 规则体系概览
+
+> 本章介绍数盾隐私治理的两大基础层：**privacy-go-sdk**（零依赖隐私计算原语库）和 **rules/**（领域分类分级规则体系）。它们是 engine-go 核心引擎的数学基础和规则来源。
+
+### 16.1 privacy-go-sdk 模块全景
+
+**设计原则**：纯 Go 零依赖、零状态、纯函数计算。所有原语都是无副作用的数学计算，状态维护统一在 engine-go 的 `service` 与 `budget` 层。
+
+```
+privacy-go-sdk/
+├── masking/      # 544 行：字段级 PII 脱敏原语
+├── dp/           # 491 行：差分隐私原语
+├── ldp/          # 464 行：本地差分隐私原语
+├── kano/         # 371 行：K-匿名与 L-多样性原语
+├── qol/          # 138 行：查询混淆原语
+├── medical/      # 769 行：医疗数据隐私处理流水线
+├── budget/       # 161 行：无锁原子隐私预算会计
+└── internal/sm3/ # SM3 国密哈希内部实现
+```
+
+### 16.2 各模块核心能力
+
+| 模块 | 核心函数 | 算法/机制 | 典型场景 |
+|------|----------|----------|----------|
+| **masking** | `MaskIDCard()`, `MaskPhone()`, `MaskBankCard()`, `MaskName()` | 正则匹配 + sync.Pool 零分配 + HMAC-SM3 确定性掩码 | 身份证/手机/银行卡/姓名脱敏 |
+| **dp** | `AddLaplaceNoise()`, `AddGaussianNoise()`, `VectorDP()` | Laplace/Gaussian 机制 + 自适应梯度截断 + 多核并发 | 统计查询加噪、向量 DP |
+| **ldp** | `RandomizedResponse()`, `CategoricalRR()`, `ProjectedFreq()` | 二值/多分类 Randomized Response + 样本守恒校准 | 终端用户数据本地扰动 |
+| **kano** | `Anonymize()`, `Mondrian()`, `VerifyLDiversity()` | Mondrian KD-tree 多维切分 + Distinct L-多样性 + 深度剪枝 | 数据集匿名化发布 |
+| **qol** | `GenerateDummyQueries()`, `ShuffleQueries()` | Fisher-Yates 语义置乱 + 医疗领域诱饵词库 | 查询意图混淆 |
+| **medical** | `ProcessYibao()`, `ProcessKangyang()` | 医保 18 字段 + 康养 27 字段特化流水线 + 多核分块 | 医疗数据分级脱敏 |
+| **budget** | `Consume()`, `GetBudget()`, `Rollback()` | atomic.Uint64 无锁 CAS 浮点位操作 + 滑动窗口重置 | 隐私预算扣减与回滚 |
+
+### 16.3 差分隐私数学基础
+
+**Laplace 机制（ε-DP）**：
+
+\[
+M(x) = f(x) + \text{Lap}\left(\frac{\Delta f}{\varepsilon}\right)
+\]
+
+其中 \(\Delta f\) 为敏感度，\(\varepsilon\) 为隐私预算。scale = sensitivity / epsilon，满足 ε-差分隐私。
+
+**Gaussian 机制（(ε,δ)-DP）**：
+
+\[
+M(x) = f(x) + \mathcal{N}\left(0, \sigma^2\right), \quad \sigma \geq \frac{\Delta f}{\varepsilon}\sqrt{2\ln\frac{1.25}{\delta}}
+\]
+
+### 16.4 rules/ 规则体系架构
+
+rules/ 目录是三层分类漏斗的**第一层（规则引擎）**的数据来源，采用 AC 自动机 + 正则双引擎匹配。
+
+```
+rules/
+├── domains/          # 领域分类规则（5 个领域）
+│   ├── medical.yaml        # 医疗健康（基因组、ICD-10、敏感病种）
+│   ├── finance.yaml        # 金融领域
+│   ├── general-pii.yaml    # 通用 PII
+│   ├── gd_health.yaml      # 广东健康领域
+│   └── sc_health_db51.yaml # 四川健康领域 DB51
+├── standards/        # 分级标准映射（4 个标准）
+│   ├── gbt43697.yaml       # GB/T 43697 数据安全
+│   ├── jrt0197.yaml        # JR/T 0197 金融数据安全
+│   ├── gd_health.yaml      # 广东健康标准
+│   └── sc_health_db51.yaml # 四川 DB51 标准
+└── taxonomies/       # 分类分级映射表（4 个映射）
+    ├── default.yaml        # 默认分类分级映射
+    ├── finance_jrt0197.yaml
+    ├── gd_health.yaml
+    └── sc_health_db51.yaml
+```
+
+**规则文件格式**（以 medical.yaml 为例）：
+
+```yaml
+domain: "medical"
+version: "1.0.0"
+rules:
+  - id: "RULE_MED_G_001"
+    name: "BRCA/TP53 基因指标"
+    category: "GENOMIC"
+    level: "L5"
+    priority: 200
+    match_logic: "AND"          # AND/OR
+    matchers:
+      - target: "field_name"    # field_name / field_value
+        operator: "keyword_contains"
+        params:
+          keywords: ["brca1", "brca2", "tp53", ...]
+```
+
+**三层漏斗协作**：
+
+```text
+输入数据
+  │
+  ▼
+第一层：规则引擎（AC 自动机 + Regex）
+  │   ← rules/domains/*.yaml 提供匹配规则
+  │   ← rules/standards/*.yaml 提供分级标准
+  │   ← rules/taxonomies/*.yaml 提供分类→级别映射
+  │
+  ├─ 命中 → 直接返回 category + level（高置信度，<1ms）
+  │
+  ▼
+第二层：Small-NER（ONNX 小模型）
+  │   未命中 → NER 实体识别（中置信度，~5ms）
+  │
+  ▼
+第三层：External LLM（熔断器保护）
+      仍未命中 → LLM 仲裁（低置信度，~500ms，熔断器保护）
+```
+
+### 16.5 config/privacy.yaml 隐私策略配置
+
+`config/privacy.yaml` 是引擎的全局隐私策略配置，驱动 44 项隐私原语的默认参数：
+
+```yaml
+budget:
+  total_epsilon: 10.0          # 总 ε 预算
+  total_delta: 1.0e-5          # 总 δ 预算
+  window_seconds: 3600         # 滑动窗口自动重置周期
+  namespace: "default"         # 预算命名空间（租户隔离）
+
+dp:
+  default_mechanism: "laplace" # 默认噪声机制
+  default_epsilon: 1.0         # 默认 ε 消耗
+  clip_lower: -1.0             # 默认梯度截断下界
+
+kano:
+  default_k: 5                 # 默认 K 值
+  max_depth: 10                # Mondrian 最大切分深度
+
+classification:
+  default_domain: "medical"    # 默认领域
+  default_standard: "gbt_35273" # 默认标准
+  confidence_threshold: 0.75   # LLM 仲裁置信度阈值
+```
+
+### 16.6 一句话总结
+
+> **privacy-go-sdk** 是数盾的「数学引擎」——7 个零依赖纯计算模块提供掩码、差分隐私、本地差分隐私、K-匿名、查询混淆、医疗流水线和隐私预算会计原语。**rules/** 是数盾的「规则大脑」——5 领域 × 4 标准的 YAML 规则体系驱动三层分类漏斗的第一层（AC 自动机 + Regex 规则引擎）。两者共同构成了 engine-go 核心引擎的基础设施层。
 
 ---
 
