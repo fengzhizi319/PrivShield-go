@@ -119,12 +119,6 @@ nav:
       - 需求文档: production_observability/prd.md
       - 测试指南: production_observability/testing.md
 
-  - 分类分级标准体系:
-      - GB/T 35273-2020 个人信息安全规范: standard/GB_T_35273-2020_信息安全技术个人信息安全规范.md
-      - GB/T 43697-2024 数据分类分级规则: standard/GB_T_43697-2024_数据安全技术数据分类分级规则.md
-      - JR/T 0197-2020 金融数据安全分级指南: standard/JR_T_0197-2020_金融数据安全数据安全分级指南.md
-      - 四川省健康医疗大数据应用指南: standard/四川省健康医疗大数据应用指南.md
-      - 广东省健康医疗数据分类分级规范: standard/广东省健康医疗数据安全分类分级管理技术规范.md
 
   - 专利技术交底书:
       - 概览: patent/README.md
