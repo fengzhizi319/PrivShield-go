@@ -31,7 +31,7 @@ import (
 // ──────────────────────────────────────────────
 
 func TestCircuitBreaker_ClosedToOpen(t *testing.T) {
-	cb := circuitbreaker.NewBreaker(3, 100*time.Millisecond)
+	cb := circuitbreaker.New(circuitbreaker.Options{Threshold: 3, Cooldown: 100 * time.Millisecond, HalfOpenMax: 3})
 
 	// 初始状态 Closed，允许通过
 	for i := 0; i < 3; i++ {
@@ -55,7 +55,7 @@ func TestCircuitBreaker_ClosedToOpen(t *testing.T) {
 }
 
 func TestCircuitBreaker_OpenToHalfOpen(t *testing.T) {
-	cb := circuitbreaker.NewBreaker(2, 50*time.Millisecond)
+	cb := circuitbreaker.New(circuitbreaker.Options{Threshold: 2, Cooldown: 50 * time.Millisecond, HalfOpenMax: 3})
 
 	// 触发熔断
 	cb.RecordFailure()
@@ -77,7 +77,7 @@ func TestCircuitBreaker_OpenToHalfOpen(t *testing.T) {
 }
 
 func TestCircuitBreaker_HalfOpenToClosed(t *testing.T) {
-	cb := circuitbreaker.NewBreaker(2, 50*time.Millisecond)
+	cb := circuitbreaker.New(circuitbreaker.Options{Threshold: 2, Cooldown: 50 * time.Millisecond, HalfOpenMax: 3})
 
 	// 触发熔断
 	cb.RecordFailure()
@@ -97,7 +97,7 @@ func TestCircuitBreaker_HalfOpenToClosed(t *testing.T) {
 }
 
 func TestCircuitBreaker_HalfOpenToOpen(t *testing.T) {
-	cb := circuitbreaker.NewBreaker(2, 50*time.Millisecond)
+	cb := circuitbreaker.New(circuitbreaker.Options{Threshold: 2, Cooldown: 50 * time.Millisecond, HalfOpenMax: 3})
 
 	// 触发熔断
 	cb.RecordFailure()
@@ -415,7 +415,7 @@ func TestInFlight_IncrementDecrement(t *testing.T) {
 
 // forceOpenCB 强制打开节点熔断器
 func forceOpenCB(node *BackendNode) {
-	node.CB = circuitbreaker.NewBreaker(1, 1*time.Hour)
+	node.CB = circuitbreaker.New(circuitbreaker.Options{Threshold: 1, Cooldown: 1 * time.Hour, HalfOpenMax: 3})
 	node.CB.RecordFailure()
 }
 

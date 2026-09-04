@@ -12,6 +12,7 @@ package grpcserver
 import (
 	"context"
 	"crypto"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -27,6 +28,7 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	naming "github.com/fengzhizi319/PrivShield-go/pkg/naming"
 	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 	"github.com/fengzhizi319/PrivShield-go/pkg/store"
@@ -81,6 +83,20 @@ func New(ag *agent.Client, ds *datasource.Client, cfg *config.Config, tasks stor
 		ctx:        ctx,
 		cancel:     cancel,
 	}
+}
+
+// checkDatasourceAccess 从 gRPC context 提取拦截器注入的身份，复用 pkg 层统一的数据源级 ABAC 判定，
+// 与 REST 侧 handlers.checkDatasourceAccess 同源，消除双路径权限不对称（H-2）。
+func (s *GRPCServer) checkDatasourceAccess(ctx context.Context, normID, rawID string) bool {
+	return pkgauth.CheckDatasourceAccess(IdentityFromContext(ctx), normID, rawID)
+}
+
+// grpcCallerName 返回当前 gRPC 调用者标识名称，未认证时返回 "anonymous"。
+func grpcCallerName(ctx context.Context) string {
+	if id := IdentityFromContext(ctx); id != nil && id.Name != "" {
+		return id.Name
+	}
+	return "anonymous"
 }
 
 // Shutdown gracefully stops all in-flight task goroutines.
@@ -266,6 +282,11 @@ func (s *GRPCServer) Dispatch(ctx context.Context, req *pb.DispatchRequest) (*pb
 	}
 	normAPICode := naming.APICodeForDataSource(normID)
 
+	// H-2：数据源级 ABAC（与 REST Dispatch 同构），拦截器已将身份注入 ctx。
+	if !s.checkDatasourceAccess(ctx, normID, rawSource) {
+		return nil, status.Errorf(codes.PermissionDenied, "caller %q is not authorized to access datasource %q", grpcCallerName(ctx), normID)
+	}
+
 	operation := strings.TrimSpace(req.Operation)
 	if operation != "" {
 		if err := validation.AllowedValues("operation", operation, validation.HubOperations); err != nil {
@@ -340,6 +361,11 @@ func (s *GRPCServer) ClassifyAndDispatch(ctx context.Context, req *pb.ClassifyAn
 		return nil, status.Errorf(codes.InvalidArgument, "invalid source: %v", normErr)
 	}
 	normAPICode := naming.APICodeForDataSource(normID)
+
+	// H-2：数据源级 ABAC（与 REST 双路径对齐）。
+	if !s.checkDatasourceAccess(ctx, normID, req.Source) {
+		return nil, status.Errorf(codes.PermissionDenied, "caller %q is not authorized to access datasource %q", grpcCallerName(ctx), normID)
+	}
 
 	requestID := extractRequestID(ctx)
 
@@ -511,6 +537,11 @@ func (s *GRPCServer) FetchAndDesensitize(ctx context.Context, req *pb.FetchAndDe
 		return nil, status.Errorf(codes.InvalidArgument, "invalid datasource: %v", err)
 	}
 
+	// H-2：按身份证号拉取记录是最高敏感操作，必须与 REST 一样做数据源级 ABAC。
+	if !s.checkDatasourceAccess(ctx, normID, datasourceID) {
+		return nil, status.Errorf(codes.PermissionDenied, "caller %q is not authorized to access datasource %q", grpcCallerName(ctx), normID)
+	}
+
 	requestID := extractRequestID(ctx)
 	rpcCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -552,7 +583,7 @@ func (s *GRPCServer) FetchAndDesensitize(ctx context.Context, req *pb.FetchAndDe
 		return nil, status.Error(codes.Internal, "failed to convert record for engine processing")
 	}
 
-	idempotencyKey := fmt.Sprintf("hub-fad-%s-%s", normID, idCardNo)
+	idempotencyKey := fmt.Sprintf("hub-fad-%s-%s", normID, validation.IDCardRef(idCardNo))
 	rpcCtx = agent.ContextWithIdempotencyKey(rpcCtx, idempotencyKey)
 
 	result, err := s.agent.ProcessAgent(rpcCtx, records, normID)
@@ -563,6 +594,60 @@ func (s *GRPCServer) FetchAndDesensitize(ctx context.Context, req *pb.FetchAndDe
 	level := result.Level
 	if level == "" {
 		level = audit.MaxSensitivityLevel(result.ClassificationReport)
+	}
+
+	// ③ 审计存证 (P0-6 fail-closed：出域必须留痕，提交失败则整个请求失败)
+	fadTaskID := fmt.Sprintf("fad-%s-%s-%d", normID, validation.IDCardRef(idCardNo), time.Now().UnixNano())
+	inputBytes, _ := json.Marshal(record)
+	inputHash := fmt.Sprintf("%x", sha256.Sum256(inputBytes))
+	outputBytes, _ := json.Marshal(result.SanitizedData)
+	outputHash := fmt.Sprintf("%x", sha256.Sum256(outputBytes))
+	// 优先使用引擎侧 SM3 指纹（便于跨服务对账），缺失时以 SHA-256 兜底
+	if engIn, engOut := audit.EngineFingerprints(result.Summary); engIn != "" || engOut != "" {
+		if engIn != "" {
+			inputHash = engIn
+		}
+		if engOut != "" {
+			outputHash = engOut
+		}
+	}
+
+	apiCode := naming.APICodeForDataSource(normID)
+	flow := audit.OutboundFlow{
+		Task: &store.Task{
+			ID:           fadTaskID,
+			APICode:      apiCode,
+			DatasourceID: normID,
+			Source:       normID,
+			Operation:    "mask",
+		},
+		Protocol:      "grpc",
+		SecurityLevel: level,
+		Input:         record,
+		Output:        result.SanitizedData,
+		InputHash:     inputHash,
+		OutputHash:    outputHash,
+		Algorithm:     "three_layer_funnel",
+	}
+
+	evTimeout := 5 * time.Second
+	if s.cfg != nil {
+		evTimeout = s.cfg.AuditLogTimeoutDuration()
+	}
+	evCtx, evCancel := context.WithTimeout(rpcCtx, evTimeout)
+	defer evCancel()
+	evCtx = pkgobs.ContextWithRequestID(evCtx, fadTaskID)
+	evCtx = agent.ContextWithIdempotencyKey(evCtx, fmt.Sprintf("hub-%s-audit", fadTaskID))
+
+	if _, err := audit.RecordOutboundEvidence(evCtx, s.audit, flow); err != nil {
+		if s.logger != nil {
+			s.logger.Error("outbound evidence recording failed for FetchAndDesensitize (P0-6 fail-closed)",
+				"datasource_id", normID,
+				"id_card_ref", validation.IDCardRef(idCardNo),
+				"error", err.Error(),
+			)
+		}
+		return nil, status.Errorf(codes.Unavailable, "audit evidence recording failed (P0-6 fail-closed): %v", err)
 	}
 
 	sanitizedJSON, _ := json.Marshal(result.SanitizedData)

@@ -24,7 +24,7 @@ import (
 
 // Server gRPC 隐私服务服务端
 type Server struct {
-	pb.UnimplementedPrivacyServiceServer
+	*TypedServer
 	svc     *service.PrivacyService
 	metrics *observability.EngineMetrics
 	*pkggrpcserver.Server
@@ -34,8 +34,9 @@ type Server struct {
 // 可选传入 grpc.ServerOption（如 Keepalive、TLS 凭证、mTLS 白名单拦截器）
 func NewServer(svc *service.PrivacyService, opts ...grpc.ServerOption) *Server {
 	return &Server{
-		svc:    svc,
-		Server: pkggrpcserver.New("", opts...),
+		TypedServer: NewTypedServer(svc),
+		svc:         svc,
+		Server:      pkggrpcserver.New("", opts...),
 	}
 }
 
@@ -48,12 +49,21 @@ func (s *Server) WithMetrics(m *observability.EngineMetrics) *Server {
 // Serve 启动 gRPC 服务（阻塞）
 func (s *Server) Serve(lis net.Listener) error {
 	builtinOpts := []grpc.ServerOption{
-		grpc.MaxRecvMsgSize(64 * 1024 * 1024),       // 64MB 接收上限，防止 OOM
-		grpc.MaxSendMsgSize(64 * 1024 * 1024),       // 64MB 发送上限
-		grpc.MaxConcurrentStreams(250),              // 并发流限制
-		grpc.UnaryInterceptor(authUnaryInterceptor), // 三级等保/密评：gRPC 应用层鉴权
+		grpc.MaxRecvMsgSize(64 * 1024 * 1024), // 64MB 接收上限，防止 OOM
+		grpc.MaxSendMsgSize(64 * 1024 * 1024), // 64MB 发送上限
+		grpc.MaxConcurrentStreams(250),        // 并发流限制
 	}
 	s.WithOptions(builtinOpts...)
+	// 拦截器链统一用 ChainUnaryInterceptor 组装（不再混用已废弃的 UnaryInterceptor），
+	// 以保证与调用方传入的 mTLS CN 白名单拦截器之间「按注册顺序由外到内」的可预期次序：
+	// mTLS CN 白名单 → IP 准入白名单 → 应用层鉴权 → 身份级限流 → 指标。
+	guardUnary, guardStream := grpcGuardInterceptors(authUnaryInterceptor)
+	if len(guardUnary) > 0 {
+		s.WithUnaryInterceptor(guardUnary...)
+	}
+	if len(guardStream) > 0 {
+		s.WithStreamInterceptor(guardStream...)
+	}
 	if s.metrics != nil {
 		s.WithUnaryInterceptor(s.metrics.UnaryServerInterceptor())
 	}

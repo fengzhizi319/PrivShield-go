@@ -109,7 +109,19 @@ func ConstantTimeLookup(keys map[string]*KeyConfig, token string) *KeyConfig {
 
 // AuthenticateAPIKey 在内部和外部 key 存储中查找 token。
 // 过期 key（IsExpired() == true）视为无效，返回 nil。
+//
+// 热轮转语义：若 Settings.LiveInternalKeys 已提供，先查活密钥（KeyStore 当前快照），
+// 再回退静态内部密钥。REST 与 gRPC 拦截器都调本函数，因此密钥轮换/吊销在两条路径上
+// 行为完全一致，不需各服务自己复制“热重载中间件”（历史上副本会遗漏 scope 鉴权）。
 func AuthenticateAPIKey(settings *Settings, token string) *Identity {
+	if settings == nil {
+		return nil
+	}
+	if settings.LiveInternalKeys != nil {
+		if live := ConstantTimeLookup(settings.LiveInternalKeys(), token); live != nil {
+			return &Identity{ServiceType: "internal", Name: live.Name, Scopes: live.Scopes}
+		}
+	}
 	if internal := ConstantTimeLookup(settings.InternalKeys, token); internal != nil {
 		if internal.IsExpired() {
 			return nil
@@ -159,7 +171,8 @@ func AuthMiddleware(settings *Settings) gin.HandlerFunc {
 		}
 
 		// 接口级权限校验 (PermissionForRESTPath)
-		// 未映射路径返回空字符串，表示无需特定权限（对所有已认证身份开放）。
+		// 映射函数对未显式登记的路径 fail-closed 返回最高权限 "admin"（而非空串），
+		// 因此新增路由若遗忘配 scope 会被默认锁死，由启动期审计与 CI 门禁提醒补显式映射。
 		requiredPerm := PermissionForRESTPath(path)
 		if requiredPerm != "" && !identity.HasPermission(requiredPerm) {
 			AuthForbiddenTotal.Inc()

@@ -62,6 +62,7 @@ func newGRPCServerRunner(
 	grpcServerOpts := []grpc.ServerOption{
 		grpc.MaxRecvMsgSize(maxMsgSize),
 		grpc.MaxSendMsgSize(maxMsgSize),
+		grpc.MaxConcurrentStreams(250), // L-2：限制单连接并发流上限，防御单连接洪泛（与 privacy-engine gRPC 服务端对齐）
 		grpc.KeepaliveParams(keepalive.ServerParameters{
 			MaxConnectionIdle:     15 * time.Minute,
 			MaxConnectionAge:      2 * time.Hour,

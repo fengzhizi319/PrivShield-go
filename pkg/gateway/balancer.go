@@ -127,14 +127,22 @@ type LoadBalancer struct {
 	rrIndex  atomic.Int32 // round-robin 原子计数器（无锁化）
 }
 
-// NewLoadBalancer 创建负载均衡器
-func NewLoadBalancer(addresses []string, strategy string) *LoadBalancer {
+// NewLoadBalancer 创建负载均衡器。可选传入自定义熔断器配置。
+func NewLoadBalancer(addresses []string, strategy string, cbOpts ...circuitbreaker.Options) *LoadBalancer {
+	opts := circuitbreaker.Options{
+		Threshold:   5,
+		Cooldown:    30 * time.Second,
+		HalfOpenMax: 3,
+	}
+	if len(cbOpts) > 0 {
+		opts = cbOpts[0]
+	}
 	nodes := make([]*BackendNode, len(addresses))
 	for i, addr := range addresses {
 		nodes[i] = &BackendNode{
 			Address: addr,
 			Weight:  1,
-			CB:      circuitbreaker.NewBreaker(5, 30*time.Second),
+			CB:      circuitbreaker.New(opts),
 		}
 	}
 	return &LoadBalancer{
@@ -143,9 +151,17 @@ func NewLoadBalancer(addresses []string, strategy string) *LoadBalancer {
 	}
 }
 
-// NewWeightedLoadBalancer 创建支持权重的负载均衡器。
+// NewWeightedLoadBalancer 创建支持权重的负载均衡器。可选传入自定义熔断器配置。
 // weights 与 addresses 一一对应，值越大分配流量越多。
-func NewWeightedLoadBalancer(addresses []string, weights []int, strategy string) *LoadBalancer {
+func NewWeightedLoadBalancer(addresses []string, weights []int, strategy string, cbOpts ...circuitbreaker.Options) *LoadBalancer {
+	opts := circuitbreaker.Options{
+		Threshold:   5,
+		Cooldown:    30 * time.Second,
+		HalfOpenMax: 3,
+	}
+	if len(cbOpts) > 0 {
+		opts = cbOpts[0]
+	}
 	nodes := make([]*BackendNode, len(addresses))
 	for i, addr := range addresses {
 		w := 1
@@ -155,7 +171,7 @@ func NewWeightedLoadBalancer(addresses []string, weights []int, strategy string)
 		nodes[i] = &BackendNode{
 			Address: addr,
 			Weight:  w,
-			CB:      circuitbreaker.NewBreaker(5, 30*time.Second),
+			CB:      circuitbreaker.New(opts),
 		}
 	}
 	return &LoadBalancer{

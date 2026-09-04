@@ -2142,10 +2142,34 @@ func (b *Breaker) Allow() bool {
 
 **并发安全**：所有方法使用 `sync.Mutex` 保护，`Allow()` 在 Open 状态下同时检查冷却期并自动转换为 HalfOpen。
 
-**Review 关注问题**：
-- `halfOpenMax` 硬编码为 3，是否需要配置化？
-- 冷却时间 `cooldown` 默认 30s 是否适合所有后端场景？
-- `RecordFailure()` 中 `openedAt` 在每次失败时都更新（L123），而非仅在状态转换时更新 — 这是否影响冷却期计算？
+**Review 关注问题与生产级改进方案（已落地完成）**：
+
+1. **`halfOpenMax` 硬编码为 3，是否需要配置化？**
+   - **现状与痛点**：早期版本直接硬编码为 3。但在高吞吐量网关集群（数千 QPS）下，3 个探测样本对统计置信度而言偏小，容易因偶发成功而误恢复；而在下游为极其脆弱或冷启动缓慢的后端服务时，3 个并发探测又可能造成二次冲击。
+   - **改进落地**：
+     - 去除旧版兼容负担，熔断器构造函数直接升级为统一配置结构体 `circuitbreaker.New(opts Options) *Breaker`（`NewBreaker` 作为统一别名），彻底消除旧签名 `NewBreaker(threshold, cooldown)` 与 `...WithOptions` 的重复设计。
+     - 同时贯通 `pkg/agent.Config`（新增 `CBHalfOpenMax` 字段）与 `pkg/gateway.NewLoadBalancer(addresses, strategy, cbOpts...)`，允许各业务服务与网关直接按需定制半开探测窗口。
+
+2. **冷却时间 `cooldown` 默认 30s 是否适合所有后端场景？**
+   - **现状与痛点**：对于内网低延迟微服务（如内部 Agent RPC），30s 冷却过长，故障自愈恢复极慢；而对于外部大模型（LLM API）或第三方受限接口，30s 又可能过短，易触发上游二次限流。此外，若后端持续宕机，固定 30s 冷却会导致不断重复冲击下游，缺乏自适应保护。
+   - **改进落地**：
+     - 支持调用方根据场景灵活指定基础冷却时间 `Cooldown`；
+     - 引入**自适应指数退避机制**（`BackoffFactor` 与 `MaxCooldown`）：
+       - 当半开探测失败重新熔断（`HalfOpen → Open`）时，当前冷却时间自动按倍数递增（如 `cooldown * 2.0`，最高封顶至 `MaxCooldown`）；
+       - 当探测成功完全恢复到 `Closed` 状态时，冷却时间立即重置为基础冷却期 `baseCooldown`；
+       - 首次因常规失败触发熔断时使用基础冷却期。此机制兼顾了瞬时抖动的快速探测与持续宕机下的指数退避自我保护。
+
+3. **`RecordFailure()` 中 `openedAt` 在每次失败时都更新，而非仅在状态转换时更新 — 是否影响冷却期计算？**
+   - **缺陷机理（严重饥饿 Starvation Bug）**：
+     - 原实现中，`openedAt = time.Now()` 在每次调用 `RecordFailure()` 时无条件执行。
+     - **严重后果**：在高并发场景下，熔断器由 `Closed` 转入 `Open` 瞬间，此前在途已发出的数十个并发请求因下游宕机陆续超时或失败，这些迟滞到达的失败请求相继调用 `RecordFailure()`。每一次调用都将 `openedAt` 强行重置为当前最新时间！
+     - 导致 `time.Since(b.openedAt) >= b.cooldown` 的冷却计时点被持续无休止后延，熔断器陷入**死锁饥饿（Starvation）**，无法正常进入 `HalfOpen` 探测自愈。
+     - 此外，在 `StateClosed` 状态下常规调用 `RecordFailure()` 也会无意义污染 `openedAt` 时间戳。
+   - **改进落地**：
+     - 严格限定 `openedAt = time.Now()` 仅在**状态跃迁至 `StateOpen` 的瞬间**记录（即 `Closed → Open` 达到连续失败阈值，或 `HalfOpen → Open` 探测失败回退）；
+     - 当熔断器已经处于 `StateOpen` 状态时，收到任何在途滞后失败回调，绝对不更新 `openedAt`，彻底消除饥饿风险；
+     - `StateClosed` 未达到阈值时不触碰 `openedAt`，保持语义纯正。
+
 
 #### 3.2.5 HTTP 反向代理处理器
 

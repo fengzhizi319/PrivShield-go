@@ -54,7 +54,7 @@ type Task struct {
 
 	// ── Phase B: Lease fields for multi-replica Hub / 多副本 Hub 租约字段 ──
 	LeaseOwner     string     `json:"lease_owner,omitempty"`      // 当前持有该任务租约的所有者实例标识（如 "hub-node-1"）
-	LeaseToken     string     `json:"lease_token,omitempty"`      // 当前租约的唯一随机令牌（防止过期所有者产生陈旧覆盖写入）
+	LeaseToken     string     `json:"-"`                          // 当前租约的唯一随机令牌（防止过期所有者产生陈旧覆盖写入）；属 fencing token，不得随任务读 API 序列化外泄
 	LeaseExpiresAt *time.Time `json:"lease_expires_at,omitempty"` // 租约绝对过期时间（为 nil 表示未被锁定）
 	Version        int        `json:"version"`                    // 乐观并发控制版本计数器
 	MaxRetries     int        `json:"max_retries"`                // 允许的最大重试次数（默认 3 次）

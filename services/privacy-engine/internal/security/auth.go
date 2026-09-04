@@ -1,73 +1,23 @@
 package security
 
 import (
-	"net/http"
-
 	"github.com/gin-gonic/gin"
 
 	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	pkgmiddleware "github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 )
 
-// AuthMiddleware 返回 Gin 中间件，执行 API Key 认证。
+// AuthMiddleware 返回 Gin 中间件，执行 API Key 认证 + 按路径 scope 鉴权。
 // 认证未启用时透传并注入匿名身份。
-// 若配置了 KeyStore（AGENT_AUTH_KEYS_FILE），每请求读取最新 keys 实现热轮转。
+//
+// 热轮转（AGENT_AUTH_KEYS_FILE）不再走单独副本：活密钥由 Settings.LiveInternalKeys 携带，
+// 统一在 pkg/auth.AuthenticateAPIKey 内活读。历史上此处有一份“热重载中间件”副本，只做了
+// 认证而**遗漏了 PermissionForRESTPath 的 scope 校验**，导致只要配了密钥文件，任何一把合法
+// Key（哪怕只有 health:read）都能调用 budget/reset、dynclassification 写接口、/debug/pprof 等
+// 全部端点；同时它把 InternalKeys 整体替换为文件密钥，使环境变量密钥在 REST 面静默失效。
+// 现收敛为单一实现，REST 与 gRPC 的认证、吊销、scope 语义从此不会再分叉。
 func AuthMiddleware() gin.HandlerFunc {
-	settings := GetSettings()
-	if keyStore != nil {
-		return hotReloadAuthMiddleware(settings)
-	}
-	return pkgauth.AuthMiddleware(&settings.Settings)
-}
-
-// hotReloadAuthMiddleware 每请求从 KeyStore 读取最新 keys，实现 API Key 热轮转。
-func hotReloadAuthMiddleware(settings *Settings) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		path := c.Request.URL.Path
-
-		if pkgauth.IsHealthPathOrMethod(path) && settings.HealthNoAuth {
-			c.Set(pkgauth.IdentityContextKey, &Identity{ServiceType: "internal", Name: "health-probe", Scopes: []string{"*"}})
-			c.Next()
-			return
-		}
-
-		if !settings.AuthEnabled {
-			c.Set(pkgauth.IdentityContextKey, pkgauth.AnonymousIdentity)
-			c.Next()
-			return
-		}
-
-		token := pkgauth.ExtractBearerToken(c.GetHeader("Authorization"))
-		if token == "" {
-			abortWithAuthError(c, "UNAUTHENTICATED", "Unauthorized: missing credentials")
-			return
-		}
-
-		ks := GetKeyStore()
-		if ks == nil {
-			abortWithAuthError(c, "UNAUTHENTICATED", "Unauthorized: key store unavailable")
-			return
-		}
-
-		currentKeys := ks.Keys()
-		lookupSettings := &pkgauth.Settings{
-			AuthEnabled:  true,
-			InternalKeys: currentKeys,
-			ExternalKeys: settings.ExternalKeys,
-		}
-		identity := pkgauth.AuthenticateAPIKey(lookupSettings, token)
-		if identity == nil {
-			abortWithAuthError(c, "UNAUTHENTICATED", "Unauthorized: invalid credentials")
-			return
-		}
-
-		c.Set(pkgauth.IdentityContextKey, identity)
-		c.Next()
-	}
-}
-
-func abortWithAuthError(c *gin.Context, code, msg string) {
-	pkgmiddleware.AbortWithError(c, http.StatusUnauthorized, code, msg, nil)
+	return pkgauth.AuthMiddleware(&GetSettings().Settings)
 }
 
 // RequirePermission 返回需要指定权限的 Gin 中间件。

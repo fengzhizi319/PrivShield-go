@@ -272,6 +272,16 @@ func (r *Runtime) Validate() error {
 		return err
 	}
 
+	// 密钥文件已声明但不可读时，loadSettings 会回退到环境变量密钥——即「运维以为在用文件管密钥，
+	// 实际文件改动对运行期无任何影响」的静音降级，故启动期即拒绝（对齐证书与 mTLS 白名单的 fail-fast）。
+	if path := strings.TrimSpace(pkgconfig.EnvString("AGENT_AUTH_KEYS_FILE", "")); path != "" {
+		if info, err := os.Stat(path); err != nil {
+			return fmt.Errorf("%s: AGENT_AUTH_KEYS_FILE not accessible: %s: %w", r.ServiceName, path, err)
+		} else if info.IsDir() {
+			return fmt.Errorf("%s: AGENT_AUTH_KEYS_FILE is a directory: %s", r.ServiceName, path)
+		}
+	}
+
 	// internal mTLS 已声明启用：白名单文件必须真实存在且可读，否则 gRPC 侧身份鉴别完全不生效。
 	if r.MTLSEnabled {
 		path := strings.TrimSpace(r.MTLSWhitelistFile)
@@ -304,12 +314,15 @@ func (r *Runtime) AuthEffectivelyEnabled() bool {
 }
 
 // inboundKeyConfigured 检查与 internal/security.loadSettings 同源的 Key 环境变量是否至少配置了一项。
+// AGENT_AUTH_KEYS_FILE 也是合法密钥源（文件型 + 5s 热轮转），必须纳入口径，
+// 否则「只配了密钥文件、未配环境变量 Key」的部署会被非环回门禁误判为无凭据。
 func inboundKeyConfigured() bool {
 	for _, key := range []string{
 		"AGENT_AUTH_INTERNAL_API_KEYS",
 		"AGENT_AUTH_API_KEY",
 		"AGENT_AUTH_EXTERNAL_API_KEYS",
 		"AGENT_AUTH_STATIC_API_KEYS",
+		"AGENT_AUTH_KEYS_FILE",
 	} {
 		if strings.TrimSpace(os.Getenv(key)) != "" {
 			return true

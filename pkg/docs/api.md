@@ -225,7 +225,7 @@ type Task struct {
     RetryAfter     *time.Time `json:"retry_after,omitempty"`
     TraceID        string     `json:"trace_id,omitempty"`
     LeaseOwner     string     `json:"lease_owner,omitempty"`
-    LeaseToken     string     `json:"lease_token,omitempty"`
+    LeaseToken     string     `json:"-"` // fencing token，不外泄
     LeaseExpiresAt *time.Time `json:"lease_expires_at,omitempty"`
     Version        int        `json:"version"`
     MaxRetries     int        `json:"max_retries"`

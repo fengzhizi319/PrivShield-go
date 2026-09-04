@@ -57,6 +57,10 @@ func PermissionForRESTPath(path string) string {
 	switch {
 	case normalized == "/health" || normalized == "/livez" || normalized == "/readyz" || normalized == "/readyz/llm":
 		return "health:read"
+	case normalized == "/metrics":
+		// Prometheus 抓取端点：归入与 /v1/ops/* 同级的运维诊断权限，避免为监控采集器发放
+		// admin 密钥（最小权限）；必须显式登记，不得落入 fail-closed 的 admin 兜底。
+		return "ops:diagnostics"
 	// 根路径直调别名（/agent/process, /medical/process 等）
 	case normalized == "/agent/process":
 		return "agent:process"
@@ -126,7 +130,7 @@ func PermissionForGRPCMethod(method string) string {
 		"DPNoisyHistogram": "privacy:dp", "DPChunkedCount": "privacy:dp",
 		"DPChunkedSum": "privacy:dp", "DPChunkedMean": "privacy:dp",
 		"DPChunkedHistogram": "privacy:dp", "DPAggregate": "privacy:dp",
-		"DPVectorSum": "privacy:dp", "DPAdaptiveClip": "privacy:dp",
+		"DPVectorSum": "privacy:dp", "DPVectorMean": "privacy:dp", "DPAdaptiveClip": "privacy:dp",
 		"DPGroupBy":          "privacy:dp",
 		"PerturbBinaryBatch": "privacy:dp", "PerturbCategoricalBatch": "privacy:dp",
 		"EstimateBinaryFrequency": "privacy:dp", "EstimateCategoricalHistogram": "privacy:dp",
@@ -272,4 +276,37 @@ func ServiceHubPermissionForPath(path string) string {
 		// fail-closed：未显式映射的非豁免路径默认归入最高 admin 权限，防止空 scope 绕过
 		return "admin"
 	}
+}
+
+// CheckDatasourceAccess 执行数据源级细粒度授权（ABAC / 租户数据源隔离），
+// 供 service-hub 的 REST 与 gRPC 双路径复用，判定顺序遵循 fail-closed 最小权限：
+//  1. 无身份（未启用鉴权的开发/免密模式）→ 放行；
+//  2. 拥有超级管理权限（"*" 或 "admin"）→ 放行；
+//  3. 命中该数据源显式授权（hub:dispatch:<normID|rawID> / data:apply:<normID|rawID>）→ 放行；
+//  4. 声明了任意细粒度数据源限定（hub:dispatch:ds_ / data:apply: 前缀）但未命中当前数据源 → 拒绝（越权）；
+//  5. 未声明细粒度限定但拥有通用调度权限（hub:dispatch / hub:dispatch:*）→ 放行；否则拒绝。
+func CheckDatasourceAccess(id *Identity, normID, rawID string) bool {
+	if id == nil {
+		return true
+	}
+	if id.HasPermission("*") || id.HasPermission("admin") {
+		return true
+	}
+	dsPerms := []string{
+		"hub:dispatch:" + normID,
+		"hub:dispatch:" + rawID,
+		"data:apply:" + normID,
+		"data:apply:" + rawID,
+	}
+	for _, p := range dsPerms {
+		if id.HasPermission(p) {
+			return true
+		}
+	}
+	for _, sc := range id.Scopes {
+		if strings.HasPrefix(sc, "hub:dispatch:ds_") || strings.HasPrefix(sc, "data:apply:") {
+			return false
+		}
+	}
+	return id.HasPermission("hub:dispatch") || id.HasPermission("hub:dispatch:*")
 }

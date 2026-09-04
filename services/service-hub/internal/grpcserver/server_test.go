@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +26,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield-go/pkg/store"
 	"github.com/fengzhizi319/PrivShield-go/pkg/store/memory"
@@ -976,5 +978,226 @@ func TestGRPCServer_LocalPendingWorker(t *testing.T) {
 	if !completed {
 		tCheck, _ := taskStore.Get("grpc-recovered-task")
 		t.Fatalf("expected task to be completed by grpc local worker, got state: %+v", tCheck)
+	}
+}
+
+func TestGRPCServer_FetchAndDesensitize_SuccessAndEvidence(t *testing.T) {
+	// 1. Mock datasource-mgr
+	mockDS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/v1/datasources/ds_yibao/record-by-id") {
+			http.NotFound(w, r)
+			return
+		}
+		idCard := r.URL.Query().Get("id_card_no")
+		if idCard != "110101199003072345" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"found": false})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"found": true,
+			"record": map[string]any{
+				"id_card_no": "110101199003072345",
+				"name":       "张三",
+				"diagnosis":  "高血压",
+			},
+		})
+	}))
+	defer mockDS.Close()
+
+	// 2. Mock upstream agent
+	mockAgent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"level": "L3",
+			"sanitized_data": []map[string]any{
+				{
+					"id_card_no": "110101********2345",
+					"name":       "张*",
+					"diagnosis":  "高血压",
+				},
+			},
+			"classification_report": []map[string]any{
+				{"field": "id_card_no", "level": "L3"},
+			},
+			"summary": map[string]any{
+				"input_hash":    "sm3_input_hash_123",
+				"output_hash":   "sm3_output_hash_456",
+				"overall_level": "L3",
+			},
+		})
+	}))
+	defer mockAgent.Close()
+
+	// 3. Evidence stub (audit-log)
+	evStub := startEvidenceStub(t)
+
+	host, portStr, _ := net.SplitHostPort(mockDS.Listener.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+
+	cfg := &config.Config{
+		DatasourceRESTHost: host,
+		DatasourceRESTPort: port,
+		AuditLogBaseURLs:   []string{evStub.url()},
+		AuditLogTimeout:    2,
+	}
+
+	mc := metrics.NewCollector("fad-test")
+	t.Setenv("PRIVACY_AGENT_URLS", mockAgent.URL)
+	ag, err := agent.New(cfg, mc)
+	if err != nil {
+		t.Fatalf("new agent: %v", err)
+	}
+	ds := datasource.New(cfg)
+	srv := New(ag, ds, cfg, memory.NewTaskStore(), slog.Default())
+	defer srv.Shutdown()
+
+	ctx := context.Background()
+	req := &pb.FetchAndDesensitizeRequest{
+		DatasourceId: "ds_yibao",
+		IdCardNo:     "110101199003072345",
+	}
+
+	resp, err := srv.FetchAndDesensitize(ctx, req)
+	if err != nil {
+		t.Fatalf("FetchAndDesensitize failed: %v", err)
+	}
+
+	if !resp.Found {
+		t.Fatal("expected found=true, got false")
+	}
+	if resp.Level != "L3" {
+		t.Fatalf("expected level L3, got %s", resp.Level)
+	}
+	if !strings.Contains(resp.SanitizedDataJson, "张*") {
+		t.Fatalf("expected sanitized data to contain 张*, got %s", resp.SanitizedDataJson)
+	}
+
+	// 校验存证必留痕
+	if evStub.callCount() != 1 {
+		t.Fatalf("expected 1 evidence submission, got %d", evStub.callCount())
+	}
+	sub := evStub.submissions()[0]
+	if sub["operation"] != "mask" {
+		t.Errorf("expected operation=mask, got %v", sub["operation"])
+	}
+	if sub["datasource"] != "ds_yibao" {
+		t.Errorf("expected datasource=ds_yibao, got %v", sub["datasource"])
+	}
+	if sub["security_level"] != "L3" {
+		t.Errorf("expected security_level=L3, got %v", sub["security_level"])
+	}
+	if sub["input_hash"] != "sm3_input_hash_123" {
+		t.Errorf("expected input_hash=sm3_input_hash_123, got %v", sub["input_hash"])
+	}
+	if sub["output_hash"] != "sm3_output_hash_456" {
+		t.Errorf("expected output_hash=sm3_output_hash_456, got %v", sub["output_hash"])
+	}
+	params, ok := sub["parameters"].(map[string]any)
+	if !ok || params["protocol"] != "grpc" {
+		t.Errorf("expected parameters.protocol=grpc, got %v", params)
+	}
+}
+
+func TestGRPCServer_FetchAndDesensitize_AuditFailure_FailClosed(t *testing.T) {
+	mockDS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"found": true,
+			"record": map[string]any{
+				"id_card_no": "110101199003072345",
+				"name":       "李四",
+			},
+		})
+	}))
+	defer mockDS.Close()
+
+	mockAgent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"level": "L2",
+			"sanitized_data": []map[string]any{
+				{"id_card_no": "110101********2345", "name": "李*"},
+			},
+			"summary": map[string]any{
+				"input_hash":  "sm3_in",
+				"output_hash": "sm3_out",
+			},
+		})
+	}))
+	defer mockAgent.Close()
+
+	evStub := startEvidenceStub(t)
+	// 模拟存证失败 (P0-6 fail-closed: 存证失败时绝不返回脱敏数据)
+	evStub.failWith(http.StatusServiceUnavailable)
+
+	host, portStr, _ := net.SplitHostPort(mockDS.Listener.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+
+	cfg := &config.Config{
+		DatasourceRESTHost: host,
+		DatasourceRESTPort: port,
+		AuditLogBaseURLs:   []string{evStub.url()},
+		AuditLogTimeout:    1,
+		AuditLogMaxRetries: 0,
+	}
+
+	t.Setenv("PRIVACY_AGENT_URLS", mockAgent.URL)
+	ag, _ := agent.New(cfg, metrics.NewCollector("fad-fc-test"))
+	ds := datasource.New(cfg)
+	srv := New(ag, ds, cfg, memory.NewTaskStore(), slog.Default())
+	defer srv.Shutdown()
+
+	ctx := context.Background()
+	req := &pb.FetchAndDesensitizeRequest{
+		DatasourceId: "ds_yibao",
+		IdCardNo:     "110101199003072345",
+	}
+
+	resp, err := srv.FetchAndDesensitize(ctx, req)
+	if err == nil {
+		t.Fatalf("expected FetchAndDesensitize to fail when audit log fails (P0-6 fail-closed), got resp: %+v", resp)
+	}
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("expected codes.Unavailable, got %v", status.Code(err))
+	}
+	if !strings.Contains(err.Error(), "P0-6 fail-closed") {
+		t.Errorf("expected error message to mention P0-6 fail-closed, got: %v", err)
+	}
+}
+
+func TestGRPCServer_FetchAndDesensitize_ValidationAndAuth(t *testing.T) {
+	srv, _, _ := setupTestGRPCServer(t, nil)
+	ctx := context.Background()
+
+	// 1. Empty datasource_id
+	_, err := srv.FetchAndDesensitize(ctx, &pb.FetchAndDesensitizeRequest{
+		DatasourceId: "",
+		IdCardNo:     "110101199003072345",
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument for empty datasource_id, got %v", err)
+	}
+
+	// 2. Invalid id_card_no length
+	_, err = srv.FetchAndDesensitize(ctx, &pb.FetchAndDesensitizeRequest{
+		DatasourceId: "ds_yibao",
+		IdCardNo:     "12345",
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument for invalid id_card_no, got %v", err)
+	}
+
+	// 3. Unauthorized caller (ABAC)
+	unauthCtx := ContextWithIdentity(ctx, &pkgauth.Identity{
+		Name:   "app-kangyang",
+		Scopes: []string{"hub:dispatch:ds_kangyang"},
+	})
+	_, err = srv.FetchAndDesensitize(unauthCtx, &pb.FetchAndDesensitizeRequest{
+		DatasourceId: "ds_yibao",
+		IdCardNo:     "110101199003072345",
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied for unauthorized datasource, got %v", err)
 	}
 }

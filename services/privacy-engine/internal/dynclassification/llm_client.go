@@ -433,14 +433,23 @@ func (c *LLMClient) recordSuccess() {
 	c.cbState = CircuitClosed
 }
 
-// recordFailure 记录一次失败调用，连续超阈值触发熔断
+// recordFailure 记录一次失败调用，连续超阈值触发熔断。
+// 仅在状态流转进入 CircuitOpen 时记录 lastFailure 时间戳，避免已处于 CircuitOpen 时因迟滞超时错误反复后推冷却期。
 func (c *LLMClient) recordFailure() {
 	c.cbMu.Lock()
 	defer c.cbMu.Unlock()
-	c.failures++
-	c.lastFailure = time.Now()
-	if c.failures >= 3 {
+	switch c.cbState {
+	case CircuitClosed:
+		c.failures++
+		if c.failures >= 3 {
+			c.cbState = CircuitOpen
+			c.lastFailure = time.Now()
+		}
+	case CircuitHalfOpen:
 		c.cbState = CircuitOpen
+		c.lastFailure = time.Now()
+	case CircuitOpen:
+		// 熔断开启中，在途残余错误到达不更新 lastFailure，防饥饿
 	}
 }
 

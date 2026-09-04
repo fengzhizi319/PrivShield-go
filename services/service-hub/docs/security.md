@@ -98,6 +98,18 @@
   - 外部流通调度权限：`hub:dispatch`、`hub:read`（签发给外部申请方）；
 - **越权阻断**：外部申请方持有的 Key 绝不包含 `agent:process` 等内部权限。即便通过内网渗透尝试直调引擎接口，也会被引擎侧的 `AuthMiddleware` 拦截并返回 `403 FORBIDDEN: insufficient scope`。
 
+#### 2.3.1 权限映射完整性保障（防「加路由忘配权限」）
+
+Scope 鉴权采用「集中式 `path → permission` 映射」（本服务的 `pkgauth.ServiceHubPermissionForPath`），与路由注册（`RegisterRoutes`）**物理分离**。当接口数量增长时，最大的隐患是：新增路由遗漏在映射函数中登记。为此系统构建了**三层防御闭环**，保证任何新增注册接口都不会无遗漏地漏配权限：
+
+| 层次 | 手段 | 触发时机 | 代码位置 |
+|---|---|---|---|
+| **运行时兜底** | fail-closed：未显式映射的路径默认归入最高 `admin` 权限，绝不因漏配而放行 | 每次请求 | `ServiceHubPermissionForPath` 的 `default` 分支 |
+| **启动期审计** | 服务启动遍历全部路由，凡落入兜底 `admin`（且不在基础设施白名单）即打 `WARN` 列出 `method+path` | 进程启动 | `pkgauth.LogRoutePermissionAudit`（在 `RegisterRoutes` 末尾调用） |
+| **CI 门禁** | 单测断言「全部路由均有显式映射」，一旦新增路由漏配即刻 `go test` 失败 | 每次 PR / `make test` | `TestAllRoutesHaveExplicitPermission`（`internal/handlers/route_audit_test.go`） |
+
+> 通用审计器 `pkgauth.AuditRoutePermissions` / `LogRoutePermissionAudit` 下沉在 [`pkg/auth/route_audit.go`](file:///home/charles/code/PrivShield-go/pkg/auth/route_audit.go)，privacy-engine、service-hub、audit-log 三服务共用同一套机制，各自传入本服务的权限函数与兜底哨兵值（`admin` / `audit:admin`）。对确属「有意仅 `admin` 可见」的基础设施路由（如指标抓取），通过 `allowFallback` 白名单显式豁免，避免噪声的同时保留对新增遗漏路由的拦截力。
+
 ### 2.4 第四道防线：数据源租户授权矩阵（ABAC / 租户数据源隔离）
 
 在 `Service-Hub` 的 [`Dispatch`](file:///home/charles/code/PrivShield-go/services/service-hub/internal/handlers/handlers.go) 与 [`FetchAndDesensitize`](file:///home/charles/code/PrivShield-go/services/service-hub/internal/handlers/handlers.go) 入口处，实现了细粒度的数据源授权检查（ABAC）：

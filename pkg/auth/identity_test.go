@@ -5,8 +5,8 @@
 // 本测试文件验证 Package auth（身份认证与权限映射）的核心功能：
 //  1. 【Identity.HasPermission 权限判定】：验证通配符 "*"、精确匹配、多 Scope 列表、空 Scope 等场景下的权限校验逻辑；
 //  2. 【PermissionForRESTPath 路径→权限映射】：验证所有 REST 端点（健康探活、隐私原语、Agent 处理、运维诊断、pprof）
-//     到权限字符串的映射覆盖完整性，未知路径返回空串（fail-closed）；
-//  3. 【PermissionForGRPCMethod 方法→权限映射】：验证 gRPC 全限定方法名到权限字符串的映射，未知方法返回空串；
+//     到权限字符串的映射覆盖完整性，未知路径 fail-closed 归入最高权限 "admin"；
+//  3. 【PermissionForGRPCMethod 方法→权限映射】：验证 gRPC 全限定方法名到权限字符串的映射，未知方法同样 fail-closed 归入 "admin"；
 //  4. 【IsHealthPathOrMethod 探活识别】：验证 REST 探活路径（/health、/livez、/readyz）与 gRPC Health 方法的统一识别。
 // ==============================================================================
 
@@ -50,7 +50,7 @@ func TestIdentity_HasPermission(t *testing.T) {
 // TestPermissionForRESTPath 验证 REST 路径到权限字符串的映射覆盖所有端点类型。
 // 执行逻辑：遍历健康探活（/health、/livez、/readyz）、隐私原语（mask/dp/kano/qol/budget）、
 // Agent 处理、运维诊断、pprof 管理端及未知路径，断言每条路径映射到正确的权限字符串，
-// 未知路径返回空串（fail-closed 安全语义）。
+// 未知路径 fail-closed 归入最高权限 "admin"（而非返回空串放行）。
 func TestPermissionForRESTPath(t *testing.T) {
 	tests := []struct {
 		path string

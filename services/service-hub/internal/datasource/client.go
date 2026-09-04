@@ -127,7 +127,11 @@ func New(cfg *config.Config) *Client {
 
 	breakers := make(map[string]*circuitbreaker.Breaker, len(baseURLs))
 	for _, ep := range baseURLs {
-		breakers[ep] = circuitbreaker.NewBreaker(cbThreshold, cbCooldown)
+		breakers[ep] = circuitbreaker.New(circuitbreaker.Options{
+			Threshold:   cbThreshold,
+			Cooldown:    cbCooldown,
+			HalfOpenMax: 3,
+		})
 	}
 
 	return &Client{
@@ -192,7 +196,11 @@ func (c *Client) breakerFor(endpoint string) *circuitbreaker.Breaker {
 	}
 	b, ok := c.breakers[endpoint]
 	if !ok {
-		b = circuitbreaker.NewBreaker(c.cbThreshold, c.cbCooldown)
+		b = circuitbreaker.New(circuitbreaker.Options{
+			Threshold:   c.cbThreshold,
+			Cooldown:    c.cbCooldown,
+			HalfOpenMax: 3,
+		})
 		c.breakers[endpoint] = b
 	}
 	return b

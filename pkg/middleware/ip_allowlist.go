@@ -2,9 +2,7 @@ package middleware
 
 import (
 	"log/slog"
-	"net"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -19,32 +17,8 @@ func IPAllowlist(allowedCIDRs []string) gin.HandlerFunc {
 		return func(c *gin.Context) { c.Next() }
 	}
 
-	networks := make([]*net.IPNet, 0, len(allowedCIDRs))
-	for _, cidr := range allowedCIDRs {
-		cidr = strings.TrimSpace(cidr)
-		if cidr == "" {
-			continue
-		}
-		// 支持单 IP（自动补 /32 或 /128）
-		if !strings.Contains(cidr, "/") {
-			ip := net.ParseIP(cidr)
-			if ip == nil {
-				slog.Warn("IPAllowlist: invalid IP/CIDR skipped", "entry", cidr)
-				continue
-			}
-			if ip.To4() != nil {
-				cidr = cidr + "/32"
-			} else {
-				cidr = cidr + "/128"
-			}
-		}
-		_, network, err := net.ParseCIDR(cidr)
-		if err != nil {
-			slog.Warn("IPAllowlist: invalid CIDR skipped", "entry", cidr, "error", err.Error())
-			continue
-		}
-		networks = append(networks, network)
-	}
+	// 网段编译与 gRPC 侧共用 ParseAllowedNetworks，保证两个端口的宽松度与日志口径完全一致
+	networks := ParseAllowedNetworks(allowedCIDRs)
 
 	if len(networks) == 0 {
 		slog.Warn("IPAllowlist: no valid CIDRs configured, all requests will pass through")
@@ -58,17 +32,9 @@ func IPAllowlist(allowedCIDRs []string) gin.HandlerFunc {
 			return
 		}
 
-		ip := net.ParseIP(clientIP)
-		if ip == nil {
-			AbortWithError(c, http.StatusForbidden, "FORBIDDEN", "invalid client IP", nil)
+		if IPAllowed(networks, clientIP) {
+			c.Next()
 			return
-		}
-
-		for _, network := range networks {
-			if network.Contains(ip) {
-				c.Next()
-				return
-			}
 		}
 
 		AbortWithError(c, http.StatusForbidden, "IP_NOT_ALLOWED", "client IP not in allowed CIDR ranges", nil)

@@ -214,3 +214,25 @@ message VerifyIntegrityResponse {
 
 #### `POST /v1/audit/report`
 - **说明**：生成权威合规评估报告，提供基于 DB51/T 2989—2023 与 GB/T 39786-2021 的治理合规评分与建议。
+
+---
+
+## 4. 接口权限（Scope）映射与完整性保障
+
+本服务对每个端点执行**基于 Scope 的接口级鉴权**（另有 P1-6 只读核验员 Key 权责分离）。`AuditLogPermissionForPath`（REST）与 `AuditLogPermissionForGRPCMethod`（gRPC）将方法+路径映射为所需权限：
+
+| Scope | 适用端点 |
+|---|---|
+| `audit:write` | `POST /v1/audit/logs`、`POST /v1/audit/report` |
+| `audit:read` | `GET /v1/audit/logs[/:id]`、`GET /v1/audit/stats`、`GET /v1/audit/snapshots` |
+| `audit:verify` | `POST /v1/audit/snapshots/verify`、`/v1/audit/chain/verify` |
+
+由于「路由注册」（`internal/handlers/handlers.go::RegisterRoutes`）与「权限映射」（`AuditLogPermissionForPath`）分离维护，为避免新增路由遗漏配权限，采用三层防御：
+
+| 层次 | 机制 |
+|---|---|
+| **运行时兜底** | 未显式映射的路径 fail-closed 归入最高 `audit:admin` 权限 |
+| **启动期审计** | `RegisterRoutes` 末尾调用 `pkgauth.LogRoutePermissionAudit`，遇落入兜底 `audit:admin` 的路由打 `WARN` |
+| **CI 门禁** | `internal/handlers/route_audit_test.go::TestAllRoutesHaveExplicitPermission` 断言全部路由均有显式映射 |
+
+> 作为不可篡改存证服务，权责分离要求极高，任何新增端点必须显式声明 read/write/verify 权限。通用审计器见 [`pkg/auth/route_audit.go`](file:///home/charles/code/PrivShield-go/pkg/auth/route_audit.go)。

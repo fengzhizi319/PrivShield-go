@@ -67,10 +67,13 @@ type Client struct {
 	cbMu          sync.Mutex                         // 保护熔断器状态变更的互斥锁
 	breakers      map[string]*circuitbreaker.Breaker // 归一化节点地址 → 该节点独立的熔断器状态
 	cbOrder       []string                           // 节点配置顺序，保证聚合状态与诊断输出稳定
-	cbThreshold   int                                // 触发单节点熔断的连续失败阈值（默认 5 次）
-	cbCooldown    time.Duration                      // 熔断开启后的冷却等待时间（默认 30s，冷却后转为 Half-Open）
-	stateObserver func(node, state string)           // 熔断器状态发生流转时的外部回调钩子（用于上报 Prometheus 指标）
-	tlcpEnabled   bool                               // 出站是否走国密 TLCP 传输（tlcp:// 基础地址归一为 https:// 由 DialTLS 完成国密握手）
+	cbThreshold     int                                // 触发单节点熔断的连续失败阈值（默认 5 次）
+	cbCooldown      time.Duration                      // 熔断开启后的冷却等待时间（默认 30s，冷却后转为 Half-Open）
+	cbHalfOpenMax   int                                // 半开探测最大并发数（默认 3）
+	cbMaxCooldown   time.Duration                      // 自适应退避冷却期上限
+	cbBackoffFactor float64                            // 自适应退避系数（>1.0 启用退避）
+	stateObserver   func(node, state string)           // 熔断器状态发生流转时的外部回调钩子（用于上报 Prometheus 指标）
+	tlcpEnabled     bool                               // 出站是否走国密 TLCP 传输（tlcp:// 基础地址归一为 https:// 由 DialTLS 完成国密握手）
 }
 
 // idempotencyKeyType is the context key for propagating X-Idempotency-Key.
@@ -236,10 +239,13 @@ type Config struct {
 	BaseURL        string                   // 上游 agent 单节点基础地址（如 "http://127.0.0.1:8079"；国密模式用 "tlcp://host:port"）
 	BaseURLs       []string                 // 上游 agent 多节点集群地址列表（设置时优先于 BaseURL，开启客户端负载均衡）
 	APIKey         string                   // 可选的 Bearer Token 鉴权凭证
-	Timeout        time.Duration            // HTTP 请求全局超时时间（默认 30s）
-	CBThreshold    int                      // 触发熔断的连续失败次数阈值（默认 5 次）
-	CBCooldown     time.Duration            // 熔断开启后的冷却重试等待时间（默认 30s）
-	MaxRetries     int                      // 网络故障与 5xx 错误的最大重试次数（默认 3 次，0 表示不重试）
+	Timeout         time.Duration            // HTTP 请求全局超时时间（默认 30s）
+	CBThreshold     int                      // 触发熔断的连续失败次数阈值（默认 5 次）
+	CBCooldown      time.Duration            // 熔断开启后的冷却重试等待时间（默认 30s）
+	CBHalfOpenMax   int                      // 半开状态下允许放行的最大并发探测请求数（默认 3）
+	CBMaxCooldown   time.Duration            // 启用自适应退避时的最大冷却期上限（默认 0，若 BackoffFactor>1.0 则按指数退避封顶）
+	CBBackoffFactor float64                  // 连续探测失败重新熔断时的冷却期指数退避系数（<=1.0 禁用退避）
+	MaxRetries      int                      // 网络故障与 5xx 错误的最大重试次数（默认 3 次，0 表示不重试）
 	RetryBaseDelay time.Duration            // 指数退避重试的基础时间（默认 500ms）
 	Logger         *slog.Logger             // 结构化日志器（默认使用 slog.Default()）
 	StateObserver  func(node, state string) // 熔断器状态变更时的观察者回调函数（入参为 node 与 state 字符串）
@@ -304,6 +310,13 @@ func New(cfg Config) *Client {
 		transport.TLSClientConfig = cfg.TLSConfig
 	}
 
+	cbOpts := circuitbreaker.Options{
+		Threshold:     cfg.CBThreshold,
+		Cooldown:      cfg.CBCooldown,
+		HalfOpenMax:   cfg.CBHalfOpenMax,
+		MaxCooldown:   cfg.CBMaxCooldown,
+		BackoffFactor: cfg.CBBackoffFactor,
+	}
 	breakers := make(map[string]*circuitbreaker.Breaker, len(urls))
 	order := make([]string, 0, len(urls))
 	for _, u := range urls {
@@ -311,7 +324,7 @@ func New(cfg Config) *Client {
 		if _, dup := breakers[ep]; dup {
 			continue
 		}
-		breakers[ep] = circuitbreaker.NewBreaker(cfg.CBThreshold, cfg.CBCooldown)
+		breakers[ep] = circuitbreaker.New(cbOpts)
 		order = append(order, ep)
 	}
 
@@ -322,15 +335,18 @@ func New(cfg Config) *Client {
 			Transport: transport,
 			Timeout:   cfg.Timeout,
 		},
-		logger:         cfg.Logger,
-		maxRetries:     cfg.MaxRetries,
-		retryBaseDelay: cfg.RetryBaseDelay,
-		breakers:       breakers,
-		cbOrder:        order,
-		cbThreshold:    cfg.CBThreshold,
-		cbCooldown:     cfg.CBCooldown,
-		stateObserver:  cfg.StateObserver,
-		tlcpEnabled:    tlcpEnabled,
+		logger:          cfg.Logger,
+		maxRetries:      cfg.MaxRetries,
+		retryBaseDelay:  cfg.RetryBaseDelay,
+		breakers:        breakers,
+		cbOrder:         order,
+		cbThreshold:     cfg.CBThreshold,
+		cbCooldown:      cfg.CBCooldown,
+		cbHalfOpenMax:   cfg.CBHalfOpenMax,
+		cbMaxCooldown:   cfg.CBMaxCooldown,
+		cbBackoffFactor: cfg.CBBackoffFactor,
+		stateObserver:   cfg.StateObserver,
+		tlcpEnabled:     tlcpEnabled,
 	}
 }
 
@@ -411,7 +427,13 @@ func (c *Client) breakerFor(endpoint string) *circuitbreaker.Breaker {
 	defer c.cbMu.Unlock()
 	b, ok := c.breakers[endpoint]
 	if !ok {
-		b = circuitbreaker.NewBreaker(c.cbThreshold, c.cbCooldown)
+		b = circuitbreaker.New(circuitbreaker.Options{
+			Threshold:     c.cbThreshold,
+			Cooldown:      c.cbCooldown,
+			HalfOpenMax:   c.cbHalfOpenMax,
+			MaxCooldown:   c.cbMaxCooldown,
+			BackoffFactor: c.cbBackoffFactor,
+		})
 		c.breakers[endpoint] = b
 	}
 	return b

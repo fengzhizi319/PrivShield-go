@@ -211,10 +211,16 @@ func main() {
 	// 而是将 HTTP/2 gRPC 流转发到负载均衡器选出的 Agent 后端。
 	grpcAddr := cfg.GRPCAddress()
 
-	grpcProxyServer, grpcLis, err := gateway.NewGrpcProxyListener(lb, grpcAddr, gwMetrics)
+	// 入站 CIDR 准入与 HTTP 漏斗共用同一份 ENGINE_GATEWAY_ALLOWED_CIDRS：
+	// 过去该变量只约束 8000 端口，代理的 50000 端口成为白名单绕过面。
+	allowedCIDRs := middleware.AllowedCIDRsFromEnv("ENGINE_GATEWAY_ALLOWED_CIDRS")
+	grpcProxyServer, grpcLis, err := gateway.NewGrpcProxyListener(lb, grpcAddr, gwMetrics, allowedCIDRs...)
 	if err != nil {
 		slog.Error("gRPC proxy listener failed", "err", err)
 		os.Exit(1)
+	}
+	if len(allowedCIDRs) > 0 {
+		slog.Info("Gateway gRPC proxy IP allowlist enabled", "cidrs", len(allowedCIDRs))
 	}
 
 	go func() {

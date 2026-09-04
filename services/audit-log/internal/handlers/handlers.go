@@ -251,6 +251,11 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 	r.POST("/v1/audit/chain/verify", s.VerifyChain) // Hash chain continuous integrity verification (POST)
 	r.POST("/v1/audit/report", s.GenerateReport)
 	r.GET("/metrics", s.mc.Handler())
+
+	// 【启动权限审计】遍历全部已注册路由，识别遗漏显式 scope 映射、静默落入 fail-closed
+	// 兜底权限（"audit:admin"）的新增接口并打 WARN，防止「加了路由忘配权限」。详见 pkg/auth/route_audit.go。
+	pkgauth.LogRoutePermissionAudit(s.logger, "audit-log", r.Routes(), AuditLogPermissionForPath,
+		map[string]bool{"audit:admin": true}, nil)
 }
 
 // Health is a liveness probe — returns 200 if the process is alive.

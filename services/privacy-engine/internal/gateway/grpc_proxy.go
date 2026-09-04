@@ -17,9 +17,11 @@ import (
 	"time"
 
 	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/observability"
+	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
@@ -57,13 +59,14 @@ func (rawCodec) String() string { return "raw" }
 
 // GrpcProxyServer gRPC 透明流代理
 type GrpcProxyServer struct {
-	lb          *LoadBalancer
-	connPool    map[string]*grpc.ClientConn
-	connPoolMu  sync.RWMutex
-	maxPoolSize int // 连接池最大连接数（防止后端地址动态变化时内存泄漏）
-	ewmaAlpha   float64
-	dialTimeout time.Duration
-	metrics     *observability.GatewayMetrics // 可为 nil
+	lb              *LoadBalancer
+	connPool        map[string]*grpc.ClientConn
+	connPoolMu      sync.RWMutex
+	maxPoolSize     int // 连接池最大连接数（防止后端地址动态变化时内存泄漏）
+	ewmaAlpha       float64
+	dialTimeout     time.Duration
+	metrics         *observability.GatewayMetrics // 可为 nil
+	allowedNetworks []*net.IPNet                  // 入站 IP 准入白名单（与 HTTP 漏斗同一份配置）
 }
 
 // NewGrpcProxyServer 创建 gRPC 透明流代理
@@ -76,6 +79,13 @@ func NewGrpcProxyServer(lb *LoadBalancer, metrics *observability.GatewayMetrics)
 		dialTimeout: 5 * time.Second,
 		metrics:     metrics,
 	}
+}
+
+// WithIPAllowlist 设置入站 IP 准入白名单（与 HTTP 侧 ENGINE_GATEWAY_ALLOWED_CIDRS 同源）。
+// 必须在 Serve 之前调用；空列表表示不启用（透传）。
+func (g *GrpcProxyServer) WithIPAllowlist(allowedCIDRs []string) *GrpcProxyServer {
+	g.allowedNetworks = middleware.ParseAllowedNetworks(allowedCIDRs)
+	return g
 }
 
 // getOrCreateConn 获取或创建到后端的 gRPC 连接（连接池 + 健康检查）
@@ -142,6 +152,17 @@ func (g *GrpcProxyServer) TransparentStreamDirector(srv interface{}, serverStrea
 	fullMethod, ok := grpc.MethodFromServerStream(serverStream)
 	if !ok {
 		return status.Errorf(codes.Internal, "failed to get method name")
+	}
+
+	// 0. 网络层准入：透明代理走 UnknownServiceHandler，gRPC 拦截器链对其**不生效**，
+	//    因此 IP 白名单必须在业务入口自身把关，否则 :50000 会绕过 HTTP 侧的 CIDR 收紧。
+	if len(g.allowedNetworks) > 0 {
+		clientIP := middleware.GRPCPeerIP(serverStream.Context())
+		if !middleware.IPAllowed(g.allowedNetworks, clientIP) {
+			slog.Warn("grpc proxy: rejected peer outside allowed CIDRs",
+				"peer_ip", clientIP, "method", fullMethod)
+			return status.Error(codes.PermissionDenied, "client IP not in allowed CIDR ranges")
+		}
 	}
 
 	// 1. 选择后端节点
@@ -292,17 +313,34 @@ func (g *GrpcProxyServer) Close() error {
 // NewGrpcProxyListener 创建并启动 gRPC 透明流代理服务器
 // 返回 grpc.Server 实例用于优雅停机。
 // metrics 可为 nil，为 nil 时不上报 Prometheus 指标。
-func NewGrpcProxyListener(lb *LoadBalancer, listenAddr string, metrics *observability.GatewayMetrics) (*grpc.Server, net.Listener, error) {
+// allowedCIDRs 与 HTTP 漏斗的 ENGINE_GATEWAY_ALLOWED_CIDRS 共用，未传表示不启用入站准入。
+func NewGrpcProxyListener(lb *LoadBalancer, listenAddr string, metrics *observability.GatewayMetrics, allowedCIDRs ...string) (*grpc.Server, net.Listener, error) {
 	lis, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("listen %s: %w", listenAddr, err)
 	}
 
-	proxy := NewGrpcProxyServer(lb, metrics)
+	proxy := NewGrpcProxyServer(lb, metrics).WithIPAllowlist(allowedCIDRs)
 
+	// 资源上限与 Agent 侧 gRPC 服务端对齐：透明代理过去无任何报文尺寸/并发流上限
+	// （gRPC 服务端默认不限制单连接并发流数），单连接即可无限占满内存与 goroutine；
+	// 而 HTTP 侧漏斗已有 MaxBodySize / MaxConcurrent / RateLimit，两个端口防护不对等。
+	// keepalive EnforcementPolicy 另用于收紧客户端 Ping 频率，防御 Ping 风暴。
+	const maxMsgSize = 64 * 1024 * 1024 // 64 MiB，与 Agent gRPC 一致
 	grpcServer := grpc.NewServer(
 		grpc.UnknownServiceHandler(proxy.TransparentStreamDirector),
 		grpc.CustomCodec(rawCodec{}),
+		grpc.MaxRecvMsgSize(maxMsgSize),
+		grpc.MaxSendMsgSize(maxMsgSize),
+		grpc.MaxConcurrentStreams(250),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             5 * time.Second,
+			PermitWithoutStream: true,
+		}),
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			MaxConnectionIdle: 5 * time.Minute,
+			MaxConnectionAge:  2 * time.Hour,
+		}),
 	)
 
 	return grpcServer, lis, nil

@@ -276,7 +276,7 @@ func (c *Config) Validate() error {
 		ServiceName:       "service-hub",
 		Hosts:             []string{c.Host, c.GRPCHost},
 		APIKey:            c.APIKey,
-		AuthEnabled:       c.APIKey != "" || len(c.ScopeKeys) > 0,
+		AuthEnabled:       c.APIKey != "" || len(c.ScopeKeys) > 0 || c.KeysFile != "", // L-3：纳入 KeyStore 热轮转文件，与运行时 authEnabled 口径一致
 		TLSEnabled:        c.TLSEnabled,
 		RequireTLS:        c.RequireTLS,
 		GRPCEnabled:       true, // 中枢进程始终监听 gRPC（默认 :50052）
@@ -346,6 +346,15 @@ func loopbackOnlyBind(hosts ...string) bool {
 		}
 	}
 	return true
+}
+
+// LoopbackOnlyBind 对外暴露「本进程 HTTP + gRPC 是否全部只绑定环回地址」的判定，
+// 供启动期的 CORS / 裸奔告警等安全自检复用（非环回且未收紧配置时应告警）。
+func (c *Config) LoopbackOnlyBind() bool {
+	if c == nil {
+		return true
+	}
+	return loopbackOnlyBind(c.Host, c.GRPCHost)
 }
 
 // firstConfigured returns the first non-empty trimmed value.

@@ -372,7 +372,7 @@ flowchart LR
   | `tasks[].retry_after` | string | 否 | 下次允许重试的最早时间戳（RFC3339，`omitempty`） |
   | `tasks[].trace_id` | string | 否 | 全链路分布式追踪 ID（`omitempty`） |
   | `tasks[].lease_owner` | string | 否 | Phase B 多副本租约持有者实例标识（`omitempty`） |
-  | `tasks[].lease_token` | string | 否 | 租约唯一随机令牌（`omitempty`） |
+  | ~~`tasks[].lease_token`~~ | — | 否 | **不再返回**：租约 fencing 令牌属敏感字段（`json:"-"`），防止经任务读 API 泄露后被伪造租约覆盖写入 |
   | `tasks[].lease_expires_at` | string | 否 | 租约绝对过期时间（RFC3339，`omitempty`） |
   | `via` | string | 是 | 响应节点标识符 |
 

@@ -14,6 +14,30 @@ import (
 	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 )
 
+// identityCtxKey 是 gRPC context 中存储已认证身份的私有键（区别于 gin.Context 的 IdentityContextKey）。
+type identityCtxKey struct{}
+
+// ContextWithIdentity 将已认证身份注入 gRPC context，供下游业务方法做数据源级 ABAC 校验。
+func ContextWithIdentity(ctx context.Context, id *pkgauth.Identity) context.Context {
+	return context.WithValue(ctx, identityCtxKey{}, id)
+}
+
+// IdentityFromContext 从 gRPC context 提取认证身份（未注入时返回 nil）。
+func IdentityFromContext(ctx context.Context) *pkgauth.Identity {
+	if id, ok := ctx.Value(identityCtxKey{}).(*pkgauth.Identity); ok {
+		return id
+	}
+	return nil
+}
+
+// identityServerStream 包装 grpc.ServerStream，使流式 handler 能通过 Context() 读到注入的身份。
+type identityServerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (s *identityServerStream) Context() context.Context { return s.ctx }
+
 var (
 	authOnce      sync.Once
 	authAPIKey    string
@@ -62,7 +86,8 @@ func AuthUnaryInterceptor() grpc.UnaryServerInterceptor {
 			pkgauth.AuthForbiddenTotal.Inc()
 			return nil, status.Errorf(codes.PermissionDenied, "insufficient scope: need %q", requiredPerm)
 		}
-		return handler(ctx, req)
+		// H-2：将已认证身份注入 ctx，使业务方法可做数据源级 ABAC（与 REST 双路径对齐）。
+		return handler(ContextWithIdentity(ctx, identity), req)
 	}
 }
 
@@ -85,11 +110,15 @@ func AuthStreamInterceptor() grpc.StreamServerInterceptor {
 			pkgauth.AuthForbiddenTotal.Inc()
 			return status.Errorf(codes.PermissionDenied, "insufficient scope: need %q", requiredPerm)
 		}
-		return handler(srv, ss)
+		// H-2：注入身份后包装流，供流式 handler 做数据源级 ABAC。
+		return handler(srv, &identityServerStream{ServerStream: ss, ctx: ContextWithIdentity(ss.Context(), identity)})
 	}
 }
 
 // ServiceHubPermissionForGRPCMethod 将 service-hub gRPC 方法映射为所需权限字符串。
+// 未命中任何显式映射的方法 fail-closed 归入最高 "admin" 权限（与 REST 侧
+// ServiceHubPermissionForPath 及共享库 PermissionForGRPCMethod 的默认拒绝语义一致），
+// 防止新增 RPC 因漏配 scope 而落入「仅需认证」的越权面。仅 Health 探针显式豁免（返回 ""）。
 func ServiceHubPermissionForGRPCMethod(fullMethod string) string {
 	switch {
 	case strings.HasSuffix(fullMethod, "/Health"):
@@ -100,10 +129,12 @@ func ServiceHubPermissionForGRPCMethod(fullMethod string) string {
 		strings.HasSuffix(fullMethod, "/PipelineStatus"):
 		return "hub:read"
 	case strings.HasSuffix(fullMethod, "/Dispatch"),
-		strings.HasSuffix(fullMethod, "/ClassifyAndDispatch"):
+		strings.HasSuffix(fullMethod, "/ClassifyAndDispatch"),
+		strings.HasSuffix(fullMethod, "/FetchAndDesensitize"):
 		return "hub:dispatch"
 	}
-	return ""
+	// fail-closed：未显式映射的 gRPC 方法默认要求最高 admin 权限。
+	return "admin"
 }
 
 func authenticateGRPCRequest(ctx context.Context, apiKey string, scopeKeys map[string]*pkgauth.KeyConfig) (*pkgauth.Identity, error) {

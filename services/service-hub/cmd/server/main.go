@@ -276,6 +276,15 @@ func main() {
 			"========================================================================")
 	}
 
+	// M-2: Warn when the hub is reachable off-box but CORS is left at the wildcard default.
+	// 当本服务绑定非环回地址（对外可达）却未显式配置 CORS 白名单时告警：
+	// pkg/middleware.CORS(nil) 会下发 Access-Control-Allow-Origin: *。虽然入站采用
+	// Authorization: Bearer（非 Cookie，且不下发 Allow-Credentials），实际跨站风险有限，
+	// 但作为南北向唯一入口仍应按最小化原则收紧。
+	if !cfg.LoopbackOnlyBind() && len(cfg.CORSOrigins) == 0 {
+		logger.Warn("CORS wildcard (*) is in effect on a non-loopback bind: set SERVICE_HUB_CORS_ORIGINS to an explicit allow-list for production", "cors_origins", 0)
+	}
+
 	// =========================================================================
 	// 13. Operating System Signal Registration / 系统中断信号监听
 	// =========================================================================

@@ -7,6 +7,7 @@ package validation
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"time"
@@ -121,4 +122,33 @@ func ParsePagination(c *gin.Context, defaultLimit, maxLimit int) (limit, offset 
 		offset = 0
 	}
 	return limit, offset
+}
+
+// RedactIDCard 将身份证号脱敏为「前3 + 掩码 + 后2」形式，用于错误消息与日志展示，
+// 避免明文国家身份证号（PII）随错误响应扩散到访问日志。长度过短时整体掩码。
+func RedactIDCard(id string) string {
+	n := len([]rune(id))
+	if n <= 7 {
+		return repeatAsterisk(n)
+	}
+	r := []rune(id)
+	return string(r[:3]) + repeatAsterisk(n-5) + string(r[n-2:])
+}
+
+// IDCardRef 返回身份证号的确定性短摘要（SHA-256 前 12 位十六进制），
+// 用于幂等键 / 任务 ID 等需要「同输入同输出」且不得携带明文 PII 的场景。
+func IDCardRef(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+func repeatAsterisk(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	b := make([]rune, n)
+	for i := range b {
+		b[i] = '*'
+	}
+	return string(b)
 }

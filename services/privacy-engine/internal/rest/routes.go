@@ -25,6 +25,7 @@ import (
 	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/dynclassification"
 	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/security"
 	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/service"
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
@@ -236,6 +237,11 @@ func RegisterRoutes(r *gin.Engine, svc *service.PrivacyService) {
 		v1d.POST("/profiles/reload", dynProfilesReloadHandler(svc))
 	}
 
+	// 【启动权限审计】遍历全部已注册路由，识别遗漏显式 scope 映射、静默落入 fail-closed
+	// 兜底权限（"admin"）的新增接口并打 WARN，防止「加了路由忘配权限」。详见 pkg/auth/route_audit.go。
+	pkgauth.LogRoutePermissionAudit(nil, "privacy-engine", r.Routes(),
+		func(method, path string) string { return pkgauth.PermissionForRESTPath(path) },
+		map[string]bool{"admin": true}, nil)
 }
 
 // ──────────────────────────────────────────────

@@ -49,3 +49,19 @@
   "retryable": false
 }
 ```
+
+---
+
+## 4. 接口权限（Scope）映射与完整性保障
+
+本引擎对每个 REST/gRPC 端点执行**基于 Scope 的接口级鉴权**：`pkg/auth.PermissionForRESTPath`（REST）与 `PermissionForGRPCMethod`（gRPC）将路径/方法映射为所需权限（如 `privacy:mask`、`privacy:dp`、`medical:process`、`ops:diagnostics`）。
+
+由于「路由注册」（`internal/rest/routes.go`）与「权限映射」（`pkg/auth/identity.go`）**分离维护**，为避免接口增多后新增路由遗漏配权限，采用三层防御：
+
+| 层次 | 机制 |
+|---|---|
+| **运行时兜底** | 未显式映射的路径 fail-closed 归入最高 `admin` 权限，绝不因漏配而默认可访问 |
+| **启动期审计** | `RegisterRoutes` 末尾调用 `pkgauth.LogRoutePermissionAudit`，遇落入兜底 `admin` 的路由打 `WARN` 列出 `method+path` |
+| **CI 门禁** | `internal/rest/route_audit_test.go::TestAllRoutesHaveExplicitPermission` 断言全部路由均有显式映射，漏配即 `go test` 失败 |
+
+> **新增接口时的规范动作**：在 `routes.go` 注册路由后，必须同步在 `pkg/auth.PermissionForRESTPath` 补充对应的 `case` 映射；否则启动审计会告警、CI 门禁会拦截。详见 [`pkg/auth/route_audit.go`](file:///home/charles/code/PrivShield-go/pkg/auth/route_audit.go)。

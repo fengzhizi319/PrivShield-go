@@ -187,7 +187,7 @@ func TestDatasourceClient_CircuitBreaker(t *testing.T) {
 	}
 
 	client := New(cfg)
-	client.breaker = circuitbreaker.NewBreaker(2, 100*time.Millisecond)
+	client.breaker = circuitbreaker.New(circuitbreaker.Options{Threshold: 2, Cooldown: 100 * time.Millisecond, HalfOpenMax: 3})
 	client.maxRetries = 0
 
 	ctx := context.Background()
@@ -248,8 +248,8 @@ func TestDatasourceClient_MultiNodeFailover(t *testing.T) {
 	client := New(cfg)
 	client.baseURLs = []string{failSrv.URL, okSrv.URL}
 	client.breakers = map[string]*circuitbreaker.Breaker{
-		failSrv.URL: circuitbreaker.NewBreaker(2, 500*time.Millisecond),
-		okSrv.URL:   circuitbreaker.NewBreaker(2, 500*time.Millisecond),
+		failSrv.URL: circuitbreaker.New(circuitbreaker.Options{Threshold: 2, Cooldown: 500 * time.Millisecond, HalfOpenMax: 3}),
+		okSrv.URL:   circuitbreaker.New(circuitbreaker.Options{Threshold: 2, Cooldown: 500 * time.Millisecond, HalfOpenMax: 3}),
 	}
 	client.maxRetries = 1
 	client.retryBaseDelay = 10 * time.Millisecond

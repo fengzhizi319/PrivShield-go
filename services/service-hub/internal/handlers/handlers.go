@@ -262,6 +262,12 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 
 	// Prometheus 监控指标导出
 	r.GET("/metrics", s.mc.Handler())
+
+	// 【启动权限审计】遍历全部已注册路由，识别遗漏显式 scope 映射、静默落入 fail-closed
+	// 兜底权限（"admin"）的新增接口并打 WARN，防止「加了路由忘配权限」。详见 pkg/auth/route_audit.go。
+	pkgauth.LogRoutePermissionAudit(s.logger, "service-hub", r.Routes(),
+		func(method, path string) string { return pkgauth.ServiceHubPermissionForPath(path) },
+		map[string]bool{"admin": true}, nil)
 }
 
 // currentAuthKeys 返回当前生效的 scope key 集合：KeyStore 热轮转 key 优先，并与静态
@@ -393,38 +399,7 @@ func (s *Server) callerName(c *gin.Context) string {
 //     若存在细粒度限定但未命中当前请求的数据源，判定为越权访问，拒绝（返回 false）；
 //  5. 若未声明任何细粒度限定，但拥有通用调度权限（"hub:dispatch" 或 "hub:dispatch:*"），放行。
 func (s *Server) checkDatasourceAccess(c *gin.Context, normID, rawID string) bool {
-	identity := pkgauth.GetIdentity(c)
-	if identity == nil {
-		return true
-	}
-	if identity.HasPermission("*") || identity.HasPermission("admin") {
-		return true
-	}
-
-	dsPerms := []string{
-		"hub:dispatch:" + normID,
-		"hub:dispatch:" + rawID,
-		"data:apply:" + normID,
-		"data:apply:" + rawID,
-	}
-	for _, p := range dsPerms {
-		if identity.HasPermission(p) {
-			return true
-		}
-	}
-
-	hasSpecificDSRestriction := false
-	for _, sc := range identity.Scopes {
-		if strings.HasPrefix(sc, "hub:dispatch:ds_") || strings.HasPrefix(sc, "data:apply:") {
-			hasSpecificDSRestriction = true
-			break
-		}
-	}
-	if hasSpecificDSRestriction {
-		return false
-	}
-
-	return identity.HasPermission("hub:dispatch") || identity.HasPermission("hub:dispatch:*")
+	return pkgauth.CheckDatasourceAccess(pkgauth.GetIdentity(c), normID, rawID)
 }
 
 // Health is a liveness probe — returns 200 if the process is alive.
@@ -988,14 +963,14 @@ func (s *Server) FetchAndDesensitize(c *gin.Context) {
 	found, _ := fetchResult["found"].(bool)
 	if !found {
 		middleware.AbortWithError(c, http.StatusNotFound, "RECORD_NOT_FOUND",
-			fmt.Sprintf("no record found for id_card_no=%s in datasource=%s", req.IDCardNo, normID), nil)
+			fmt.Sprintf("no record found for id_card_no=%s in datasource=%s", validation.RedactIDCard(req.IDCardNo), normID), nil)
 		return
 	}
 
 	record, ok := fetchResult["record"].(map[string]any)
 	if !ok || len(record) == 0 {
 		middleware.AbortWithError(c, http.StatusNotFound, "RECORD_NOT_FOUND",
-			fmt.Sprintf("empty record for id_card_no=%s in datasource=%s", req.IDCardNo, normID), nil)
+			fmt.Sprintf("empty record for id_card_no=%s in datasource=%s", validation.RedactIDCard(req.IDCardNo), normID), nil)
 		return
 	}
 
@@ -1006,7 +981,7 @@ func (s *Server) FetchAndDesensitize(c *gin.Context) {
 		return
 	}
 
-	idempotencyKey := fmt.Sprintf("hub-fad-%s-%s", normID, req.IDCardNo)
+	idempotencyKey := fmt.Sprintf("hub-fad-%s-%s", normID, validation.IDCardRef(req.IDCardNo))
 	ctx = agent.ContextWithIdempotencyKey(ctx, idempotencyKey)
 
 	result, err := s.agent.ProcessAgent(ctx, records, normID)
@@ -1021,7 +996,7 @@ func (s *Server) FetchAndDesensitize(c *gin.Context) {
 	}
 
 	// ③ 审计存证 (P0-6 fail-closed：出域必须留痕，提交失败则整个请求失败)
-	fadTaskID := fmt.Sprintf("fad-%s-%s-%d", normID, req.IDCardNo, time.Now().UnixNano())
+	fadTaskID := fmt.Sprintf("fad-%s-%s-%d", normID, validation.IDCardRef(req.IDCardNo), time.Now().UnixNano())
 	inputBytes, _ := json.Marshal(record)
 	inputHash := fmt.Sprintf("%x", sha256.Sum256(inputBytes))
 	outputBytes, _ := json.Marshal(result.SanitizedData)
