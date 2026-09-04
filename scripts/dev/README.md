@@ -8,38 +8,39 @@
 
 ## 目录索引
 
-- [1. 本地原生开发与控制台启动脚本](#1-本地原生开发与控制台启动脚本)
-  - [`dev-bff-agent.sh` / `dev-bff-agent.ps1` (Go Agent + Go BFF + 前端 HMR)](#dev-bff-agentsh--dev-bff-agentps1)
-  - [`dev-app-lz.sh` (调度之眼 App-LZ: Go BFF + 前端 HMR)](#dev-app-lzsh)
-  - [`go-engine-start.sh` (快速启动 Go Agent)](#go-engine-startsh)
-  - [`go-gateway-start.sh` (快速启动 Go Gateway 网关)](#go-gateway-startsh)
-  - [`dev-stop.sh` (停止本地开发服务)](#dev-stopsh)
+- [1. 隐私计算引擎与网关脚本 (Privacy Engine & Gateway)](#1-隐私计算引擎与网关脚本-privacy-engine--gateway)
+  - [`start-privacy-engine.sh` (快速启动 Privacy Engine Agent)](#start-privacy-enginesh)
+  - [`start-privacy-gateway.sh` (快速启动 Privacy Gateway 网关)](#start-privacy-gatewaysh)
+  - [`test-privacy-engine.sh` (全栈模块单元测试与集成测试)](#test-privacy-enginesh)
+  - [`bench-privacy-engine.sh` (Go 原生基准性能测试 Benchmark)](#bench-privacy-enginesh)
+  - [`test-e2e-privacy-engine.sh` (Engine 19 大 REST 端点全量集成测试)](#test-e2e-privacy-enginesh)
+- [2. 中台微服务群管理脚本 (Services: Hub / Datasource / Audit)](#2-中台微服务群管理脚本-services-hub--datasource--audit)
+  - [`dev-start-services.sh` (一键启动 Engine + 3 大中台微服务)](#dev-start-servicessh)
+  - [`dev-stop-services.sh` (一键停止 Engine + 3 大中台微服务)](#dev-stop-servicessh)
+  - [`integration-test-services.sh` (中台三大微服务集成测试)](#integration-test-servicessh)
+  - [`e2e-start-all-services.sh` (后台启动真实服务运行环境)](#e2e-start-all-servicessh)
+  - [`e2e-stop-all-services.sh` (停止后台真实服务运行环境)](#e2e-stop-all-servicessh)
+  - [`start_all_services.sh` (后台拉起全栈服务集群)](#start_all_servicessh)
+  - [`stop_all_services.sh` (停止全栈服务集群)](#stop_all_servicessh)
+- [3. 本地原生控制台启动脚本 (Console)](#3-本地原生控制台启动脚本-console)
+  - [`dev-engine-console.sh` (Privacy Engine 控制台全家桶: Agent + BFF + Web HMR)](#dev-engine-consolesh)
+  - [`dev-app-lz.sh` (调度之眼 App-LZ: 全部 4 上游 + BFF + 前端 HMR)](#dev-app-lzsh)
+  - [`dev-stop.sh` (停止本地控制台开发服务)](#dev-stopsh)
   - [`stop-app-lz.sh` (停止 App-LZ 控制台服务)](#stop-app-lzsh)
-- [2. 中台微服务群管理脚本](#2-中台微服务群管理脚本)
-  - [`dev-start-new-modules.sh` (启动 3 大中台微服务)](#dev-start-new-modulessh)
-  - [`dev-stop-new-modules.sh` (停止 3 大中台微服务)](#dev-stop-new-modulessh)
-  - [`e2e-start-all-services.sh` (一键启动 Go Agent + 3 大微服务)](#e2e-start-all-servicessh)
-  - [`e2e-stop-all-services.sh` (停止 Go Agent + 3 大微服务)](#e2e-stop-all-servicessh)
-  - [`start_all_services.sh` (后台启动全栈服务群)](#start_all_servicessh)
-  - [`stop_all_services.sh` (停止全栈服务群)](#stop_all_servicessh)
-- [3. Docker 容器化联调脚本](#3-docker-容器化联调脚本)
-  - [`docker-start-bff-agent.sh` / `docker-start-bff-agent.ps1` (控制台三件套容器版)](#docker-start-bff-agentsh--docker-start-bff-agentps1)
+- [4. Docker 容器化联调脚本 (Docker Suite)](#4-docker-容器化联调脚本-docker-suite)
+  - [`docker-start-all.sh` (启动全栈 Docker 容器集群)](#docker-start-allsh)
+  - [`docker-start-agent.sh` (启动 Go Engine 容器)](#docker-start-agentsh)
+  - [`docker-stop-agent.sh` (停止 Go Engine 容器)](#docker-stop-agentsh)
+  - [`docker-start-bff-agent.sh` (Engine 控制台三件套容器版)](#docker-start-bff-agentsh)
   - [`docker-start-app-lz.sh` (调度之眼 App-LZ 全栈容器版)](#docker-start-app-lzsh)
   - [`docker-stop-app-lz.sh` (停止 App-LZ 容器集群)](#docker-stop-app-lzsh)
-  - [`docker-start-all.sh` / `docker-start-go-all.sh` (启动全栈 Docker 容器)](#docker-start-allsh)
-  - [`docker-start-agent.sh` / `docker-start-go-agent.sh` (启动 Go Agent 容器)](#docker-start-agentsh)
-  - [`docker-stop-agent.sh` / `docker-stop-go-agent.sh` (停止 Go Agent 容器)](#docker-stop-agentsh)
   - [`docker-start-llm.sh` / `docker-start-llm.ps1` (启动 vLLM 大模型容器)](#docker-start-llmsh--docker-start-llmps1)
   - [`docker-stop-llm.sh` / `docker-stop-llm.ps1` (停止 vLLM 容器)](#docker-stop-llmsh--docker-stop-llmps1)
   - [`docker-stop.sh` (停止全部 Docker 容器)](#docker-stopsh)
   - [`start-postgres.sh` (独立启动 Phase B PostgreSQL)](#start-postgressh)
-- [4. 自动化测试、基准压测与环境工具](#4-自动化测试基准压测与环境工具)
-  - [`go-engine-test.sh` (Go 全栈模块单元测试与集成测试)](#go-engine-testsh)
-  - [`integration-test-go.sh` (Go Engine 19 大 REST 端点全量集成测试)](#integration-test-gosh)
-  - [`integration-test-new-modules.sh` (中台三大微服务集成测试)](#integration-test-new-modulessh)
-  - [`run_console_e2e_tests.sh` (Console 前后端端到端 E2E 测试)](#run_console_e2e_testssh)
-  - [`go-engine-bench.sh` (Go 引擎基准性能压测)](#go-engine-benchsh)
-  - [`benchmark_performance.sh` (HTTP 原语基准性能压测)](#benchmark_performancesh)
+- [5. 自动化测试、基准压测与环境工具 (Testing, Benchmark & Ops)](#5-自动化测试基准压测与环境工具-testing-benchmark--ops)
+  - [`run_console_e2e_tests.sh` (Console 前后端端到端 E2E 自动化测试)](#run_console_e2e_testssh)
+  - [`benchmark_performance.sh` (HTTP 原语吞吐与时延并发基准压测)](#benchmark_performancesh)
   - [`benchmark-data-api.sh` (预设数据 API 全链路性能基准压测)](#benchmark-data-apish)
   - [`health_check.sh` (全组件健康状态诊断与探针)](#health_checksh)
   - [`check_metrics_endpoints.sh` (Prometheus 指标端点探针)](#check_metrics_endpointssh)
@@ -55,20 +56,20 @@
 
 ## 1. 本地原生开发与控制台启动脚本
 
-### `dev-bff-agent.sh` / `dev-bff-agent.ps1`
-- **作用说明**: 【推荐主力】一键启动 Go 核心隐私 Agent（REST `:8079`、gRPC `:50051`）、Go 语言 gRPC/HTTPS 代理网关 BFF (`:8081`)，以及基于 Vite 的 React Web 前端开发服务器 (`:5173`，支持毫秒级 HMR 热更新）。同时支持 `--mtls` 参数以 mTLS 双向认证模式启动。
+### `dev-engine-console.sh`（兼容 `dev-bff-agent.sh` / `dev-bff-go-agent.sh`）
+- **作用说明**: 【推荐主力】一键启动 Privacy Engine 核心计算引擎（REST `:8079`、gRPC `:50051`）、Engine Console Go 代理网关 BFF (`:8081`)，以及基于 Vite 的 React Web 前端开发服务器 (`:5173`，支持毫秒级 HMR 热更新）。同时支持 `--mtls` 参数以 mTLS 双向认证模式启动。
 - **参数选项**:
   - `--force`: 端口被占用时自动释放占用进程。
   - `--mtls`: 启用 mTLS 双向认证模式（自动生成/挂载自签名证书）。
 
 标准开发模式（Linux / macOS）：
 ```bash
-bash ./scripts/dev/dev-bff-agent.sh
+bash ./scripts/dev/dev-engine-console.sh
 ```
 
 mTLS 安全认证模式（Linux / macOS）：
 ```bash
-bash ./scripts/dev/dev-bff-agent.sh --mtls
+bash ./scripts/dev/dev-engine-console.sh --mtls
 ```
 
 Windows PowerShell 启动：
@@ -131,22 +132,22 @@ curl -s -X POST http://127.0.0.1:8082/v1/hub/dispatch \
 
 ---
 
-### `go-engine-start.sh`
+### `start-privacy-engine.sh`（兼容 `go-engine-start.sh`）
 - **作用说明**: 快速启动 Go 核心隐私计算与动态分类分级引擎 Agent（`privshield-agent`），监听 REST `:8079` 与 gRPC `:50051`。
 
 执行启动命令：
 ```bash
-bash ./scripts/dev/go-engine-start.sh
+bash ./scripts/dev/start-privacy-engine.sh
 ```
 
 ---
 
-### `go-gateway-start.sh`
+### `start-privacy-gateway.sh`（兼容 `go-gateway-start.sh`）
 - **作用说明**: 快速启动 Go 高性能隐私网关反向代理（`privshield-gateway`），监听 REST `:8000` 与 gRPC `:50000`，提供 P2C-EWMA 负载均衡与 BufferPool 零分配代理。
 
 执行启动命令：
 ```bash
-bash ./scripts/dev/go-gateway-start.sh
+bash ./scripts/dev/start-privacy-gateway.sh
 ```
 
 ---
@@ -173,26 +174,29 @@ bash ./scripts/dev/stop-app-lz.sh
 
 ## 2. 中台微服务群管理脚本
 
-### `dev-start-new-modules.sh`
-- **作用说明**: 启动 PrivShield 的 3 大 Go 语言中台微服务：
-  - `service-hub` 数据流通调度中枢 (REST `:8082`，gRPC `:50052`)
+### `dev-start-services.sh`（兼容 `dev-start-new-modules.sh`）
+- **作用说明**: 一键顺序编译并后台启动 PrivShield 隐私计算引擎及 3 大 Go 语言中台微服务：
+  - `privshield-agent` 隐私计算引擎 (REST `:8079`，gRPC `:50051`)
   - `datasource-mgr` 数据源资产管理与探查 (REST `:8083`，gRPC `:50053`)
   - `audit-log` 脱敏审计日志与哈希存证 (REST `:8084`，gRPC `:50054`)
-  *(注：该脚本要求核心 Agent 已在运行中)*。
+  - `service-hub` 数据流通调度中枢 (REST `:8082`，gRPC `:50052`)
+  *(脚本内置各服务健康探针轮询检测，全绿就绪后返回)*。
+- **参数选项**:
+  - `--force`: 端口被占用时自动释放占用进程。
 
 执行启动命令：
 ```bash
-bash ./scripts/dev/dev-start-new-modules.sh
+bash ./scripts/dev/dev-start-services.sh --force
 ```
 
 ---
 
-### `dev-stop-new-modules.sh`
-- **作用说明**: 停止由 `dev-start-new-modules.sh` 启动的 3 大微服务进程。
+### `dev-stop-services.sh`（兼容 `dev-stop-new-modules.sh`）
+- **作用说明**: 优雅停止由 `dev-start-services.sh` 启动的隐私引擎及 3 大微服务进程。
 
 执行停止命令：
 ```bash
-bash ./scripts/dev/dev-stop-new-modules.sh
+bash ./scripts/dev/dev-stop-services.sh
 ```
 
 ---
@@ -390,39 +394,39 @@ bash ./scripts/dev/start-postgres.sh --stop
 
 ---
 
-## 4. 自动化测试、基准压测与环境工具
+## 5. 自动化测试、基准压测与环境工具 (Testing, Benchmark & Ops)
 
-### `go-engine-test.sh`
+### `test-privacy-engine.sh`（兼容 `go-engine-test.sh`）
 - **作用说明**: 【核心测试入口】一键按序运行全仓库 Go 模块的单元测试与集成测试（覆盖 `services/privacy-engine/sdk`、`services/privacy-engine`、`pkg`、`services`、`console/engine-console/bff-go`）。
 
 执行全量测试：
 ```bash
-bash ./scripts/dev/go-engine-test.sh
+bash ./scripts/dev/test-privacy-engine.sh
 ```
 
 ---
 
-### `integration-test-go.sh`
-- **作用说明**: 【Go 原生引擎集成测试】对 `privshield-agent` 暴露的 19 个 REST 端点（健康检查、掩码脱敏、差分隐私、K-匿名、查询混淆、LDP、医疗流水线、通用 Agent、动态分类及 Prometheus 指标）进行全量自动化端到端测试。
+### `test-e2e-privacy-engine.sh`（兼容 `integration-test-go.sh`）
+- **作用说明**: 【Privacy Engine 集成测试】对 `privshield-agent` 暴露的 19 个 REST 端点（健康检查、掩码脱敏、差分隐私、K-匿名、查询混淆、LDP、医疗流水线、通用 Agent、动态分类及 Prometheus 指标）进行全量自动化端到端测试。
 
 执行集成测试（需 Agent 在 `:8079` 运行）：
 ```bash
-bash ./scripts/dev/integration-test-go.sh
+bash ./scripts/dev/test-e2e-privacy-engine.sh
 ```
 
 ---
 
-### `integration-test-new-modules.sh`
+### `integration-test-services.sh`（兼容 `integration-test-new-modules.sh`）
 - **作用说明**: 对 `service-hub`、`datasource-mgr` 与 `audit-log` 三大微服务执行全流程接口与数据流集成测试。
 
 执行微服务集成测试：
 ```bash
-bash ./scripts/dev/integration-test-new-modules.sh
+bash ./scripts/dev/integration-test-services.sh
 ```
 
 ---
 
-### `run_console_e2e_tests.sh`
+### `run_console_e2e_tests.sh`（兼容 `run_console_e2e_tests_go.sh`）
 - **作用说明**: 【全栈 E2E 自动化测试】自动拉起真实的 Go Agent 算力层，按序执行 4 大测试阶段：
   1. `services/privacy-engine/sdk` 隐私原语与 `services/privacy-engine` 引擎测试
   2. `console/engine-console/bff-go` 代理后端与 `pkg` 基础库测试
@@ -436,12 +440,12 @@ bash ./scripts/dev/run_console_e2e_tests.sh
 
 ---
 
-### `go-engine-bench.sh`
+### `bench-privacy-engine.sh`（兼容 `go-engine-bench.sh`）
 - **作用说明**: 对 `services/privacy-engine/sdk` 与 `services/privacy-engine` 中的所有核心隐私计算原语执行高并发基准性能压测（Benchmark），输出 Ops/s、单次耗时 (ns/op) 与内存分配指标。
 
 执行基准性能压测：
 ```bash
-bash ./scripts/dev/go-engine-bench.sh
+bash ./scripts/dev/bench-privacy-engine.sh
 ```
 
 ---

@@ -1,39 +1,18 @@
 #!/usr/bin/env bash
 # ============================================================================
-# 【开发模式】停止并清理 PrivShield 容器
-# Stop and remove PrivShield Docker container
+# 【开发模式】停止并清理 PrivShield Go 引擎容器
+# Stop and remove PrivShield Go Engine Docker container
 #
-# 执行步骤总览：
-#   1. 检查并强制停止删除名为 PrivShield 的开发容器（docker rm -f）
-#   2. 输出清理完成结果
-#
-# 用法 / Usage: ./scripts/dev/docker-stop-agent.sh
+# 用法 / Usage: ./scripts/dev/docker-stop-go-agent.sh
 # ============================================================================
 
 set -euo pipefail
 
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -h|--help)
-            echo "用法 / Usage: $0 [选项]"
-            echo ""
-            echo "选项 / Options:"
-            echo "  -h, --help    显示帮助信息并退出"
-            exit 0
-            ;;
-        *)
-            shift
-            ;;
-    esac
-done
-
 echo "============================================================================"
-echo "🛑 [Docker Mode] 正在停止 PrivShield 容器..."
+echo "🛑 [Docker Mode - Go Engine] 正在停止 PrivShield Go 引擎容器..."
 echo "============================================================================"
 
-# ── 步骤 1：强制停止并删除开发容器 ────────────────────────────────────────
-docker rm -f PrivShield 2>/dev/null || true
+docker rm -f PrivShield-Go 2>/dev/null || true
 
-# ── 步骤 2：输出清理结果 ──────────────────────────────────────────────────
-echo "✅ PrivShield 容器已成功停止与清理！"
+echo "✅ PrivShield Go 引擎容器已成功停止与清理！"
 echo "============================================================================"

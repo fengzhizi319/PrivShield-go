@@ -1,53 +1,37 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # 脚本名称: benchmark_performance.sh
-# 脚本说明: PrivShield 隐私原语与分类漏斗性能基准测试与吞吐压测工具。
+# 脚本说明: PrivShield Privacy Engine 隐私原语与分类分级 HTTP 吞吐量与时延基准压测工具。
 #
 # 执行步骤总览：
 #   1. 解析命令行参数（--host、--port、--requests、--concurrency）
-#   2. 初始化 Python 多线程并发 HTTP 压测执行引擎
-#   3. 对脱敏原语（/v1/privacy/mask）执行高并发吞吐压测并统计 P50/P95/P99 时延
-#   4. 对差分隐私原语（/v1/privacy/dp/count）执行加噪性能压测
-#   5. 对动态分类分级漏斗（/v1/dynclassification/classify）执行端到端压测
-#   6. 汇总结算 RPS (Requests Per Second) 与延迟百分位数分布
+#   2. 对脱敏原语（/v1/privacy/mask/record）执行高并发吞吐压测并统计时延
+#   3. 对差分隐私原语（/v1/privacy/dp/count, /v1/privacy/dp/mean）执行加噪性能压测
+#   4. 对 K-匿名原语（/v1/privacy/k_anonymize/table）执行泛化性能压测
+#   5. 对 LDP 本地差分隐私（/v1/privacy/ldp/perturb/binary）执行扰动压测
+#   6. 对查询混淆（/v1/privacy/qol/obfuscate）执行置乱压测
+#   7. 对动态分类分级漏斗（/v1/dynclassification/classify）执行端到端压测
+#   8. 汇总结算 RPS (Requests Per Second) 与延迟百分位数分布 (P50/P95/P99)
 #
 # 用法 / Usage:
 #   ./scripts/dev/benchmark_performance.sh [选项]
 # ==============================================================================
 
 set -euo pipefail
+export NO_PROXY="*"
+export no_proxy="*"
 
-# ANSI 终端颜色代码
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+CYAN='\033[0;36m'
+NC='\033[0m'
 
-# ── 步骤 1：定位默认参数与并发配置 ────────────────────────────────────────
-REST_HOST="${PRIVACY_REST_HOST:-127.0.0.1}"
-REST_PORT="${PRIVACY_REST_PORT:-8079}"
-NUM_REQUESTS=200
+REST_HOST="127.0.0.1"
+REST_PORT="8079"
+NUM_REQUESTS=100
 CONCURRENCY=10
-
-# ── 步骤 2：帮助说明与命令行解析 ──────────────────────────────────────────
-usage() {
-    cat <<EOF
-使用说明: $(basename "$0") [选项]
-
-选项:
-  --host HOST          REST 服务主机 (默认: 127.0.0.1 或 PRIVACY_REST_HOST)
-  --port PORT          REST 服务端口 (默认: 8079 或 PRIVACY_REST_PORT)
-  -n, --requests NUM   基准测试请求总数 (默认: 200)
-  -c, --concurrency C  并发线程数 (默认: 10)
-  -h, --help           显示帮助信息并退出
-
-使用示例:
-  ./scripts/dev/benchmark_performance.sh
-  ./scripts/dev/benchmark_performance.sh -n 500 -c 20
-EOF
-    exit 0
-}
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -59,20 +43,28 @@ while [[ $# -gt 0 ]]; do
             REST_PORT="$2"
             shift 2
             ;;
-        -n|--requests)
+        --requests)
             NUM_REQUESTS="$2"
             shift 2
             ;;
-        -c|--concurrency)
+        --concurrency)
             CONCURRENCY="$2"
             shift 2
             ;;
         -h|--help)
-            usage
+            echo "用法 / Usage: $0 [选项]"
+            echo ""
+            echo "选项 / Options:"
+            echo "  --host <IP>          目标 Agent 主机 (默认: 127.0.0.1)"
+            echo "  --port <PORT>        目标 Agent 端口 (默认: 8079)"
+            echo "  --requests <N>       每项测试总请求数 (默认: 100)"
+            echo "  --concurrency <N>    并发请求数 (默认: 10)"
+            echo "  -h, --help           显示此帮助信息"
+            exit 0
             ;;
         *)
-            echo -e "${RED}错误: 未知选项 $1${NC}"
-            usage
+            echo "未知参数: $1"
+            exit 1
             ;;
     esac
 done
@@ -80,100 +72,118 @@ done
 BASE_URL="http://${REST_HOST}:${REST_PORT}"
 
 echo -e "${BLUE}====================================================${NC}"
-echo -e "${BLUE} PrivShield 性能基准测试与吞吐压测${NC}"
-echo -e "${BLUE} 目标服务器 : ${BASE_URL}${NC}"
-echo -e "${BLUE} 总请求量   : ${NUM_REQUESTS} 次${NC}"
-echo -e "${BLUE} 并发线程数 : ${CONCURRENCY} 线程${NC}"
+echo -e "${BLUE} PrivShield Privacy Engine 性能基准测试${NC}"
+echo -e "${BLUE} 目标地址  : ${BASE_URL}${NC}"
+echo -e "${BLUE} 请求总数  : ${NUM_REQUESTS}${NC}"
+echo -e "${BLUE} 并发线程  : ${CONCURRENCY}${NC}"
 echo -e "${BLUE}====================================================${NC}"
 
-# 使用内嵌 Python 脚本并发发送 HTTP 请求，精准统计时延分布与 RPS
-python3 -c "
-import concurrent.futures
-import json
-import sys
-import time
-import urllib.request
+run_bench() {
+    local desc="$1"
+    local endpoint="$2"
+    local body="$3"
 
-base_url = '${BASE_URL}'
-num_requests = ${NUM_REQUESTS}
-concurrency = ${CONCURRENCY}
+    echo -e "\n${YELLOW}[BENCH] ${desc}${NC}"
+    echo -e "  端点: POST ${endpoint}"
 
-def send_request(endpoint, payload):
-    url = f'{base_url}{endpoint}'
-    data = json.dumps(payload).encode('utf-8')
-    req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
-    
-    start_t = time.perf_counter()
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            _ = resp.read()
-            elapsed_ms = (time.perf_counter() - start_t) * 1000
-            return elapsed_ms, resp.status == 200
-    except Exception as e:
-        elapsed_ms = (time.perf_counter() - start_t) * 1000
-        return elapsed_ms, False
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    local start_time end_time total_time
 
-def run_bench(name, endpoint, payload):
-    print(f'\n[*] 开始测试 [{name}] 接口...')
-    latencies = []
-    successes = 0
-    
-    start_total = time.perf_counter()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
-        futures = [executor.submit(send_request, endpoint, payload) for _ in range(num_requests)]
-        for f in concurrent.futures.as_completed(futures):
-            elapsed_ms, ok = f.result()
-            latencies.append(elapsed_ms)
-            if ok:
-                successes += 1
-                
-    total_time_sec = time.perf_counter() - start_total
-    rps = num_requests / total_time_sec if total_time_sec > 0 else 0
-    
-    latencies.sort()
-    p50 = latencies[int(len(latencies) * 0.50)] if latencies else 0
-    p95 = latencies[int(len(latencies) * 0.95)] if latencies else 0
-    p99 = latencies[int(len(latencies) * 0.99)] if latencies else 0
-    avg = sum(latencies) / len(latencies) if latencies else 0
+    start_time=$(date +%s%N)
 
-    print(f'---- [{name}] 性能测算报告 ----')
-    print(f'成功率       : {successes}/{num_requests} ({successes/num_requests*100:.1f}%)')
-    print(f'吞吐率 (RPS) : {rps:.2f} req/sec')
-    print(f'平均响应时间 : {avg:.2f} ms')
-    print(f'P50 响应延迟 : {p50:.2f} ms')
-    print(f'P95 响应延迟 : {p95:.2f} ms')
-    print(f'P99 响应延迟 : {p99:.2f} ms')
+    for (( i=0; i<NUM_REQUESTS; i++ )); do
+        (
+            local req_start req_end
+            req_start=$(date +%s%N)
+            curl --noproxy "*" -sf -o /dev/null -X POST \
+                -H "Content-Type: application/json" \
+                -d "$body" \
+                --max-time 10 \
+                "${BASE_URL}${endpoint}" 2>/dev/null
+            req_end=$(date +%s%N)
+            echo $(( (req_end - req_start) / 1000000 )) > "${tmp_dir}/latency_${i}.ms"
+        ) &
+        if (( (i + 1) % CONCURRENCY == 0 )); then
+            wait
+        fi
+    done
+    wait
 
-# 1. 字段脱敏 Masking 接口测试
-mask_payload = {
-    'field': 'phone',
-    'value': '13800138000',
-    'type': 'phone'
+    end_time=$(date +%s%N)
+    total_time=$(( (end_time - start_time) / 1000000 ))
+
+    local latencies
+    latencies=$(cat "${tmp_dir}"/latency_*.ms 2>/dev/null | sort -n)
+    local count
+    count=$(echo "$latencies" | wc -l | tr -d ' ')
+
+    if [ "$count" -gt 0 ] && [ -n "$latencies" ]; then
+        local p50_idx=$(( count * 50 / 100 ))
+        local p95_idx=$(( count * 95 / 100 ))
+        local p99_idx=$(( count * 99 / 100 ))
+        [ "$p50_idx" -eq 0 ] && p50_idx=1
+        [ "$p95_idx" -eq 0 ] && p95_idx=1
+        [ "$p99_idx" -eq 0 ] && p99_idx=1
+
+        local p50 p95 p99
+        p50=$(echo "$latencies" | sed -n "${p50_idx}p")
+        p95=$(echo "$latencies" | sed -n "${p95_idx}p")
+        p99=$(echo "$latencies" | sed -n "${p99_idx}p")
+
+        local sum=0
+        for lat in $latencies; do
+            sum=$(( sum + lat ))
+        done
+        local avg=$(( sum / count ))
+
+        local rps=0
+        if [ "$total_time" -gt 0 ]; then
+            rps=$(( count * 1000 / total_time ))
+        fi
+
+        echo -e "  ${GREEN}成功请求: ${count}/${NUM_REQUESTS}${NC}"
+        echo -e "  ${GREEN}总耗时   : ${total_time} ms${NC}"
+        echo -e "  ${GREEN}RPS      : ${rps} req/s${NC}"
+        echo -e "  ${CYAN}延迟 P50 : ${p50} ms${NC}"
+        echo -e "  ${CYAN}延迟 P95 : ${p95} ms${NC}"
+        echo -e "  ${CYAN}延迟 P99 : ${p99} ms${NC}"
+        echo -e "  ${CYAN}平均延迟 : ${avg} ms${NC}"
+    else
+        echo -e "  ${RED}无成功请求${NC}"
+    fi
+
+    rm -rf "$tmp_dir"
 }
-run_bench('数据脱敏 Masking', '/v1/privacy/mask', mask_payload)
 
-# 2. 差分隐私 DP 接口测试 (先自动重置预算确保压测基准不受历史消耗干扰)
-try:
-    req_reset = urllib.request.Request(f'{base_url}/v1/privacy/budget/reset', data=b'{}', headers={'Content-Type': 'application/json'})
-    with urllib.request.urlopen(req_reset, timeout=5) as r:
-        pass
-except Exception:
-    pass
+# ── 1. Masking 脱敏基准 ────────────────────────────────────────────────
+run_bench "Masking 脱敏 (MaskRecord)" "/v1/privacy/mask/record" \
+    '{"record": {"name": "张三", "phone": "13800138000", "email": "test@example.com", "id_card": "110101199003072345"}}'
 
-dp_payload = {
-    'count': 100,
-    'epsilon': 0.001
-}
-run_bench('差分隐私 DP Count', '/v1/privacy/dp/count', dp_payload)
+# ── 2. Differential Privacy 基准 ───────────────────────────────────────
+run_bench "DP Count (Laplace 加噪)" "/v1/privacy/dp/count" \
+    '{"value": 100, "epsilon": 0.5, "delta": 0.00001}'
 
-# 3. 动态分类分级接口测试
-class_payload = {
-    'field': 'id_card',
-    'value': '110101199003072381'
-}
-run_bench('动态分类分级三层漏斗', '/v1/dynclassification/classify', class_payload)
-"
+run_bench "DP Mean (Laplace 均值)" "/v1/privacy/dp/mean" \
+    '{"values": [1.0, 2.0, 3.0, 4.0, 5.0], "epsilon": 0.5, "lower": 0.0, "upper": 10.0}'
 
-echo -e "\n${GREEN}====================================================${NC}"
-echo -e "${GREEN} 性能基准测试完成！${NC}"
-echo -e "${GREEN}====================================================${NC}"
+# ── 3. K-Anonymity 基准 ───────────────────────────────────────────────
+run_bench "K-Anonymity 表泛化" "/v1/privacy/k_anonymize/table" \
+    '{"rows": [{"age": 25, "zip": "100000"}, {"age": 26, "zip": "100000"}], "k": 2, "quasi_identifiers": ["age", "zip"]}'
+
+# ── 4. LDP 基准 ───────────────────────────────────────────────────────
+run_bench "LDP Binary 扰动" "/v1/privacy/ldp/perturb/binary" \
+    '{"value": 1, "epsilon": 1.0}'
+
+# ── 5. Query Obfuscation 基准 ─────────────────────────────────────────
+run_bench "Query Obfuscation 混淆" "/v1/privacy/qol/obfuscate" \
+    '{"queries": ["SELECT * FROM patients WHERE name = '\''张三'\''"], "dummy_count": 3}'
+
+# ── 6. 动态分类分级基准 ───────────────────────────────────────────────
+run_bench "动态分类分级 (Layer-1 Rule + ONNX)" "/v1/dynclassification/classify" \
+    '{"texts": ["身份证号: 110101199003072345, 手机: 13800138000"], "domain": "finance"}'
+
+echo ""
+echo -e "${BLUE}====================================================${NC}"
+echo -e "${BLUE} Privacy Engine 性能基准测试完成${NC}"
+echo -e "${BLUE}====================================================${NC}"

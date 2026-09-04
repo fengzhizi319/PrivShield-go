@@ -17,6 +17,8 @@
 # ============================================================================
 
 set -euo pipefail
+export NO_PROXY="*"
+export no_proxy="*"
 export CGO_ENABLED=0
 
 while [[ $# -gt 0 ]]; do

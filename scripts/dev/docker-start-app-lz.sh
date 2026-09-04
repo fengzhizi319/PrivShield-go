@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================================
-# 【Docker 模式】一键启动 PrivShield 调度之眼全栈测试集群 (Docker Compose)
-# Launch PrivShield App-LZ Full Stack in Docker Compose
+# 【Docker 模式】一键启动 PrivShield 调度之眼全栈测试集群 (Go 原生引擎版)
+# Launch PrivShield App-LZ Full Stack in Docker Compose with Go Engine
 #
-# 用法 / Usage: ./scripts/dev/docker-start-app-lz.sh [--build] [--no-build] [--force]
+# 用法 / Usage: ./scripts/dev/docker-start-app-lz-go.sh [--build] [--no-build] [--force]
 # ============================================================================
 
 set -euo pipefail
@@ -38,7 +38,7 @@ for arg in "$@"; do
 done
 
 echo "============================================================================"
-echo "🌟 [Docker Mode] 正在启动 PrivShield 调度之眼全景测试集群 (App-LZ Stack)..."
+echo "🌟 [Docker Mode] 正在启动 PrivShield 调度之眼全景测试集群 (Go 原生引擎版)..."
 echo "============================================================================"
 
 # ── 端口清理 ──────────────────────────────────────────────────────────
@@ -48,6 +48,13 @@ if [[ "$FORCE" == "true" ]]; then
         fuser -k -9 "${p}/tcp" 2>/dev/null || true
     done
 fi
+
+# ── 确保 Go 引擎镜像已构建 ──────────────────────────────────────────
+echo "📦 准备 PrivShield-Go 原生引擎 Docker 镜像..."
+(
+    cd "$PROJECT_ROOT"
+    docker build -f services/privacy-engine/Dockerfile -t privshield-go:1.0.0 . >/dev/null 2>&1 || true
+)
 
 # ── 前置准备：确保前端与 Go 二进制已就绪（加速 Docker 本地构建） ───────────
 if [[ ! -d "$PROJECT_ROOT/console/app-lz/web/dist" || "$BUILD_FLAG" == "--build" ]]; then
@@ -74,21 +81,21 @@ if [[ "$BUILD_FLAG" == "--build" ]]; then
 fi
 
 # ── 清理可能残留的同名容器 ──────────────────────────────────────────────
-docker rm -f PrivShield privshield-service-hub privshield-datasource-mgr privshield-audit-log privshield-app-lz-bff privshield-app-lz-web 2>/dev/null || true
+docker rm -f PrivShield PrivShield-Go privshield-service-hub privshield-datasource-mgr privshield-audit-log privshield-app-lz-bff privshield-app-lz-web 2>/dev/null || true
 
-# ── 启动 Docker Compose 编排 ──────────────────────────────────────────
+# ── 启动 Docker Compose 编排 (叠加 Go 引擎覆盖层) ────────────────────────
 cd "$PROJECT_ROOT/deploy/docker-compose"
 # shellcheck disable=SC2086
-docker compose -f docker-compose.app-lz.yml up -d $BUILD_FLAG
+docker compose -f docker-compose.app-lz.yml -f docker-compose.app-lz-go-engine.yml up -d $BUILD_FLAG
 
 echo ""
 echo "============================================================================"
-echo " ✨ PrivShield App-LZ 调度之眼容器集群已成功启动！"
+echo " ✨ PrivShield App-LZ (Go Engine) 调度之眼容器集群已成功启动！"
 echo " 🌐 React 控制台 Web 大屏   : http://localhost:5174"
 echo " 🔌 App-LZ Go BFF 聚合接口  : http://localhost:8085"
 echo " 🚀 Service Hub 调度中枢    : http://localhost:8082 (gRPC: 50052)"
 echo " 📊 Datasource Mgr 数据源   : http://localhost:8083 (gRPC: 50053)"
 echo " 🛡️ Audit Log 审计存证      : http://localhost:8084 (gRPC: 50054)"
-echo " ⚡ Privacy Agent 算力引擎  : http://localhost:8079 (gRPC: 50051)"
+echo " ⚡ Privacy Agent 算力引擎  : http://localhost:8079 (gRPC: 50051) [Go 原生]"
 echo " 停止服务命令              : ./scripts/dev/docker-stop-app-lz.sh"
 echo "============================================================================"

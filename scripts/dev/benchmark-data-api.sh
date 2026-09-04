@@ -38,6 +38,8 @@
 #   bash ./scripts/dev/benchmark-data-api.sh -u http://192.168.1.100:8085
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
+export NO_PROXY="*"
+export no_proxy="*"
 
 # ── 默认参数 ──
 BFF_URL="http://127.0.0.1:8085"

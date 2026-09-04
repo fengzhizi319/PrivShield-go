@@ -37,7 +37,8 @@ GRPC_PORT="${PRIVACY_GRPC_PORT:-50051}"
 CHECK_ALL=false
 
 export no_proxy="127.0.0.1,localhost,${REST_HOST},${no_proxy:-}"
-export NO_PROXY="127.0.0.1,localhost,${REST_HOST},${NO_PROXY:-}"
+export NO_PROXY="*"
+export no_proxy="*"
 
 TOTAL_CHECKS=0
 PASSED_CHECKS=0

@@ -22,6 +22,18 @@
 
 set -euo pipefail
 
+for arg in "$@"; do
+    case "$arg" in
+        -h|--help)
+            echo "用法 / Usage: $0 [选项]"
+            echo ""
+            echo "说明: 为 PrivShield 各微服务与网关生成全套开发与测试用自签名 mTLS 证书链"
+            echo "环境变量支持: CERT_DAYS (默认 3650 天)"
+            exit 0
+            ;;
+    esac
+done
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DAYS="${CERT_DAYS:-3650}"

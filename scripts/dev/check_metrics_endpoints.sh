@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# PrivShield - Prometheus 指标端点一键巡检脚本
-# Check Prometheus /metrics endpoints across all services
+# PrivShield - Go 原生引擎全平台 Prometheus 指标端点一键巡检脚本
+# Check Prometheus /metrics endpoints across all Go services & Gateway
 # ==============================================================================
 set -euo pipefail
+export NO_PROXY="*"
+export no_proxy="*"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -11,15 +13,17 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 echo "========================================================"
-echo " 📊 PrivShield 全平台 Prometheus 指标端点巡检"
+echo " 📊 PrivShield-Go 全平台 Prometheus 指标端点巡检"
 echo "========================================================"
 
 TARGETS=(
-  "PrivShield Core Agent|http://127.0.0.1:8079/metrics"
+  "PrivShield-Go Agent|http://127.0.0.1:8079/metrics"
+  "PrivShield-Go Gateway|http://127.0.0.1:8000/metrics"
   "Console Go BFF Gateway|http://127.0.0.1:8081/metrics"
   "Service Hub 调度中枢|http://127.0.0.1:8082/metrics"
   "Datasource Manager 数据源|http://127.0.0.1:8083/metrics"
   "Audit Log 审计存证|http://127.0.0.1:8084/metrics"
+  "App-LZ Go BFF|http://127.0.0.1:8085/metrics"
 )
 
 SUCCESS_COUNT=0
@@ -29,7 +33,7 @@ for item in "${TARGETS[@]}"; do
   NAME="${item%%|*}"
   URL="${item##*|}"
   
-  printf "%-28s %-32s " "$NAME" "$URL"
+  printf "%-28s %-36s " "$NAME" "$URL"
   
   if HTTP_CODE=$(curl -s -o /tmp/metric_out.txt -w "%{http_code}" --max-time 2 "$URL" 2>/dev/null); then
     if [ "$HTTP_CODE" = "200" ]; then

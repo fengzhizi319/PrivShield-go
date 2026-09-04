@@ -243,14 +243,13 @@ python -m engine.server
 当需要调试 6 阶段调度流水线、数据源资产探查与审计存证功能时使用：
 
 ```bash
-# 1. 仅启动 3 大 Go 中台微服务（service-hub :8082, datasource-mgr :8083, audit-log :8084）
-# （前提：Python 核心 Agent 已在 :8079 独立运行）
-bash ./scripts/dev/dev-start-new-modules.sh
+# 1. 一键顺序编译并启动 Privacy Engine 与 3 大 Go 中台微服务（service-hub :8082, datasource-mgr :8083, audit-log :8084）
+bash ./scripts/dev/dev-start-services.sh --force
 ```
 
 ```bash
-# 2. 停止由上述脚本启动的 3 大微服务
-bash ./scripts/dev/dev-stop-new-modules.sh
+# 2. 停止由上述脚本启动的微服务与引擎
+bash ./scripts/dev/dev-stop-services.sh
 ```
 
 ```bash
@@ -396,30 +395,36 @@ python scripts/dev/mock_agent_server.py
 
 | 分类 | 脚本文件 | 执行命令 / 支持参数 | 核心功能与使用场景 |
 |---|---|---|---|
-| **控制台开发** | `dev-bff-agent.sh`<br/>`dev-bff-agent.ps1` | `bash ./scripts/dev/dev-bff-agent.sh`<br/>`[--mtls] [--force]` | **【主力推荐】** 一键启动 Agent + Go BFF (:8081) + Vite 前端 (:5173 HMR)。 |
+| **隐私引擎** | `start-privacy-engine.sh`<br/>*(原 `go-engine-start.sh`)* | `bash ./scripts/dev/start-privacy-engine.sh` | 快速启动 Go 隐私计算引擎 Agent (REST :8079, gRPC :50051)。 |
+| **隐私网关** | `start-privacy-gateway.sh`<br/>*(原 `go-gateway-start.sh`)* | `bash ./scripts/dev/start-privacy-gateway.sh` | 快速启动反向代理与 P2C 负载均衡网关 (REST :8000, gRPC :50000)。 |
+| **控制台开发** | `dev-engine-console.sh`<br/>*(原 `dev-bff-agent.sh`)* | `bash ./scripts/dev/dev-engine-console.sh`<br/>`[--mtls] [--force]` | **【主力推荐】** 启动 Privacy Engine + Go BFF (:8081) + Vite 前端 (:5173 HMR)。 |
+| **控制台开发** | `dev-app-lz.sh` | `bash ./scripts/dev/dev-app-lz.sh`<br/>`[--force] [--mtls\|--tlcp]` | 启动调度之眼控制台 (4微服务 + App-LZ BFF :8085 + 前端 :5174)。 |
 | **控制台开发** | `dev-stop.sh` | `bash ./scripts/dev/dev-stop.sh` | 优雅停止本地运行的 Agent、Go BFF 及 Vite 前端。 |
-| **中台微服务** | `dev-start-new-modules.sh` | `bash ./scripts/dev/dev-start-new-modules.sh` | 启动 3 大 Go 中台微服务（service-hub, datasource-mgr, audit-log），需 Agent 先行运行。 |
-| **中台微服务** | `dev-stop-new-modules.sh` | `bash ./scripts/dev/dev-stop-new-modules.sh` | 停止由 `dev-start-new-modules.sh` 启动的 3 大微服务。 |
+| **中台微服务** | `dev-start-services.sh`<br/>*(原 `dev-start-new-modules.sh`)* | `bash ./scripts/dev/dev-start-services.sh --force` | 一键顺序启动 Engine + 3 大 Go 中台微服务 (Hub, Datasource, Audit)。 |
+| **中台微服务** | `dev-stop-services.sh`<br/>*(原 `dev-stop-new-modules.sh`)* | `bash ./scripts/dev/dev-stop-services.sh` | 停止由 `dev-start-services.sh` 启动的微服务与引擎。 |
 | **中台微服务** | `e2e-start-all-services.sh` | `bash ./scripts/dev/e2e-start-all-services.sh` | **【真实环境】** 一键按序拉起 Agent + 3 大 Go 中台微服务。 |
 | **中台微服务** | `e2e-stop-all-services.sh` | `bash ./scripts/dev/e2e-stop-all-services.sh` | 停止真实 E2E 环境的全量服务进程。 |
 | **中台微服务** | `start_all_services.sh` | `bash ./scripts/dev/start_all_services.sh --with-services` | 后台守护进程模式启动全量服务群（记录 PID 文件）。 |
 | **中台微服务** | `stop_all_services.sh` | `bash ./scripts/dev/stop_all_services.sh` | 停止由 `start_all_services.sh` 启动的全量开发服务群。 |
-| **Docker 联调** | `docker-start-bff-agent.sh`<br/>`docker-start-bff-agent.ps1` | `bash ./scripts/dev/docker-start-bff-agent.sh`<br/>`[--no-build] [--build]` | **【Docker 开发】** 启动控制台三件套容器（Agent + BFF + Web）。 |
-| **Docker 联调** | `docker-start-all.sh` | `bash ./scripts/dev/docker-start-all.sh`<br/>`[--with-llm] [--no-build]` | 启动全栈 Docker 容器集群（Agent + 3 中台微服务 + BFF + Web）。 |
-| **Docker 联调** | `docker-start-agent.sh`<br/>`docker-start-agent.ps1` | `bash ./scripts/dev/docker-start-agent.sh [core\|ml]` | 独立启动 Agent 容器（支持 core 纯 CPU 或 ml 重型镜像）。 |
+| **Docker 联调** | `docker-start-bff-agent.sh`<br/>`docker-start-bff-agent.ps1` | `bash ./scripts/dev/docker-start-bff-agent.sh`<br/>`[--no-build] [--build]` | **【Docker 开发】** 启动控制台三件套容器（Engine + BFF + Web）。 |
+| **Docker 联调** | `docker-start-all.sh` | `bash ./scripts/dev/docker-start-all.sh`<br/>`[--with-llm] [--no-build]` | 启动全栈 Docker 容器集群（Engine + 3 中台微服务 + BFF + Web）。 |
+| **Docker 联调** | `docker-start-agent.sh` | `bash ./scripts/dev/docker-start-agent.sh` | 独立启动 Go Engine 容器 (:8079, :50051)。 |
 | **Docker 联调** | `docker-stop-agent.sh` | `bash ./scripts/dev/docker-stop-agent.sh` | 停止由 `docker-start-agent.sh` 启动的 Agent 容器。 |
 | **Docker 联调** | `docker-start-llm.sh`<br/>`docker-stop-llm.sh` | `bash ./scripts/dev/docker-start-llm.sh`<br/>`bash ./scripts/dev/docker-stop-llm.sh` | 启动 / 停止独立的本地 vLLM 大模型推理容器 (:8000)。 |
 | **Docker 联调** | `docker-stop.sh` | `bash ./scripts/dev/docker-stop.sh` | 一键停止并清理所有通过 Docker Compose 启动的开发容器及网络。 |
-| **测试与基准** | `run_console_e2e_tests.sh` | `bash ./scripts/dev/run_console_e2e_tests.sh` | 自动化启动 Mock Agent + Go BFF + Vite 并运行全套 E2E 测试。 |
-| **测试与基准** | `integration-test-new-modules.sh` | `bash ./scripts/dev/integration-test-new-modules.sh` | 执行 3 大 Go 中台微服务全流程集成测试与数据流校验。 |
-| **测试与基准** | `benchmark_performance.sh` | `bash ./scripts/dev/benchmark_performance.sh` | 执行隐私脱敏、差分隐私加噪、K-Anonymity 等原语基准性能压测。 |
+| **测试与基准** | `test-privacy-engine.sh`<br/>*(原 `go-engine-test.sh`)* | `bash ./scripts/dev/test-privacy-engine.sh` | 全仓库 Go 模块 (SDK, Engine, Pkg, Services, BFF) 单元/集成测试。 |
+| **测试与基准** | `test-e2e-privacy-engine.sh`<br/>*(原 `integration-test-go.sh`)* | `bash ./scripts/dev/test-e2e-privacy-engine.sh` | Privacy Engine 19 大 REST 端点全量端到端测试。 |
+| **测试与基准** | `integration-test-services.sh`<br/>*(原 `integration-test-new-modules.sh`)* | `bash ./scripts/dev/integration-test-services.sh` | 执行 3 大 Go 中台微服务全流程集成测试与数据流校验。 |
+| **测试与基准** | `bench-privacy-engine.sh`<br/>*(原 `go-engine-bench.sh`)* | `bash ./scripts/dev/bench-privacy-engine.sh` | 对 SDK 与 Engine 所有核心隐私计算原语执行基准性能压测 (Benchmark)。 |
+| **测试与基准** | `benchmark_performance.sh` | `bash ./scripts/dev/benchmark_performance.sh` | 执行脱敏、DP、K-匿名、LDP、QOL、分级分类 HTTP 吞吐与延迟压测。 |
+| **测试与基准** | `benchmark-data-api.sh` | `bash ./scripts/dev/benchmark-data-api.sh` | 预设数据 API (医保/康养) 全链路性能基准压测。 |
+| **测试与基准** | `run_console_e2e_tests.sh` | `bash ./scripts/dev/run_console_e2e_tests.sh` | 启动真实 Agent + BFF + Vite 并运行全套自动化回归测试。 |
 | **诊断与运维** | `health_check.sh` | `bash ./scripts/dev/health_check.sh [--all]` | 全微服务健康诊断巡检探针。 |
 | **诊断与运维** | `check_metrics_endpoints.sh` | `bash ./scripts/dev/check_metrics_endpoints.sh` | 检查全量服务 `/metrics` Prometheus 指标暴露端点连通性。 |
 | **诊断与运维** | `start_monitoring.sh`<br/>`stop_monitoring.sh` | `bash ./scripts/dev/start_monitoring.sh`<br/>`bash ./scripts/dev/stop_monitoring.sh` | 一键启动 / 停止 Prometheus (:9090) 与 Grafana (:3000) 监控大屏。 |
-| **诊断与运维** | `verify_console_environment.sh` | `bash ./scripts/dev/verify_console_environment.sh` | 检查 Go, Python, Node.js, pnpm 等本地依赖环境与端口占用。 |
+| **诊断与运维** | `verify_console_environment.sh` | `bash ./scripts/dev/verify_console_environment.sh` | 检查 Go, Node.js, pnpm 等本地依赖环境与端口占用。 |
 | **安全与数据** | `generate_all_test_certs.sh` | `bash ./scripts/dev/generate_all_test_certs.sh` | 一键生成全套 mTLS 开发测试证书链（CA、Server、Client）。 |
 | **安全与数据** | `clean_privacy_budget_db.sh` | `bash ./scripts/dev/clean_privacy_budget_db.sh` | 重置并清理开发阶段生成的 SQLite 隐私预算消费数据库。 |
-| **桩服务** | `mock_agent_server.py` | `python scripts/dev/mock_agent_server.py` | 轻量级 Python Mock Agent，用于无 ML 依赖环境下的快速前端/BFF 联调。 |
 
 > 💡 **提示**：Windows PowerShell 环境可运行同名 `.ps1` 脚本（如 `dev-bff-agent.ps1`、`docker-start-bff-agent.ps1` 等）。关于生产部署脚本（`scripts/prod/`）、数据生成脚本（`scripts/data/`）及硬件加速脚本（`scripts/env/`）详见 [scripts/README.md](scripts/README.md)。
 

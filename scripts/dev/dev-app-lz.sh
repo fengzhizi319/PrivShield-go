@@ -16,6 +16,8 @@
 
 set -euo pipefail
 export CGO_ENABLED=0
+export NO_PROXY="*"
+export no_proxy="*"
 
 FORCE=false
 SKIP_UPSTREAM=false

@@ -23,6 +23,8 @@
 
 set -euo pipefail
 export CGO_ENABLED=0
+export NO_PROXY="*"
+export no_proxy="*"
 
 # ANSI 终端颜色代码
 RED='\033[0;31m'
