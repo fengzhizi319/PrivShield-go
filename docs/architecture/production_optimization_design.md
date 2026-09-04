@@ -1,7 +1,7 @@
 # PrivShield 生产级架构优化与高可用演进设计方案
 
 > **版本**：v18.0.0  
-> **适用范围**：`PrivShield` 核心算力引擎、中台微服务群（`service-hub` / `datasource-mgr` / `audit-log`）、控制台 BFF 及 Kubernetes 云原生部署套件。  
+> **适用范围**：`services/privacy-engine` 核心算力引擎、中台微服务群（`services/service-hub` / `services/audit-log`）、控制台与数据源生态（`console/mock-datasource` / `console/engine-console` / `console/app-lz`）及 Kubernetes 云原生部署套件。  
 > **核心目标**：针对高并发政务与医疗数据流通场景，全面实现负载均衡、分布式预算一致性、PostgreSQL 原子租约并发、细粒度事件驱动自动扩缩容（KEDA/CronHPA）、异步任务队列与极限压测套件。
 
 ---
@@ -35,7 +35,7 @@ flowchart TD
 
     subgraph ServiceMesh [企业级中台微服务群 :8082~:8084 / :50052~:50054]
         ServiceHub[Service Hub 调度中枢<br/>HTTP 8082 / gRPC 50052<br/>PostgreSQL 原子租约 Worker]
-        DatasourceMgr[Datasource Manager<br/>HTTP 8083 / gRPC 50053<br/>多源切片纳管 + 敏感特征探查]
+        DatasourceMgr[Mock Datasource<br/>HTTP 8083 / gRPC 50053<br/>多源切片纳管 + 敏感特征探查]
         AuditLog[Audit Log 存证中心<br/>HTTP 8084 / gRPC 50054<br/>9 要素 SHA-256 哈希链 + SM4-GCM 快照加密]
     end
 
@@ -67,7 +67,7 @@ flowchart TD
     ScalingControl -.->|精准水平扩缩| ComputeEngines
 ```
 
-> **gRPC mTLS 接入**：service-hub、datasource-mgr、audit-log、bff-go 等 Go gRPC 服务器在 `PRIVACY_AUTH_MTLS_WHITELIST_FILE` 指向 `config/mtls-whitelist.yaml` 时，通过 `pkg/tlsutil.NewWhitelistInterceptor()` 注册 unary/stream CN 白名单拦截器，并支持 5 秒 mtime 轮询热载。
+> **gRPC mTLS 接入**：service-hub、mock-datasource、audit-log、engine-console/bff-go 等 Go gRPC 服务器在 `PRIVACY_AUTH_MTLS_WHITELIST_FILE` 指向 `config/mtls-whitelist.yaml` 时，通过 `pkg/tlsutil.NewWhitelistInterceptor()` 注册 unary/stream CN 白名单拦截器，并支持 5 秒 mtime 轮询热载。
 
 ---
 
@@ -75,7 +75,7 @@ flowchart TD
 
 ### 2.1 分布式全局隐私预算一致性中心 (Distributed Consistency Budget)
 
-在 `privacy-go-sdk/budget/budget.go` 中，`BudgetAccountant` 通过纯 Go 原子无锁并发设计实现统一预算抽象：
+在 `services/privacy-engine/sdk/budget/budget.go` 中，`BudgetAccountant` 通过纯 Go 原子无锁并发设计实现统一预算抽象：
 1. **无锁原子 CAS 模式**（默认）：基于 `sync/atomic` 与 `math.Float64bits` 实现单机千万级 QPS 原子扣减与原子回滚，消除读陈旧与并发丢失风险；
 2. **SQLite 模式**：通过环境变量 `PRIVACY_BUDGET_DB` 启用，支持单机本地持久化与跨实例共享；
 3. **滑动时间窗口**：通过 `PRIVACY_BUDGET_WINDOW_SECONDS` 实现自动周期重置；
@@ -93,7 +93,7 @@ flowchart TD
   - 探活恢复后通过半开（Half-Open）状态自动重新纳入可用节点池。
 - **响应体及时释放**：重试循环内显式 `resp.Body.Close()`（读取完毕后立即关闭），避免 `defer` 导致所有响应体累积到函数返回才释放，防止极端场景下 256 MiB 内存占用与连接池耗尽。
 
-#### 2. Go 网关 P2C-EWMA 动态负载调度与 BufferPool (`engine-go/internal/gateway/`)
+#### 2. Go 网关 P2C-EWMA 动态负载调度与 BufferPool (`services/privacy-engine/internal/gateway/`)
 - **Power of Two Choices + EWMA 算法 (`balancer.go`)**：
   - 每次调度从健康节点列表中随机选取两个候选节点；
   - 基于指数加权移动平均（EWMA）计算候选节点的综合负载得分：
@@ -162,7 +162,7 @@ RETURNING *;
 
 ## 3. 第二轮深度四维架构审计优化（P0~P3）
 
-在第一轮 12 项优化基础上，对 `engine-go` 全模块再次实施全量四维审计（功能性、安全性、可靠性、并发性），发现并修复 **24 项** 新优化点：
+在第一轮 12 项优化基础上，对 `services/privacy-engine` 全模块再次实施全量四维审计（功能性、安全性、可靠性、并发性），发现并修复 **24 项** 新优化点：
 
 ### 3.1 P0 — 隐私安全与正确性
 
@@ -197,13 +197,13 @@ RETURNING *;
 - **DPChunked 使用请求 ctx**：替代 `context.Background()`
 - **Profile 加载错误日志**：`slog.Warn` 记录加载失败
 
-**全量测试验证**：12 个 engine-go 包全部通过 `go test -race -count=1 ./...`，零数据竞争。详见 [`docs/archive/go_engine_architecture_and_ner_cuda_design.md`](../archive/go_engine_architecture_and_ner_cuda_design.md) §7-8。
+**全量测试验证**：`services/privacy-engine` 全部包通过 `go test -race -count=1 ./...`，零数据竞争。
 
 ---
 
 ## 4. 第三轮深度四维架构审计优化（P0~P2）
 
-在前两轮 36 项优化基础上，对 `engine-go` 全模块实施第三轮全量四维审计，发现并修复 **9 项** 新优化点：
+在前两轮 36 项优化基础上，对 `services/privacy-engine` 全模块实施第三轮全量四维审计，发现并修复 **9 项** 新优化点：
 
 ### 4.1 P0 — 隐私安全与正确性
 
@@ -222,13 +222,13 @@ RETURNING *;
 - **ProcessAgentData 静默忽略归一化错误**：`naming.NormalizeDataSourceID` 错误从 `_` 改为记录 `slog.Warn` 日志。
 - **getEnvInt 改用 strconv.Atoi**：`fmt.Sscanf` 不检查错误且对无效输入返回 0，改用 `strconv.Atoi` + 错误回退默认值。影响 `service.go` 和 `cmd/privshield-agent/main.go`。
 
-**全量测试验证**：12 个 engine-go 包全部通过 `go test -race -count=1 ./...`，零数据竞争。
+**全量测试验证**：`services/privacy-engine` 全部包通过 `go test -race -count=1 ./...`，零数据竞争。
 
 ---
 
 ## 5. 第四轮深度四维架构审计优化（P0~P2）
 
-在前三轮 45 项优化基础上，对 `engine-go` + `privacy-go-sdk` 全模块实施第四轮全量四维审计，发现并修复 **6 项** 新优化点：
+在前三轮 45 项优化基础上，对 `services/privacy-engine`（引擎服务 + 内置 sdk）全模块实施第四轮全量四维审计，发现并修复 **6 项** 新优化点：
 
 ### 5.1 P0 — 正确性与安全
 
@@ -245,13 +245,13 @@ RETURNING *;
 
 - **LDP 批量扰动全局 rand 锁竞争**：`PerturbBinaryBatch`/`PerturbCategoricalBatch` 多 worker 共享 `math/rand/v2` 全局函数，内部全局锁竞争。改为 per-worker 独立 `rand.New(rand.NewPCG(...))` 消除锁竞争。
 
-**全量测试验证**：19 个包（engine-go 12 + privacy-go-sdk 7）全部通过 `go test -race -count=1 ./...`，零数据竞争。
+**全量测试验证**：`services/privacy-engine` 19 个包（12 个 internal 包 + 7 个内置 sdk 原语包）全部通过 `go test -race -count=1 ./...`，零数据竞争。
 
 ---
 
 ## 6. 第五轮深度四维架构审计优化（P1~P2）
 
-在前四轮 51 项优化基础上，对 `engine-go` 全模块实施第五轮全量四维审计，发现并修复 **5 项** 新优化点：
+在前四轮 51 项优化基础上，对 `services/privacy-engine` 全模块实施第五轮全量四维审计，发现并修复 **5 项** 新优化点：
 
 ### 6.1 P1 — 并发安全
 
@@ -340,4 +340,4 @@ RETURNING *;
 - `TestBackendNodeReverseProxyIsNodeScoped`（含 16 goroutine 并发同一性断言）/ `TestBackendNodeReverseProxyPersistsBuildError`。
 - `TestProcessFileStreamCSVMatchesProcessFile`（BOM/列过滤/引号内逗号/空表体/空文件 6 形态）、`TestProcessFileStreamJSONMatchesProcessFile`（嵌套值/空数组/顶层对象/非对象元素/尾部脏数据 8 形态）：**流式与物化路径输出 `reflect.DeepEqual` 等价**；另有回退一致性、字节硬上限、内存放大消除与 `forEachChunked` 区间不重不漏断言。
 
-**全量测试验证**：19 个包全部通过 `go test -race -count=1 ./engine-go/... ./privacy-go-sdk/...`，零数据竞争。
+**全量测试验证**：19 个包全部通过 `go test -race -count=1 ./services/privacy-engine/...`，零数据竞争。

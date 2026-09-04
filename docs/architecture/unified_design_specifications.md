@@ -1,7 +1,7 @@
 # PrivShield 全栈统一架构设计与跨层协同规范 (Unified Architecture Design Specifications)
 
 > **版本**：v16.0.0  
-> **适用范围**：PrivShield 核心隐私引擎（Go `engine-go` / `privacy-go-sdk`）、企业级中台微服务群（Go `service-hub` / `datasource-mgr` / `audit-log`）、控制台与 BFF 网关（`console/bff-go` / `console/app-lz` / `console/web`）及基础共享库（`pkg/`）。  
+> **适用范围**：PrivShield 核心隐私引擎（`services/privacy-engine`，内置 `sdk/`）、企业级中台微服务群（`services/service-hub` / `services/audit-log`）、控制台与数据源生态（`console/engine-console` / `console/app-lz` / `console/mock-datasource`）及基础共享库（`pkg/`）。  
 > **定位**：本文档沉淀 PrivShield 在分布式、高并发场景下的**跨层统一架构设计标准与协同规范**，消除不同服务之间的语义分歧与实现割裂。
 
 ---
@@ -52,7 +52,7 @@ flowchart TD
 
     subgraph S3 ["3. 统一零信任与机密安全架构 (Zero-Trust & Data Security)"]
         mTLS["内部通信: TLS 1.3 双向 mTLS + CN 白名单动态热重载"]
-        EnvelopeEnc["静态数据: 国密 SM3 散列 / SM4-GCM 快照信封加密 (enc:v1:...)"]
+        EnvelopeEnc["静态数据: 国密 SM3 散列 / SM4-GCM 快照信封加密 (enc:v2:...)"]
         HashChain["存证防篡改: 9 要素连续哈希链 (prev_hash 链式绑定)"]
         DDoSMW["9 层防御中间件栈 (MaxBodySize / MaxConcurrent / RateLimit)"]
     end
@@ -81,13 +81,13 @@ flowchart TD
 
 | 服务 | 入口模块 | 默认 HTTP 地址 | 默认 gRPC 地址 | 说明 |
 |---|---|---|---|---|
-| Go PrivShield Agent | `engine-go/cmd/privshield-agent` | `0.0.0.0:8079` | `0.0.0.0:50051` | 核心隐私算力与动态分类双协议统一入口 |
-| Go PrivShield Gateway | `engine-go/cmd/privshield-gateway` | `0.0.0.0:8000` | `0.0.0.0:50000` | L7 P2C-EWMA 反向代理网关与 BufferPool 缓存 |
+| Go Privacy Engine | `services/privacy-engine/cmd/privshield-agent` | `0.0.0.0:8079` | `0.0.0.0:50051` | 核心隐私算力与动态分类双协议统一入口 |
+| Go Privacy Gateway | `services/privacy-engine/cmd/privshield-gateway` | `0.0.0.0:8000` | `0.0.0.0:50000` | L7 P2C-EWMA 反向代理网关与 BufferPool 缓存 |
 | service-hub | `services/service-hub` | `127.0.0.1:8082` | `127.0.0.1:50052` | 数据服务调度中枢 |
-| datasource-mgr | `services/datasource-mgr` | `127.0.0.1:8083` | `127.0.0.1:50053` | 数据源资产管理 |
+| mock-datasource | `console/mock-datasource` | `127.0.0.1:8083` | `127.0.0.1:50053` | 模拟多源数据服务与资产管理 |
 | audit-log | `services/audit-log` | `127.0.0.1:8084` | `127.0.0.1:50054` | 审计存证服务 |
-| bff-go / console | `console/bff-go` | `127.0.0.1:8081` | `127.0.0.1:50055`（可选） | 统一管理控制台 BFF 网关 |
-| app-lz / bff-go | `console/app-lz/bff-go` | `127.0.0.1:8085` | — | 调度之眼业务 BFF（统一走 service-hub 编排） |
+| engine-console/bff-go | `console/engine-console/bff-go` | `127.0.0.1:8081` | `127.0.0.1:50055`（可选） | 统一管理控制台 BFF 网关 |
+| app-lz/bff-go | `console/app-lz/bff-go` | `127.0.0.1:8085` | — | 调度之眼业务 BFF（统一走 service-hub 编排） |
 
 > 生产环境请通过对应的环境变量显式设置监听地址；默认回环地址仅用于本地开发。各服务具体的环境变量名见 [7. 统一配置管理](#7-统一配置管理与环境级联覆盖机制-configuration-hierarchy)。
 
@@ -173,9 +173,9 @@ flowchart TD
    - 入站请求若包含 `X-Request-ID`，写入上下文并透传；
    - 入站请求若缺失，中间件自动生成并回写到 HTTP 响应头 `X-Request-ID` 与 `X-Trace-ID`；
 2. **gRPC 双向元数据转换**：
-   - Go gRPC 客户端（`console/bff-go/internal/agent/client.go`）发起 gRPC 调用时，自动将上下文中的 trace ID 写入 gRPC `metadata.AppendToOutgoingContext(ctx, "x-request-id", traceID, "x-trace-id", traceID)`；
+   - Go gRPC 客户端（`console/engine-console/bff-go/internal/agent/client.go`）发起 gRPC 调用时，自动将上下文中的 trace ID 写入 gRPC `metadata.AppendToOutgoingContext(ctx, "x-request-id", traceID, "x-trace-id", traceID)`；
    - Go HTTP 客户端（`pkg/agent/client.go`）发起 HTTP 调用时，自动注入 `X-Request-ID` + `X-Trace-ID` 双头；
-   - Go gRPC Servicer（`engine-go/internal/grpcserver/server.go`）自动从 gRPC metadata 中提取并在日志中绑定；
+   - Go gRPC Servicer（`services/privacy-engine/internal/grpcserver/server.go`）自动从 gRPC metadata 中提取并在日志中绑定；
 3. **结构化日志标准输出字段**：
    ```json
    {
@@ -221,7 +221,7 @@ TraceMiddleware ➔ StructuredLogger ➔ Recovery ➔ SecurityHeaders ➔ MaxBod
 
 1. **强密码学通信**：微服务间跨机通信强制启用 TLS 1.3，禁用非安全老旧密码套件；
 2. **证书 CN 授权与热重载 (`config/mtls-whitelist.yaml`)**：
-   - Go 端通过 `pkg/tlsutil/grpc_interceptor.go` 与 `pkg/tlsutil/whitelist.go` 提供的 `NewWhitelistInterceptor()` 构造 unary/stream 拦截器；当 `PRIVACY_AUTH_MTLS_WHITELIST_FILE` 指向 `config/mtls-whitelist.yaml` 时，`engine-go`、`service-hub`、`datasource-mgr`、`audit-log`、`bff-go` 的 gRPC 服务端均自动注册该拦截器；
+   - Go 端通过 `pkg/tlsutil/grpc_interceptor.go` 与 `pkg/tlsutil/whitelist.go` 提供的 `NewWhitelistInterceptor()` 构造 unary/stream 拦截器；当 `PRIVACY_AUTH_MTLS_WHITELIST_FILE` 指向 `config/mtls-whitelist.yaml` 时，`privacy-engine`、`service-hub`、`mock-datasource`、`audit-log`、`engine-console/bff-go` 的 gRPC 服务端均自动注册该拦截器；
    - 服务端提取客户端证书的 `Common Name (CN)`，根据白名单配置匹配客户端角色与允许调用的 RPC 方法（Scopes，如 `["*"]` 或 `["privacy:mask"]`）；
    - Go 端支持通过文件 mtime 轮询（5 秒间隔）监听白名单文件，**动态热更新授权无需重启服务**；
    - 兼容 `PRIVACY_AUTH_MTLS_ALLOWED_CNS` 静态列表作为降级。
@@ -232,7 +232,7 @@ TraceMiddleware ➔ StructuredLogger ➔ Recovery ➔ SecurityHeaders ➔ MaxBod
 
 ```text
 密文字符串格式规范：
-enc:v1:<Base64( 12 字节随机 Nonce + SM4-GCM 密文 + 16 字节 Auth Tag )>
+enc:v2:<Base64( 16 字节 HKDF salt + 12 字节随机 Nonce + SM4-GCM 密文 + 16 字节 Auth Tag )>
 ```
 
 - **加密标识与透明回退**：`crypto.IsEncrypted(s)` 通过 `enc:v1:` 前缀识别。若遇到历史未加密明文，自动透明回退读取，保证升级兼容；
@@ -345,7 +345,7 @@ classDiagram
 全栈所有微服务遵循严格的**多层级配置覆盖优先级阶梯**。环境变量按服务隔离，各服务拥有独立前缀：
 
 - `SERVICE_HUB_*`：数据服务调度中枢
-- `DATASOURCE_MGR_*`：数据源资产管理
+- `DATASOURCE_MGR_*` / `MOCK_DATASOURCE_*`：数据源资产管理与模拟
 - `AUDIT_LOG_*`：审计存证服务
 - `PRIVACY_CONSOLE_*` / `CONSOLE_*`：BFF 控制台
 
@@ -371,9 +371,9 @@ classDiagram
 
 ### 7.1 动态热重载规范 (Zero-Downtime Reload)
 以下配置项支持在**不重启微服务进程**的情况下动态重载生效：
-1. **动态分类分级规则库 (`rules/domains/*.yaml`、`rules/taxonomies/*.yaml`)**：由 `engine-go/internal/dynclassification/funnel.go` 实现三层漏斗（规则 → 可选 Small-NER → 可选外部 LLM 仲裁）；调用 `POST /v1/dynclassification/profiles/reload` 或 `/ops/reload` 触发引擎无锁重载；
-2. **医疗流水线字段规格矩阵与别名字典 (`rules/domains/medical.yaml`)**：支持声明式配置 `field_specs`（脱敏算子/分箱步长/差分隐私上下界）与 `aliases`（上游更名字段映射），通过 5s mtime 检测或 reload 端点自动动态装配至统一 `medicalPipeline`，无需修改代码；
-3. **mTLS CN 访问控制白名单 (`config/mtls-whitelist.yaml`)**：Go 端 `pkg/tlsutil/whitelist.go` 与 `engine-go/internal/security/whitelist.go` 内置文件 mtime 轮询监听器（5 秒间隔）在文件变更时自动热更新内存白名单；
+1. **动态分类分级规则库 (`services/privacy-engine/rules/domains/*.yaml`、`services/privacy-engine/rules/taxonomies/*.yaml`)**：由 `services/privacy-engine/internal/dynclassification/funnel.go` 实现三层漏斗（规则 → 可选 Small-NER → 可选外部 LLM 仲裁）；调用 `POST /v1/dynclassification/profiles/reload` 或 `/ops/reload` 触发引擎无锁重载；
+2. **医疗流水线字段规格矩阵与别名字典 (`services/privacy-engine/rules/domains/medical.yaml`)**：支持声明式配置 `field_specs`（脱敏算子/分箱步长/差分隐私上下界）与 `aliases`（上游更名字段映射），通过 5s mtime 检测或 reload 端点自动动态装配至统一 `medicalPipeline`，无需修改代码；
+3. **mTLS CN 访问控制白名单 (`config/mtls-whitelist.yaml`)**：Go 端 `pkg/tlsutil/whitelist.go` 与 `services/privacy-engine/internal/security/whitelist.go` 内置文件 mtime 轮询监听器（5 秒间隔）在文件变更时自动热更新内存白名单；
 4. **数据源定义与别名注册 (`pkg/naming`)**：作为静态事实源编译固化，保证分布式集群间的一致性。
 
 ---
@@ -384,7 +384,7 @@ classDiagram
 |---|---|---|
 | **跨服务命名治理** | `pkg/naming` 单一事实源注册表 | 杜绝语义漂移与拼写错误，实现编译期静态检查与入站自动归一化 |
 | **存证数据防篡改** | 9 要素区块链式哈希链 + 链式验真 | 保证存证前后强关联，杜绝删行、篡改与重放，无需昂贵的外部硬件即可实现审计抗抵赖 |
-| **机密数据保护** | SM4-GCM 信封加密 (`enc:v1:`) | 针对敏感字段按需加密，密文自带 Nonce 与 Auth Tag，具备版本前缀透明兼容回退能力 |
+| **机密数据保护** | SM4-GCM 信封加密 (`enc:v2:`) | 针对敏感字段按需加密，密文自带 HKDF Salt 与 Auth Tag，具备版本前缀透明兼容回退能力 |
 | **多副本分布式租约** | PostgreSQL `FOR UPDATE SKIP LOCKED` | 利用成熟 RDBMS 的行级锁实现原子任务争抢，免去第三方分布式锁运维与锁超时脑裂风险 |
 | **大文件恒定内存处理** | `ProcessFileStream` 逐行解码分块脱敏 | 基于 `bufio` + `json.Decoder`/`csv.Reader` 单趟流水线与 `streamBatchSize` 分块，避免全量物化 4~6 倍内存峰值放大 |
 | **匹配算子防泄漏** | `boundedRegexCache` 有界正则缓存 | 淘汰无界 `sync.Map`，设定 1024 槽位上限与半容量自适应驱逐，杜绝长运行态内存泄漏 |
@@ -399,4 +399,4 @@ classDiagram
 1. **新增数据接口/API**：严格依照 [docs/architecture/new_api_design.md](new_api_design.md) 执行 5 步 SOP；
 2. **新增配置项**：在 `internal/config/config.go` 中声明带有清晰默认值的结构体字段，并在环境变量表中补充；
 3. **新增微服务调用**：统一通过 `pkg/` 共享基础库（`pkg/agent`、`pkg/naming`、`pkg/store`、`pkg/middleware`）进行标准化封装；
-4. **提交前自检**：运行全栈测试套件 `go test -race -count=1 ./...` 与 `PYTHONPATH=. pytest tests -q`，确保 100% 绿色通过。
+4. **提交前自检**：运行全栈测试套件 `make test` 或 `go test -race -count=1 ./...`，确保 100% 绿色通过。

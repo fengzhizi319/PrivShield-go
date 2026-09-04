@@ -1,7 +1,7 @@
 # 企业级数据流通中台微服务群 (Enterprise Services)
 
 > **版本**：v16.0.0  
-> **适用范围**：`services/service-hub`、`services/datasource-mgr`、`services/audit-log` 及共享库 `pkg/`。  
+> **适用范围**：`services/service-hub`、`services/privacy-engine`、`services/audit-log` 及数据源模拟服务 `console/mock-datasource`、共享库 `pkg/`。  
 > **定位**：本文档系统阐述数联天下 · 数盾（`PrivShield`）高性能 Go 微服务群的核心职责、流通模型、可靠性与密码学存证机制。
 
 ---
@@ -11,7 +11,7 @@
 - [1. 业务架构与流通模型](#1-业务架构与流通模型)
 - [2. 微服务职责与关键特性](#2-微服务职责与关键特性)
   - [2.1 Service Hub 数据服务调度中枢 (:8082 / :50052)](#21-service-hub-数据服务调度中枢-8082--50052)
-  - [2.2 Datasource Manager 数据源与资产管理微服务 (:8083 / :50053)](#22-datasource-manager-数据源与资产管理微服务-8083--50053)
+  - [2.2 Mock Datasource 模拟数据源与资产管理服务 (:8083 / :50053)](#22-mock-datasource-模拟数据源与资产管理服务-8083--50053)
   - [2.3 Audit Log 脱敏审计与存证微服务 (:8084 / :50054)](#23-audit-log-脱敏审计与存证微服务-8084--50054)
 - [3. 运行、测试与验证命令](#3-运行测试与验证命令)
 
@@ -26,12 +26,12 @@
 ```mermaid
 graph LR
     subgraph DataProvider [数据提供方 / 原始数据局]
-        D[(Datasource Mgr<br/>:8083 / :50053 数据源纳管)]
+        D[(Mock Datasource<br/>:8083 / :50053 数据源纳管与模拟)]
     end
 
     subgraph GovernanceHub [安全流通与调度中枢]
         S[Service Hub<br/>:8082 / :50052 调度编排中枢<br/>PG 原子租约 Worker]
-        A[PrivShield Agent<br/>:8079 / :50051 算力引擎]
+        A[Privacy Engine<br/>:8079 / :50051 算力引擎]
         L[Audit Log<br/>:8084 / :50054 存证审计]
     end
 
@@ -54,13 +54,13 @@ graph LR
 
 ## 2. 微服务职责与关键特性
 
-微服务群通过**服务专属环境变量**暴露 HTTP/gRPC 监听地址与 TLS 配置（`SERVICE_HUB_*`、`DATASOURCE_MGR_*`、`AUDIT_LOG_*`），并复用共享的 `PRIVACY_*` 变量（如 `PRIVACY_REST_PORT`、`PRIVACY_AGENT_*`、`PRIVACY_AUTH_MTLS_WHITELIST_FILE`）。所有 Go gRPC 服务端（service-hub、datasource-mgr、audit-log 及 console/bff-go）均在 `PRIVACY_AUTH_MTLS_WHITELIST_FILE` 指向 `config/mtls-whitelist.yaml` 时，通过 `pkg/tlsutil.NewWhitelistInterceptor()` 注册 unary/stream 拦截器，实现基于客户端证书 CN 的 method-scope 授权与 5 秒 mtime 轮询热重载。
+微服务群通过**服务专属环境变量**暴露 HTTP/gRPC 监听地址与 TLS 配置（`SERVICE_HUB_*`、`DATASOURCE_MGR_*`、`AUDIT_LOG_*`），并复用共享的 `PRIVACY_*` 变量（如 `PRIVACY_REST_PORT`、`PRIVACY_AGENT_*`、`PRIVACY_AUTH_MTLS_WHITELIST_FILE`）。所有 Go gRPC 服务端（service-hub、mock-datasource、audit-log 及 console/engine-console/bff-go）均在 `PRIVACY_AUTH_MTLS_WHITELIST_FILE` 指向 `config/mtls-whitelist.yaml` 时，通过 `pkg/tlsutil.NewWhitelistInterceptor()` 注册 unary/stream 拦截器，实现基于客户端证书 CN 的 method-scope 授权与 5 秒 mtime 轮询热重载。
 
 ### 2.1 Service Hub 数据服务调度中枢 (`:8082` / `:50052`)
 * **6 阶段自动化调度流水线**：
   1. `Ingest`：解析外部调用方数据请求与参数，生成唯一 `task_id` 与绑定 `trace_id`；
   2. `Fetch`：安全连接指定数据源拉取数据切片（`pkg/naming` 归一化校验）；
-  3. `Classify`：请求 PrivShield 核心 Agent（`engine-go/internal/dynclassification/`）执行三层漏斗动态分类分级（YAML 规则 → 可选 Small-NER → 可选外部 LLM 仲裁）；
+  3. `Classify`：请求 PrivShield 核心 Agent（`services/privacy-engine/internal/dynclassification/`）执行三层漏斗动态分类分级（YAML 规则 → 可选 Small-NER → 可选外部 LLM 仲裁）；
   4. `Desensitize`：根据判定等级（L1~L5）自动选择并执行最佳脱敏算子（明文/掩码/K-匿名/差分隐私）；
   5. `Return`：封装脱敏后的安全数据流并返回调用方；
   6. `Audit`：异步向 Audit Log 微服务写入 9 要素存证与加密快照；
@@ -73,18 +73,18 @@ graph LR
 * **HTTP/gRPC 双协议 mTLS**：共享 `pkg/tlsutil` 工具库（`grpc_interceptor.go` / `whitelist.go`），TLS 1.3 + `NewWhitelistInterceptor()` CN 白名单 method-scope 授权与 5 秒轮询热重载；
 * 📖 [学习指南](../../services/service-hub/docs/learning-guide.md) · [详细设计](../../services/service-hub/docs/design.md) · [可靠性能力](../../services/service-hub/docs/reliability.md)
 
-### 2.2 Datasource Manager 数据源与资产管理微服务 (`:8083` / `:50053`)
+### 2.2 Mock Datasource 模拟数据源与资产管理服务 (`:8083` / `:50053`)
 * **统一资产纳管与 SSOT**：统一纳管医保 `ds_yibao`、康养 `ds_kangyang` 及扩展接口，基于 `pkg/naming` 严格执行唯一事实源标识校验与 Fail-Closed 阻断；
 * **样本切片提取 (Sample Slicing)**：提供安全受限的真实样本抽样（`GET /v1/datasources/:id/records` / `sample`），支持单次最大行数沙箱保护；
 * **双协议暴露**：同时支持 HTTPS REST（TLS 1.3 + API Key）与 gRPC mTLS 双向认证，并通过共享 `pkg/tlsutil.NewWhitelistInterceptor()` 启用 CN 白名单 method-scope 授权；
 * **生命周期管控**：提供数据源资产目录、连通性心跳探测、动态元数据探查与多维访问审计；
-* 📖 [学习指南](../../services/datasource-mgr/docs/learning-guide.md) · [详细设计](../../services/datasource-mgr/docs/design.md) · [可靠性能力](../../services/datasource-mgr/docs/reliability.md)
+* 📖 [学习指南](../../console/mock-datasource/docs/learning-guide.md) · [详细设计](../../console/mock-datasource/docs/design.md) · [可靠性能力](../../console/mock-datasource/docs/reliability.md)
 
 ### 2.3 Audit Log 脱敏审计与存证微服务 (`:8084` / `:50054`)
 * **9 要素区块链式防篡改哈希链**：
   $$\text{IntegrityHash} = \text{SHA256}(\text{prev\_hash} \parallel \text{id} \parallel \text{task\_id} \parallel \text{api\_code} \parallel \text{datasource\_id} \parallel \text{timestamp} \parallel \text{input\_hash} \parallel \text{output\_hash} \parallel \text{algorithm})$$
   形成严格的区块链式链式锚定，任何删行、篡改或重放均能即刻识别；
-* **快照信封加密**：敏感脱敏快照数据采用 SM4-GCM 加密存储（带有 `enc:v1:` 前缀），密钥由 `AUDIT_LOG_ENCRYPTION_KEY` 或 `PRIVACY_AUDIT_KEY` 经 SHA-256 派生为 128-bit SM4 密钥，读取时透明解密；
+* **快照信封加密**：敏感脱敏快照数据采用 SM4-GCM 加密存储（当前写入标准为 HKDF-SM3 派生的 `enc:v2:` 格式，兼容读取 `enc:v1:`），密钥由 `AUDIT_LOG_ENCRYPTION_KEY` 或 `PRIVACY_AUDIT_KEY` 派生，读取时透明解密；
 * **HTTP/gRPC 双协议 mTLS**：支持 HTTPS REST 与 gRPC mTLS，并通过共享 `pkg/tlsutil.NewWhitelistInterceptor()` 启用 CN 白名单 method-scope 授权；
 * **在线核验与报告**：暴露 `POST /v1/audit/chain/verify` 接口秒级核验全量或区间存证链条，支持多维合规统计报告（`POST /v1/audit/report`）；
 * **数据保留策略**：支持按 `AUDIT_LOG_RETENTION_DAYS`（默认 90 天）自动清理超期记录，同时保持链条完整；
@@ -95,11 +95,11 @@ graph LR
 ## 3. 运行、测试与验证命令
 
 ```bash
-# 1. 启动全套真实微服务群 (需 Agent 先在 :8079 启动)
+# 1. 启动全套真实微服务群 (需 Privacy Engine 先在 :8079 启动)
 bash ./scripts/dev/e2e-start-all-services.sh
 
 # 2. 运行 Go 微服务单元测试（启用竞争检测）
-go test -race -count=1 ./services/service-hub/... ./services/datasource-mgr/... ./services/audit-log/...
+go test -race -count=1 ./services/service-hub/... ./console/mock-datasource/... ./services/audit-log/... ./services/privacy-engine/...
 
 # 3. 运行端到端 E2E 集成测试
 bash ./scripts/dev/integration-test-services.sh

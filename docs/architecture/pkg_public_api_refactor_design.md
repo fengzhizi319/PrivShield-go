@@ -1,10 +1,10 @@
-# PrivShield 公共 API 收敛与 engine-go/internal 重构设计实现文档
+# PrivShield 公共 API 收敛与 services/privacy-engine/internal 重构设计实现文档
 
-> **目标**：让 `pkg/` 真正成为全仓库共享的公共 API，消除 `engine-go/internal` 与 `pkg/` 之间的重复轮子，并把引擎内部可复用的基础设施下沉到 `pkg/`，供 `services/*`、`console/*` 及未来模块统一使用。
+> **目标**：让 `pkg/` 真正成为全仓库共享的公共 API，消除 `services/privacy-engine/internal` 与 `pkg/` 之间的重复轮子，并把引擎内部可复用的基础设施下沉到 `pkg/`，供 `services/*`、`console/*` 及未来模块统一使用。
 > 
 > **版本**：v2.2.0（2026-09-01）  
 > **状态**：已完成并落地  
-> **适用范围**：`engine-go/internal/*`、`pkg/*`、`services/*`、`console/*`  
+> **适用范围**：`services/privacy-engine/internal/*`、`pkg/*`、`services/*`、`console/*`  
 > **关联文档**：
 > - `docs/architecture/architecture-design.md`（全栈架构总览）
 > - `docs/production_observability/design.md`（可观测性设计）
@@ -19,20 +19,20 @@
 当前仓库采用 Monorepo + Go workspace 结构：
 
 - `pkg/*`：定位为**公共 API / 共享库**，所有 Go 模块理论上都可以依赖。
-- `engine-go/internal/*`：定位为**核心隐私引擎内部实现**，原则上只服务于 `engine-go`。
+- `services/privacy-engine/internal/*`：定位为**核心隐私引擎内部实现**，原则上只服务于 `privacy-engine`。
 
 但实际代码中出现了两类问题：
 
-1. **`engine-go/internal` 没有充分复用 `pkg`**  
-   同一类基础设施（日志中间件、限流、认证、配置 env helper、metrics）在 `pkg` 和 `engine-go/internal` 两边各实现了一套。
-2. **`engine-go/internal` 里有大量通用能力被锁在内部**  
+1. **`services/privacy-engine/internal` 没有充分复用 `pkg`**  
+   同一类基础设施（日志中间件、限流、认证、配置 env helper、metrics）在 `pkg` 和 `services/privacy-engine/internal` 两边各实现了一套。
+2. **`services/privacy-engine/internal` 里有大量通用能力被锁在内部**  
    可观测性抽象、网关负载均衡、scope identity 鉴权、gRPC server wrapper 等，其实可以被 `services/*`、`console/*` 复用。
 
 ### 1.2 目标
 
-- **消除重复**：`engine-go/internal` 优先调用 `pkg` 公共 API。
+- **消除重复**：`services/privacy-engine/internal` 优先调用 `pkg` 公共 API。
 - **能力下沉**：把引擎内部真正通用的能力以零业务耦合的方式抽到 `pkg/`。
-- **边界清晰**：留在 `engine-go/internal` 的，必须是与隐私计算业务强耦合的实现。
+- **边界清晰**：留在 `services/privacy-engine/internal` 的，必须是与隐私计算业务强耦合的实现。
 - **不破坏现有行为**：所有重构通过现有测试；指标名、日志字段、认证语义、限流行为保持不变。
 
 ---
@@ -53,20 +53,20 @@
 
 | 阶段 | 主题 | 涉及文件 | 优先级 | 状态 |
 |---|---|---|---|---|
-| Phase 1 | 配置层收敛：`engine-go/internal/config` 复用 `pkg/config` env helper | `engine-go/internal/config/config.go`<br>`pkg/config/env.go` | P1 | ✅ 已完成 |
-| Phase 2 | 可观测性下沉：`Tracer`、通用 logger、metrics builder 抽到 `pkg/observability` | `engine-go/internal/observability/*`<br>`pkg/observability/*`（新增） | P1 | ✅ 已完成 |
-| Phase 3 | 安全与限流收敛：`engine-go/internal/security` 复用 `pkg/auth`/`pkg/middleware` | `engine-go/internal/security/*`<br>`pkg/middleware/auth.go`<br>`pkg/auth/*`（新增） | P1 | ✅ 已完成 |
-| Phase 4 | 网关负载均衡下沉：`LoadBalancer`/`CircuitBreaker` 抽到 `pkg/gateway` | `engine-go/internal/gateway/balancer.go`<br>`pkg/gateway/*`（新增） | P2 | ✅ 已完成 |
-| Phase 5 | gRPC server wrapper 下沉：通用 gRPC server 封装抽到 `pkg/grpcserver` | `engine-go/internal/grpcserver/server.go`<br>`pkg/grpcserver/*`（新增） | P2 | ✅ 已完成 |
-| Phase 6 | 隐私参数解析器下沉：`engine-go/internal/profile` 抽到 `pkg/profile` | `engine-go/internal/profile/*`<br>`pkg/profile/*`（新增） | P2 | ✅ 已完成 |
-| Phase 7 | console / services 向 `pkg` 公共 API 收敛 | `console/bff-go/*`<br>`console/app-lz/bff-go/*`<br>`services/audit-log/*`<br>`services/datasource-mgr/*` | P1 | ✅ 已完成 |
+| Phase 1 | 配置层收敛：`services/privacy-engine/internal/config` 复用 `pkg/config` env helper | `services/privacy-engine/internal/config/config.go`<br>`pkg/config/env.go` | P1 | ✅ 已完成 |
+| Phase 2 | 可观测性下沉：`Tracer`、通用 logger、metrics builder 抽到 `pkg/observability` | `services/privacy-engine/internal/observability/*`<br>`pkg/observability/*`（新增） | P1 | ✅ 已完成 |
+| Phase 3 | 安全与限流收敛：`services/privacy-engine/internal/security` 复用 `pkg/auth`/`pkg/middleware` | `services/privacy-engine/internal/security/*`<br>`pkg/middleware/auth.go`<br>`pkg/auth/*`（新增） | P1 | ✅ 已完成 |
+| Phase 4 | 网关负载均衡下沉：`LoadBalancer`/`CircuitBreaker` 抽到 `pkg/gateway` | `services/privacy-engine/internal/gateway/balancer.go`<br>`pkg/gateway/*`（新增） | P2 | ✅ 已完成 |
+| Phase 5 | gRPC server wrapper 下沉：通用 gRPC server 封装抽到 `pkg/grpcserver` | `services/privacy-engine/internal/grpcserver/server.go`<br>`pkg/grpcserver/*`（新增） | P2 | ✅ 已完成 |
+| Phase 6 | 隐私参数解析器下沉：`services/privacy-engine/internal/profile` 抽到 `pkg/profile` | `services/privacy-engine/internal/profile/*`<br>`pkg/profile/*`（新增） | P2 | ✅ 已完成 |
+| Phase 7 | console / services 向 `pkg` 公共 API 收敛 | `console/engine-console/bff-go/*`<br>`console/app-lz/bff-go/*`<br>`services/audit-log/*`<br>`console/mock-datasource/*` | P1 | ✅ 已完成 |
 | Phase 8 | 清理、归档与全量测试 | 全仓库 | P2 | ✅ 已完成 |
 
 ### 3.2 不涉及本次重构的内容
 
-- `engine-go/internal/service` 中的 `PrivacyService` 业务编排（与隐私原语强耦合）。
-- `engine-go/internal/dynclassification` 中的 LLM client、ONNX NER、AC 自动机等业务逻辑。
-- `engine-go/internal/imageredact` 中的 DICOM 二进制处理。
+- `services/privacy-engine/internal/service` 中的 `PrivacyService` 业务编排（与隐私原语强耦合）。
+- `services/privacy-engine/internal/dynclassification` 中的 LLM client、ONNX NER、AC 自动机等业务逻辑。
+- `services/privacy-engine/internal/imageredact` 中的 DICOM 二进制处理。
 
 ---
 
@@ -74,11 +74,11 @@
 
 ### 4.1 问题
 
-`engine-go/internal/config/config.go` 原先自己实现了 `envString/envInt/envBool`，而 `pkg/config/env.go` 已经提供了 `EnvString/EnvInt/EnvBool/EnvStringSlice`。
+`services/privacy-engine/internal/config/config.go` 原先自己实现了 `envString/envInt/envBool`，而 `pkg/config/env.go` 已经提供了 `EnvString/EnvInt/EnvBool/EnvStringSlice`。
 
 ### 4.2 目标
 
-删除 `engine-go/internal/config` 的私有 env helper，统一使用 `pkg/config` 的公共函数。
+删除 `services/privacy-engine/internal/config` 的私有 env helper，统一使用 `pkg/config` 的公共函数。
 
 ### 4.3 实际变更
 
@@ -88,33 +88,33 @@
 - 新增 `EnvStringFirstSet(names ...string) string`，支持依次读取多个环境变量并返回第一个非空值。
 - 新增 `EnvStringOptional(name, def string) string`，区分"未设置"与"显式设为空字符串"（空字符串是合法值）。
 
-**文件：`engine-go/internal/config/config.go`**
+**文件：`services/privacy-engine/internal/config/config.go`**
 
 - 删除私有函数 `envString/envInt/envBool`。
 - `LoadAgent` / `LoadGateway` 全面使用 `pkgconfig.EnvString/EnvInt/EnvBool`。
 - 新增复用 `pkgconfig.ValidateFailClosed` 进行 fail-closed 启动门禁校验。
 
-**文件：`engine-go/cmd/privshield-agent/main.go`**
+**文件：`services/privacy-engine/cmd/privshield-agent/main.go`**
 
 - 删除私有 `getEnv/getEnvInt`，统一使用 `pkgconfig.EnvString/EnvInt`。
 
-**文件：`engine-go/cmd/privshield-gateway/main.go`**
+**文件：`services/privacy-engine/cmd/privshield-gateway/main.go`**
 
 - 删除私有 `getEnv`，统一使用 `pkgconfig.EnvString`。
 
-**文件：`engine-go/internal/rest/routes.go`**
+**文件：`services/privacy-engine/internal/rest/routes.go`**
 
 - 删除私有 `getEnvDefault`，统一使用 `pkgconfig.EnvString`。
 
-**文件：`engine-go/internal/security/config.go`**
+**文件：`services/privacy-engine/internal/security/config.go`**
 
 - 删除私有 `envBool/envInt/envFloat`，统一使用 `pkgconfig.EnvBool/EnvInt/EnvFloat`。
 
-**文件：`engine-go/internal/service/service.go`**
+**文件：`services/privacy-engine/internal/service/service.go`**
 
 - 删除私有 `getEnv/getEnvInt`，统一使用 `pkgconfig.EnvString/EnvInt`。
 
-**文件：`console/bff-go/internal/config/config.go`**
+**文件：`console/engine-console/bff-go/internal/config/config.go`**
 
 - 删除私有 `getEnvWithFallback/getEnvOptional`。
 - `getEnvWithFallback` 替换为 `pkgconfig.EnvStringFirstSet`。
@@ -137,14 +137,14 @@ RESTHost: pkgconfig.EnvString("PRIVACY_REST_HOST", "127.0.0.1"),
 ### 4.4 兼容性
 
 - `pkg/config.EnvString/EnvInt/EnvBool/EnvFloat` 与内部函数语义完全一致。
-- `pkg/config.EnvStringFirstSet` 与 `console/bff-go` 的 `getEnvWithFallback` 语义一致。
-- `pkg/config.EnvStringOptional` 与 `console/bff-go` 的 `getEnvOptional` 语义一致。
+- `pkg/config.EnvStringFirstSet` 与 `console/engine-console/bff-go` 的 `getEnvWithFallback` 语义一致。
+- `pkg/config.EnvStringOptional` 与 `console/engine-console/bff-go` 的 `getEnvOptional` 语义一致。
 - 无行为变化。
 
 ### 4.5 验收
 
-- `go test ./engine-go/internal/config/...` 通过。
-- `go test ./console/bff-go/internal/config/...` 通过。
+- `go test ./services/privacy-engine/internal/config/...` 通过。
+- `go test ./console/engine-console/bff-go/internal/config/...` 通过。
 
 ---
 
@@ -154,7 +154,7 @@ RESTHost: pkgconfig.EnvString("PRIVACY_REST_HOST", "127.0.0.1"),
 
 当前可观测性能力分散：
 
-- `engine-go/internal/observability`：提供 `InitLogger`、`RequestLogger`、`EngineMetrics`/`GatewayMetrics`、`Tracer` 抽象。
+- `services/privacy-engine/internal/observability`：提供 `InitLogger`、`RequestLogger`、`EngineMetrics`/`GatewayMetrics`、`Tracer` 抽象。
 - `pkg/middleware`：提供 `StructuredLogger`、`RequestID`、`TraceMiddleware`。
 - `pkg/config`：提供 `SetupLogger`。
 - `pkg/metrics`：提供 `Collector`（面向 services）。
@@ -170,7 +170,7 @@ RESTHost: pkgconfig.EnvString("PRIVACY_REST_HOST", "127.0.0.1"),
 - `Metrics`：基于独立 Registry 的通用 RED metrics builder。
 - `Tracer`：保留 `Tracer` 接口 + `NoOpTracer`/`OTelTracer` 骨架。
 
-`engine-go/internal/observability` 退化为**引擎专属指标扩展层**：只保留 `EngineMetrics` 中隐私计算业务指标（classification、budget、ner）的定义，通用 RED 指标和初始化逻辑复用 `pkg/observability`。
+`services/privacy-engine/internal/observability` 退化为**引擎专属指标扩展层**：只保留 `EngineMetrics` 中隐私计算业务指标（classification、budget、ner）的定义，通用 RED 指标和初始化逻辑复用 `pkg/observability`。
 
 ### 5.3 实际变更
 
@@ -264,9 +264,9 @@ func (m *REDMetrics) UnaryServerInterceptor() grpc.UnaryServerInterceptor
   - `GetTraceID(c *gin.Context) string` 追踪 ID 提取；
   - `TraceMiddleware()` 分布式追踪上下文中间件。
 - `pkg/middleware/trace.go` 改为委托 `pkg/observability` 的兼容别名，保持历史调用方零改动。
-- `engine-go/internal/observability/tracing.go` 改为类型别名委托。
+- `services/privacy-engine/internal/observability/tracing.go` 改为类型别名委托。
 
-#### 5.3.5 改造 `engine-go/internal/observability/metrics.go`
+#### 5.3.5 改造 `services/privacy-engine/internal/observability/metrics.go`
 
 ```go
 type EngineMetrics struct {
@@ -287,7 +287,7 @@ type EngineMetrics struct {
 - `privshield_api_alias_requests_total{alias, canonical, target}`
 - `privshield_datasource_normalize_errors_total{reason}`
 
-#### 5.3.6 改造 `engine-go/internal/observability/logger.go`
+#### 5.3.6 改造 `services/privacy-engine/internal/observability/logger.go`
 
 ```go
 func InitLogger(level string) { pkgobs.InitLogger("json", level) }
@@ -299,7 +299,7 @@ func RequestLogger() gin.HandlerFunc { return pkgobs.RequestLogger() }
 - 指标名、标签保持不变。
 - REST/gRPC 指标标签保持不变。
 - 日志字段统一后，文档 `docs/production_observability/design.md` 同步更新。
-- 验收：`go test ./engine-go/internal/observability/... ./pkg/observability/...` 通过。
+- 验收：`go test ./services/privacy-engine/internal/observability/... ./pkg/observability/...` 通过。
 
 ---
 
@@ -307,15 +307,15 @@ func RequestLogger() gin.HandlerFunc { return pkgobs.RequestLogger() }
 
 ### 6.1 问题
 
-- `engine-go/internal/security` 实现了 scope-based API key 认证、32 分片限流、安全头。
+- `services/privacy-engine/internal/security` 实现了 scope-based API key 认证、32 分片限流、安全头。
 - `pkg/middleware` 实现了简单 API key 认证、单锁 IP 限流、安全头。
 - 两边关键能力不互通，services 和 console 只能用 `pkg/middleware` 的简单版。
 
 ### 6.2 目标
 
-1. 把 `engine-go/internal/security` 中的 **scope-based Identity 模型** 和 **权限映射** 下沉到 `pkg/auth`。
+1. 把 `services/privacy-engine/internal/security` 中的 **scope-based Identity 模型** 和 **权限映射** 下沉到 `pkg/auth`。
 2. 把 **32 分片高性能限流器** 下沉到 `pkg/middleware`，替换现有的 `IPRateLimiter`，并保留 `RateLimit` API。
-3. `engine-go/internal/security` 退化为**引擎安全配置加载器**，调用 `pkg/auth` + `pkg/middleware`。
+3. `services/privacy-engine/internal/security` 退化为**引擎安全配置加载器**，调用 `pkg/auth` + `pkg/middleware`。
 4. 安全头统一使用 `pkg/middleware.SecurityHeadersTo`。
 
 ### 6.3 实际变更
@@ -381,7 +381,7 @@ func GetIdentity(c *gin.Context) *Identity
   - 新增 `RateLimitWithKeyFunc(rps, burst int, keyFunc func(*gin.Context) string) gin.HandlerFunc`
 - 新增 `NormalizeRateLimitPath(path string) string`：把纯数字/UUID 动态段替换为 `:id`，防止高基数路径导致桶爆炸。
 
-#### 6.3.6 改造 `engine-go/internal/security`
+#### 6.3.6 改造 `services/privacy-engine/internal/security`
 
 - `auth.go`：
   - `AuthMiddleware()` 委托 `pkgauth.AuthMiddleware(&settings.Settings)`。
@@ -399,7 +399,7 @@ func GetIdentity(c *gin.Context) *Identity
 - 认证行为、健康端点豁免、scope 权限映射保持不变。
 - 限流默认行为（未启用时透传）保持不变。
 - 安全头字段统一为 `pkg/middleware.SecurityHeadersTo` 的输出。
-- 验收：`go test ./engine-go/internal/security/... ./pkg/auth/... ./pkg/middleware/...` 通过。
+- 验收：`go test ./services/privacy-engine/internal/security/... ./pkg/auth/... ./pkg/middleware/...` 通过。
 
 ---
 
@@ -407,11 +407,11 @@ func GetIdentity(c *gin.Context) *Identity
 
 ### 7.1 问题
 
-`engine-go/internal/gateway/balancer.go` 实现了 `LoadBalancer`、`BackendNode`、`CircuitBreaker`、`P2C-EWMA`、`round-robin`、`least-conn`、`weighted` 等算法。这些能力在 `console/bff-go` 和 `services/service-hub` 中其实也需要。
+`services/privacy-engine/internal/gateway/balancer.go` 实现了 `LoadBalancer`、`BackendNode`、`CircuitBreaker`、`P2C-EWMA`、`round-robin`、`least-conn`、`weighted` 等算法。这些能力在 `console/engine-console/bff-go` 和 `services/service-hub` 中其实也需要。
 
 ### 7.2 目标
 
-把通用负载均衡抽象和算法实现抽到 `pkg/gateway`，`engine-go/internal/gateway` 只保留 HTTP/gRPC 反向代理胶水代码。
+把通用负载均衡抽象和算法实现抽到 `pkg/gateway`，`services/privacy-engine/internal/gateway` 只保留 HTTP/gRPC 反向代理胶水代码。
 
 ### 7.3 实际变更
 
@@ -464,7 +464,7 @@ func (n *BackendNode) DecrementInFlight()
 - 三态：`Closed / HalfOpen / Open`
 - 默认阈值：`threshold=5`，`cooldown=30s`，`halfOpenMax=3`
 
-#### 7.3.2 改造 `engine-go/internal/gateway/balancer.go`
+#### 7.3.2 改造 `services/privacy-engine/internal/gateway/balancer.go`
 
 ```go
 package gateway
@@ -487,7 +487,7 @@ const CBOpen = pgateway.CBOpen
 
 - 网关默认算法（P2C-EWMA）行为不变。
 - `/gateway/backends` 端点返回的字段不变。
-- 验收：`go test ./engine-go/internal/gateway/... ./pkg/gateway/...` 通过。
+- 验收：`go test ./services/privacy-engine/internal/gateway/... ./pkg/gateway/...` 通过。
 
 ---
 
@@ -495,11 +495,11 @@ const CBOpen = pgateway.CBOpen
 
 ### 8.1 问题
 
-`engine-go/internal/grpcserver/server.go` 封装了一个通用 gRPC server，支持 TLS、metrics interceptor、message size 限制。`services/*/grpcserver` 包里存在重复样板。
+`services/privacy-engine/internal/grpcserver/server.go` 封装了一个通用 gRPC server，支持 TLS、metrics interceptor、message size 限制。`services/*/grpcserver` 包里存在重复样板。
 
 ### 8.2 目标
 
-把通用 gRPC server wrapper 抽到 `pkg/grpcserver`，保留引擎特有的 `PrivacyService` 注册在 `engine-go/internal/grpcserver`。
+把通用 gRPC server wrapper 抽到 `pkg/grpcserver`，保留引擎特有的 `PrivacyService` 注册在 `services/privacy-engine/internal/grpcserver`。
 
 ### 8.3 实际变更
 
@@ -530,7 +530,7 @@ func (s *Server) GracefulStop()
 func (s *Server) Stop()
 ```
 
-#### 8.3.2 改造 `engine-go/internal/grpcserver/server.go`
+#### 8.3.2 改造 `services/privacy-engine/internal/grpcserver/server.go`
 
 - 复用 `pkg/grpcserver.Server` 作为底层包装器。
 - 保留 `PrivacyService` 注册和引擎特有的拦截器链配置（metrics、TLS、mTLS CN 白名单）。
@@ -538,13 +538,13 @@ func (s *Server) Stop()
 #### 8.3.3 services 与 console 复用 `pkg/grpcserver`
 
 - `services/audit-log/cmd/server/main.go`：`grpcServer = pkggrpcserver.New(cfg.GRPCAddress(), grpcServerOpts...)`
-- `services/datasource-mgr/cmd/server/main.go`：`grpcServer = pkggrpcserver.New(cfg.GRPCAddress(), grpcServerOpts...)`
+- `console/mock-datasource/cmd/server/main.go`：`grpcServer = pkggrpcserver.New(cfg.GRPCAddress(), grpcServerOpts...)`
 
 ### 8.4 兼容性与验收
 
 - gRPC 监听地址、keepalive、消息大小限制不变。
 - metrics interceptor 挂载方式不变。
-- 验收：`go test ./engine-go/internal/grpcserver/... ./pkg/grpcserver/...` 通过。
+- 验收：`go test ./services/privacy-engine/internal/grpcserver/... ./pkg/grpcserver/...` 通过。
 
 ---
 
@@ -552,11 +552,11 @@ func (s *Server) Stop()
 
 ### 9.1 问题
 
-`engine-go/internal/profile/resolver.go` 实现了 YAML 隐私参数解析、namespace override、请求级参数合并。`services/service-hub` 在编排流水线时可能需要类似能力。
+`services/privacy-engine/internal/profile/resolver.go` 实现了 YAML 隐私参数解析、namespace override、请求级参数合并。`services/service-hub` 在编排流水线时可能需要类似能力。
 
 ### 9.2 目标
 
-把通用隐私参数解析器抽到 `pkg/profile`，`engine-go/internal/profile` 保留与引擎配置热重载相关的胶水。
+把通用隐私参数解析器抽到 `pkg/profile`，`services/privacy-engine/internal/profile` 保留与引擎配置热重载相关的胶水。
 
 ### 9.3 实际变更
 
@@ -591,7 +591,7 @@ func Validate(primitive string, params map[string]interface{}) error
 - `qol`：`num_dummies=3`
 - `classification`：`confidence_threshold=0.75`
 
-#### 9.3.2 改造 `engine-go/internal/profile/resolver.go`
+#### 9.3.2 改造 `services/privacy-engine/internal/profile/resolver.go`
 
 ```go
 package profile
@@ -610,7 +610,7 @@ func Validate(primitive string, params map[string]interface{}) error { return pp
 
 - 隐私参数推荐行为不变。
 - 配置热重载路径不变。
-- 验收：`go test ./engine-go/internal/profile/... ./pkg/profile/...` 通过。
+- 验收：`go test ./services/privacy-engine/internal/profile/... ./pkg/profile/...` 通过。
 
 ---
 
@@ -618,7 +618,7 @@ func Validate(primitive string, params map[string]interface{}) error { return pp
 
 ### 10.1 目标
 
-把 `console/bff-go`、`console/app-lz/bff-go`、`services/audit-log`、`services/datasource-mgr` 中重复实现的基础设施能力统一收敛到 `pkg` 公共 API。
+把 `console/engine-console/bff-go`、`console/app-lz/bff-go`、`services/audit-log`、`console/mock-datasource` 中重复实现的基础设施能力统一收敛到 `pkg` 公共 API。
 
 ### 10.2 实际变更
 
@@ -626,10 +626,10 @@ func Validate(primitive string, params map[string]interface{}) error { return pp
 
 | 模块 | 文件 | 变更 |
 |---|---|---|
-| `console/bff-go` | `internal/config/config.go` | 删除私有 `getEnv/getEnvInt/getEnvBool/getEnvWithFallback/getEnvOptional`，改用 `pkgconfig.EnvString/EnvInt/EnvBool/EnvStringFirstSet/EnvStringOptional` |
+| `console/engine-console/bff-go` | `internal/config/config.go` | 删除私有 `getEnv/getEnvInt/getEnvBool/getEnvWithFallback/getEnvOptional`，改用 `pkgconfig.EnvString/EnvInt/EnvBool/EnvStringFirstSet/EnvStringOptional` |
 | `console/app-lz/bff-go` | `internal/config/config.go` | 删除私有 `getEnv/getEnvInt/getEnvBool`，改用 `pkgconfig.EnvString/EnvInt/EnvBool` |
 | `services/audit-log` | `internal/config/config.go` | 同上 |
-| `services/datasource-mgr` | `internal/config/config.go` | 同上 |
+| `console/mock-datasource` | `internal/config/config.go` | 同上 |
 | `services/service-hub` | `internal/handlers/real_e2e_test.go` | 删除测试私有 `getEnvDefault`，改用 `pkgconfig.EnvString` |
 
 示例（`console/app-lz/bff-go/internal/config/config.go`）：
@@ -651,10 +651,10 @@ logger := slog.Default()
 
 涉及文件：
 
-- `console/bff-go/cmd/server/main.go`
+- `console/engine-console/bff-go/cmd/server/main.go`
 - `console/app-lz/bff-go/cmd/server/main.go`
 - `services/audit-log/cmd/server/main.go`
-- `services/datasource-mgr/cmd/server/main.go`
+- `console/mock-datasource/cmd/server/main.go`
 
 #### 10.2.3 HTTP 请求日志中间件收敛
 
@@ -663,11 +663,11 @@ logger := slog.Default()
 
 | 模块 | 文件 | 变更 |
 |---|---|---|
-| `console/bff-go` | `internal/handlers/handlers.go:153` | `middleware.StructuredLogger(s.logger, "backend-go")` → `pkgobs.RequestLoggerWithModule("backend-go")` |
+| `console/engine-console/bff-go` | `internal/handlers/handlers.go:153` | `middleware.StructuredLogger(s.logger, "backend-go")` → `pkgobs.RequestLoggerWithModule("backend-go")` |
 | `console/app-lz/bff-go` | `internal/handlers/handlers.go:86` | `middleware.StructuredLogger(h.logger, "app-lz")` → `pkgobs.RequestLoggerWithModule("app-lz")` |
 | `services/service-hub` | `internal/handlers/handlers.go:207` | `middleware.StructuredLogger(s.logger, "service-hub")` → `pkgobs.RequestLoggerWithModule("service-hub")` |
 | `services/audit-log` | `internal/handlers/handlers.go:65` | `middleware.StructuredLogger(s.logger, "audit-log")` → `pkgobs.RequestLoggerWithModule("audit-log")` |
-| `services/datasource-mgr` | `internal/handlers/handlers.go:84` | `middleware.StructuredLogger(s.logger, "datasource-mgr")` → `pkgobs.RequestLoggerWithModule("datasource-mgr")` |
+| `console/mock-datasource` | `internal/handlers/handlers.go:84` | `middleware.StructuredLogger(s.logger, "mock-datasource")` → `pkgobs.RequestLoggerWithModule("mock-datasource")` |
 
 新增 `pkg/observability/trace.go`：
 
@@ -677,7 +677,7 @@ logger := slog.Default()
 
 #### 10.2.3 gRPC server 收敛
 
-`services/audit-log` 与 `services/datasource-mgr` 的 `cmd/server/main.go` 中 gRPC server 构建统一改为：
+`services/audit-log` 与 `console/mock-datasource` 的 `cmd/server/main.go` 中 gRPC server 构建统一改为：
 
 ```go
 import pkggrpcserver "github.com/fengzhizi319/PrivShield-go/pkg/grpcserver"
@@ -687,7 +687,7 @@ grpcServer.RegisterService(&pb.AuditLogService_ServiceDesc, serviceImpl)
 go grpcServer.ServeListener(grpcLis)
 ```
 
-> `console/bff-go/internal/grpcserver/server.go` 因与 BFF 代理逻辑高度耦合，未强制迁移到 `pkg/grpcserver`，保持现状。
+> `console/engine-console/bff-go/internal/grpcserver/server.go` 因与 BFF 代理逻辑高度耦合，未强制迁移到 `pkg/grpcserver`，保持现状。
 
 #### 10.2.4 认证中间件收敛
 
@@ -700,7 +700,7 @@ router.Use(middleware.AuthWithRoles(cfg.APIKey, cfg.ReaderAPIKey, readOnlyEndpoi
 ### 10.3 未强制迁移项
 
 - `pkg/observability.RequestLogger` 未强制替换各程序的 REST 日志中间件，因为现有日志字段差异可能导致日志解析器失效。
-- `console/bff-go` 的上游 HTTP/gRPC 客户端未强制改用 `pkg/gateway`，当前仍使用自定义 client pool。
+- `console/engine-console/bff-go` 的上游 HTTP/gRPC 客户端未强制改用 `pkg/gateway`，当前仍使用自定义 client pool。
 
 ---
 
@@ -708,10 +708,10 @@ router.Use(middleware.AuthWithRoles(cfg.APIKey, cfg.ReaderAPIKey, readOnlyEndpoi
 
 ### 11.1 清理动作
 
-- 删除 `engine-go/internal/config` 中的私有 env helper。
-- 删除 `engine-go/internal/security` 中已下沉的限流、安全头实现。
-- 删除 `engine-go/internal/observability` 中已下沉的通用 logger/metrics/tracing 实现。
-- 删除 `engine-go/internal/gateway` 中已下沉的 balancer 算法实现。
+- 删除 `services/privacy-engine/internal/config` 中的私有 env helper。
+- 删除 `services/privacy-engine/internal/security` 中已下沉的限流、安全头实现。
+- 删除 `services/privacy-engine/internal/observability` 中已下沉的通用 logger/metrics/tracing 实现。
+- 删除 `services/privacy-engine/internal/gateway` 中已下沉的 balancer 算法实现。
 - `pkg/config.SetupLogger` 保留未删除，以维持向后兼容。
 
 ### 11.2 文档更新
@@ -737,9 +737,9 @@ make check
 ### 12.1 单元测试
 
 ```bash
-CGO_ENABLED=0 go test ./pkg/... ./services/service-hub/... ./services/datasource-mgr/... \
-  ./services/audit-log/... ./console/bff-go/... ./console/app-lz/bff-go/... \
-  ./privacy-go-sdk/... ./engine-go/...
+CGO_ENABLED=0 go test ./pkg/... ./services/service-hub/... ./console/mock-datasource/... \
+  ./services/audit-log/... ./console/engine-console/bff-go/... ./console/app-lz/bff-go/... \
+  ./services/privacy-engine/sdk/... ./services/privacy-engine/...
 ```
 
 结果：全部 `ok`，无失败。
@@ -757,21 +757,21 @@ make check
 
 ### 12.3 编译验证
 
-- 修复了迁移过程中暴露的预存在编译错误：`engine-go/internal/service/service.go:1296` 调用未定义的 `s.llmDiagnostics()`。
-- 在 `engine-go/internal/service/privacyconfig.go` 中补上了 `llmDiagnostics()` 方法，并在 `PrivacyService` 结构体中增加了 `llmEndpoint`、`llmMaxConcurrency`、`enableLLM` 字段。
+- 修复了迁移过程中暴露的预存在编译错误：`services/privacy-engine/internal/service/service.go:1296` 调用未定义的 `s.llmDiagnostics()`。
+- 在 `services/privacy-engine/internal/service/privacyconfig.go` 中补上了 `llmDiagnostics()` 方法，并在 `PrivacyService` 结构体中增加了 `llmEndpoint`、`llmMaxConcurrency`、`enableLLM` 字段。
 
 ---
 
-## 十三、仍然保留在 `engine-go/internal` 的内容
+## 十三、仍然保留在 `services/privacy-engine/internal` 的内容
 
 | 模块 | 保留原因 |
 |---|---|
-| `engine-go/internal/service` | `PrivacyService` 业务编排与隐私原语强耦合。 |
-| `engine-go/internal/dynclassification` | LLM client、ONNX NER、AC 自动机、分类分级业务逻辑。 |
-| `engine-go/internal/imageredact` | DICOM 二进制处理与医疗影像业务逻辑。 |
-| `engine-go/internal/grpcserver/typed_server.go` | 引擎特有的 PrivacyService 注册与 typed gRPC 分发。 |
-| `engine-go/internal/observability/gateway_metrics.go` | 网关代理的专属指标扩展。 |
-| `engine-go/internal/gateway/http_proxy.go` / `grpc_proxy.go` | HTTP/gRPC 反向代理胶水代码。 |
+| `services/privacy-engine/internal/service` | `PrivacyService` 业务编排与隐私原语强耦合。 |
+| `services/privacy-engine/internal/dynclassification` | LLM client、ONNX NER、AC 自动机、分类分级业务逻辑。 |
+| `services/privacy-engine/internal/imageredact` | DICOM 二进制处理与医疗影像业务逻辑。 |
+| `services/privacy-engine/internal/grpcserver/typed_server.go` | 引擎特有的 PrivacyService 注册与 typed gRPC 分发。 |
+| `services/privacy-engine/internal/observability/gateway_metrics.go` | 网关代理的专属指标扩展。 |
+| `services/privacy-engine/internal/gateway/http_proxy.go` / `grpc_proxy.go` | HTTP/gRPC 反向代理胶水代码。 |
 
 ---
 
@@ -779,9 +779,9 @@ make check
 
 以下项在本次重构中未强制迁移，后续若出现第二处复用可按相同模式下沉：
 
-1. **console BFF 上游客户端改用 `pkg/gateway`**：`console/bff-go/internal/microservices/client.go` 使用自定义连接池，未来可评估是否复用 `pkg/gateway` 的负载均衡能力。
+1. **console BFF 上游客户端改用 `pkg/gateway`**：`console/engine-console/bff-go/internal/microservices/client.go` 使用自定义连接池，未来可评估是否复用 `pkg/gateway` 的负载均衡能力。
 2. **`pkg/grpcserver` 流式拦截器增强**：当前仅提供 unary 拦截器，流式服务增长后可补充 stream interceptor builder。
-3. **`pkg/metrics.Collector` 与 `pkg/observability.REDMetrics` 语义统一**：两者目前独立存在，Collector 面向 services，REDMetrics 面向 engine-go，未来可考虑统一接口。
+3. **`pkg/metrics.Collector` 与 `pkg/observability.REDMetrics` 语义统一**：两者目前独立存在，Collector 面向 services，REDMetrics 面向 privacy-engine，未来可考虑统一接口。
 
 ---
 
@@ -792,7 +792,7 @@ make check
 | 指标名/日志字段变化导致 dashboard/日志解析失效 | 高 | 保持指标名、标签、日志 key 不变；若必须调整，双写并提前公告 |
 | 限流行为变化导致生产突增被限 | 高 | 保持默认未启用；保持 token-bucket 算法和默认值；单独跑限流基准测试 |
 | 安全头取值变化影响 iframe/安全策略 | 中 | 统一为 `pkg/middleware.SecurityHeadersTo` 输出，引擎侧追加 `X-Frame-Options: DENY` 前先确认前端控制台依赖 |
-| `pkg` 包循环依赖 | 中 | 新 `pkg` 包只依赖现有 `pkg` 子包，不依赖 `engine-go/internal` 或 `services/*` |
+| `pkg` 包循环依赖 | 中 | 新 `pkg` 包只依赖现有 `pkg` 子包，不依赖 `services/privacy-engine/internal` 或 `services/*` |
 | 工作区模块 go.mod 不同步 | 中 | 每个 phase 结束后执行 `go mod tidy` 并跑 `make check` |
 
 ---
@@ -801,24 +801,24 @@ make check
 
 | 主题 | 重构前路径 | 当前路径 |
 |---|---|---|
-| env helper | `engine-go/internal/config/config.go:205`（私有函数） | `pkg/config/env.go:17` |
-| env float helper | `engine-go/internal/security/config.go:104`（私有函数） | `pkg/config/env.go:38` |
-| env first-set helper | `console/bff-go/internal/config/config.go:372`（私有函数） | `pkg/config/env.go:54` |
-| env optional helper | `console/bff-go/internal/config/config.go:395`（私有函数） | `pkg/config/env.go:72` |
-| Logger 初始化 | `engine-go/internal/observability/logger.go:14` | `pkg/observability/logger.go:17` |
-| RequestLogger | `engine-go/internal/observability/logger.go:22` | `pkg/observability/request_logger.go:22` |
+| env helper | `services/privacy-engine/internal/config/config.go:205`（私有函数） | `pkg/config/env.go:17` |
+| env float helper | `services/privacy-engine/internal/security/config.go:104`（私有函数） | `pkg/config/env.go:38` |
+| env first-set helper | `console/engine-console/bff-go/internal/config/config.go:372`（私有函数） | `pkg/config/env.go:54` |
+| env optional helper | `console/engine-console/bff-go/internal/config/config.go:395`（私有函数） | `pkg/config/env.go:72` |
+| Logger 初始化 | `services/privacy-engine/internal/observability/logger.go:14` | `pkg/observability/logger.go:17` |
+| RequestLogger | `services/privacy-engine/internal/observability/logger.go:22` | `pkg/observability/request_logger.go:22` |
 | RequestLoggerWithModule | `pkg/middleware/middleware.go:107` | `pkg/observability/request_logger.go:30` |
-| RED metrics builder | `engine-go/internal/observability/metrics.go:30` | `pkg/observability/metrics.go:30` |
-| Engine 业务指标 | `engine-go/internal/observability/metrics.go`（原混合） | `engine-go/internal/observability/metrics.go:17`（嵌入 RED） |
-| Tracer 抽象 | `engine-go/internal/observability/tracing.go:14` | `pkg/observability/tracing.go:11` |
+| RED metrics builder | `services/privacy-engine/internal/observability/metrics.go:30` | `pkg/observability/metrics.go:30` |
+| Engine 业务指标 | `services/privacy-engine/internal/observability/metrics.go`（原混合） | `services/privacy-engine/internal/observability/metrics.go:17`（嵌入 RED） |
+| Tracer 抽象 | `services/privacy-engine/internal/observability/tracing.go:14` | `pkg/observability/tracing.go:11` |
 | TraceMiddleware / GetTraceID | `pkg/middleware/trace.go:49` | `pkg/observability/trace.go:56` |
-| Scope identity | `engine-go/internal/security/identity.go:8` | `pkg/auth/identity.go:7` |
-| Auth middleware | `engine-go/internal/security/auth.go:48` | `pkg/auth/middleware.go:64` |
-| 32-shard rate limiter | `engine-go/internal/security/auth.go:271` | `pkg/middleware/ratelimit.go:81` |
-| 安全头 | `engine-go/internal/security/auth.go:155` | `pkg/middleware/middleware.go`（`SecurityHeadersTo`） |
-| LoadBalancer/CircuitBreaker | `engine-go/internal/gateway/balancer.go:143` | `pkg/gateway/balancer.go:235` |
-| gRPC server wrapper | `engine-go/internal/grpcserver/server.go:24` | `pkg/grpcserver/server.go:14` |
-| Profile resolver | `engine-go/internal/profile/resolver.go:29` | `pkg/profile/resolver.go:29` |
+| Scope identity | `services/privacy-engine/internal/security/identity.go:8` | `pkg/auth/identity.go:7` |
+| Auth middleware | `services/privacy-engine/internal/security/auth.go:48` | `pkg/auth/middleware.go:64` |
+| 32-shard rate limiter | `services/privacy-engine/internal/security/auth.go:271` | `pkg/middleware/ratelimit.go:81` |
+| 安全头 | `services/privacy-engine/internal/security/auth.go:155` | `pkg/middleware/middleware.go`（`SecurityHeadersTo`） |
+| LoadBalancer/CircuitBreaker | `services/privacy-engine/internal/gateway/balancer.go:143` | `pkg/gateway/balancer.go:235` |
+| gRPC server wrapper | `services/privacy-engine/internal/grpcserver/server.go:24` | `pkg/grpcserver/server.go:14` |
+| Profile resolver | `services/privacy-engine/internal/profile/resolver.go:29` | `pkg/profile/resolver.go:29` |
 | console/services logger 入口 | 各模块 `cmd/server/main.go` 私有 `setupLogger` | 统一为 `pkg/observability.InitLogger` |
 | services gRPC server | 各模块自建 `grpc.NewServer` | 统一为 `pkg/grpcserver.New` |
 
@@ -832,14 +832,14 @@ make check
 
 | # | 严重度 | 模块 | 文件 | 问题描述 | 修复方式 |
 |---|--------|------|------|----------|----------|
-| 1 | 死代码 | `engine-go/internal/security` | `auth.go:12-19` | 私有 `extractBearerToken()` 是 `pkg/auth/middleware.go` 的未使用副本，`AuthMiddleware` 已委托 `pkgauth`，该函数无调用方 | 删除函数及 `strings` 导入 |
-| 2 | 死代码 | `engine-go/internal/security` | `auth.go:88-91` | `StopRateLimiter()` 为空函数体，`pkg/middleware` 限流器自行管理清理 | 删除函数及 `cmd/privshield-agent/main.go:303` 的调用点 |
-| 3 | 死代码 | `engine-go/internal/observability` | `logger.go:27-33` | `HealthHandler()` 未被任何代码调用 | 删除函数及 `net/http` 导入 |
+| 1 | 死代码 | `services/privacy-engine/internal/security` | `auth.go:12-19` | 私有 `extractBearerToken()` 是 `pkg/auth/middleware.go` 的未使用副本，`AuthMiddleware` 已委托 `pkgauth`，该函数无调用方 | 删除函数及 `strings` 导入 |
+| 2 | 死代码 | `services/privacy-engine/internal/security` | `auth.go:88-91` | `StopRateLimiter()` 为空函数体，`pkg/middleware` 限流器自行管理清理 | 删除函数及 `cmd/privshield-agent/main.go:303` 的调用点 |
+| 3 | 死代码 | `services/privacy-engine/internal/observability` | `logger.go:27-33` | `HealthHandler()` 未被任何代码调用 | 删除函数及 `net/http` 导入 |
 | 4 | 缺失标记 | `pkg/config` | `env.go:111` | `SetupLogger` 与 `pkg/observability.NewLogger` 功能重复，但未标记 `Deprecated` | 添加 `Deprecated:` 注释，引导使用 `pkg/observability.NewLogger` |
 | 5 | 不一致 | `console/app-lz/bff-go` | `internal/config/config.go:99-100` | 使用 `strconv.ParseBool(pkgconfig.EnvString(...))` 而非 `pkgconfig.EnvBool(...)`，与其他所有模块不一致，且丢失 `"yes"/"on"` 识别 | 替换为 `pkgconfig.EnvBool(...)`，移除 `strconv` 导入 |
-| 6 | 不一致 | `engine-go/internal/security` | `config.go:87,90,91` | 三个字段使用裸 `os.Getenv` 而非 `pkgconfig.EnvString`，与同文件其他字段不一致 | 统一替换为 `pkgconfig.EnvString(name, "")` |
+| 6 | 不一致 | `services/privacy-engine/internal/security` | `config.go:87,90,91` | 三个字段使用裸 `os.Getenv` 而非 `pkgconfig.EnvString`，与同文件其他字段不一致 | 统一替换为 `pkgconfig.EnvString(name, "")` |
 | 7 | 代码质量 | `pkg/auth` | `identity.go:126-128` | 自定义 `hasPrefix()` 是 `strings.HasPrefix` 的逐字重实现 | 替换为 `strings.HasPrefix`，删除自定义函数 |
-| 8 | 过时注释 | `services/datasource-mgr` | `internal/handlers/handlers.go:72` | 注释仍引用 `StructuredLogger`，实际已改用 `RequestLoggerWithModule` | 更新注释 |
+| 8 | 过时注释 | `console/mock-datasource` | `internal/handlers/handlers.go:72` | 注释仍引用 `StructuredLogger`，实际已改用 `RequestLoggerWithModule` | 更新注释 |
 | 9 | 过时注释 | `services/service-hub` | `internal/handlers/handlers.go:199` | 同上 | 更新注释 |
 
 ### 17.2 审核发现的遗留问题
@@ -864,7 +864,7 @@ make check
 | Bearer token 提取 | `pkg/auth/middleware.go:18` (`extractBearerToken`) | `pkg/middleware/auth.go:193` (`extractBearer`) | 统一保留 `pkg/auth` 版本，`pkg/middleware` 委托 |
 | 熔断器 | `pkg/gateway/balancer.go:144` (`CircuitBreaker` struct) | `pkg/agent/client.go:70` (`cbState` struct) | 抽取到 `pkg/circuitbreaker` 共享包 |
 | HTTP 指标 | `pkg/observability/metrics.go` (`REDMetrics`) | `pkg/metrics/metrics.go` (`Collector`) | 明确边界：`observability` 负责 HTTP 中间件层，`metrics` 负责领域指标聚合 |
-| TLS 配置构建 | `services/audit-log/internal/grpcserver/server.go:700-746` | `services/datasource-mgr/internal/grpcserver/server.go:315-385` | 约 150 行 TLS/mTLS/公钥固定代码重复，应下沉到 `pkg/tlsutil` |
+| TLS 配置构建 | `services/audit-log/internal/grpcserver/server.go:700-746` | `console/mock-datasource/internal/grpcserver/server.go:315-385` | 约 150 行 TLS/mTLS/公钥固定代码重复，应下沉到 `pkg/tlsutil` |
 
 #### P3 — 死代码与命名（低优先级）
 
@@ -873,7 +873,7 @@ make check
 | `BackendNode.LastUsed` 写入但从未读取 | `pkg/gateway/balancer.go:30,446` | 删除字段或补充消费方 |
 | `scanTaskRow` 零价值包装 | `pkg/store/postgres/tasks.go:202-206` | 删除，直接使用 `scanTask` |
 | `postgres.New()` 命名过于泛化 | `pkg/store/postgres/postgres.go:100` | 重命名为 `NewTaskStore()` 或 `NewStore()` |
-| `console/bff-go` handlers 中 7 处裸 `os.Getenv` | `console/bff-go/internal/handlers/handlers.go:438-464` | 迁入 `Config` 结构体，通过 `pkgconfig.EnvString*` 读取 |
+| `console/engine-console/bff-go` handlers 中 7 处裸 `os.Getenv` | `console/engine-console/bff-go/internal/handlers/handlers.go:438-464` | 迁入 `Config` 结构体，通过 `pkgconfig.EnvString*` 读取 |
 
 ### 17.3 v2.2.0 全部遗留问题修复
 
@@ -890,10 +890,10 @@ make check
 
 | # | 重复项 | 修复方式 | 涉及文件 |
 |---|--------|----------|----------|
-| B1 | Bearer token 提取 | 导出 `pkg/auth.ExtractBearerToken`，`pkg/middleware/auth.go` 与 `console/bff-go/internal/handlers/handlers.go` 删除本地副本并委托 | `pkg/auth/middleware.go`、`pkg/middleware/auth.go`、`console/bff-go/internal/handlers/handlers.go` |
-| B2 | 熔断器 | 新建 `pkg/circuitbreaker` 共享包，`pkg/gateway` 与 `pkg/agent` 统一使用 `*circuitbreaker.Breaker`，旧类型保留为 `deprecated` 别名 | `pkg/circuitbreaker/circuitbreaker.go`、`pkg/gateway/balancer.go`、`pkg/agent/client.go`、`engine-go/internal/gateway/balancer.go` |
+| B1 | Bearer token 提取 | 导出 `pkg/auth.ExtractBearerToken`，`pkg/middleware/auth.go` 与 `console/engine-console/bff-go/internal/handlers/handlers.go` 删除本地副本并委托 | `pkg/auth/middleware.go`、`pkg/middleware/auth.go`、`console/engine-console/bff-go/internal/handlers/handlers.go` |
+| B2 | 熔断器 | 新建 `pkg/circuitbreaker` 共享包，`pkg/gateway` 与 `pkg/agent` 统一使用 `*circuitbreaker.Breaker`，旧类型保留为 `deprecated` 别名 | `pkg/circuitbreaker/circuitbreaker.go`、`pkg/gateway/balancer.go`、`pkg/agent/client.go`、`services/privacy-engine/internal/gateway/balancer.go` |
 | B3 | HTTP 指标边界 | 在 `pkg/metrics/metrics.go` 包文档中明确与 `pkg/observability.REDMetrics` 的职责边界：`metrics` 负责领域指标聚合，`observability` 负责传输层 RED 指标 | `pkg/metrics/metrics.go`、`pkg/observability/metrics.go` |
-| B4 | TLS 配置构建 | 在 `pkg/tlsutil` 中补充 `require_and_verify` / `verify_if_given` 客户端认证别名，`services/audit-log` 与 `services/datasource-mgr` 的 ~150 行重复 TLS 代码替换为 `tlsutil.BuildServerTLSConfig` 薄包装 | `pkg/tlsutil/tlsutil.go`、`services/audit-log/internal/grpcserver/server.go`、`services/datasource-mgr/internal/grpcserver/server.go` |
+| B4 | TLS 配置构建 | 在 `pkg/tlsutil` 中补充 `require_and_verify` / `verify_if_given` 客户端认证别名，`services/audit-log` 与 `console/mock-datasource` 的 ~150 行重复 TLS 代码替换为 `tlsutil.BuildServerTLSConfig` 薄包装 | `pkg/tlsutil/tlsutil.go`、`services/audit-log/internal/grpcserver/server.go`、`console/mock-datasource/internal/grpcserver/server.go` |
 
 #### P3 — 死代码与命名（已修复）
 
@@ -902,7 +902,7 @@ make check
 | C1 | `BackendNode.LastUsed` 写入但从未读取 | 删除 `LastUsed` 字段及 `UpdateEWMA` 中的写入 | `pkg/gateway/balancer.go` |
 | C2 | `scanTaskRow` 零价值包装 | 删除 `scanTaskRow`，调用方直接使用 `scanTask` / `scanTaskFields` | `pkg/store/postgres/tasks.go`、`pkg/store/sqlite/tasks.go` |
 | C3 | `postgres.New()` 命名过于泛化 | 重命名为 `NewStore`，保留 `New` 为 `Deprecated` 别名 | `pkg/store/postgres/postgres.go`、`pkg/store/postgres/leased_test.go`、`pkg/store/cmd/migrate/main_test.go` |
-| C4 | `console/bff-go` handlers 中 7 处裸 `os.Getenv` | 新增 `Config.AgentRESTURL` 与 `Config.GRPCCallTimeout` 字段，在 `config.Load()` 中通过 `pkgconfig.EnvString*` 统一解析，`handlers.go` 使用配置字段 | `console/bff-go/internal/config/config.go`、`console/bff-go/internal/handlers/handlers.go` |
+| C4 | `console/engine-console/bff-go` handlers 中 7 处裸 `os.Getenv` | 新增 `Config.AgentRESTURL` 与 `Config.GRPCCallTimeout` 字段，在 `config.Load()` 中通过 `pkgconfig.EnvString*` 统一解析，`handlers.go` 使用配置字段 | `console/engine-console/bff-go/internal/config/config.go`、`console/engine-console/bff-go/internal/handlers/handlers.go` |
 
 ---
 

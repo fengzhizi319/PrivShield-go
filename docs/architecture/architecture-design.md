@@ -1,7 +1,7 @@
 # PrivShield 架构设计文档 (Architecture Design Document)
 
 > **版本**：v16.5.0（2026 生产实装版）  
-> **适用范围**：`PrivShield` Go 核心算力引擎（`engine-go`）、`privacy-go-sdk` 隐私数学原语库、企业级中台微服务群（`service-hub` / `datasource-mgr` / `audit-log`）、控制台与双 BFF 体系（`bff-go` / `app-lz` / `web`）及云原生部署基础设施。  
+> **适用范围**：`PrivShield` Go 核心算力引擎（`services/privacy-engine`，内置 `sdk/` 隐私数学原语库）、`services/privacy-engine/model-training/llmlora`（离线模型微调与量化）、企业级中台微服务群（`services/service-hub` / `services/audit-log`）、控制台与数据源生态（`console/engine-console` / `console/app-lz` / `console/mock-datasource`）及云原生部署基础设施。  
 > **核心数据分级基准**：**DB51/T 2989—2023《四川省健康医疗大数据应用指南》**（五级分类分级核心基准与敏感病种治理规则）  
 > **关联文档**：
 > - [liuzhou_govcloud_data_security_architecture.md](liuzhou_govcloud_data_security_architecture.md)（柳州政务云数据流通与网关脱敏安全架构审查专版）
@@ -29,7 +29,7 @@
   - [2.4 示范数据源（医保与康养）字段脱敏策略矩阵](#24-示范数据源医保与康养字段脱敏策略矩阵)
 - [三、企业级中台微服务群（Enterprise Services）](#三企业级中台微服务群enterprise-services)
   - [3.1 数据服务调度中枢 (Service Hub :8082 / :50052)](#31-数据服务调度中枢-service-hub-8082--50052)
-  - [3.2 数据源资产管理 (Datasource Manager :8083 / :50053)](#32-数据源资产管理-datasource-manager-8083--50053)
+  - [3.2 模拟多源数据源服务 (Mock Datasource :8083 / :50053)](#32-模拟多源数据源服务-mock-datasource-8083--50053)
   - [3.3 独立审计与国密 SM3 防篡改存证 (Audit Log :8084 / :50054)](#33-独立审计与国密-sm3-防篡改存证-audit-log-8084--50054)
 - [四、端到端数据流转机制与高可用调度](#四端到端数据流转机制与高可用调度)
   - [4.1 端到端 9 阶段全流程流转时序](#41-端到端-9-阶段全流程流转时序)
@@ -56,20 +56,20 @@
 ### 1.1 业务定位与全景拓扑
 
 PrivShield 实现了**「三层四柱五御六类」数据安全与隐私治理架构**：
-- **表现与接入面**：双控制台（`console/web` 与 `console/app-lz/web`）配合高性能 Go BFF 代理网关群（`:8081` / `:8085`），面向合规工程师与业务运营人员提供全场景交互；
-- **调度与存证面**：企业级 Go 微服务群串联多源数据纳管（`datasource-mgr:8083`）、6 阶段流水线调度编排（`service-hub:8082`）与 9 要素国密 SM3 防篡改存证（`audit-log:8084`）；
-- **核心计算面**：以独立高性能微服务（`engine-go:8079` / `:50051`）形式提供字段级脱敏、差分隐私、K-匿名与三层动态分类分级漏斗（Rule → Small-NER → Local LLM 仲裁），纯 Go 实现 + `privacy-go-sdk` 零依赖数学原语库；
+- **表现与接入面**：双控制台（`console/engine-console/web` 与 `console/app-lz/web`）配合高性能 Go BFF 代理网关群（`:8081` / `:8085`），面向合规工程师与业务运营人员提供全场景交互；
+- **调度与存证面**：企业级 Go 微服务群串联多源数据纳管与模拟（`console/mock-datasource:8083`）、6 阶段流水线调度编排（`services/service-hub:8082`）与 9 要素国密 SM3 防篡改存证（`services/audit-log:8084`）；
+- **核心计算面**：以独立核心引擎（`services/privacy-engine:8079` / `:50051`）形式提供字段级脱敏、差分隐私、K-匿名与三层动态分类分级漏斗（Rule → Small-NER → Local LLM 仲裁），纯 Go 实现 + 内置 `sdk/` 零依赖数学原语库；
 - **存储与基础设施面**：支持 SQLite WAL 单机部署与 PostgreSQL `FOR UPDATE SKIP LOCKED` 原子租约高可用集群，并提供 Helm / K8s / Docker Compose 全栈云原生基础设施。
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#1e293b', 'primaryTextColor': '#f8fafc', 'primaryBorderColor': '#38bdf8', 'lineColor': '#38bdf8' }}}%%
 flowchart TD
     subgraph Presentation ["1. 表现与接入层 (Presentation & Gateway)"]
-        WebFull[console/web<br/>通用隐私与分类控制台 :5173]
+        WebFull[console/engine-console/web<br/>通用隐私与分类控制台 :5173]
         WebAppLZ[console/app-lz/web<br/>数联调度之眼大屏 :5174]
-        GoBFF[Go gRPC API Gateway / BFF :8081<br/>REST 入口 + gRPC 上游]
+        GoBFF[Engine Console BFF 网关 :8081<br/>REST 入口 + gRPC 上游]
         GoLZBFF[App-LZ BFF 网关 :8085<br/>流水线调度与 E2E 测试器]
-        GoGateway[engine-go/gateway<br/>Go P2C-EWMA 负载均衡网关 :8000 / :50000]
+        GoGateway[privacy-engine/gateway<br/>Go P2C-EWMA 负载均衡网关 :8000 / :50000]
     end
 
     subgraph CrossCutting ["2. 跨切面中间件与零信任安全层 (Middleware & Security)"]
@@ -79,11 +79,11 @@ flowchart TD
 
     subgraph ServiceCluster ["3. 企业级数据流通调度与存证层 (Governance Services)"]
         ServiceHub[数据服务调度中枢 :8082 / :50052<br/>6 阶段流水线编排 / PG 原子租约 Worker]
-        DatasourceMgr[数据源与资产管理 :8083 / :50053<br/>多源连接池 / 样本切片 / 敏感特征探查]
+        DatasourceMgr[模拟多源数据服务 :8083 / :50053<br/>多源连接池 / 样本切片 / 敏感特征探查]
         AuditLog[合规存证与审计日志 :8084 / :50054<br/>9 要素国密 SM3 哈希链 / SM4-GCM 快照加密]
     end
 
-    subgraph CoreEngine ["4. 核心隐私算力与动态分类引擎 (Core Engine :8079 / :50051)"]
+    subgraph CoreEngine ["4. 核心隐私算力与动态分类引擎 (Privacy Engine :8079 / :50051)"]
         REST[Go Gin REST API :8079]
         GRPC[gRPC Servicer :50051]
         Funnel[3 层动态分类漏斗<br/>Rule → Small-NER → Local LLM 仲裁]
@@ -95,11 +95,11 @@ flowchart TD
         SSOT[pkg/naming 单一事实源]
         StoreSQLite[SQLite WAL 单机存储]
         StorePostgres[PostgreSQL FOR UPDATE SKIP LOCKED 原子租约高可用存储]
-        CryptoBase[国密 SM4-GCM 快照信封加密 enc:v1:... 与 SM3 哈希]
+        CryptoBase[国密 SM4-GCM 快照信封加密 enc:v2:... 与 SM3 哈希]
     end
 
     subgraph Infrastructure ["6. 云原生与全栈可观测基础设施 (Observability & K8s)"]
-        Prometheus[Prometheus 指标采集 :9090<br/>Go Engine 15+ / Gateway 4+ / Services 15+ 指标]
+        Prometheus[Prometheus 指标采集 :9090<br/>Privacy Engine 15+ / Gateway 4+ / Services 15+ 指标]
         Grafana[Grafana 联合监控看板 :3000]
         Tracing[OpenTelemetry 分布式链路追踪]
         K8sHPA[K8s HPA / CronHPA / ServiceMonitor]
@@ -136,7 +136,7 @@ flowchart TD
 |---|---|---|
 | **确定性优先** | 隐私算法与安全定级具备可证明的数学与规则依据 | 规则引擎优先于 AI 模型；DP/K-Anon 采用经典数学机制 |
 | **优雅降级** | 复杂重依赖缺失或硬件受限时不崩溃，自动回退可用子集 | LLM/NER 缺失回退规则层与人工审核标记；内存 `<512MB` 跳过 LLM |
-| **双引擎同源** | Go 引擎为主力算力（REST :8079 + gRPC :50051），Python 引擎为 AI 算力补充 | Go 引擎提供完整隐私原语 + 动态分类 + 网关调度；Python 引擎专攻 AI 模型适配（ONNX / LLM） |
+| **纯 Go 云原生与离线 AI 闭环** | 生产运行时彻底纯 Go 1.25+ 化，AI 模型训练与量化保持离线解耦 | 核心引擎与微服务群 100% 纯 Go 构建，保持 ~25MB Alpine 极简镜像；Python 仅作为离线模型专精微调工具（`model-training/llmlora`）存在 |
 | **双栈同源** | 一套核心业务逻辑，同时支持高性能 RPC 与易调试 REST | `PrivacyService` 同时驱动 REST 路由与 gRPC Servicer |
 | **零信任访问** | 默认不信任任何内部网络，每跳通信均需身份认证与权限校验 | gRPC mTLS + CN 白名单动态热重载 + HTTP API Key 鉴权 |
 | **云原生韧性** | 具备自愈、自适应负载均衡与细粒度事件驱动弹性扩缩 | P2C 动态分流、三态熔断器、优雅停机排空与 CronHPA 潮汐调度 |
@@ -147,62 +147,52 @@ flowchart TD
 
 ```text
 PrivShield/ (Repo Root)
-├── engine-go/                 # Go 核心隐私与动态分类分级引擎 (Go 1.25+)
-│   ├── cmd/
-│   │   ├── privshield-agent/  # Agent 主入口 (REST :8079 + gRPC :50051)
-│   │   └── privshield-gateway/# 网关与反向代理入口 (:8000 + gRPC :50000)
-│   ├── internal/
-│   │   ├── service/           # PrivacyService 统一编排、文件脱敏、预算集成
-│   │   ├── rest/              # REST 路由 (Gin)、pprof、K8s readyz/healthz
-│   │   ├── grpcserver/        # gRPC Servicer、RawCodec 统一分发、mTLS 提取
-│   │   ├── dynclassification/ # 3-Layer 漏斗 (AC 规则引擎 + ONNX NER + 熔断器 LLM)
-│   │   ├── gateway/           # P2C-EWMA 负载均衡器、BufferPool 零分配反向代理
-│   │   ├── imageredact/       # DICOM 二进制重构脱敏、路径白名单校验
-│   │   ├── security/          # mTLS CN 白名单热重载、32 分片限流、常量时间认证
-│   │   └── observability/     # log/slog 结构化日志、Prometheus 指标、分布式追踪
-│
-├── privacy-go-sdk/            # 纯 Go 零依赖无状态隐私计算数学原语库
-│   ├── masking/               # 掩码原语 (国密 SM3/SM4, 身份证, 手机, 银行卡, 姓名)
-│   ├── dp/                    # 差分隐私 (单趟融合向量 DP, Laplace/Gaussian, 自适应截断)
-│   ├── ldp/                   # 本地差分隐私 (二值/多分类多核并发扰动, 样本守恒校准)
-│   ├── kano/                  # K-匿名 (Mondrian 算法, 深度剪枝, Distinct L-多样性)
-│   ├── qol/                   # 查询混淆 (Fisher-Yates 语义置乱)
-│   ├── medical/               # 医疗数据流水线 (多核并发分块, 无痕脱敏 5 阶段管线)
-│   └── budget/                # 无锁原子隐私预算会计 (CAS 循环, 原子回滚)
-│
-├── engine/                    # Python 隐私算力引擎 (AI 算力层, ONNX/LLM 适配)
-│   ├── privacy/               # 隐私原语 (Masking, DP, K-Anon, QoL, Budget)
-│   ├── dynclassification/     # 3 层动态分类漏斗 (Rule, NER, LLM 适配器与仲裁)
-│   └── gateway/               # Python L7 负载均衡网关 (P2C / WRR / 节点熔断)
-│
-├── services/                  # 企业级中台微服务群 (Go 1.25 集群)
-│   ├── service-hub/           # 数据服务调度中枢 (:8082 / :50052)
-│   ├── datasource-mgr/        # 数据源资产管理与模拟库 (:8083 / :50053)
-│   └── audit-log/             # 脱敏审计与 9 要素国密 SM3 防篡改存证 (:8084 / :50054)
-│
-├── console/                   # 统一管理与测试控制台
-│   ├── bff-go/                # Go BFF 聚合网关 (:8081 / :50055)
-│   ├── app-lz/                # 数联调度之眼业务 BFF 与 E2E 测试器 (:8085)
-│   ├── web/                   # 通用隐私控制台前端 (React 18 + TS + Vite)
-│   └── app-lz/web/            # 业务流水线控制台前端 (React 18 + TS + Vite)
-│
-├── pkg/                       # Go 全局共享基础库
-│   ├── naming/                # SSOT 规范命名与别名归一化
-│   ├── auth/                  # Scope-based 身份认证与 REST/gRPC 权限映射
-│   ├── middleware/            # 9 层统一中间件栈、统一错误信封与 DDoS 纵深防御
-│   ├── gateway/               # P2C-EWMA 负载均衡、三态熔断器与 BufferPool 零分配
-│   ├── circuitbreaker/        # 共享三态熔断器原语 (Closed → Open → HalfOpen)
-│   ├── store/                 # 存储底座抽象 (SQLite WAL / PostgreSQL 原子租约 / Memory)
-│   ├── crypto/                # SM4-GCM 信封加密 (enc:v2: HKDF 派生) 与纯 Go SM3/SM4
-│   ├── tlsutil/               # TLS 1.3 mTLS 与 CN 白名单 5s 热重载 + gRPC 拦截器
-│   ├── observability/         # Prometheus RED 指标、OTel Tracer 抽象与结构化日志
-│   └── metrics/               # Prometheus 业务指标收集器
-│
-├── proto/                     # gRPC 协议定义 (privacy.proto)
-├── deploy/                    # 云原生部署基础设施 (Helm, K8s, Docker Compose, Grafana)
-├── config/                    # 运行时配置与 mTLS 白名单 (mtls-whitelist.yaml)
-├── rules/                     # 分类分级领域规则库与标准体系 YAML (medical.yaml, sc_health_db51.yaml)
-└── scripts/                   # 自动化运维、启动、测试与数据迁移脚本
+├── services/                          # 商业化生产微服务群 (Production Services)
+│   ├── privacy-engine/                # 核心隐私计算与动态分类分级引擎 (Core Sidecar/Agent)
+│   │   ├── cmd/
+│   │   │   ├── privshield-agent/      # Agent 主入口 (REST :8079 + gRPC :50051)
+│   │   │   └── privshield-gateway/    # 网关与反向代理入口 (:8000 + gRPC :50000)
+│   │   ├── internal/                  # 动态分类分级、网关代理、安全认证、画像等
+│   │   ├── sdk/                       # 内置隐私计算数学原语库 (Masking, DP, LDP, K-Ano, Medical, Budget)
+│   │   ├── rules/                     # 领域敏感特征规则库 (Taxonomies, Domains, Standards)
+│   │   ├── model-training/llmlora/    # 领域大模型/NER 离线微调与量化流水线 (Python/PEFT)
+│   │   ├── docs/                      # 引擎自包含架构与 API 说明文档
+│   │   ├── deploy/                    # 引擎专属 Dockerfile / Dockerfile.cuda / k8s / compose
+│   │   ├── scripts/                   # 引擎单模块运行、测试与压测脚本
+│   │   └── Makefile                   # 引擎单模块构建与测试入口
+│   ├── service-hub/                   # 数联数据服务调度中枢 · 唯一编排入口 (流水线调度: :8082 / :50052)
+│   │   ├── docs/ deploy/ scripts/ Makefile # 自包含交付资产
+│   │   └── ...
+│   └── audit-log/                     # 脱敏审计日志与不可篡改存证服务 (:8084 / :50054)
+│       ├── docs/ deploy/ scripts/ Makefile # 自包含交付资产
+│       └── ...
+├── console/                           # 测试与管理生态 (Testing & Management Consoles)
+│   ├── engine-console/                # Privacy Engine 专属管理控制台 (专测 privacy-engine)
+│   │   ├── bff-go/                    # Engine Console BFF (:8081 / :50055)
+│   │   ├── web/                       # Engine Console Web 前端 (React 18 + TS + Vite :5173)
+│   │   ├── docs/ deploy/ scripts/ Makefile # 自包含交付资产
+│   ├── app-lz/                        # 数联调度之眼业务模拟器 (专测 service-hub 调度编排)
+│   │   ├── bff-go/                    # 业务专有 BFF (:8085，所有数据请求统一走 service-hub)
+│   │   ├── web/                       # 业务流水线控制台前端 (React 18 + TS + Vite :5174)
+│   │   ├── docs/ deploy/ scripts/ Makefile # 自包含交付资产
+│   └── mock-datasource/               # 模拟多源异构数据源服务 (:8083 / :50053)
+│       ├── docs/ deploy/ scripts/ Makefile # 自包含交付资产
+│       └── ...
+├── pkg/                               # Go 全局共享基础库
+│   ├── naming/                        # SSOT 规范命名与别名归一化
+│   ├── auth/                          # Scope-based 身份认证与 REST/gRPC 权限映射
+│   ├── middleware/                    # 9 层统一中间件栈、统一错误信封与 DDoS 纵深防御
+│   ├── gateway/                       # P2C-EWMA 负载均衡、三态熔断器与 BufferPool 零分配
+│   ├── circuitbreaker/                # 共享三态熔断器原语 (Closed → Open → HalfOpen)
+│   ├── store/                         # 存储底座抽象 (SQLite WAL / PostgreSQL 原子租约 / Memory)
+│   ├── crypto/                        # SM4-GCM 信封加密 (enc:v2: HKDF 派生) 与纯 Go SM3/SM4
+│   ├── tlsutil/                       # TLS 1.3 mTLS 与 CN 白名单 5s 热重载 + gRPC 拦截器
+│   ├── observability/                 # Prometheus RED 指标、OTel Tracer 抽象与结构化日志
+│   └── metrics/                       # Prometheus 业务指标收集器
+├── proto/                             # gRPC 协议定义 (privacy.proto)
+├── deploy/                            # 全栈集中部署基础设施 (Helm, K8s, Docker Compose, Grafana)
+├── config/                            # 全局运行时配置与 mTLS 白名单 (mtls-whitelist.yaml)
+└── scripts/                           # 全局自动化运维、启动、测试与全链路压测脚本
 ```
 
 ---
@@ -214,7 +204,7 @@ PrivShield/ (Repo Root)
 ```mermaid
 graph TD
     subgraph ZoneA [区域一：业务应用域 / 龙城云 VPC]
-        AppLZ[业务系统 / 客户端 APP<br/>如: 龙城云·康养APP :8085/:5173]
+        AppLZ[业务系统 / 客户端 APP<br/>如: 龙城云·康养APP :8085/:5174]
         AgentLZ[业务 Agent 编排集群<br/>Context 组装 / 安全审查]
         ExtLLM[公有云通用大模型集群<br/>Qwen / 商业大模型]
     end
@@ -226,7 +216,7 @@ graph TD
     subgraph ZoneB [区域二：政务云高安全 VPC 专区]
         subgraph Server1 [政务云虚拟机主机甲 · 网关算力节点 · ECS]
             Hub[数联数据服务调度中枢 :8082 / :50052<br/>Service Hub / 6阶段流水线]
-            Engine[动态分类分级与脱敏引擎 :8079 / :50051<br/>Core Engine / 3层漏斗脱敏]
+            Engine[动态分类分级与脱敏引擎 :8079 / :50051<br/>Privacy Engine / 3层漏斗脱敏]
         end
 
         subgraph Server2 [政务云独立审计虚拟机主机乙 · 安全审计节点 · ECS]
@@ -235,7 +225,7 @@ graph TD
         end
 
         subgraph BureauDB [数据局核心资产受控 VPC 子网]
-            DB[(内部原始高密数据库<br/>Datasource Mgr :8083 / :50053)]
+            DB[(内部原始高密数据库<br/>Mock Datasource :8083 / :50053)]
         end
     end
 
@@ -254,10 +244,10 @@ graph TD
 
 | 部署节点定位 | 部署组件 | 网络与 VPC 安全组控制策略 | 归属与管理责任 |
 |---|---|---|---|
-| **外部业务节点** | • 业务系统 (`app-lz`)<br/>• 业务 Agent 集群 | 位于业务云 VPC，经国密 IPSec VPN 专线连接政务云网关 | 业务运营方 |
-| **云虚拟机主机甲**<br/>(网关算力节点 · ECS) | • 数据服务调度中枢 (`service-hub:8082`)<br/>• 动态分类分级与脱敏引擎 (`engine:8079`) | 仅开放受控 VPN 接入端口；中枢与脱敏引擎使用 `127.0.0.1` 环回内存 IPC 高速通信 (10~50μs) | 技术运营方（受数据局监管） |
+| **外部业务节点** | • 业务系统 (`console/app-lz`)<br/>• 业务 Agent 集群 | 位于业务云 VPC，经国密 IPSec VPN 专线连接政务云网关 | 业务运营方 |
+| **云虚拟机主机甲**<br/>(网关算力节点 · ECS) | • 数据服务调度中枢 (`service-hub:8082`)<br/>• 动态分类分级与脱敏引擎 (`privacy-engine:8079`) | 仅开放受控 VPN 接入端口；中枢与脱敏引擎使用 `127.0.0.1` 环回内存 IPC 高速通信 (10~50μs) | 技术运营方（受数据局监管） |
 | **云虚拟机主机乙**<br/>(独立审计节点 · ECS) | • 脱敏审计日志服务器 (`audit-log:8084`)<br/>• 9 要素国密 SM3 连续哈希链与 SM4 快照 | 独立审计虚拟机，VPC 安全组配置单向入站只写策略，暴露只读验真端点 | **数据局安全监管组专属** |
-| **核心数据资产区** | • 内部原始数据库 (`datasource-mgr:8083`) | 专用高密受控 VPC 子网，禁止外网直连，仅响应主机甲鉴权原数切片申请 | **数据局独家持有与管控** |
+| **核心数据资产区** | • 内部原始数据库 (`mock-datasource:8083`) | 专用高密受控 VPC 子网，禁止外网直连，仅响应主机甲鉴权原数切片申请 | **数据局独家持有与管控** |
 
 ---
 
@@ -265,7 +255,7 @@ graph TD
 
 ### 2.1 四川省五级分级基准与三层动态分类漏斗
 
-系统以 **DB51/T 2989—2023《四川省健康医疗大数据应用指南》** 为核心五级分级基准（L1公开、L2内部、L3敏感、L4高敏、L5极敏），并在 `engine/dynclassification` 实现**三层递进漏斗机制**：
+系统以 **DB51/T 2989—2023《四川省健康医疗大数据应用指南》** 为核心五级分级基准（L1公开、L2内部、L3敏感、L4高敏、L5极敏），并在 `services/privacy-engine/internal/dynclassification` 实现**三层递进漏斗机制**：
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#1e293b', 'primaryTextColor': '#f8fafc', 'primaryBorderColor': '#38bdf8', 'lineColor': '#38bdf8' }}}%%
@@ -278,7 +268,7 @@ graph TB
     L3 --> Out
 ```
 
-* **Layer-1 (规则层 + Safety Floor 保底)**：`ConfigurableRuleEngine` 解析 `rules/domains/*.yaml` 与 DB51 标准体系定义，支持正则匹配、枚举词典、Luhn 校验与条件组合规则，并结合 Safety Floor 对身份证、手机号等关键字段强制保底定级（L3/L4），处理 85%+ 明确模式；
+* **Layer-1 (规则层 + Safety Floor 保底)**：`ConfigurableRuleEngine` 解析 `services/privacy-engine/rules/domains/*.yaml` 与 DB51 标准体系定义，支持正则匹配、枚举词典、Luhn 校验与条件组合规则，并结合 Safety Floor 对身份证、手机号等关键字段强制保底定级（L3/L4），处理 85%+ 明确模式；
 * **Layer-2 (实体抽取层)**：采用轻量级 ONNX NER 模型抽取姓名、身份证、疾病、机构等实体，跳过纯数字及英文字段以提高吞吐；
 * **Layer-3 (大模型仲裁层)**：采用专精量化本地大模型（Qwen3.5）进行上下文语义推理与歧义仲裁，配备进程级并发信号量（`PRIVACY_LLM_MAX_CONCURRENCY=1`）防显存 OOM，当系统可用内存 `<512MB` 时自动跳过并标记 `needs_human_review`。
 
@@ -340,8 +330,8 @@ graph TB
 * **完整性校验与备份**：启动时执行 `PRAGMA integrity_check` 阻断损坏数据库，统一备份脚本支持全量/增量/验证模式；
 * **HTTP/gRPC 双协议 mTLS**：共享 `pkg/tlsutil` 工具库，TLS 1.3 强制最低版本，gRPC 服务端注册一元与流式 mTLS CN 白名单拦截器。
 
-### 3.2 数据源资产管理 (Datasource Manager :8083 / :50053)
-* **多源异构纳管**：统一管理 MySQL、PostgreSQL、API 及文件型数据源；
+### 3.2 模拟多源数据源服务 (Mock Datasource :8083 / :50053)
+* **多源异构纳管与模拟**：统一管理 MySQL、PostgreSQL、API 及文件型数据源；
 * **模拟数据集开箱即用**：内置医保结算（`yibao.csv`）与康养体检慢病（`kangyang.csv`）数据库，支持启动自动种子注入（`SeedMockDataSources`）、元数据自动探查与样本安全切片提取（Sample Slicing）；
 * **HTTP/gRPC 双协议 mTLS**：与 service-hub 共享 `pkg/tlsutil` 工具库，支持 TLS 1.3 双向认证与 CN 白名单动态热重载。
 
@@ -392,7 +382,7 @@ sequenceDiagram
     end
 
     box rgba(220,38,38,0.1) 数据核心专区 (受控 VPC)
-    participant DB as 内部原始数据库 (Datasource Mgr)
+    participant DB as 内部原始数据库 (Mock Datasource)
     end
 
     box rgba(217,119,6,0.1) 主机乙 (独立审计节点 · ECS)
@@ -434,9 +424,9 @@ sequenceDiagram
 
 | 阶段序号 | 阶段名称 | 执行实体 | 安全与技术控制点 | 架构关注重点 |
 |:---:|---|---|---|---|
-| **①** | 协商数据请求 | `app-lz` ➔ VPN ➔ `service-hub` | • 必须指明规范化的 `api_code`（如 `api1_yibao`）<br/>• 验证客户端 mTLS 证书 CN 是否在白名单中 | 严格限制调用范围，拒绝任意 SQL 或自由查询 |
-| **②~③** | 原数受控供给 | `service-hub` ➔ `datasource-mgr` | • 受控专网连接，严格限制读取行数（Limit）<br/>• 原始库表不暴露任何外部公网端口 | 原始数据物理不出专网，仅在局方受控专区流转 |
-| **④~⑤** | 同虚机闭环脱敏 | `service-hub` ➔ `engine` | • 同虚拟机 `127.0.0.1` 环回通信，无跨机抓包风险<br/>• 3 层漏斗自动打标 L1~L5 并强制执行脱敏 | 内存级处理，微秒级响应，杜绝中间明文落盘 |
+| **①** | 协商数据请求 | `console/app-lz` ➔ VPN ➔ `service-hub` | • 必须指明规范化的 `api_code`（如 `api1_yibao`）<br/>• 验证客户端 mTLS 证书 CN 是否在白名单中 | 严格限制调用范围，拒绝任意 SQL 或自由查询 |
+| **②~③** | 原数受控供给 | `service-hub` ➔ `mock-datasource` | • 受控专网连接，严格限制读取行数（Limit）<br/>• 原始库表不暴露任何外部公网端口 | 原始数据物理不出专网，仅在局方受控专区流转 |
+| **④~⑤** | 同虚机闭环脱敏 | `service-hub` ➔ `privacy-engine` | • 同虚拟机 `127.0.0.1` 环回通信，无跨机抓包风险<br/>• 3 层漏斗自动打标 L1~L5 并强制执行脱敏 | 内存级处理，微秒级响应，杜绝中间明文落盘 |
 | **⑥** | 跨虚机同步存证 | `service-hub` ➔ `audit-log` | • 跨虚机异步存证，记录 9 要素国密 SM3 特征<br/>• 样本快照自动执行 SM4-GCM 信封加密 | 计算与审计强隔离，确保存证不可被业务侧篡改 |
 | **⑦** | 脱敏安全回传 | `service-hub` ➔ VPN ➔ 业务端 | • 仅允许经脱敏引擎处理后的安全结构体出域<br/>• 经过国密 VPN（IPSec/SM4）通道安全加密传输 | 确保出域数据完全符合脱敏标准，绝无原始高敏泄漏 |
 | **⑧~⑨** | 大模型安全交互 | 业务 Agent ➔ 公有云 LLM | • Prompt 仅包含已脱敏字段与泛化特征<br/>• Agent 执行响应后置校验，拦截非法内容 | 外部第三方大模型全程零接触敏感明文 |
@@ -455,7 +445,7 @@ sequenceDiagram
 
 ### 4.4 网关 P2C-EWMA 动态负载调度
 
-Go 网关（`pkg/gateway/balancer.go` + `engine-go/internal/gateway/`）实现完整的自适应负载均衡体系：
+Go 网关（`pkg/gateway/balancer.go` + `services/privacy-engine/internal/gateway/`）实现完整的自适应负载均衡体系：
 
 * **P2C-EWMA（默认策略）**：Power of Two Choices 随机双选 + Exponentially Weighted Moving Average 延迟感知，负载评分 = $(\text{InFlight} + 1) \times \max(\text{EWMA}, 0.001)$，消除大并发下的羊群聚集效应；
 * **5 种调度策略**：`p2c`（默认）/ `round_robin`（无锁原子轮询）/ `least_conn`（最少连接）/ `weighted_rr`（Nginx 平滑加权轮询）/ `weighted_random`（加权随机）；
@@ -496,8 +486,8 @@ RETURNING *;
 
 ### 5.1 统一 Go BFF 网关架构
 
-* **`bff-go` (:8081 / :50055)**：采用 Go + Gin + gRPC，对外暴露 REST/JSON 接口，内部通过 gRPC 直连 Agent 算力层；内置文件脱敏处理器与滑动窗口限流；
-* **`app-lz/bff-go` (:8085)**：业务专有 BFF（模拟外部业务程序），所有数据请求统一通过 service-hub 调度中枢编排，不直接访问 datasource-mgr / engine-go / audit-log；提供动态数据 API 目录并内置 E2E 自动化测试执行器。
+* **`console/engine-console/bff-go` (:8081 / :50055)**：采用 Go + Gin + gRPC，对外暴露 REST/JSON 接口，内部通过 gRPC 直连 Privacy Engine 算力层；内置文件脱敏处理器与滑动窗口限流；
+* **`app-lz/bff-go` (:8085)**：业务专有 BFF（模拟外部业务程序），所有数据请求统一通过 service-hub 调度中枢编排，不直接访问 mock-datasource / privacy-engine / audit-log；提供动态数据 API 目录并内置 E2E 自动化测试执行器。
 
 ### 5.2 前端 React 18 架构
 
@@ -509,7 +499,7 @@ RETURNING *;
 
 ### 6.1 Prometheus 指标与 Grafana 看板
 
-* **全栈指标采集**：统一抓取 Go Engine（15+ 指标）、Gateway（4+ 指标）、BFF-Go、Service-Hub、Datasource-Mgr、Audit-Log（15+ 指标）；
+* **全栈指标采集**：统一抓取 Privacy Engine（15+ 指标）、Gateway（4+ 指标）、BFF-Go、Service-Hub、Mock-Datasource、Audit-Log（15+ 指标）；
 * **预置双仪表盘**：`deploy/grafana/dashboard.json`（全平台总览）与 `service-hub-dashboard.json`（流水线调度大屏）。
 
 ### 6.2 9 层统一中间件栈与纵深防御
@@ -527,7 +517,7 @@ TraceMiddleware → StructuredLogger → Recovery → SecurityHeaders → MaxBod
 
 * **强制 TLS 1.3 最低版本**；
 * **证书 CN 白名单动态热重载**：服务端提取客户端证书中的 `Common Name (CN)`，根据 [`config/mtls-whitelist.yaml`](file:///home/charles/code/PrivShield/config/mtls-whitelist.yaml) 进行方法级权限鉴权，文件修改后 **5 秒内自动热重载生效，无需中断业务**；
-* **Go gRPC 服务端拦截器全量注册**：`service-hub`（`:50052`）、`datasource-mgr`（`:50053`）、`audit-log`（`:50054`）及 `bff-go`（`:50055`）均已注册一元/流式 mTLS CN 白名单拦截器（`pkg/tlsutil/grpc_interceptor.go`），与 Python Agent 共享同一白名单事实源。
+* **Go gRPC 服务端拦截器全量注册**：`service-hub`（`:50052`）、`mock-datasource`（`:50053`）、`audit-log`（`:50054`）及 `bff-go`（`:50055`）均已注册一元/流式 mTLS CN 白名单拦截器（`pkg/tlsutil/grpc_interceptor.go`），与全平台共享同一白名单事实源。
 
 ### 6.4 Scope-based 接口权限控制体系
 
@@ -608,8 +598,8 @@ gRPC 侧通过 mTLS CN 白名单拦截器实现等价权限控制，从客户端
 
 | 分层 | 核心技术组件 | 运行版本 | 核心选型考量 |
 |---|---|---|---|
-| **算力层（主力）** | Go / Gin / gRPC / privacy-go-sdk | 1.25+ / 1.12 / 1.72 | 零依赖纯函数隐私原语 + REST/gRPC 双协议 + P2C-EWMA 网关 |
-| **算力层（AI 补充）** | Python / FastAPI / Pydantic v2 | 3.10+ / 0.115 / 2.10 | ONNX / LLM 适配 + AI 算力补充 |
+| **算力层（核心引擎）** | Go / Gin / gRPC / 内置 sdk | 1.25+ / 1.12 / 1.72 | 零依赖纯函数隐私原语 + REST/gRPC 双协议 + P2C-EWMA 网关 (~25MB Alpine 极简镜像) |
+| **模型微调（离线流水线）** | Python / PyTorch / HuggingFace PEFT / LoRA | 3.10+ | 领域大模型与轻量 NER 离线微调、量化与 ONNX 转换导出（独立解耦，不进生产容器） |
 | **分类漏斗** | YAML Rules / ONNX / Qwen3.5 | DB51 基准 | 规则引擎确定性过滤 + 轻量 NER + 本地大模型语义仲裁 |
 | **中台微服务** | Go / Gin / ByteDance Sonic | 1.24+ / 1.12 / 1.15 | 超轻量 Goroutine 并发调度与 JIT 极速序列化 |
 | **密码学基座** | 纯 Go SM4 / SM4-GCM / 国密 SM3 / SM2 | GM/T 0004 / GB/T 32907 / GB/T 32918 | 国密商用密码标准对齐、快照信封加密与 9 要素防篡改哈希链 |

@@ -15,8 +15,8 @@
 - [3. 全链路架构拓扑与数据流转](#3-全链路架构拓扑与数据流转)
 - [4. 新增数据接口标准实施路径 (5 步 SOP)](#4-新增数据接口标准实施路径-5-步-sop)
   - [第 1 步：在 pkg/naming 中注册核心事实源](#第-1-步在-pkgnaming-中注册核心事实源)
-  - [第 2 步：在 services/datasource-mgr 中接入数据资产](#第-2-步在-servicesdatasource-mgr-中接入数据资产)
-  - [第 3 步：在 rules/domains 中配置动态分类分级与脱敏规则](#第-3-步在-rulesdomains-中配置动态分类分级与脱敏规则)
+  - [第 2 步：在 console/mock-datasource 中接入数据资产](#第-2-步在-consolemock-datasource-中接入数据资产)
+  - [第 3 步：在 services/privacy-engine/rules/domains 中配置动态分类分级与脱敏规则](#第-3-步在-servicesprivacy-enginerulesdomains-中配置动态分类分级与脱敏规则)
   - [第 4 步：service-hub 与 audit-log 自动适配验证](#第-4-步service-hub-与-audit-log-自动适配验证)
   - [第 5 步：在 app-lz/bff-go 中注册前端展示元数据](#第-5-步在-app-lzbff-go-中注册前端展示元数据)
 - [5. 质量保证与 CI 门禁验证 (Verification DoD)](#5-质量保证与-ci-门禁验证-verification-dod)
@@ -33,7 +33,7 @@
 ### 1.1 核心设计原则
 
 - **单一事实源原则 (Single Source of Truth, SSOT)**：  
-  跨服务业务标识在 [`pkg/naming/naming.go`](../../pkg/naming/naming.go) 集中注册，所有 Go 微服务（`service-hub`、`datasource-mgr`、`audit-log`、`console/bff-go`、`console/app-lz/bff-go`）直接依赖该包，实现**一处定义、全服务生效**。
+  跨服务业务标识在 [`pkg/naming/naming.go`](../../pkg/naming/naming.go) 集中注册，所有 Go 微服务与组件（`services/service-hub`、`console/mock-datasource`、`services/audit-log`、`console/engine-console/bff-go`、`console/app-lz/bff-go`）直接依赖该包，实现**一处定义、全服务生效**。
 - **边界归一化与 Fail-Closed**：  
   允许入站请求携带别名（如文件名 `xx.csv`、中文名 `XX数据`、Slug `xx`），但**只允许在服务入口边界被归一化一次**（`naming.NormalizeDataSourceID()`），内部流转统一使用 Canonical 标准标识。未知或预留标识直接拦截拒绝。
 - **编译期静态约束**：  
@@ -56,7 +56,7 @@
 │ **1. 数据源唯一标识** │ `^ds_[a-z][a-z0-9_]{1,30}$`│ `ds_xx1` (常量: `naming.DSXX1`)              │
 │ **2. 业务 API 编码** │ `^api[1-9]_[a-z0-9_]{1,30}$`│ `api3_xx1` (常量: `naming.API3XX1`)          │
 │ **3. 原始数据集文件** │ `<domain>.csv`            │ `data/xx1.csv`                                │
-│ **4. 分类脱敏规则集** │ `rules/domains/<domain>.yaml` | `rules/domains/xx1.yaml`                     │
+│ **4. 分类脱敏规则集** │ `rules/domains/<domain>.yaml` | `services/privacy-engine/rules/domains/xx1.yaml` │
 └─────────────────────┴───────────────────────────┴───────────────────────────────────────────────┘
 ```
 
@@ -65,7 +65,7 @@
 1. **数据源标识 (DataSource ID)**：全局唯一的底层数据源实体名，前缀固定为 `ds_`，用于数据源切片管理、任务元数据与审计存证。
 2. **API 稳定编码 (API Code)**：面向外部调用方与控制台的 API 编号，前缀为 `api<序号>_`，用于服务目录展示与 API 申请调度。
 3. **数据集文件 (Dataset File)**：存放于 `data/` 目录下，作为该数据源的静态样本与模拟数据源。
-4. **领域规则文件 (Domain Rules)**：存放于 `rules/domains/` 目录下，定义该数据源特有字段的分类分级标准与脱敏策略。
+4. **领域规则文件 (Domain Rules)**：存放于 `services/privacy-engine/rules/domains/` 目录下，定义该数据源特有字段的分类分级标准与脱敏策略。
 
 ---
 
@@ -79,8 +79,8 @@ sequenceDiagram
     participant UI as 前端控制台 (console/app-lz/web)
     participant BFF as BFF 网关 (console/app-lz/bff-go)
     participant Hub as 调度中枢 (services/service-hub)
-    participant DSMgr as 数据源管理 (services/datasource-mgr)
-    participant Engine as 隐私治理引擎 (engine-go)
+    participant DSMgr as 模拟数据源 (console/mock-datasource)
+    participant Engine as 隐私治理引擎 (services/privacy-engine)
     participant Audit as 审计存证中心 (services/audit-log)
 
     Note over UI,Audit: 跨服务统一事实源：pkg/naming
@@ -89,7 +89,7 @@ sequenceDiagram
     BFF->>Hub: 3. DispatchTask (Source: "ds_xx1", Op: "mask")
     Hub->>DSMgr: 4. FetchSlice (DatasourceID: "ds_xx1", Limit: 5)
     DSMgr-->>Hub: 5. 返回 data/xx1.csv 原始记录（JSON Payload）
-    Hub->>Engine: 6. POST /v1/agent/process (加载 rules/domains/xx1.yaml)
+    Hub->>Engine: 6. POST /v1/agent/process (加载 services/privacy-engine/rules/domains/xx1.yaml)
     Engine-->>Hub: 7. 返回分类分级评级结果 + 脱敏后记录 (Masked Payload)
     Note over Hub,Audit: service-hub 全链路编排已集成审计存证（P0-6 fail-closed）。
     Hub-->>BFF: 8. 返回任务终态结果 (TaskCompleted)
@@ -97,8 +97,8 @@ sequenceDiagram
 ```
 
 > **默认端口、环境变量与 mTLS 说明**：
-> - Go Agent REST `:8079` / gRPC `:50051`；service-hub `:8082`/`:50052`；datasource-mgr `:8083`/`:50053`；audit-log `:8084`/`:50054`；bff-go `:8081`/`:50055`（可选）。
-> - 环境变量按服务隔离：`SERVICE_HUB_*`、`DATASOURCE_MGR_*`、`AUDIT_LOG_*`、`PRIVACY_CONSOLE_*`、`PRIVACY_AGENT_*` 等，并共享 `PRIVACY_AUTH_MTLS_WHITELIST_FILE` 等配置。
+> - Go Privacy Engine REST `:8079` / gRPC `:50051`；service-hub `:8082`/`:50052`；mock-datasource `:8083`/`:50053`；audit-log `:8084`/`:50054`；engine-console/bff-go `:8081`/`:50055`（可选）。
+> - 环境变量按服务隔离：`SERVICE_HUB_*`、`MOCK_DATASOURCE_*`、`AUDIT_LOG_*`、`PRIVACY_CONSOLE_*`、`PRIVACY_AGENT_*` 等，并共享 `PRIVACY_AUTH_MTLS_WHITELIST_FILE` 等配置。
 > - Go gRPC 服务器统一使用 `pkg/tlsutil` 的 `NewWhitelistInterceptor()` CN 白名单拦截器；配置 `PRIVACY_AUTH_MTLS_WHITELIST_FILE=config/mtls-whitelist.yaml` 后，通过 5 秒 mtime 轮询热重载。
 
 ---
@@ -153,11 +153,11 @@ var Registry = []Entry{
 > **底层生效机制**：
 > - `naming.NormalizeDataSourceID("xx1")` 自动映射为 `"ds_xx1"`；
 > - `naming.ValidateDatasourceID("ds_xx1")` 自动判定为合法并放行；
-> - `service-hub`、`datasource-mgr`、`audit-log` 等服务即刻感知，**无需修改任何 Go 微服务的鉴权与校验逻辑**。
+> - `service-hub`、`mock-datasource`、`audit-log` 等服务即刻感知，**无需修改任何 Go 微服务的鉴权与校验逻辑**。
 
 ---
 
-### 第 2 步：在 `services/datasource-mgr` 中接入数据资产
+### 第 2 步：在 `console/mock-datasource` 中接入数据资产
 
 1. **放置样本数据文件**：  
    创建并放入 [`data/xx1.csv`](../../data/) 文件，包含真实或模拟的业务字段表头与行数据：
@@ -167,19 +167,19 @@ var Registry = []Entry{
    TX-2026-002,李淑珍,510101199008085678,13811112222,880.50,2026-08-25 11:15:20,192.168.1.101
    ```
 2. **验证数据源切片提取**：  
-   `datasource-mgr` 会根据注册表中的 `FileName: "xx1.csv"` 自动定位文件，支持通过 REST 接口拉取 JSON 格式的原始记录切片：
+   `mock-datasource` 会根据注册表中的 `FileName: "xx1.csv"` 自动定位文件，支持通过 REST 接口拉取 JSON 格式的原始记录切片：
    ```bash
    curl -s http://127.0.0.1:8083/v1/datasources/ds_xx1/sample?limit=2 | jq .
    ```
 
 ---
 
-### 第 3 步：在 `engine` 中配置动态分类分级与脱敏规则
+### 第 3 步：在 `services/privacy-engine` 中配置动态分类分级与脱敏规则
 
 1. **新建领域规则配置文件**：  
-   在 [`rules/domains/`](../../rules/domains/) 目录下新建 `xx1.yaml`：
+   在 [`services/privacy-engine/rules/domains/`](../../services/privacy-engine/rules/domains/) 目录下新建 `xx1.yaml`：
    ```yaml
-   # rules/domains/xx1.yaml
+   # services/privacy-engine/rules/domains/xx1.yaml
    domain: xx1
    version: "1.0.0"
    description: "XX业务流转数据分类分级与脱敏治理规则"
@@ -226,7 +226,7 @@ var Registry = []Entry{
 得益于调度中枢与审计存证的**泛型负载（`map[string]any`）**设计，**新增数据源无需修改 `service-hub` 与 `audit-log` 的现有 Go 源代码**即可被识别：
 
 1. **调度中枢自动转发**：  
-   `service-hub` 从 `datasource-mgr` 获取任意字段的 JSON 记录，透明转发给 `engine-go` 的 `POST /v1/agent/process`，`engine-go` 根据 `rules/domains/xx1.yaml` 自动完成分类分级与脱敏。
+   `service-hub` 从 `mock-datasource` 获取任意字段的 JSON 记录，透明转发给 `privacy-engine` 的 `POST /v1/agent/process`，`privacy-engine` 根据 `services/privacy-engine/rules/domains/xx1.yaml` 自动完成分类分级与脱敏。
 2. **审计存证当前状态**：  
    `audit-log` 服务已就绪（`:8084` REST / `:50054` gRPC），支持显式调用 `RecordAudit` 并将样本以 SM4-GCM 信封加密后持久化；`service-hub` 6 阶段流水线支持自动异步写入 9 要素存证。
 
@@ -267,7 +267,7 @@ var schemas = map[string]schema{
 make test
 
 # 2. 运行 Go 基础库与微服务测试
-go test -race -count=1 ./pkg/naming/... ./services/datasource-mgr/... ./console/app-lz/bff-go/...
+go test -race -count=1 ./pkg/naming/... ./console/mock-datasource/... ./console/app-lz/bff-go/...
 
 # 3. 执行 App-LZ 自动化 E2E 调度流水线测试
 go test -v -run TestRunSuites ./console/app-lz/bff-go/internal/runner/
