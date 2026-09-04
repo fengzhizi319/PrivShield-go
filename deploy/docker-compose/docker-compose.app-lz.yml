@@ -114,7 +114,7 @@ services:
   datasource-mgr:
     build:
       context: ../..
-      dockerfile: services/datasource-mgr/Dockerfile
+      dockerfile: console/mock-datasource/Dockerfile
     image: privshield-datasource-mgr:1.8.0
     pull_policy: build
     container_name: privshield-datasource-mgr
@@ -180,7 +180,7 @@ services:
     restart: "no"
 
   # 5. App-LZ Go BFF 外部模拟业务程序 (:8085，仅访问 service-hub 调度中枢)
-  # 架构原则：app-lz 模拟外部系统，除 service-hub 外无权直连任何内部服务 (datasource-mgr / engine-go / audit-log)
+  # 架构原则：app-lz 模拟外部系统，除 service-hub 外无权直连任何内部服务 (datasource-mgr / services/privacy-engine / audit-log)
   app-lz-bff:
     build:
       context: ../..

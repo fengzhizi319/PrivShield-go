@@ -5,7 +5,7 @@
 # 防止「某处私自加一级 / 改中文名 / 换枚举值」这类只能靠人肉发现的漂移：
 #   1. pkg/validation        —— SensitivityLevels 对外契约枚举
 #   2. pkg/naming/levels.go  —— 跨服务词表实现（id / canonical name / 中文名 / rank）
-#   3. engine-go 常量        —— 三层漏斗内部 canonical 名称集合
+#   3. services/privacy-engine 常量        —— 三层漏斗内部 canonical 名称集合
 #   4. 全仓 Go 源码          —— 中文名只允许在 pkg/naming/levels.go 定义一处
 #
 # Go 侧另有 pkg/naming/levels_test.go 做同构断言；本脚本的价值是无需编译即可在
@@ -13,10 +13,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TAXONOMY="$ROOT/rules/taxonomies/default.yaml"
+TAXONOMY="$ROOT/services/privacy-engine/rules/taxonomies/default.yaml"
+[[ -f "$TAXONOMY" ]] || TAXONOMY="$ROOT/rules/taxonomies/default.yaml"
 VALIDATION="$ROOT/pkg/validation/validation.go"
 LEVELS_GO="$ROOT/pkg/naming/levels.go"
-ENGINE_GO="$ROOT/engine-go/internal/dynclassification/engine.go"
+ENGINE_GO="$ROOT/services/privacy-engine/internal/dynclassification/engine.go"
+[[ -f "$ENGINE_GO" ]] || ENGINE_GO="$ROOT/services/privacy-engine/internal/dynclassification/engine.go"
 
 fail=0
 err() {
@@ -89,7 +91,7 @@ else
   diff <(printf '%s\n' "$TAXONOMY_LEVELS") <(printf '%s\n' "$naming_levels") >&2 || true
 fi
 
-echo "3) pkg/naming canonical 名称 → engine-go SecurityLevel 常量"
+echo "3) pkg/naming canonical 名称 → services/privacy-engine SecurityLevel 常量"
 naming_canonical="$(sed -n 's/^[[:space:]]*{SecurityLevelL[0-9]*, "\([^"]*\)", .*$/\1/p' "$LEVELS_GO" | sort | tr '\n' ' ' | sed 's/ $//')"
 engine_canonical="$(sed -n 's/^[[:space:]]*Level[A-Za-z]*[[:space:]]*SecurityLevel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$ENGINE_GO" | sort | tr '\n' ' ' | sed 's/ $//')"
 # 两侧都抽空时字符串相等会给出假绿，因此先判定抽取结果非空。
@@ -98,7 +100,7 @@ if [[ -z "$naming_canonical" || -z "$engine_canonical" ]]; then
 elif [[ "$naming_canonical" == "$engine_canonical" ]]; then
   ok "engine canonical 集合与词表一致: $engine_canonical"
 else
-  err "engine-go 的等级常量与 pkg/naming canonical 名称不一致:
+  err "services/privacy-engine 的等级常量与 pkg/naming canonical 名称不一致:
        naming: $naming_canonical
        engine: $engine_canonical"
 fi

@@ -37,7 +37,7 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-CONSOLE_DIR="$PROJECT_ROOT/console"
+CONSOLE_DIR="$PROJECT_ROOT/console/engine-console"
 PIDS_DIR="$PROJECT_ROOT/.pids"
 LOGS_DIR="$PROJECT_ROOT/.logs"
 
@@ -271,7 +271,7 @@ launch_agent() {
         if [[ -f "$PROJECT_ROOT/bin/privshield-agent" ]]; then
             exec "$PROJECT_ROOT/bin/privshield-agent" >> "$agent_log" 2>&1
         else
-            exec go run ./engine-go/cmd/privshield-agent >> "$agent_log" 2>&1
+            exec go run ./services/privacy-engine/cmd/privshield-agent >> "$agent_log" 2>&1
         fi
     ) &
     AGENT_PID=$!

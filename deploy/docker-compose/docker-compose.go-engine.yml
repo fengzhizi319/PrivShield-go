@@ -11,7 +11,7 @@
 #
 # 说明：
 #   本文件覆盖主 docker-compose.yml 中的 PrivShield 服务定义，
-#   将 Python 引擎镜像替换为 Go 原生引擎（engine-go/Dockerfile 构建）。
+#   将 Python 引擎镜像替换为 Go 原生引擎（services/privacy-engine/Dockerfile 构建）。
 #   Go 引擎镜像极小（~15MB），启动速度快（<1s），无 Python/ML 依赖。
 #
 # 环境变量：

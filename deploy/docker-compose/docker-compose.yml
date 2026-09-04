@@ -305,7 +305,7 @@ services:
   console-backend-go:
     build:
       context: ../..
-      dockerfile: console/bff-go/Dockerfile
+      dockerfile: console/engine-console/bff-go/Dockerfile
     image: privacy-console-backend-go:1.8.0
     pull_policy: build
     container_name: privacy-console-backend-go
@@ -364,7 +364,7 @@ services:
   # ===========================================================================
   console-web:
     build:
-      context: ../../console/web   # 构建上下文 = React 前端源码目录（构建产物打入 Nginx 镜像）
+      context: ../../console/engine-console/web   # 构建上下文 = React 前端源码目录（构建产物打入 Nginx 镜像）
       dockerfile: Dockerfile
     image: privacy-console-web:1.8.0
     pull_policy: build
@@ -479,7 +479,7 @@ services:
   datasource-mgr:
     build:
       context: ../..
-      dockerfile: services/datasource-mgr/Dockerfile
+      dockerfile: console/mock-datasource/Dockerfile
     image: privshield-datasource-mgr:1.8.0
     pull_policy: build
     container_name: privshield-datasource-mgr

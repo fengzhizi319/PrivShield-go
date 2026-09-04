@@ -1,0 +1,92 @@
+# ── CUDA 变体 Dockerfile ──
+# 用于 NVIDIA GPU 环境，支持 ONNX Runtime GPU 推理加速 Small-NER。
+# 构建：docker build -f services/privacy-engine/Dockerfile.cuda -t privshield-go:10.0.0-cuda .
+#
+# 与基础 Dockerfile 的差异：
+#   - Builder 阶段启用 CGO_ENABLED=1（ONNX Runtime CGO 绑定需要）
+#   - 运行时基于 nvidia/cuda:12.2.2-runtime-ubuntu22.04（含 CUDA 运行时）
+#   - 安装 libonnxruntime GPU 动态库
+#   - 非 root 运行 + HEALTHCHECK 与基础镜像保持一致安全基线
+
+# ── Stage 1: Go 编译环境（CGO 启用）──
+FROM golang:1.25-bookworm AS builder
+
+WORKDIR /build
+ENV GOPROXY=https://goproxy.cn,direct
+ENV CGO_ENABLED=1
+ENV GOWORK=off
+
+# 安装 ONNX Runtime 开发库（编译时需要头文件与 .so）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget ca-certificates build-essential \
+    && wget -q https://github.com/microsoft/onnxruntime/releases/download/v1.17.1/onnxruntime-linux-x64-gpu-1.17.1.tgz \
+    && tar -zxf onnxruntime-linux-x64-gpu-1.17.1.tgz \
+    && cp onnxruntime-linux-x64-gpu-1.17.1/include/* /usr/local/include/ \
+    && cp onnxruntime-linux-x64-gpu-1.17.1/lib/libonnxruntime* /usr/local/lib/ \
+    && ldconfig \
+    && rm -rf onnxruntime-linux-x64-gpu-1.17.1* \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+ENV CGO_CFLAGS="-I/usr/local/include"
+ENV CGO_LDFLAGS="-L/usr/local/lib -lonnxruntime"
+ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+
+# 先拷贝 go.mod 利用缓存
+COPY pkg/go.mod ./pkg/go.mod
+COPY services/privacy-engine/sdk/go.mod ./services/privacy-engine/sdk/go.mod
+COPY services/privacy-engine/go.mod ./services/privacy-engine/go.mod
+RUN cd pkg && go mod download || true
+RUN cd services/privacy-engine/sdk && go mod download || true
+RUN cd services/privacy-engine && go mod download || true
+
+# 拷贝源码
+COPY pkg/ ./pkg/
+COPY services/privacy-engine/sdk/ ./services/privacy-engine/sdk/
+COPY services/privacy-engine/ ./services/privacy-engine/
+
+# 编译 Agent 与 Gateway（含 CGO ONNX 绑定）
+RUN cd services/privacy-engine && \
+    go build -ldflags="-s -w -X 'main.Version=10.0.0-cuda' -X 'main.BuildTime=$(date -u)'" \
+    -o /build/bin/privshield-agent ./cmd/privshield-agent && \
+    go build -ldflags="-s -w -X 'main.Version=10.0.0-cuda' -X 'main.BuildTime=$(date -u)'" \
+    -o /build/bin/privshield-gateway ./cmd/privshield-gateway
+
+# ── Stage 2: NVIDIA CUDA 运行时镜像 ──
+FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04
+
+WORKDIR /app
+
+# 安装运行时依赖 + ONNX Runtime GPU 动态库
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget ca-certificates libgomp1 \
+    && wget -q https://github.com/microsoft/onnxruntime/releases/download/v1.17.1/onnxruntime-linux-x64-gpu-1.17.1.tgz \
+    && tar -zxf onnxruntime-linux-x64-gpu-1.17.1.tgz \
+    && cp onnxruntime-linux-x64-gpu-1.17.1/lib/libonnxruntime* /usr/local/lib/ \
+    && rm -rf onnxruntime-linux-x64-gpu-1.17.1* \
+    && ldconfig \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# 创建非 root 用户
+RUN groupadd -r privacy && useradd -r -g privacy privacy
+
+# 从 Stage 1 拷贝二进制与配置文件
+COPY --from=builder /build/bin/privshield-agent /app/privshield-agent
+COPY --from=builder /build/bin/privshield-gateway /app/privshield-gateway
+COPY config/ /app/config/
+COPY services/privacy-engine/rules/ /app/rules/
+COPY .models/ /app/.models/
+
+RUN chown -R privacy:privacy /app
+
+USER privacy
+
+EXPOSE 8079 50051 8000 50000
+
+ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:8079/health || exit 1
+
+ENTRYPOINT ["/app/privshield-agent"]

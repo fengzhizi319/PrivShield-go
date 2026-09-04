@@ -91,11 +91,11 @@ fi
 
 # 检查 Go 引擎源码
 TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
-if [[ -d "$PROJECT_ROOT/engine-go" && -f "$PROJECT_ROOT/engine-go/go.mod" ]]; then
-    echo -e "Go 引擎源码   : ${GREEN}engine-go/ 目录存在${NC}"
+if [[ -d "$PROJECT_ROOT/services/privacy-engine" && -f "$PROJECT_ROOT/services/privacy-engine/go.mod" ]]; then
+    echo -e "Go 引擎源码   : ${GREEN}services/privacy-engine/ 目录存在${NC}"
     PASSED_CHECKS=$((PASSED_CHECKS + 1))
 else
-    echo -e "${RED}[错误] 未检测到 engine-go/ 目录${NC}"
+    echo -e "${RED}[错误] 未检测到 services/privacy-engine/ 目录${NC}"
     FAILED_CHECKS=$((FAILED_CHECKS + 1))
 fi
 

@@ -5,9 +5,9 @@
 #
 # 证书覆盖模块：
 #   1. config/certs/                  全局通用 mTLS 测试证书 (Root CA, Server, Client, Client PubKey)
-#   2. console/bff-go/certs/          Go BFF 代理网关与 Agent 通信 mTLS 证书
+#   2. console/engine-console/bff-go/certs/          Go BFF 代理网关与 Agent 通信 mTLS 证书
 #   3. services/service-hub/certs/    数据流通调度中枢 mTLS 证书
-#   4. services/datasource-mgr/certs/ 数据源管理微服务 mTLS 证书与 SPKI 公钥固定文件
+#   4. console/mock-datasource/certs/ 数据源管理微服务 mTLS 证书与 SPKI 公钥固定文件
 #   5. services/audit-log/certs/      合规存证审计微服务 mTLS 证书与 SPKI 公钥固定文件
 #
 # 有效期与特性：
@@ -94,16 +94,16 @@ echo -e "\n[1/5] 生成全局通用测试证书 (config/certs)..."
 generate_cert_chain "$PROJECT_ROOT/config/certs" "PrivShield-Global-Test-CA" "localhost" "PrivShield-Test-Client"
 
 # 2. Go BFF 代理网关测试证书
-echo -e "\n[2/5] 生成 Console BFF-Go 测试证书 (console/bff-go/certs)..."
-generate_cert_chain "$PROJECT_ROOT/console/bff-go/certs" "PrivShield-BFF-Test-CA" "localhost" "privacy-console-go-client"
+echo -e "\n[2/5] 生成 Console BFF-Go 测试证书 (console/engine-console/bff-go/certs)..."
+generate_cert_chain "$PROJECT_ROOT/console/engine-console/bff-go/certs" "PrivShield-BFF-Test-CA" "localhost" "privacy-console-go-client"
 
 # 3. Service-Hub 调度中枢测试证书
 echo -e "\n[3/5] 生成 Service-Hub 调度中枢测试证书 (services/service-hub/certs)..."
 generate_cert_chain "$PROJECT_ROOT/services/service-hub/certs" "service-hub-test-ca" "localhost" "service-hub-client"
 
 # 4. Datasource-Mgr 数据源微服务测试证书
-echo -e "\n[4/5] 生成 Datasource-Mgr 微服务测试证书 (services/datasource-mgr/certs)..."
-generate_cert_chain "$PROJECT_ROOT/services/datasource-mgr/certs" "datasource-mgr-test-ca" "localhost" "datasource-mgr-client"
+echo -e "\n[4/5] 生成 Datasource-Mgr 微服务测试证书 (console/mock-datasource/certs)..."
+generate_cert_chain "$PROJECT_ROOT/console/mock-datasource/certs" "datasource-mgr-test-ca" "localhost" "datasource-mgr-client"
 
 # 5. Audit-Log 审计存证微服务测试证书
 echo -e "\n[5/5] 生成 Audit-Log 微服务测试证书 (services/audit-log/certs)..."

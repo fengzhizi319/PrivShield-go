@@ -14,7 +14,7 @@ resources:
   # - llm-service.yaml
   # ── Go 微服务群（下沉各服务自包含部署清单）──
   - ../../services/service-hub/deploy/k8s
-  - ../../services/datasource-mgr/deploy/k8s
+  - ../../console/mock-datasource/deploy/k8s
   - ../../services/audit-log/deploy/k8s
   # ── 统一控制台（Go BFF + Web 前端自包含部署清单）──
   - ../../console/deploy/k8s

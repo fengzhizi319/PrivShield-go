@@ -6,13 +6,14 @@ require (
 	github.com/fengzhizi319/PrivShield-go/pkg v0.0.0
 	github.com/fengzhizi319/PrivShield-go/services/datasource-mgr v0.0.0
 	github.com/gin-gonic/gin v1.12.0
+	github.com/tjfoc/gmsm v1.4.1
 	google.golang.org/grpc v1.83.1
 	google.golang.org/protobuf v1.36.11
 )
 
 replace github.com/fengzhizi319/PrivShield-go/pkg => ../../pkg
 
-replace github.com/fengzhizi319/PrivShield-go/services/datasource-mgr => ../../services/datasource-mgr
+replace github.com/fengzhizi319/PrivShield-go/services/datasource-mgr => ../../console/mock-datasource
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -50,7 +51,6 @@ require (
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/tjfoc/gmsm v1.4.1 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect

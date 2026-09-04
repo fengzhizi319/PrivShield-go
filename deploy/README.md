@@ -38,7 +38,7 @@ deploy/
 ```
 
 > 💡 **架构分层说明**：
-> - **单服务原子部署**：各独立子项目（`services/service-hub`、`services/datasource-mgr`、`services/audit-log`、`console`）在各自的 `deploy/k8s/` 目录下自包含原子 Deployment/Service/PVC 清单与 `Dockerfile`，支持单服务独立构建与独立发布；
+> - **单服务原子部署**：各独立子项目（`services/service-hub`、`console/mock-datasource`、`services/audit-log`、`console`）在各自的 `deploy/k8s/` 目录下自包含原子 Deployment/Service/PVC 清单与 `Dockerfile`，支持单服务独立构建与独立发布；
 > - **全栈集成编排**：`deploy/` 根目录统一管理多服务全栈拓扑、统一 Compose 联调、统一 Helm 伞图（Umbrella Chart）与全栈 Kustomize 集成入口。
 
 ---
@@ -50,10 +50,10 @@ deploy/
 | 服务 | 角色 | 端口 | 技术栈 |
 |---|---|---|---|
 | **PrivShield (Core Agent)** | 隐私计算引擎（脱敏/DP/K-匿名/分类分级） | REST `8079` / gRPC `50051` | Python (FastAPI + gRPC) |
-| **bff-go** (`console/bff-go`) | Console Go 代理（REST + gRPC 双协议） | `8081` / `50055` | Go (Gin + gRPC) |
+| **bff-go** (`console/engine-console/bff-go`) | Console Go 代理（REST + gRPC 双协议） | `8081` / `50055` | Go (Gin + gRPC) |
 | **console-web** | React 控制台前端（Nginx 托管） | `5173` | React + Nginx |
 | **service-hub** (`services/service-hub`) | 数据服务调度中枢 | REST `8082` / gRPC `50052` | Go |
-| **datasource-mgr** (`services/datasource-mgr`) | 数据源管理 | REST `8083` / gRPC `50053` | Go |
+| **datasource-mgr** (`console/mock-datasource`) | 数据源管理 | REST `8083` / gRPC `50053` | Go |
 | **audit-log** (`services/audit-log`) | 脱敏审计日志 | REST `8084` / gRPC `50054` | Go |
 | **vllm**（可选，`--profile llm`） | Layer-3 LLM 推理（GPU） | `8000` | vLLM |
 | **redis**（仅生产编排） | 分布式限流后端 | `6379`（内部） | Redis |

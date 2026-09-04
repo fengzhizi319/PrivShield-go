@@ -35,59 +35,54 @@
 - **External LLM Client** with 3-state Circuit Breaker (`Closed` -> `Open` -> `HalfOpen`)
 - **Alpine Linux / Multi-stage Docker** (~25MB ultra-lightweight image)
 
-## 3. Repository Layout
+## 3. Repository Layout (v3.0 Architecture)
 
 ```text
 PrivShield/
-├── engine-go/                     # Go 核心隐私与动态分类分级引擎 (Core Agent / Sidecar)
-│   ├── cmd/
-│   │   ├── privshield-agent/      # Agent 主入口 (REST :8079 + gRPC :50051)
-│   │   └── privshield-gateway/    # 网关与反向代理入口 (:8000 + gRPC :50000)
-│   ├── internal/
-│   │   ├── service/               # PrivacyService 统一编排、文件脱敏、预算集成
-│   │   ├── rest/                  # REST 路由 (Gin)、pprof、K8s readyz/healthz
-│   │   ├── grpcserver/            # gRPC Servicer、RawCodec 统一分发、mTLS 提取
-│   │   ├── dynclassification/     # 3-Layer 漏斗 (AC 规则引擎 + ONNX NER + 熔断器 LLM)
-│   │   ├── gateway/               # P2C-EWMA 负载均衡器、BufferPool 零分配反向代理
-│   │   ├── imageredact/           # DICOM 二进制重构脱敏、路径白名单校验
-│   │   ├── security/              # mTLS CN 白名单 5s 热重载、32分片限流、常量时间认证
-│   │   ├── observability/         # log/slog 结构化日志、Prometheus 指标、分布式追踪
-│   │   └── profile/               # 领域规则与参数 Profile 动态加载器
-│   ├── Dockerfile                 # 极简多阶段构建镜像
-│   └── Dockerfile.cuda            # CUDA / ONNX 专用加速镜像
-├── privacy-go-sdk/                # 纯 Go 零依赖无状态隐私计算数学原语库
-│   ├── masking/                   # 掩码原语 (国密 SM3/SM4, 身份证, 手机, 银行卡, 姓名)
-│   ├── dp/                        # 差分隐私 (单趟融合向量 DP, Laplace/Gaussian, 自适应截断)
-│   ├── ldp/                       # 本地差分隐私 (二值/多分类多核并发扰动, 样本守恒校准)
-│   ├── kano/                      # K-匿名 (Mondrian 算法, 深度剪枝, Distinct L-多样性)
-│   ├── qol/                       # 查询混淆 (Fisher-Yates 语义置乱)
-│   ├── medical/                   # 医疗数据流水线 (多核并发分块, 医保19 / 康养27)
-│   └── budget/                    # 无锁原子隐私预算会计 (无锁 CAS 循环, 原子回滚)
-├── services/                      # 企业级数据流通与安全治理中台微服务群 (Go)
-│   ├── service-hub/               # 数联数据服务调度中枢 · 唯一编排入口 (流水线调度: :8082)
-│   ├── datasource-mgr/            # 数据源资产管理与敏感特征自动探查 (:8083)
-│   └── audit-log/                 # 脱敏审计日志与不可篡改 SHA-256 / SM3 存证 (:8084)
-├── console/                       # 统一运维与测试控制台 (Web UI + BFF)
-│   ├── bff-go/                    # Go gRPC/HTTPS 代理网关 / BFF (:8081)
-│   ├── app-lz/                    # 数联调度之眼 (模拟外部业务程序)
-│   │   ├── bff-go/                # 业务专有 BFF (:8085)，所有数据请求统一走 service-hub 编排
-│   │   └── web/                   # 业务流水线控制台前端 (React 18 + TS + Vite)
-│   └── web/                       # React + TypeScript + Vite 前端控制台 (:5173)
-├── deploy/                        # 全栈集中部署与编排资产 (Compose / Helm / K8s)
-│   ├── docker-compose/            # Docker Compose 全栈编排
-│   ├── helm/PrivShield/           # 全栈统一 Helm Chart
-│   ├── k8s/                       # 原生 K8s 全栈集成清单
-│   ├── prometheus/                # Prometheus 采集与告警规则
-│   └── grafana/                   # Grafana 预置仪表盘
-├── pkg/                           # Go 共享基础库 (Agent客户端, 中间件, 存储, 国密, 校验)
-├── proto/privacy.proto            # gRPC 协议定义
-├── go.work                        # 根目录 Go 1.25 工作区
-├── config/                        # Profile & runtime 配置文件
-├── rules/                         # 领域分类分级规则与标准体系 (YAML)
-├── data/                          # 样例数据集与测试数据
-├── scripts/                       # 自动化运维、开发启动与测试脚本
-├── Makefile                       # 统一构建与测试入口
-└── Dockerfile                     # 根目录多阶段构建 Dockerfile
+├── services/                          # 商业化生产微服务群 (Production Services)
+│   ├── privacy-engine/                # 核心隐私计算与动态分类分级引擎 (Core Sidecar/Agent)
+│   │   ├── cmd/
+│   │   │   ├── privshield-agent/      # Agent 主入口 (REST :8079 + gRPC :50051)
+│   │   │   └── privshield-gateway/    # 网关与反向代理入口 (:8000 + gRPC :50000)
+│   │   ├── internal/                  # 动态分类分级、网关代理、安全认证、画像等
+│   │   ├── sdk/                       # 内置隐私计算数学原语库 (Masking, DP, LDP, K-Ano, Medical, Budget)
+│   │   ├── rules/                     # 领域敏感特征规则库 (Taxonomies, Domains, Standards)
+│   │   ├── docs/                      # 引擎自包含架构与 API 说明文档
+│   │   ├── deploy/                    # 引擎专属 Dockerfile / Dockerfile.cuda / k8s / compose
+│   │   ├── scripts/                   # 引擎单模块运行、测试与压测脚本
+│   │   └── Makefile                   # 引擎单模块构建与测试入口
+│   ├── service-hub/                   # 数联数据服务调度中枢 · 唯一编排入口 (流水线调度: :8082)
+│   │   ├── docs/ deploy/ scripts/ Makefile # 自包含交付资产
+│   │   └── ...
+│   └── audit-log/                     # 脱敏审计日志与不可篡改存证服务 (:8084)
+│       ├── docs/ deploy/ scripts/ Makefile # 自包含交付资产
+│       └── ...
+├── console/                           # 测试与管理生态 (Testing & Management Consoles)
+│   ├── engine-console/                # Privacy Engine 专属管理控制台 (专测 privacy-engine)
+│   │   ├── bff-go/                    # Engine Console BFF (:8081)
+│   │   ├── web/                       # Engine Console Web 前端 (React 18 + TS + Vite :5173)
+│   │   ├── docs/ deploy/ scripts/ Makefile # 自包含交付资产
+│   ├── app-lz/                        # 数联调度之眼业务模拟器 (专测 service-hub 调度编排)
+│   │   ├── bff-go/                    # 业务专有 BFF (:8085，所有数据请求统一走 service-hub)
+│   │   ├── web/                       # 业务流水线控制台前端 (React 18 + TS + Vite :5174)
+│   │   ├── docs/ deploy/ scripts/ Makefile # 自包含交付资产
+│   └── mock-datasource/               # 模拟多源异构数据源服务 (:8083)
+│       ├── docs/ deploy/ scripts/ Makefile # 自包含交付资产
+│       └── ...
+├── deploy/                            # 全栈集中部署与编排资产 (Compose / Helm / K8s)
+│   ├── docker-compose/                # Docker Compose 全栈集中编排
+│   ├── helm/PrivShield/               # 全栈统一 Helm Chart
+│   ├── k8s/                           # 原生 K8s 全栈集成清单
+│   ├── prometheus/                    # Prometheus 采集与告警规则
+│   └── grafana/                       # Grafana 预置仪表盘
+├── pkg/                               # Go 共享基础库 (Agent客户端, 中间件, 存储, 国密, 校验)
+├── proto/privacy.proto                # gRPC 协议定义
+├── go.work                            # 根目录 Go 1.25 工作区
+├── config/                            # 全局 Profile & runtime 配置文件
+├── data/                              # 样例数据集与测试数据
+├── scripts/                           # 全局自动化运维、开发启动与全链路测试脚本
+├── Makefile                           # 根目录统一全局构建与测试入口
+└── Dockerfile                         # 根目录多阶段构建 Dockerfile
 ```
 
 ## 4. Build & Test Commands
@@ -98,7 +93,7 @@ cd /path/to/PrivShield
 # 运行全仓库所有模块测试 (100% 通过)
 make test
 
-# 快速编译二进制产物至 bin/
+# 快速编译全局二进制产物至 bin/
 make build
 
 # 静态代码检查与格式化
@@ -110,22 +105,24 @@ make docker-all
 
 ## 5. Running Locally
 
-### 编译并启动 Go Agent (REST :8079 + gRPC :50051)
+### 编译并启动 Go Privacy Engine (REST :8079 + gRPC :50051)
 
 ```bash
-go run ./engine-go/cmd/privshield-agent
+go run ./services/privacy-engine/cmd/privshield-agent
 ```
 
-### 启动 Go 网关 (REST :8000 + gRPC :50000)
+### 启动 Go Privacy Gateway (REST :8000 + gRPC :50000)
 
 ```bash
-go run ./engine-go/cmd/privshield-gateway
+go run ./services/privacy-engine/cmd/privshield-gateway
 ```
 
-### 一键启动开发控制台全家桶 (Agent + Go BFF + Vite 前端)
+### 一键启动 Privacy Engine 开发控制台全家桶 (Agent + Engine Console BFF + Vite 前端)
 
 ```bash
 bash ./scripts/dev/dev-bff-agent.sh
+# 或
+bash ./scripts/dev/dev-engine-console.sh
 ```
 
 ### 一键启动调度之眼控制台 (App-LZ BFF + Vite 前端 + 4 上游微服务)
@@ -155,7 +152,7 @@ bash ./scripts/dev/dev-app-lz.sh --tlcp --force   # TLCP 国密双证书模式�
 | `PRIVACY_IMAGE_ALLOWED_DIRS` | cwd + 系统临时目录 | 医学影像处理允许读取的文件目录白名单 |
 | `PRIVACY_RULES_RELOAD_CHECK_SECONDS` | `5` | 规则热重载 mtime 检测节流间隔秒数（0 = 禁用节流） |
 | `PRIVACY_PPROF_ENABLED` | `false` | 启用 pprof 性能分析端点（生产默认关闭，需 `ops:admin` 权限） |
-| `PRIVACY_RULES_DIR` | `rules/domains` | 领域分类分级规则目录 |
+| `PRIVACY_RULES_DIR` | `services/privacy-engine/rules/domains` | 领域分类分级规则目录 |
 | `PRIVACY_CONFIG_FILE` | `config/privacy.yaml` | 隐私策略配置文件路径 |
 
 ### 微服务出站 Agent 传输信任（service-hub / audit-log 的 `pkg/agent` 客户端真实读取）
@@ -175,4 +172,5 @@ bash ./scripts/dev/dev-app-lz.sh --tlcp --force   # TLCP 国密双证书模式�
 
 ## 8. 架构原则
 
-- **service-hub 唯一编排入口**：`app-lz BFF` 是模拟的外部业务程序，所有数据请求统一通过 `service-hub` 调度中枢编排，不直接访问 `datasource-mgr` / `engine-go` / `audit-log`。
+- **service-hub 唯一编排入口**：`app-lz BFF` 是模拟的外部业务程序，所有数据请求统一通过 `service-hub` 调度中枢编排，不直接访问 `mock-datasource` / `privacy-engine` / `audit-log`。
+- **双层资产自治**：每个微服务/控制台拥有完全独立的 `docs/`、`deploy/`、`scripts/` 与 `Makefile`，可独立测试、构建和部署；根目录资产负责全栈集中编排。

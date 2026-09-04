@@ -10,7 +10,7 @@
 #
 # 说明：
 #   本文件覆盖 docker-compose.dev.yml 中的 PrivShield 服务定义，
-#   将 Python 引擎替换为 Go 原生引擎（engine-go/Dockerfile 构建）。
+#   将 Python 引擎替换为 Go 原生引擎（services/privacy-engine/Dockerfile 构建）。
 #   Go 引擎镜像极小（~15MB），启动速度快（<1s），无 Python/ML 依赖。
 #   开发模式下：纯文本日志、关闭 TLS、挂载 budget-db 卷。
 #
@@ -29,7 +29,7 @@ services:
     pull_policy: if_not_present
     container_name: PrivShield-Go-dev
     environment:
-      # Go 引擎基础配置（agent 只读 AGENT_* 变量名，见 engine-go/internal/config/config.go）
+      # Go 引擎基础配置（agent 只读 AGENT_* 变量名，见 services/privacy-engine/internal/config/config.go）
       AGENT_REST_HOST: "0.0.0.0"
       AGENT_REST_PORT: "8079"
       AGENT_GRPC_HOST: "0.0.0.0"

@@ -118,7 +118,7 @@ services:
       PRIVACY_REST_HOST: "0.0.0.0"
       PRIVACY_REST_PORT: "8079"
       PRIVACY_GRPC_PORT: "50051"
-      # 注：Go Agent 的 gRPC 监听地址在代码内固定为 0.0.0.0（engine-go/cmd/privshield-agent/main.go
+      # 注：Go Agent 的 gRPC 监听地址在代码内固定为 0.0.0.0（services/privacy-engine/cmd/privshield-agent/main.go
       # 的 grpcAddr），编排层不存在 PRIVACY_GRPC_HOST 读取点，故不再设置该幽灵变量（P2-1）。
       PRIVACY_SERVICE_NAME: "PrivShield-prod"
       PRIVACY_LOG_LEVEL: "${PRIVACY_LOG_LEVEL:-INFO}"
@@ -141,7 +141,7 @@ services:
 
       # ── 生产安全：API Key 鉴权（Fail-Closed，无密钥即拒绝启动）──
       PRIVACY_AUTH_ENABLED: "true"
-      # 格式：token:name:scope1,scope2;token2:name2:...（engine-go/internal/security/config.go parseAPIKeys）
+      # 格式：token:name:scope1,scope2;token2:name2:...（services/privacy-engine/internal/security/config.go parseAPIKeys）
       # 必须来自 .env / Secret，绝不在清单中写字面量；留空会让 compose 直接失败而不是静默放行。
       PRIVACY_AUTH_INTERNAL_API_KEYS: "${PRIVACY_AUTH_INTERNAL_API_KEYS:?PRIVACY_AUTH_INTERNAL_API_KEYS is required in production (format token:name:scopes;...): the service refuses to boot with an empty inbound API key on a non-loopback bind}"
       PRIVACY_AUTH_EXTERNAL_API_KEYS: "${PRIVACY_AUTH_EXTERNAL_API_KEYS:?PRIVACY_AUTH_EXTERNAL_API_KEYS is required in production: external callers must hold a scoped key (empty default would fail the boot gate)}"
@@ -264,7 +264,7 @@ services:
       PRIVACY_CONSOLE_TLS_KEY_FILE: "${PRIVACY_CONSOLE_TLS_KEY_FILE:-/certs/console/tls.key}"
       # ── 直连中台三服务的出站密钥（与各服务 *_API_KEY 一致）──
       # ⚠️ 东西向 REST 仍是 http://：Go 侧这三条链路的基础地址硬编码 http 方案且没有自定义 CA/客户端证书入口
-      # （services/service-hub/internal/config/config.go DatasourceBaseURL、console/bff-go/internal/microservices/client.go），
+      # （services/service-hub/internal/config/config.go DatasourceBaseURL、console/engine-console/bff-go/internal/microservices/client.go），
       # 因此本编排把这三条腿限制在 `backend: internal` 隔离网络内；北向（console/业务方）链路一律 TLS。
       # 切换到 https 需先补客户端 TLS 支持，届时同步修改本段。
       BFF_HUB_URL: "http://service-hub:8082"

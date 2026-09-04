@@ -43,7 +43,7 @@ if ($Mtls) {
     $env:AGENT_AUTH_INTERNAL_MTLS_ENABLED = "true"
     $env:AGENT_AUTH_MTLS_ALLOWED_CNS = '["privshield-client"]'
 }
-$agentProcess = Start-Process -FilePath "go" -ArgumentList "run ./engine-go/cmd/privshield-agent" -NoNewWindow -PassThru
+$agentProcess = Start-Process -FilePath "go" -ArgumentList "run ./services/privacy-engine/cmd/privshield-agent" -NoNewWindow -PassThru
 Pop-Location
 
 Start-Sleep -Seconds 2

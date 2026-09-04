@@ -21,7 +21,7 @@ services:
       # 唯一生效的白名单来源是下面这个文件；上面的 ALLOWED_CNS 仅作为无文件时的静态兜底。
       PRIVACY_AUTH_MTLS_WHITELIST_FILE: "/etc/PrivShield/mtls-whitelist.yaml"
     volumes:
-      - ../../console/bff-go/certs:/certs:ro
+      - ../../console/engine-console/bff-go/certs:/certs:ro
       - ../../config/mtls-whitelist.yaml:/etc/PrivShield/mtls-whitelist.yaml:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -fk https://localhost:8079/readyz || curl -fk https://localhost:8079/health || exit 1"]
@@ -38,7 +38,7 @@ services:
       # 与引擎共用同一份 CN 白名单事实源（可选入站 gRPC 面启用时用于拦截器注册）
       PRIVACY_AUTH_MTLS_WHITELIST_FILE: "/etc/PrivShield/mtls-whitelist.yaml"
     volumes:
-      - ../../console/bff-go/certs:/certs:ro
+      - ../../console/engine-console/bff-go/certs:/certs:ro
       - ../../config/mtls-whitelist.yaml:/etc/PrivShield/mtls-whitelist.yaml:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8081/health || exit 1"]

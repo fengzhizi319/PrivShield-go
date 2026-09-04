@@ -106,7 +106,7 @@ services:
   console-backend-go:
     build:
       context: ../..
-      dockerfile: console/bff-go/Dockerfile
+      dockerfile: console/engine-console/bff-go/Dockerfile
     image: privacy-console-backend-go:1.8.0-dev
     container_name: privacy-console-backend-go-dev
     ports:
@@ -143,7 +143,7 @@ services:
   # 3. Console 前端 Web UI (Nginx 托管)
   console-web:
     build:
-      context: ../../console/web
+      context: ../../console/engine-console/web
       dockerfile: Dockerfile
     image: privacy-console-web:1.8.0-dev
     container_name: privacy-console-web-dev
@@ -217,7 +217,7 @@ services:
   datasource-mgr:
     build:
       context: ../..
-      dockerfile: services/datasource-mgr/Dockerfile
+      dockerfile: console/mock-datasource/Dockerfile
     container_name: privshield-datasource-mgr-dev
     ports:
       - "8083:8083"

@@ -65,7 +65,7 @@ services:
   console-backend-go:
     build:
       context: ../..
-      dockerfile: console/bff-go/Dockerfile
+      dockerfile: console/engine-console/bff-go/Dockerfile
     image: privacy-console-backend-go:1.8.0-test
     container_name: privacy-console-backend-go-test
     environment:

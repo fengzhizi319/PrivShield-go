@@ -4,13 +4,13 @@
 # 用法：
 #   bash scripts/dev/go-engine-bench.sh [--bench-time=1s] [--output=results.txt]
 #
-# 前提：Go 1.25+ 已安装，engine-go 模块编译通过。
+# 前提：Go 1.25+ 已安装，services/privacy-engine 模块编译通过。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-ENGINE_DIR="$PROJECT_ROOT/engine-go"
-SDK_DIR="$PROJECT_ROOT/privacy-go-sdk"
+ENGINE_DIR="$PROJECT_ROOT/services/privacy-engine"
+SDK_DIR="$PROJECT_ROOT/services/privacy-engine/sdk"
 
 BENCH_TIME="1s"
 OUTPUT=""
@@ -65,8 +65,8 @@ run_bench() {
   fi
 }
 
-# ── privacy-go-sdk 基准 ──
-echo "▸ privacy-go-sdk 基准测试"
+# ── services/privacy-engine/sdk 基准 ──
+echo "▸ services/privacy-engine/sdk 基准测试"
 echo ""
 run_bench "$SDK_DIR" "./masking" "masking — PII 脱敏原语"
 run_bench "$SDK_DIR" "./dp" "dp — 差分隐私原语"
@@ -75,8 +75,8 @@ run_bench "$SDK_DIR" "./kano" "kano — K-匿名"
 run_bench "$SDK_DIR" "./qol" "qol — 查询混淆"
 run_bench "$SDK_DIR" "./budget" "budget — 隐私预算"
 
-# ── engine-go 基准 ──
-echo "▸ engine-go 基准测试"
+# ── services/privacy-engine 基准 ──
+echo "▸ services/privacy-engine 基准测试"
 echo ""
 run_bench "$ENGINE_DIR" "./internal/dynclassification" "dynclassification — 规则引擎 + AC 自动机"
 

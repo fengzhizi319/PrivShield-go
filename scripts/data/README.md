@@ -50,7 +50,7 @@
   - 环境变量 `PLA_CJK_FONT`: 指定中文字体文件路径。
 - **执行命令**:
   ```bash
-  # 批量生成全套病历图片至 console/web/src/assets/medical/ 目录
+  # 批量生成全套病历图片至 console/engine-console/web/src/assets/medical/ 目录
   python scripts/data/gen_medical_images.py
   ```
   ```bash

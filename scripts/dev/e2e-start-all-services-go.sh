@@ -40,7 +40,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PIDS_DIR="${PROJECT_ROOT}/.pids"
 LOGS_DIR="${PROJECT_ROOT}/.logs"
 DATA_DIR="${PROJECT_ROOT}/data"
-ENGINE_GO_DIR="${PROJECT_ROOT}/engine-go"
+ENGINE_GO_DIR="${PROJECT_ROOT}/services/privacy-engine"
 GO_BIN="${GO_BIN:-go}"
 
 mkdir -p "$PIDS_DIR" "$LOGS_DIR" "$DATA_DIR"
@@ -161,7 +161,7 @@ start_datasource_mgr() {
         return
     fi
     log_step "Building & starting datasource-mgr on :${port}..."
-    cd "${PROJECT_ROOT}/services/datasource-mgr"
+    cd "${PROJECT_ROOT}/console/mock-datasource"
     "$GO_BIN" build -o bin/datasource-mgr ./cmd/server
     DATASOURCE_MGR_HOST=127.0.0.1 DATASOURCE_MGR_PORT="$port" \
         DATASOURCE_MGR_AGENT_REST_HOST=127.0.0.1 DATASOURCE_MGR_AGENT_REST_PORT=8079 \

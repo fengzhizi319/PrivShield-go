@@ -101,7 +101,7 @@ if [[ "$GO_ENGINE" == "true" ]]; then
     kubectl apply -f "$K8S_DIR/deployment-go.yaml" -n "$NAMESPACE"
     kubectl apply -f "$K8S_DIR/service-go.yaml" -n "$NAMESPACE"
     kubectl apply -k "$PROJECT_ROOT/services/service-hub/deploy/k8s" -n "$NAMESPACE"
-    kubectl apply -k "$PROJECT_ROOT/services/datasource-mgr/deploy/k8s" -n "$NAMESPACE"
+    kubectl apply -k "$PROJECT_ROOT/console/mock-datasource/deploy/k8s" -n "$NAMESPACE"
     kubectl apply -k "$PROJECT_ROOT/services/audit-log/deploy/k8s" -n "$NAMESPACE"
     kubectl apply -k "$PROJECT_ROOT/console/deploy/k8s" -n "$NAMESPACE"
 else

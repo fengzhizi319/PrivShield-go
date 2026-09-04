@@ -1,118 +1,73 @@
-# 数盾控制台 (PrivShield Console & BFF)
+# 数盾控制台与测试生态 (PrivShield Consoles & Testing Ecosystem)
 
-数盾统一运维与测试控制台，提供现代化的 Web UI 交互界面与高性能的 API 代理网关（BFF），用于直观呈现隐私计算、动态分类分级、数据流通调度及合规审计全链路功能。
+数盾统一测试与运维控制台生态，包含两大独立业务控制台与模拟数据源沙箱，实现对商业化生产服务（`privacy-engine`、`service-hub`、`audit-log`）的端到端严苛测试与可视化观测。
 
 ---
 
 ## 1. 架构与目录结构
 
-在全平台解耦架构重构后，中台核心微服务已提升至顶层 [services/](../services/)，控制台目录聚焦于 **Web 前端交互** 与 **BFF 代理网关** 职责：
+按照平台解耦与测试独立性原则，控制台严格区分职责，**两个控制台的后端保持独立，绝不合并**：
 
 ```text
 console/
-├── web/                  # React + TypeScript + Vite 前端控制台 (UI: :5173 / :80)
-├── bff-go/               # Go gRPC/HTTPS API 代理网关 / 主力 BFF (API: :8081)
-│   ├── cmd/server/       # 网关启动入口 (支持 HTTPS, gRPC, mTLS 双向认证)
-│   ├── internal/         # gRPC 转换、模型映射、文件解析与压测
-│   └── docs/             # Go BFF 专属设计与接口文档
-├── docs/                 # 控制台技术架构、模式与学习指南
-└── README.md             # 控制台总览（本文档）
+├── engine-console/       # Privacy Engine 专属管理控制台 (专测 services/privacy-engine)
+│   ├── bff-go/           # Go gRPC/HTTPS API 代理网关 / BFF (:8081)
+│   ├── web/              # React + TypeScript + Vite 前端控制台 (:5173)
+│   └── docs/ deploy/ scripts/ Makefile # 自治交付资产
+│
+├── app-lz/               # 数联调度之眼业务模拟器 (模拟外部调用方，专测 services/service-hub 调度编排)
+│   ├── bff-go/           # 业务专有 BFF (:8085，所有数据请求统一走 service-hub)
+│   ├── web/              # 业务流水线控制台前端 (:5174)
+│   └── docs/ deploy/ scripts/ Makefile # 自治交付资产
+│
+├── mock-datasource/      # 模拟多源异构数据源服务 (测试沙箱 REST :8083 / gRPC :50053)
+│   ├── cmd/server/       # 服务启动入口
+│   ├── internal/         # 医保、康养等仿真数据源
+│   └── docs/ deploy/ scripts/ Makefile # 自治交付资产
+│
+├── docs/                 # 控制台相关技术文档
+└── README.md             # 控制台生态总览（本文档）
 ```
-
-> 💡 **中台微服务索引**：企业级数据流通调度微服务群位于根目录 [services/](../services/)：
-> - [services/service-hub/](../services/service-hub/)：数据服务调度中枢（REST `:8082` / gRPC `:50052`）
-> - [services/datasource-mgr/](../services/datasource-mgr/)：数据源与资产管理（REST `:8083` / gRPC `:50053`）
-> - [services/audit-log/](../services/audit-log/)：合规存证与审计日志（REST `:8084` / gRPC `:50054`）
-> - 共享基础库提升至根目录 [pkg/](../pkg/)，根目录统一通过 [go.work](../go.work) 管理。
 
 ---
 
-## 2. 文档索引
+## 2. 核心架构原则
 
-- [docs/modes.md](docs/modes.md) — 开发模式 vs 生产模式部署与网络拓扑总览
-- [docs/learning/vite.md](../docs/learning/vite.md) — 前端 Vite 热重载与构建原理
-- **Go BFF 文档**：[design](bff-go/docs/design.md) · [api](bff-go/docs/api.md) · [test](bff-go/docs/test.md) · [ops](bff-go/docs/ops.md) · [reliability](bff-go/docs/reliability.md)
-- **调度微服务文档**：[service-hub docs](../services/service-hub/docs/design.md) · [datasource-mgr docs](../services/datasource-mgr/docs/design.md) · [audit-log docs](../services/audit-log/docs/design.md)
-- **可靠性能力文档**：[engine](../docs/reliability.md) · [service-hub](../services/service-hub/docs/reliability.md) · [audit-log](../services/audit-log/docs/reliability.md) · [datasource-mgr](../services/datasource-mgr/docs/reliability.md) · [gateway](../docs/gateway_balancer/reliability.md) · [bff-go](bff-go/docs/reliability.md)
-- **脚本手册**：[scripts/dev/](../scripts/dev) · [scripts/prod/](../scripts/prod)
+1. **测试后端隔离**：
+   - `engine-console` 专为核心引擎 `privacy-engine` 设计，直连引擎的 REST/gRPC 接口，测试 44 项脱敏原语与三层动态分类分级漏斗。
+   - `app-lz` 模拟外部数据申请业务系统，专为调度中枢 `service-hub` 设计，测试全链路数据申请流水线，除 `service-hub` 外**无法直连**任何内部生产服务。
+2. **双层交付资产自治**：
+   - `engine-console`、`app-lz` 与 `mock-datasource` 均拥有自包含的 `docs/`、`deploy/`、`scripts/` 与 `Makefile`，支持完全独立的单体开发与部署。
 
 ---
 
 ## 3. 快速启动指南
 
-### 3.1 一键启动（开发模式）
-
-在仓库根目录下执行：
+### 3.1 启动 Engine Console 开发控制台 (专测 privacy-engine)
 
 ```bash
-# 启动 PrivShield Agent + Go BFF + Web 前端 (Vite HMR: http://localhost:5173)
+# 一键启动 privacy-engine + engine-console BFF + Vite 前端 (http://localhost:5173)
+bash ./scripts/dev/dev-engine-console.sh
+# 或
 bash ./scripts/dev/dev-bff-agent.sh
-
-# 启用 mTLS 双向认证模式启动
-bash ./scripts/dev/dev-bff-agent.sh --mtls
-
-# 停止开发服务
-bash ./scripts/dev/dev-stop.sh
 ```
 
-### 3.2 联动启动中台微服务群
+### 3.2 启动 App-LZ 调度之眼控制台 (专测 service-hub 调度全链路)
 
 ```bash
-# 一键启动 Agent + 三大中台微服务群 (service-hub, datasource-mgr, audit-log)
-bash ./scripts/dev/e2e-start-all-services.sh
-
-# 或单独启动三大微服务 (需 Agent 已运行)
-bash ./scripts/dev/dev-start-new-modules.sh
-
-# 停止微服务群
-bash ./scripts/dev/dev-stop-new-modules.sh
+# 一键启动 4 大微服务 + app-lz BFF + Vite 前端 (http://localhost:5174)
+bash ./scripts/dev/dev-app-lz.sh --force
+# 开启 mTLS 模式
+bash ./scripts/dev/dev-app-lz.sh --mtls --force
+# 开启 TLCP 国密双证书模式
+bash ./scripts/dev/dev-app-lz.sh --tlcp --force
 ```
 
-### 3.3 Docker 容器化启动
+### 3.3 单模块自治启动
 
 ```bash
-# 启动全栈容器套件（Agent + Go BFF + Web UI + 3 大中台微服务）
-bash ./scripts/dev/docker-start-all.sh
-
-# 启动全栈容器 + vLLM 大模型推理容器
-bash ./scripts/dev/docker-start-all.sh --with-llm
-
-# 停止并清理容器服务
-bash ./scripts/dev/docker-stop.sh
+# 在各模块目录下直接运行 Makefile
+cd console/engine-console && make dev
+cd console/app-lz && make dev
+cd console/mock-datasource && make dev
 ```
-
----
-
-## 4. 自动化测试与质量保障
-
-```bash
-# 1. 运行全套端到端 E2E 自动化测试（Mock Agent + Go BFF + Services + Web 前端）
-bash ./scripts/dev/run_console_e2e_tests.sh
-
-# 2. 运行 Go 全量测试（Pkg + 微服务群 + Go BFF）
-make test-go
-
-# 3. 运行 Web 前端 Vitest 测试
-cd console/web && corepack pnpm test -- --run
-
-# 4. 真实全链路 E2E 调度测试（需先启动真实服务）
-PRIVSHIELD_E2E=1 go test -v -run TestRealE2E ./services/service-hub/internal/handlers/
-```
-
----
-
-## 5. 功能矩阵与端点支持
-
-| 功能模块 | 描述 | BFF-Go (gRPC / HTTPS) | 生产就绪度 |
-|---|---|:---:|:---:|
-| **Masking** | 字段级、整行记录、批量及结构化 DataFrame 敏感信息脱敏 | ✅ | 生产就绪 |
-| **DP / 差分隐私** | 噪声统计（Count/Sum/Mean/Histogram）、向量与自适应裁剪 | ✅ | 生产就绪 |
-| **K-Anonymity** | Mondrian 算法数据集泛化与单记录启发式 K-匿名 | ✅ | 生产就绪 |
-| **LDP / 本地差分隐私** | 二值/类别特征客户端扰动与中心聚合估计 | ✅ | 生产就绪 |
-| **动态分类分级** | 三层漏斗（规则 ➔ Small-NER ➔ 本地 LLM 智能裁决） | ✅ | 生产就绪 |
-| **查询混淆 (QOL)** | 差分查询与虚假查询注入 | ✅ | 生产就绪 |
-| **医疗/医保治理** | 医疗敏感病历与医保结算多阶段治理流水线 | ✅ | 生产就绪 |
-| **双向 mTLS 认证** | 支持入站 HTTPS/gRPC 与出站 Agent 的零信任 mTLS | ✅ | 生产就绪 |
-| **中台调度流水线** | 数据服务编排调度（ingest→classify→desensitize→audit） | ✅ (`services`) | 生产就绪 |
-| **资产与敏感特征发现**| 自动化探测数据源敏感字段并绑定安全级别 | ✅ (`services`) | 生产就绪 |
-| **合规与存证审计** | 不可篡改 SHA-256 审计追踪与合规报告导出 | ✅ (`services`) | 生产就绪 |

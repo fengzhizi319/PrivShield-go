@@ -158,7 +158,7 @@ start_agent() {
     else
         PRIVACY_REST_HOST=127.0.0.1 PRIVACY_REST_PORT="$port" \
         PRIVACY_GRPC_HOST=127.0.0.1 PRIVACY_GRPC_PORT="${PRIVACY_GRPC_PORT:-50051}" \
-            "$GO_BIN" run ./engine-go/cmd/privshield-agent > "${LOGS_DIR}/agent_e2e.log" 2>&1 &
+            "$GO_BIN" run ./services/privacy-engine/cmd/privshield-agent > "${LOGS_DIR}/agent_e2e.log" 2>&1 &
     fi
     echo $! > "$pid_file"
     log_info "Agent started (PID $(cat "$pid_file"))"
@@ -209,7 +209,7 @@ start_datasource_mgr() {
     fi
 
     log_step "Building & starting datasource-mgr on :${port}..."
-    cd "${PROJECT_ROOT}/services/datasource-mgr"
+    cd "${PROJECT_ROOT}/console/mock-datasource"
     "$GO_BIN" build -o bin/datasource-mgr ./cmd/server
 
     DATASOURCE_MGR_HOST=127.0.0.1 DATASOURCE_MGR_PORT="$port" \

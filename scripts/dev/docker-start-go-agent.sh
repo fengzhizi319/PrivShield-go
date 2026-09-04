@@ -5,11 +5,11 @@
 #
 # 与 docker-start-agent.sh 的区别：
 #   - docker-start-agent.sh 使用 Python 引擎（Dockerfile --target core/ml）
-#   - 本脚本使用 Go 原生引擎（engine-go/Dockerfile，极小镜像 ~15MB）
+#   - 本脚本使用 Go 原生引擎（services/privacy-engine/Dockerfile，极小镜像 ~15MB）
 #
 # 执行步骤总览：
 #   1. 前置检查 Docker CLI 与 Daemon
-#   2. 使用 engine-go/Dockerfile 构建 Go 引擎镜像
+#   2. 使用 services/privacy-engine/Dockerfile 构建 Go 引擎镜像
 #   3. 停止并清理旧容器
 #   4. 启动 Go 引擎容器，映射 REST (8079) 与 gRPC (50051) 端口
 #
@@ -40,7 +40,7 @@ cd "$PROJECT_ROOT"
 # ── 步骤 2：构建 Go 引擎镜像 ────────────────────────────────────────────
 IMAGE_NAME="privshield-go:1.0.0"
 echo "📦 构建 Go 原生引擎镜像 (${IMAGE_NAME})..."
-docker build -t "$IMAGE_NAME" -f engine-go/Dockerfile .
+docker build -t "$IMAGE_NAME" -f services/privacy-engine/Dockerfile .
 
 # ── 步骤 3：清理旧容器 ──────────────────────────────────────────────────
 docker rm -f PrivShield-Go 2>/dev/null || true

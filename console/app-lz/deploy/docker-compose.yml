@@ -1,0 +1,31 @@
+# console/app-lz/deploy/docker-compose.yml
+# 独立的调度之眼业务模拟器 (BFF :8085 + Web :5174)
+# 用法: cd console/app-lz/deploy && docker compose up -d
+
+services:
+  app-lz-bff:
+    build:
+      context: ../../../
+      dockerfile: console/app-lz/bff-go/Dockerfile
+    image: privshield-app-lz-bff:10.0.0
+    container_name: privshield-app-lz-bff
+    restart: unless-stopped
+    ports:
+      - "8085:8085"
+    environment:
+      APP_LZ_HOST: "0.0.0.0"
+      APP_LZ_PORT: "8085"
+      APP_LZ_SERVICE_HUB_URL: "http://service-hub:8082"
+      APP_LZ_LOG_LEVEL: "info"
+
+  app-lz-web:
+    build:
+      context: ../../../
+      dockerfile: console/app-lz/web/Dockerfile
+    image: privshield-app-lz-web:10.0.0
+    container_name: privshield-app-lz-web
+    restart: unless-stopped
+    ports:
+      - "5174:80"
+    depends_on:
+      - app-lz-bff

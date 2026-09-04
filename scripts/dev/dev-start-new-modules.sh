@@ -130,7 +130,7 @@ start_datasource_mgr() {
     local pid_file="${PIDS_DIR}/datasource-mgr.pid"
 
     log_info "Building datasource-mgr..."
-    cd "${PROJECT_ROOT}/services/datasource-mgr"
+    cd "${PROJECT_ROOT}/console/mock-datasource"
     DATASOURCE_MGR_HOST=127.0.0.1 DATASOURCE_MGR_PORT="$port" \
         "$GO_BIN" build -o bin/datasource-mgr ./cmd/server
 

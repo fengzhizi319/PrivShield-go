@@ -98,7 +98,7 @@ start_go_agent() {
     fi
 
     log_info "Building privshield-agent..."
-    cd "${PROJECT_ROOT}/engine-go"
+    cd "${PROJECT_ROOT}/services/privacy-engine"
     CGO_ENABLED=0 "$GO_BIN" build -o bin/privshield-agent ./cmd/privshield-agent
 
     log_info "Starting privshield-agent (REST :${rest_port}, gRPC :${grpc_port})..."
@@ -160,7 +160,7 @@ start_datasource_mgr() {
     fi
 
     log_info "Building datasource-mgr..."
-    cd "${PROJECT_ROOT}/services/datasource-mgr"
+    cd "${PROJECT_ROOT}/console/mock-datasource"
     DATASOURCE_MGR_HOST=127.0.0.1 DATASOURCE_MGR_PORT="$port" \
         CGO_ENABLED=0 "$GO_BIN" build -o bin/datasource-mgr ./cmd/server
 

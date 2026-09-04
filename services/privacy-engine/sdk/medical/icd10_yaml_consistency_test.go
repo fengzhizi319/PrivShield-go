@@ -72,7 +72,7 @@ func findRepoRoot(t *testing.T) string {
 	}
 	start := dir
 	for i := 0; i < 10; i++ {
-		if fi, err := os.Stat(filepath.Join(dir, "rules", "domains", "medical.yaml")); err == nil && !fi.IsDir() {
+		if fi, err := os.Stat(filepath.Join(dir, "go.work")); err == nil && !fi.IsDir() {
 			return dir
 		}
 		parent := filepath.Dir(dir)
@@ -81,7 +81,7 @@ func findRepoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
-	t.Fatalf("rules/domains/medical.yaml not found walking up from %s", start)
+	t.Fatalf("go.work not found walking up from %s", start)
 	return ""
 }
 
@@ -209,6 +209,9 @@ func icd10IntervalBound(code string) (byte, int) {
 func TestICD10SDKAgreesWithAuthoritativeYAML(t *testing.T) {
 	root := findRepoRoot(t)
 	yamlPath := filepath.Join(root, "rules", "domains", "medical.yaml")
+	if _, err := os.Stat(yamlPath); err != nil {
+		yamlPath = filepath.Join(root, "services", "privacy-engine", "rules", "domains", "medical.yaml")
+	}
 	intervals := loadICD10Intervals(t, yamlPath)
 	assertICD10IntervalsWellFormed(t, intervals)
 

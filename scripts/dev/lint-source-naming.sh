@@ -48,7 +48,7 @@ OBSOLETE_IDS=(
 )
 
 for obs in "${OBSOLETE_IDS[@]}"; do
-    MATCHES=$(grep -rn "\"${obs}\"" "${ROOT_DIR}/services" "${ROOT_DIR}/console" "${ROOT_DIR}/engine-go" "${ROOT_DIR}/pkg" 2>/dev/null | grep -v "_test.go" | grep -v "test_" | grep -v "\.md" || true)
+    MATCHES=$(grep -rn "\"${obs}\"" "${ROOT_DIR}/services" "${ROOT_DIR}/console" "${ROOT_DIR}/services/privacy-engine" "${ROOT_DIR}/pkg" 2>/dev/null | grep -v "_test.go" | grep -v "test_" | grep -v "\.md" || true)
     if [ -n "${MATCHES}" ]; then
         echo "❌ ERROR: Found obsolete identifier '${obs}' in active code:"
         echo "${MATCHES}"

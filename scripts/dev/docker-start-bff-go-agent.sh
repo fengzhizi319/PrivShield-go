@@ -5,7 +5,7 @@
 #
 # 与 docker-start-bff-agent.sh 的区别：
 #   - docker-start-bff-agent.sh 使用 Python 引擎作为 Agent
-#   - 本脚本使用 Go 原生引擎（engine-go/Dockerfile）替代 Python 引擎
+#   - 本脚本使用 Go 原生引擎（services/privacy-engine/Dockerfile）替代 Python 引擎
 #
 # 用法 / Usage:
 #   ./scripts/dev/docker-start-bff-go-agent.sh [--build] [--no-build] [--force] [--mtls|--no-mtls]
@@ -53,10 +53,10 @@ echo "🚀 [Docker Mode - Go Engine] 启动控制台三件套 (Go Engine + Go BF
 echo "============================================================================"
 
 # ── 前置准备：构建前端 ──────────────────────────────────────────────────
-if [[ ! -d "$PROJECT_ROOT/console/web/dist" || "$BUILD_FLAG" == "--build" ]]; then
+if [[ ! -d "$PROJECT_ROOT/console/engine-console/web/dist" || "$BUILD_FLAG" == "--build" ]]; then
     echo "📦 准备前端静态资源 (Vite build)..."
     (
-        cd "$PROJECT_ROOT/console/web"
+        cd "$PROJECT_ROOT/console/engine-console/web"
         if command -v corepack >/dev/null 2>&1; then
             corepack pnpm build 2>/dev/null || npm run build
         elif command -v pnpm >/dev/null 2>&1; then
@@ -71,9 +71,9 @@ fi
 if [[ "$BUILD_FLAG" == "--build" ]]; then
     echo "🔨 准备 Go 微服务二进制构建产物..."
     export GOPROXY="${GOPROXY:-https://goproxy.cn,https://goproxy.io,direct}"
-    (cd "$PROJECT_ROOT/console/bff-go" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
+    (cd "$PROJECT_ROOT/console/engine-console/bff-go" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
     (cd "$PROJECT_ROOT/services/service-hub" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
-    (cd "$PROJECT_ROOT/services/datasource-mgr" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
+    (cd "$PROJECT_ROOT/console/mock-datasource" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
     (cd "$PROJECT_ROOT/services/audit-log" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
 fi
 
@@ -89,7 +89,7 @@ export PRIVSHIELD_GO_IMAGE="privshield-go:1.0.0"
 
 # 先构建 Go 引擎镜像
 echo "📦 构建 Go 原生引擎镜像..."
-docker build -t "$PRIVSHIELD_GO_IMAGE" -f "$PROJECT_ROOT/engine-go/Dockerfile" "$PROJECT_ROOT"
+docker build -t "$PRIVSHIELD_GO_IMAGE" -f "$PROJECT_ROOT/services/privacy-engine/Dockerfile" "$PROJECT_ROOT"
 
 # shellcheck disable=SC2086
 if [[ "$MTLS_MODE" == "true" ]]; then

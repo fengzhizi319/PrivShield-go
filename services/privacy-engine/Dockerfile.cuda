@@ -1,6 +1,6 @@
 # ── CUDA 变体 Dockerfile ──
 # 用于 NVIDIA GPU 环境，支持 ONNX Runtime GPU 推理加速 Small-NER。
-# 构建：docker build -f engine-go/Dockerfile.cuda -t privshield-go:10.0.0-cuda .
+# 构建：docker build -f services/privacy-engine/Dockerfile.cuda -t privshield-go:10.0.0-cuda .
 #
 # 与基础 Dockerfile 的差异：
 #   - Builder 阶段启用 CGO_ENABLED=1（ONNX Runtime CGO 绑定需要）
@@ -32,20 +32,20 @@ ENV CGO_LDFLAGS="-L/usr/local/lib -lonnxruntime"
 ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 
 # 先拷贝 go.mod 利用缓存
-COPY privacy-go-sdk/go.mod ./privacy-go-sdk/go.mod
-COPY engine-go/go.mod ./engine-go/go.mod
 COPY pkg/go.mod ./pkg/go.mod
-RUN cd privacy-go-sdk && go mod download || true
-RUN cd engine-go && go mod download || true
+COPY services/privacy-engine/sdk/go.mod ./services/privacy-engine/sdk/go.mod
+COPY services/privacy-engine/go.mod ./services/privacy-engine/go.mod
 RUN cd pkg && go mod download || true
+RUN cd services/privacy-engine/sdk && go mod download || true
+RUN cd services/privacy-engine && go mod download || true
 
 # 拷贝源码
-COPY privacy-go-sdk/ ./privacy-go-sdk/
-COPY engine-go/ ./engine-go/
 COPY pkg/ ./pkg/
+COPY services/privacy-engine/sdk/ ./services/privacy-engine/sdk/
+COPY services/privacy-engine/ ./services/privacy-engine/
 
 # 编译 Agent 与 Gateway（含 CGO ONNX 绑定）
-RUN cd engine-go && \
+RUN cd services/privacy-engine && \
     go build -ldflags="-s -w -X 'main.Version=10.0.0-cuda' -X 'main.BuildTime=$(date -u)'" \
     -o /build/bin/privshield-agent ./cmd/privshield-agent && \
     go build -ldflags="-s -w -X 'main.Version=10.0.0-cuda' -X 'main.BuildTime=$(date -u)'" \
@@ -73,7 +73,7 @@ RUN groupadd -r privacy && useradd -r -g privacy privacy
 COPY --from=builder /build/bin/privshield-agent /app/privshield-agent
 COPY --from=builder /build/bin/privshield-gateway /app/privshield-gateway
 COPY config/ /app/config/
-COPY rules/ /app/rules/
+COPY services/privacy-engine/rules/ /app/rules/
 COPY .models/ /app/.models/
 
 RUN chown -R privacy:privacy /app

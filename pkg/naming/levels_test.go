@@ -36,14 +36,29 @@ type taxonomyYAML struct {
 // loadTaxonomy reads the authoritative level vocabulary file from the repository root.
 func loadTaxonomy(t *testing.T) taxonomyYAML {
 	t.Helper()
-	path := filepath.Join("..", "..", "rules", "taxonomies", "default.yaml")
-	raw, err := os.ReadFile(path)
+	candidates := []string{
+		filepath.Join("..", "..", "rules", "taxonomies", "default.yaml"),
+		filepath.Join("..", "..", "services", "privacy-engine", "rules", "taxonomies", "default.yaml"),
+		filepath.Join("..", "services", "privacy-engine", "rules", "taxonomies", "default.yaml"),
+		filepath.Join("services", "privacy-engine", "rules", "taxonomies", "default.yaml"),
+		filepath.Join("rules", "taxonomies", "default.yaml"),
+	}
+	var foundPath string
+	var raw []byte
+	var err error
+	for _, p := range candidates {
+		raw, err = os.ReadFile(p)
+		if err == nil {
+			foundPath = p
+			break
+		}
+	}
 	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
+		t.Fatalf("read default.yaml from candidates %v: %v", candidates, err)
 	}
 	var tax taxonomyYAML
 	if err := yaml.Unmarshal(raw, &tax); err != nil {
-		t.Fatalf("parse %s: %v", path, err)
+		t.Fatalf("parse %s: %v", foundPath, err)
 	}
 	return tax
 }

@@ -12,30 +12,34 @@ PrivShield 采用纯 **Go 1.25+ 云原生 Monorepo 架构**，清晰解耦底层
 
 ```text
 PrivShield/ (Repo Root)
-├── engine-go/                    # 【Go 核心隐私算力引擎】REST(:8079) + gRPC(:50051)
-│   ├── cmd/                      # Agent 与 Gateway 启动入口
-│   └── internal/                 # 动态分类分级漏斗、网关反向代理、DICOM影像脱敏、可观测性
-├── privacy-go-sdk/               # 【纯 Go 隐私计算数学原语库】
-│   ├── masking/                  # 脱敏 (Masking)、国密 SM3/SM4
-│   ├── dp/                       # 差分隐私 (DP 单趟融合计算)
-│   ├── ldp/                      # 本地差分隐私 (LDP 多核并发扰动)
-│   ├── kano/                     # K-匿名 (Mondrian 算法) 与 L-多样性 (L-Diversity) 检验
-│   ├── medical/                  # 医疗数据流水线 (多核并发分块)
-│   ├── qol/                      # 查询混淆 (QOL)
-│   └── budget/                   # 无锁原子隐私预算记账 (CAS 循环 + 原子回滚)
-├── services/                     # 【Go 企业级中台微服务群】
-│   ├── service-hub/              # 数据服务调度中枢 (:8082) - 流水线编排 (Ingest→Classify→Mask→Audit)
-│   ├── datasource-mgr/           # 数据源与资产管理微服务 (:8083) - CSV/DB 连接池、元数据探查与抽样
-│   └── audit-log/                # 脱敏审计与存证微服务 (:8084) - 审计快照、不可篡改哈希链
-├── console/                      # 【统一控制台与接入层】
-│   ├── web/                      # React 18 + TS + Vite + TailwindCSS 交互控制台 (:5173)
-│   └── bff-go/                   # Go gRPC/HTTPS API Gateway / BFF (:8081)
-├── pkg/                          # 【Go 全局共享基础库】连接池、中间件、安全防御、国密密码学、存储
-├── proto/                        # 【Protobuf 契约定义】privacy.proto / servicehub.proto
-├── deploy/                       # 【云原生运维套件】Docker Compose / Helm / K8s / Prometheus / Grafana
-├── config/                       # 环境变量模板、Profile YAML、mTLS 白名单
-├── rules/                        # 分类分级标准 (GB/T 37988, 医疗, 医保, 金融) 与规则体系
-└── scripts/                      # 开发、测试、压测与生产自动化运维工具链
+├── services/                         # 【商业化生产微服务群】
+│   ├── privacy-engine/               # Go 核心隐私计算与动态分类分级引擎 REST(:8079) + gRPC(:50051)
+│   │   ├── cmd/                      # Agent 与 Gateway 启动入口
+│   │   ├── internal/                 # 动态分类分级漏斗、网关反向代理、DICOM影像脱敏、可观测性
+│   │   ├── sdk/                      # 纯 Go 隐私计算数学原语库 (Masking, DP, LDP, K-Ano, Medical, Budget)
+│   │   ├── rules/                    # 敏感特征分类分级标准与规则库 (GB/T 37988, 医疗, 医保, 金融)
+│   │   └── docs/ deploy/ scripts/    # 引擎专属自治交付资产与 Makefile
+│   ├── service-hub/                  # 数据服务调度中枢 (:8082) - 唯一编排调度入口 (Ingest→Classify→Mask→Audit)
+│   │   └── docs/ deploy/ scripts/    # 中枢专属自治交付资产与 Makefile
+│   └── audit-log/                    # 脱敏审计与不可篡改存证微服务 (:8084)
+│       └── docs/ deploy/ scripts/    # 审计专属自治交付资产与 Makefile
+├── console/                          # 【测试与接入生态】
+│   ├── engine-console/               # 引擎专属管理控制台 (专测 privacy-engine)
+│   │   ├── bff-go/                   # Go gRPC/HTTPS API Gateway / BFF (:8081)
+│   │   ├── web/                      # React 18 + TS + Vite 前端交互控制台 (:5173)
+│   │   └── docs/ deploy/ scripts/    # 专属自治交付资产与 Makefile
+│   ├── app-lz/                       # 数联调度之眼业务模拟器 (专测 service-hub 调度编排)
+│   │   ├── bff-go/                   # 业务专有 BFF (:8085，所有数据请求统一走 service-hub)
+│   │   ├── web/                      # 业务流水线控制台前端 (:5174)
+│   │   └── docs/ deploy/ scripts/    # 专属自治交付资产与 Makefile
+│   └── mock-datasource/              # 模拟多源异构数据源微服务 (:8083)
+│       └── docs/ deploy/ scripts/    # 专属自治交付资产与 Makefile
+├── pkg/                              # 【Go 全局共享基础库】连接池、中间件、安全防御、国密密码学、存储
+├── proto/                            # 【Protobuf 契约定义】privacy.proto / servicehub.proto
+├── deploy/                           # 【全栈集中运维套件】Docker Compose / Helm / K8s / Prometheus / Grafana
+├── config/                           # 环境变量模板、Profile YAML、mTLS 白名单
+├── data/                             # 样例数据集与测试数据
+└── scripts/                          # 开发、测试、压测与生产自动化全栈运维工具链
 ```
 
 ---
@@ -154,7 +158,7 @@ graph TD
   * **零信任 mTLS**：集成 `pkg/tlsutil`，强制 TLS 1.3 客户端证书双向认证与 SPKI 公钥固定。
 * 📖 [设计文档](services/service-hub/docs/design.md) · [学习指南](services/service-hub/docs/learning-guide.md) · [可靠性能力](services/service-hub/docs/reliability.md)
 
-#### 3.2 模拟数据源与资产管理微服务 ([services/datasource-mgr](services/datasource-mgr))
+#### 3.2 模拟数据源与资产管理微服务 ([console/mock-datasource](console/mock-datasource))
 * **核心职责**：专为开发联调、沙箱演练与数据探查设计的轻量级仿真数据中台，对外提供 HTTPS REST (`:8083`) 与 gRPC (`:50053`) 双协议。
 * **4 大内置独立模拟数据源体系**：
   * **API 1 医保数据源** (`GET /v1/yibao` / `GetYibaoData`)：就医结算明细，含身份证号、患者姓名、就医诊断、社保卡号、自费金额与统筹支付等高敏字段；
@@ -165,7 +169,7 @@ graph TD
   * **无状态自愈**：无本地状态机与持久化队列，具备秒级热启动与水平扩缩容能力；
   * **数据源沙箱隔离 (LFI 防护)**：严格限制 CSV 文件白名单与基名校验，硬性限制单次最多加载 50,000 行，阻断任意目录穿越与系统文件逃逸；
   * **资产目录与元数据探查**：提供数据源 CRUD 目录、动态分页样本抽样（`/v1/datasources/:id/records`）、Schema 元数据探查（`/v1/datasources/:id/metadata`）与访问审计日志追踪。
-* 📖 [设计文档](services/datasource-mgr/docs/design.md) · [学习指南](services/datasource-mgr/docs/learning-guide.md) · [可靠性能力](services/datasource-mgr/docs/reliability.md)
+* 📖 [设计文档](console/mock-datasource/docs/design.md) · [学习指南](console/mock-datasource/docs/learning-guide.md) · [可靠性能力](console/mock-datasource/docs/reliability.md)
 
 #### 3.3 脱敏审计与不可篡改存证微服务 ([services/audit-log](services/audit-log))
 * **核心职责**：国家数据安全法合规存证中枢，为数据流通全生命周期提供「可追溯、防篡改、抗抵赖」的司法级审计存证底座，暴露 REST (`:8084`) 与 gRPC (`:50054`)。
@@ -558,7 +562,7 @@ make docs-build
 - **[全平台目录架构重构方案 (Migration Design)](docs/archive/migration-design.md)**
 - **[企业级中台微服务总览 (Services Overview)](services/README.md)**
 - **[数据服务调度中枢文档 (Service Hub Docs)](services/service-hub/docs/design.md)**
-- **[数据源与资产管理文档 (Datasource Manager Docs)](services/datasource-mgr/docs/design.md)**
+- **[数据源与资产管理文档 (Datasource Manager Docs)](console/mock-datasource/docs/design.md)**
 - **[脱敏审计与不可篡改存证文档 (Audit Log Docs)](services/audit-log/docs/design.md)**
 - **[Go 全局共享基础库文档 (Pkg README)](pkg/README.md)**
 - **[统一控制台与接入层手册 (Console README)](console/README.md)**

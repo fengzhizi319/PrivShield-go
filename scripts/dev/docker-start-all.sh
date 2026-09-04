@@ -59,10 +59,10 @@ echo "🌟 [Docker Mode] 正在启动 PrivShield 全栈容器套件..."
 echo "============================================================================"
 
 # ── 前置准备：确保前端与 Go 微服务二进制已就绪 ───────────────────────────
-if [[ ! -d "$PROJECT_ROOT/console/web/dist" || "$BUILD_FLAG" == "--build" ]]; then
+if [[ ! -d "$PROJECT_ROOT/console/engine-console/web/dist" || "$BUILD_FLAG" == "--build" ]]; then
     echo "📦 准备前端静态资源 (Vite build)..."
     (
-        cd "$PROJECT_ROOT/console/web"
+        cd "$PROJECT_ROOT/console/engine-console/web"
         if command -v corepack >/dev/null 2>&1; then
             corepack pnpm build 2>/dev/null || npm run build
         elif command -v pnpm >/dev/null 2>&1; then
@@ -76,10 +76,10 @@ fi
 if [[ "$BUILD_FLAG" == "--build" ]]; then
     echo "🔨 准备 Go 引擎与微服务二进制构建产物 (加速 Docker 本地构建)..."
     export GOPROXY="${GOPROXY:-https://goproxy.cn,https://goproxy.io,https://mirrors.aliyun.com/goproxy/,direct}"
-    (cd "$PROJECT_ROOT/engine-go" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/privshield-agent ./cmd/privshield-agent 2>/dev/null || true)
-    (cd "$PROJECT_ROOT/console/bff-go" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
+    (cd "$PROJECT_ROOT/services/privacy-engine" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/privshield-agent ./cmd/privshield-agent 2>/dev/null || true)
+    (cd "$PROJECT_ROOT/console/engine-console/bff-go" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
     (cd "$PROJECT_ROOT/services/service-hub" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
-    (cd "$PROJECT_ROOT/services/datasource-mgr" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
+    (cd "$PROJECT_ROOT/console/mock-datasource" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
     (cd "$PROJECT_ROOT/services/audit-log" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
 fi
 

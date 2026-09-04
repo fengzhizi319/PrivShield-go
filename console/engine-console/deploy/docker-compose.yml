@@ -1,0 +1,53 @@
+# console/engine-console/deploy/docker-compose.yml
+# 独立的引擎测试控制台套件 (BFF :8081 + Web :5173 + Privacy-Engine :8079)
+# 用法: cd console/engine-console/deploy && docker compose up -d
+
+services:
+  engine-console-bff:
+    build:
+      context: ../../../
+      dockerfile: console/engine-console/bff-go/Dockerfile
+    image: privshield-engine-bff:10.0.0
+    container_name: privshield-engine-bff
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      CONSOLE_HOST: "0.0.0.0"
+      CONSOLE_PORT: "8081"
+      BFF_AGENT_URL: "http://privacy-engine:8079"
+      CONSOLE_LOG_LEVEL: "info"
+    depends_on:
+      privacy-engine:
+        condition: service_healthy
+
+  engine-console-web:
+    build:
+      context: ../../../
+      dockerfile: console/engine-console/web/Dockerfile
+    image: privshield-engine-web:10.0.0
+    container_name: privshield-engine-web
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      - engine-console-bff
+
+  privacy-engine:
+    build:
+      context: ../../../
+      dockerfile: services/privacy-engine/Dockerfile
+    image: privshield-agent:10.0.0
+    container_name: privshield-engine-backend
+    restart: unless-stopped
+    ports:
+      - "8079:8079"
+    environment:
+      AGENT_REST_HOST: "0.0.0.0"
+      AGENT_REST_PORT: "8079"
+      AGENT_RULES_DIR: "services/privacy-engine/rules/domains"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8079/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3

@@ -4,7 +4,7 @@
 # Build context: . (Project root)
 # 构建上下文：项目根目录
 #
-# docker build -f services/datasource-mgr/Dockerfile -t datasource-mgr:latest .
+# docker build -f console/mock-datasource/Dockerfile -t datasource-mgr:latest .
 # ============================================================================
 
 # Stage 1: Build
@@ -20,9 +20,9 @@ RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
 
 # Copy shared pkg/ and module source
 COPY pkg/ ./pkg/
-COPY services/datasource-mgr/ ./services/datasource-mgr/
+COPY console/mock-datasource/ ./console/mock-datasource/
 
-WORKDIR /app/services/datasource-mgr
+WORKDIR /app/console/mock-datasource
 RUN if [ -f "./bin/server" ]; then \
         cp ./bin/server /app/server; \
     else \
@@ -41,7 +41,7 @@ RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
 
 COPY --from=builder /app/server /app/server
 COPY data/ /app/data/
-COPY services/datasource-mgr/samples/ /app/samples/
+COPY console/mock-datasource/samples/ /app/samples/
 COPY engine/medical_pipeline/samples/ /app/engine/medical_pipeline/samples/
 
 RUN mkdir -p /app/data && chown -R privacy:privacy /app

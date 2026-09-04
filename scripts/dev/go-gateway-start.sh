@@ -19,4 +19,4 @@ export ENGINE_GATEWAY_BACKENDS="${ENGINE_GATEWAY_BACKENDS:-127.0.0.1:8079}"
 export ENGINE_GATEWAY_STRATEGY="${ENGINE_GATEWAY_STRATEGY:-p2c}"
 export ENGINE_GATEWAY_LOG_LEVEL="${ENGINE_GATEWAY_LOG_LEVEL:-INFO}"
 
-exec go run ./engine-go/cmd/privshield-gateway "$@"
+exec go run ./services/privacy-engine/cmd/privshield-gateway "$@"

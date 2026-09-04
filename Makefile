@@ -53,45 +53,44 @@ help:
 
 build:
 	@mkdir -p bin
-	CGO_ENABLED=0 go build -ldflags="-s -w -X 'main.Version=$(VERSION)'" -o bin/privshield-agent ./engine-go/cmd/privshield-agent
-	CGO_ENABLED=0 go build -ldflags="-s -w -X 'main.Version=$(VERSION)'" -o bin/privshield-gateway ./engine-go/cmd/privshield-gateway
+	CGO_ENABLED=0 go build -ldflags="-s -w -X 'main.Version=$(VERSION)'" -o bin/privshield-agent ./services/privacy-engine/cmd/privshield-agent
+	CGO_ENABLED=0 go build -ldflags="-s -w -X 'main.Version=$(VERSION)'" -o bin/privshield-gateway ./services/privacy-engine/cmd/privshield-gateway
 
 lint:
-	@for mod in pkg privacy-go-sdk engine-go services/service-hub services/datasource-mgr services/audit-log console/bff-go console/app-lz/bff-go; do \
+	@for mod in pkg services/privacy-engine services/privacy-engine/sdk services/service-hub console/mock-datasource services/audit-log console/engine-console/bff-go console/app-lz/bff-go; do \
 		(cd $$mod && CGO_ENABLED=0 go vet ./...) || exit 1; \
 	done
 
 format:
-	@for mod in pkg privacy-go-sdk engine-go services/service-hub services/datasource-mgr services/audit-log console/bff-go console/app-lz/bff-go; do \
+	@for mod in pkg services/privacy-engine services/privacy-engine/sdk services/service-hub console/mock-datasource services/audit-log console/engine-console/bff-go console/app-lz/bff-go; do \
 		(cd $$mod && go fmt ./...) || exit 1; \
 	done
 
 check: format lint taxonomy-check env-check test
 
-# 等级词表一致性门禁（P1-5）：rules/taxonomies/default.yaml 是唯一事实源，
-# pkg/validation / pkg/naming / engine-go 三处派生口径必须与之一致。
+# 等级词表一致性门禁（P1-5）：services/privacy-engine/rules/taxonomies/default.yaml 是唯一事实源，
+# pkg/validation / pkg/naming / privacy-engine 三处派生口径必须与之一致。
 taxonomy-check:
 	@bash scripts/check_taxonomy_consistency.sh
 
-# 编排变量防漂移门禁（P2-1）：deploy/** 里声明的每个环境变量都必须能在 Go 代码里找到读取点，
-# 否则就是「运维改了配置却不生效」的幽灵变量（历史上曾漂出 DATASOURCE_MGR_DB_PATH 等一批）。
+# 编排变量防漂移门禁（P2-1）：deploy/** 里声明的每个环境变量都必须能在 Go 代码里找到读取点。
 env-check:
 	@bash scripts/check_orchestration_env_consistency.sh
 
 # ── Testing ──────────────────────────────────────────────────
 
 test:
-	CGO_ENABLED=0 go test ./pkg/... ./services/service-hub/... ./services/datasource-mgr/... ./services/audit-log/... ./console/bff-go/... ./console/app-lz/bff-go/... ./privacy-go-sdk/... ./engine-go/...
+	CGO_ENABLED=0 go test ./pkg/... ./services/privacy-engine/... ./services/privacy-engine/sdk/... ./services/service-hub/... ./services/audit-log/... ./console/mock-datasource/... ./console/engine-console/bff-go/... ./console/app-lz/bff-go/...
 
 test-unit: test
 
 test-console:
-	CGO_ENABLED=0 go test -count=1 -v ./console/bff-go/... ./console/app-lz/bff-go/...
+	CGO_ENABLED=0 go test -count=1 -v ./console/engine-console/bff-go/... ./console/app-lz/bff-go/... ./console/mock-datasource/...
 
 test-go: test
 
 test-services:
-	CGO_ENABLED=0 go test -count=1 ./services/service-hub/... ./services/datasource-mgr/... ./services/audit-log/...
+	CGO_ENABLED=0 go test -count=1 ./services/privacy-engine/... ./services/service-hub/... ./services/audit-log/...
 
 # 微批写入缓冲器与审计服务是并发关键区，本地门禁与 CI 保持一致。
 # -race 依赖 cgo，因此这里不能沿用其它目标的 CGO_ENABLED=0。
@@ -101,7 +100,6 @@ test-race:
 # ── Benchmarks ───────────────────────────────────────────────
 
 # 性能基线（P2-8）：只跑仓内 Go Benchmark 原语级采样，不等同端到端压测。
-# 头部记录 commit / Go 版本 / CPU 型号 / 核数 / 内核，保证报告可归因、可复现。
 BENCH_OUT ?= /tmp/privshield-bench.txt
 bench:
 	@(echo "# env"; \
@@ -114,10 +112,10 @@ bench:
 	  echo "cpu=$$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ //')"; \
 	  echo "cores=$$(nproc)"; \
 	  echo "kernel=$$(uname -r)"; \
-	  echo; echo "# privacy-go-sdk -count=3"; \
-	  cd privacy-go-sdk && go test -run '^$$' -bench . -benchmem -count=3 ./ldp/... ./masking/... ./kano/... ./dp/...; \
-	  echo; echo "# engine-go -count=3"; \
-	  cd ../engine-go && go test -run '^$$' -bench . -benchmem -count=3 ./internal/dynclassification/... ./internal/service/...) | tee $(BENCH_OUT)
+	  echo; echo "# privacy-engine/sdk -count=3"; \
+	  cd services/privacy-engine/sdk && go test -run '^$$' -bench . -benchmem -count=3 ./ldp/... ./masking/... ./kano/... ./dp/...; \
+	  echo; echo "# privacy-engine -count=3"; \
+	  cd ../ && go test -run '^$$' -bench . -benchmem -count=3 ./internal/dynclassification/... ./internal/service/...) | tee $(BENCH_OUT)
 
 # ── Docker ───────────────────────────────────────────────────
 
@@ -125,13 +123,16 @@ docker-agent:
 	docker build -t privshield-agent:$(VERSION) -f Dockerfile .
 
 docker-services:
+	docker build -t privshield-agent:$(VERSION) -f Dockerfile .
 	docker build -t privshield-service-hub:$(VERSION) -f services/service-hub/Dockerfile .
-	docker build -t privshield-datasource-mgr:$(VERSION) -f services/datasource-mgr/Dockerfile .
 	docker build -t privshield-audit-log:$(VERSION) -f services/audit-log/Dockerfile .
 
 docker-console:
-	docker build -t privshield-bff-go:$(VERSION) -f console/bff-go/Dockerfile .
-	docker build -t privshield-web:$(VERSION) -f console/web/Dockerfile .
+	docker build -t privshield-engine-bff:$(VERSION) -f console/engine-console/bff-go/Dockerfile .
+	docker build -t privshield-engine-web:$(VERSION) -f console/engine-console/web/Dockerfile .
+	docker build -t privshield-mock-datasource:$(VERSION) -f console/mock-datasource/Dockerfile .
+	docker build -t privshield-app-lz-bff:$(VERSION) -f console/app-lz/bff-go/Dockerfile .
+	docker build -t privshield-app-lz-web:$(VERSION) -f console/app-lz/web/Dockerfile .
 
 docker-all: docker-agent docker-services docker-console
 

@@ -74,19 +74,19 @@ if [[ "$FORCE" == "true" ]]; then
 fi
 
 # ── mTLS 证书检查与就绪 ────────────────────────────────────────────────
-CERT_DIR="$PROJECT_ROOT/console/bff-go/certs"
+CERT_DIR="$PROJECT_ROOT/console/engine-console/bff-go/certs"
 if [[ "$MTLS_MODE" == "true" ]]; then
     if [[ ! -f "$CERT_DIR/ca.crt" || ! -f "$CERT_DIR/server.crt" || ! -f "$CERT_DIR/client.crt" ]]; then
         echo "🔐 未检测到完整 mTLS 证书，自动生成测试证书链..."
-        bash "$PROJECT_ROOT/console/bff-go/scripts/gen-certs.sh" "$CERT_DIR"
+        bash "$PROJECT_ROOT/console/engine-console/bff-go/scripts/gen-certs.sh" "$CERT_DIR"
     fi
 fi
 
 # ── 前置准备：确保前端与 Go BFF 二进制已就绪 ──────────────────────────────
-if [[ ! -d "$PROJECT_ROOT/console/web/dist" || "$BUILD_FLAG" == "--build" ]]; then
+if [[ ! -d "$PROJECT_ROOT/console/engine-console/web/dist" || "$BUILD_FLAG" == "--build" ]]; then
     echo "📦 准备前端静态资源 (Vite build)..."
     (
-        cd "$PROJECT_ROOT/console/web"
+        cd "$PROJECT_ROOT/console/engine-console/web"
         if command -v corepack >/dev/null 2>&1; then
             corepack pnpm build 2>/dev/null || npm run build
         elif command -v pnpm >/dev/null 2>&1; then
@@ -100,9 +100,9 @@ fi
 if [[ "$BUILD_FLAG" == "--build" ]]; then
     echo "🔨 准备 Go 微服务 Linux 二进制构建产物 (加速 Docker 本地构建)..."
     export GOPROXY="${GOPROXY:-https://goproxy.cn,https://goproxy.io,https://mirrors.aliyun.com/goproxy/,direct}"
-    (cd "$PROJECT_ROOT/console/bff-go" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
+    (cd "$PROJECT_ROOT/console/engine-console/bff-go" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
     (cd "$PROJECT_ROOT/services/service-hub" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
-    (cd "$PROJECT_ROOT/services/datasource-mgr" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
+    (cd "$PROJECT_ROOT/console/mock-datasource" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
     (cd "$PROJECT_ROOT/services/audit-log" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
 fi
 

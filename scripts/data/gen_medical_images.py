@@ -5,7 +5,7 @@
 覆盖 L1~L5 不同敏感等级，用于前端测试控制台「分类分级」功能对
 多模态（图片）分类能力的可视化验证。
 
-生成的 PNG 输出到 ``console/web/src/assets/medical/``，由 Vite 在
+生成的 PNG 输出到 ``console/engine-console/web/src/assets/medical/``，由 Vite 在
 构建时打包为静态资源；前端通过 ``import.meta.glob`` 引入并展示缩略图，
 用户点选后转为 base64 data URI 注入 ``/v1/privacy/classify/field`` 请求体。
 
@@ -324,7 +324,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="生成分类分级测试用病例图片")
     parser.add_argument("--list", action="store_true", help="仅列出可用模板")
     parser.add_argument(
-        "--out", default=str(OUTPUT_DIR), help="输出目录（默认 console/web/src/assets/medical）"
+        "--out", default=str(OUTPUT_DIR), help="输出目录（默认 console/engine-console/web/src/assets/medical）"
     )
     args = parser.parse_args()
 

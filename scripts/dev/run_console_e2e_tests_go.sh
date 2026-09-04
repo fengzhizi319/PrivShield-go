@@ -7,7 +7,7 @@
 # 执行步骤总览：
 #   0. 自动定位并切换至项目根目录，注册退出清理钩子
 #   1. 启动真实的 PrivShield-Go 原生引擎 (端口 REST: 8079, gRPC: 50051)
-#   2. 运行 privacy-go-sdk 与 engine-go 核心引擎测试套件
+#   2. 运行 services/privacy-engine/sdk 与 services/privacy-engine 核心引擎测试套件
 #   3. 运行 Console BFF-Go (REST/gRPC/mTLS 双协议) 与 Pkg 基础库测试
 #   4. 运行 Services 微服务群 (service-hub / datasource-mgr / audit-log) 测试
 #   5. 运行 Console Web (React 前端) Vitest 自动化单元与组件测试
@@ -66,13 +66,13 @@ echo -e "${BLUE}====================================================${NC}"
 # ── 步骤 1：编译并启动 Go 原生 Agent 服务 ─────────────────────────────────
 echo -e "\n${YELLOW}[步骤 1/5] 启动 PrivShield-Go 原生引擎 (REST: 8079, gRPC: 50051)...${NC}"
 (
-    cd "$PROJECT_ROOT/engine-go"
+    cd "$PROJECT_ROOT/services/privacy-engine"
     CGO_ENABLED=0 go build -o bin/privshield-agent ./cmd/privshield-agent
 )
 PRIVACY_REST_HOST=127.0.0.1 PRIVACY_REST_PORT=8079 \
 PRIVACY_GRPC_HOST=127.0.0.1 PRIVACY_GRPC_PORT=50051 \
 PRIVACY_LOG_LEVEL=WARN \
-"$PROJECT_ROOT/engine-go/bin/privshield-agent" >/dev/null 2>&1 &
+"$PROJECT_ROOT/services/privacy-engine/bin/privshield-agent" >/dev/null 2>&1 &
 AGENT_PID=$!
 sleep 1
 
@@ -83,9 +83,9 @@ fi
 echo -e "${GREEN}PrivShield-Go Agent 已启动 (PID: ${AGENT_PID})${NC}"
 
 # ── 步骤 2：运行 Go 原生隐私 SDK 与 Engine 测试 ───────────────────────────
-echo -e "\n${YELLOW}[步骤 2/5] 运行 privacy-go-sdk 与 engine-go 核心引擎测试...${NC}"
+echo -e "\n${YELLOW}[步骤 2/5] 运行 services/privacy-engine/sdk 与 services/privacy-engine 核心引擎测试...${NC}"
 TESTS_RUN=$((TESTS_RUN + 1))
-if CGO_ENABLED=0 go test ./privacy-go-sdk/... ./engine-go/...; then
+if CGO_ENABLED=0 go test ./services/privacy-engine/sdk/... ./services/privacy-engine/...; then
     TESTS_PASSED=$((TESTS_PASSED + 1))
     echo -e "${GREEN}[成功] Go 原生隐私引擎与 SDK 测试全部通过！${NC}"
 else
@@ -94,9 +94,9 @@ fi
 
 # ── 步骤 3：运行 Go BFF 网关与共享库测试 ──────────────────────────────────
 echo -e "\n${YELLOW}[步骤 3/5] 运行 Console BFF-Go (REST/gRPC/mTLS) 与 Pkg 基础库测试...${NC}"
-if [ -d "console/bff-go" ]; then
+if [ -d "console/engine-console/bff-go" ]; then
     TESTS_RUN=$((TESTS_RUN + 1))
-    if CGO_ENABLED=0 go test ./pkg/... ./console/bff-go/...; then
+    if CGO_ENABLED=0 go test ./pkg/... ./console/engine-console/bff-go/...; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
         echo -e "${GREEN}[成功] Go BFF 与 Pkg 基础库测试通过！${NC}"
     else
@@ -104,14 +104,14 @@ if [ -d "console/bff-go" ]; then
     fi
 else
     TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
-    echo -e "${YELLOW}[跳过] 未发现 console/bff-go 目录。${NC}"
+    echo -e "${YELLOW}[跳过] 未发现 console/engine-console/bff-go 目录。${NC}"
 fi
 
 # ── 步骤 4：运行 Services 微服务群测试 ────────────────────────────────────
 echo -e "\n${YELLOW}[步骤 4/5] 运行 Services 微服务群 (service-hub / datasource-mgr / audit-log) 测试...${NC}"
 if [ -d "services" ]; then
     TESTS_RUN=$((TESTS_RUN + 1))
-    if CGO_ENABLED=0 go test ./services/service-hub/... ./services/datasource-mgr/... ./services/audit-log/...; then
+    if CGO_ENABLED=0 go test ./services/service-hub/... ./console/mock-datasource/... ./services/audit-log/...; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
         echo -e "${GREEN}[成功] Services 中台微服务群测试通过！${NC}"
     else
@@ -124,14 +124,14 @@ fi
 
 # ── 步骤 5：运行 Web 前端组件与单元测试 ───────────────────────────────────
 echo -e "\n${YELLOW}[步骤 5/5] 运行 Console Web (React) 组件与自动化测试...${NC}"
-if [ -d "console/web" ]; then
+if [ -d "console/engine-console/web" ]; then
     TESTS_RUN=$((TESTS_RUN + 1))
     WEB_TEST_OK=false
-    if (cd console/web && command -v corepack &> /dev/null && corepack pnpm test -- --run); then
+    if (cd console/engine-console/web && command -v corepack &> /dev/null && corepack pnpm test -- --run); then
         WEB_TEST_OK=true
-    elif (cd console/web && command -v pnpm &> /dev/null && pnpm test -- --run); then
+    elif (cd console/engine-console/web && command -v pnpm &> /dev/null && pnpm test -- --run); then
         WEB_TEST_OK=true
-    elif (cd console/web && command -v npm &> /dev/null && npm test -- --run); then
+    elif (cd console/engine-console/web && command -v npm &> /dev/null && npm test -- --run); then
         WEB_TEST_OK=true
     fi
     if [ "$WEB_TEST_OK" = true ]; then
@@ -142,7 +142,7 @@ if [ -d "console/web" ]; then
     fi
 else
     TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
-    echo -e "${YELLOW}[跳过] 未发现 console/web 目录。${NC}"
+    echo -e "${YELLOW}[跳过] 未发现 console/engine-console/web 目录。${NC}"
 fi
 
 # ── 汇总测试结果 ──────────────────────────────────────────────────────────

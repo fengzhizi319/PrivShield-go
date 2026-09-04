@@ -159,7 +159,7 @@ def main():
 
     print(f"✅ [成功] 顺利生成 {len(records)} 条医保结算仿真数据 -> {output_path}")
 
-    console_go_path = project_root / "console/bff-go/internal/samples/yibao.csv"
+    console_go_path = project_root / "console/engine-console/bff-go/internal/samples/yibao.csv"
     if console_go_path.parent.exists():
         console_go_path.write_bytes(output_path.read_bytes())
         print(f"✅ [副本] 成功将 yibao.csv 复制到 -> {console_go_path}")

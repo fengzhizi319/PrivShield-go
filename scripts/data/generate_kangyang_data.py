@@ -442,7 +442,7 @@ def main():
     else:
         target_paths = [
             project_root / "data/kangyang.csv",
-            project_root / "console/bff-go/internal/samples/kangyang.csv",
+            project_root / "console/engine-console/bff-go/internal/samples/kangyang.csv",
         ]
 
     for p in target_paths:

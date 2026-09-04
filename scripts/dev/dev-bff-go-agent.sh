@@ -37,10 +37,10 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-CONSOLE_DIR="$PROJECT_ROOT/console"
+CONSOLE_DIR="$PROJECT_ROOT/console/engine-console"
 PIDS_DIR="$PROJECT_ROOT/.pids"
 LOGS_DIR="$PROJECT_ROOT/.logs"
-ENGINE_GO_DIR="$PROJECT_ROOT/engine-go"
+ENGINE_GO_DIR="$PROJECT_ROOT/services/privacy-engine"
 
 mkdir -p "$PIDS_DIR" "$LOGS_DIR"
 

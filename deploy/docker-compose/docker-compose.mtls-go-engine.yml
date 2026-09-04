@@ -20,7 +20,7 @@ services:
       # P0-1：TLS + gRPC 开启 ⇒ CN 白名单文件必填（缺失即拦截器不注册 → 门禁拒绝启动）
       AGENT_AUTH_MTLS_WHITELIST_FILE: "/etc/PrivShield/mtls-whitelist.yaml"
     volumes:
-      - ../../console/bff-go/certs:/certs:ro
+      - ../../console/engine-console/bff-go/certs:/certs:ro
       - ../../config/mtls-whitelist.yaml:/etc/PrivShield/mtls-whitelist.yaml:ro
       - budget-db:/data/budget
     healthcheck:
@@ -37,7 +37,7 @@ services:
       PRIVACY_AGENT_URL: "https://PrivShield:8079"
       PRIVACY_AUTH_MTLS_WHITELIST_FILE: "/etc/PrivShield/mtls-whitelist.yaml"
     volumes:
-      - ../../console/bff-go/certs:/certs:ro
+      - ../../console/engine-console/bff-go/certs:/certs:ro
       - ../../config/mtls-whitelist.yaml:/etc/PrivShield/mtls-whitelist.yaml:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8081/health || exit 1"]

@@ -123,7 +123,7 @@ curl -s -X POST http://127.0.0.1:8082/v1/hub/dispatch \
   引擎日志出现 `REST TLCP (国密双证书) server starting` 即为 TLCP 监听成功。
 
 证书位置：
-- mTLS 开发证书（RSA）：`console/bff-go/certs/`（由 `console/bff-go/scripts/gen-certs.sh` 生成，脚本自动确保存在）。
+- mTLS 开发证书（RSA）：`console/engine-console/bff-go/certs/`（由 `console/engine-console/bff-go/scripts/gen-certs.sh` 生成，脚本自动确保存在）。
 - TLCP 开发证书（SM2 双证书）：`config/certs/tlcp/`（由 `go run ./scripts/dev/tlcp-certgen` 生成，幂等，已存在则跳过）。
 
 > ⚠️ 已知问题：`go run` 启动的引擎会留下编译子进程，脚本 trap 只回收 PID 文件中的包装进程。
@@ -393,7 +393,7 @@ bash ./scripts/dev/start-postgres.sh --stop
 ## 4. 自动化测试、基准压测与环境工具
 
 ### `go-engine-test.sh`
-- **作用说明**: 【核心测试入口】一键按序运行全仓库 Go 模块的单元测试与集成测试（覆盖 `privacy-go-sdk`、`engine-go`、`pkg`、`services`、`console/bff-go`）。
+- **作用说明**: 【核心测试入口】一键按序运行全仓库 Go 模块的单元测试与集成测试（覆盖 `services/privacy-engine/sdk`、`services/privacy-engine`、`pkg`、`services`、`console/engine-console/bff-go`）。
 
 执行全量测试：
 ```bash
@@ -424,10 +424,10 @@ bash ./scripts/dev/integration-test-new-modules.sh
 
 ### `run_console_e2e_tests.sh`
 - **作用说明**: 【全栈 E2E 自动化测试】自动拉起真实的 Go Agent 算力层，按序执行 4 大测试阶段：
-  1. `privacy-go-sdk` 隐私原语与 `engine-go` 引擎测试
-  2. `console/bff-go` 代理后端与 `pkg` 基础库测试
+  1. `services/privacy-engine/sdk` 隐私原语与 `services/privacy-engine` 引擎测试
+  2. `console/engine-console/bff-go` 代理后端与 `pkg` 基础库测试
   3. `services` 微服务群集成测试
-  4. `console/web` 前端 TypeScript 与 Vitest 组件自动化测试（79+ 项测试）
+  4. `console/engine-console/web` 前端 TypeScript 与 Vitest 组件自动化测试（79+ 项测试）
 
 执行端到端 E2E 测试：
 ```bash
@@ -437,7 +437,7 @@ bash ./scripts/dev/run_console_e2e_tests.sh
 ---
 
 ### `go-engine-bench.sh`
-- **作用说明**: 对 `privacy-go-sdk` 与 `engine-go` 中的所有核心隐私计算原语执行高并发基准性能压测（Benchmark），输出 Ops/s、单次耗时 (ns/op) 与内存分配指标。
+- **作用说明**: 对 `services/privacy-engine/sdk` 与 `services/privacy-engine` 中的所有核心隐私计算原语执行高并发基准性能压测（Benchmark），输出 Ops/s、单次耗时 (ns/op) 与内存分配指标。
 
 执行基准性能压测：
 ```bash
@@ -545,7 +545,7 @@ bash ./scripts/dev/verify_console_environment.sh
 ---
 
 ### `generate_all_test_certs.sh`
-- **作用说明**: 一键重新生成全套 mTLS 测试证书链（Root CA、Server、Client 证书、私钥与 SPKI 客户端公钥固定文件），自动覆盖 `config/certs`、`console/bff-go/certs` 以及 `services/*/certs`。
+- **作用说明**: 一键重新生成全套 mTLS 测试证书链（Root CA、Server、Client 证书、私钥与 SPKI 客户端公钥固定文件），自动覆盖 `config/certs`、`console/engine-console/bff-go/certs` 以及 `services/*/certs`。
 
 执行证书生成命令：
 ```bash

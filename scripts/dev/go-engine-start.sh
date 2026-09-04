@@ -18,4 +18,4 @@ export PRIVACY_REST_PORT="${PRIVACY_REST_PORT:-8079}"
 export PRIVACY_GRPC_PORT="${PRIVACY_GRPC_PORT:-50051}"
 export PRIVACY_LOG_LEVEL="${PRIVACY_LOG_LEVEL:-INFO}"
 
-exec go run ./engine-go/cmd/privshield-agent "$@"
+exec go run ./services/privacy-engine/cmd/privshield-agent "$@"

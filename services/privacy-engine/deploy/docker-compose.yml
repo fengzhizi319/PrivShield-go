@@ -1,0 +1,53 @@
+# services/privacy-engine/deploy/docker-compose.yml
+# 独立的分类分级与隐私脱敏核心引擎部署 (Agent + Gateway)
+# 用法: cd services/privacy-engine/deploy && docker compose up -d
+
+services:
+  privshield-agent:
+    build:
+      context: ../../../
+      dockerfile: services/privacy-engine/Dockerfile
+    image: privshield-agent:10.0.0
+    container_name: privshield-agent-standalone
+    restart: unless-stopped
+    ports:
+      - "8079:8079"
+      - "50051:50051"
+    environment:
+      AGENT_REST_HOST: "0.0.0.0"
+      AGENT_REST_PORT: "8079"
+      AGENT_GRPC_HOST: "0.0.0.0"
+      AGENT_GRPC_PORT: "50051"
+      AGENT_LOG_LEVEL: "info"
+      AGENT_LOG_FORMAT: "json"
+      AGENT_RULES_DIR: "services/privacy-engine/rules/domains"
+      AGENT_STANDARDS_DIR: "services/privacy-engine/rules/standards"
+      AGENT_AUTH_ENABLED: "false"
+      AGENT_RATE_LIMIT_ENABLED: "false"
+    volumes:
+      - ../rules:/app/services/privacy-engine/rules:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8079/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  privshield-gateway:
+    build:
+      context: ../../../
+      dockerfile: services/privacy-engine/Dockerfile
+    image: privshield-gateway:10.0.0
+    container_name: privshield-gateway-standalone
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+      - "50000:50000"
+    command: ["/app/bin/privshield-gateway"]
+    environment:
+      ENGINE_GATEWAY_HTTP_PORT: "8000"
+      ENGINE_GATEWAY_GRPC_PORT: "50000"
+      ENGINE_GATEWAY_HTTP_BACKENDS: "http://privshield-agent:8079"
+      ENGINE_GATEWAY_GRPC_BACKENDS: "privshield-agent:50051"
+    depends_on:
+      privshield-agent:
+        condition: service_healthy

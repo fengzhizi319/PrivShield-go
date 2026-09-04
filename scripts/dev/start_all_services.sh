@@ -112,7 +112,7 @@ rotate_log "$AGENT_LOG"
 if [[ -f "$PROJECT_ROOT/bin/privshield-agent" ]]; then
     nohup "$PROJECT_ROOT/bin/privshield-agent" < /dev/null > "$AGENT_LOG" 2>&1 &
 else
-    nohup go run ./engine-go/cmd/privshield-agent < /dev/null > "$AGENT_LOG" 2>&1 &
+    nohup go run ./services/privacy-engine/cmd/privshield-agent < /dev/null > "$AGENT_LOG" 2>&1 &
 fi
 AGENT_PID=$!
 echo $AGENT_PID > "${PIDS_DIR}/agent.pid"
@@ -120,9 +120,9 @@ echo -e "Agent 进程 PID: ${GREEN}${AGENT_PID}${NC} (日志: ${AGENT_LOG})"
 
 # 3. 启动 Console BFF 代理 (Go BFF :8081)
 echo -e "\n${YELLOW}[2/3] 启动 Console BFF 代理网关 (Go gRPC BFF)...${NC}"
-if [ -d "$PROJECT_ROOT/console/bff-go" ]; then
+if [ -d "$PROJECT_ROOT/console/engine-console/bff-go" ]; then
     (
-        cd "$PROJECT_ROOT/console/bff-go"
+        cd "$PROJECT_ROOT/console/engine-console/bff-go"
         go build -o bin/backend-go ./cmd/server
         nohup ./bin/backend-go < /dev/null > "${LOG_DIR}/console_bff_go.log" 2>&1 &
         echo $! > "${PIDS_DIR}/console-go.pid"
@@ -147,7 +147,7 @@ if [ "$WITH_SERVICES" = true ]; then
 
     # 4.2 datasource-mgr
     (
-        cd "$PROJECT_ROOT/services/datasource-mgr"
+        cd "$PROJECT_ROOT/console/mock-datasource"
         go build -o bin/datasource-mgr ./cmd/server
         nohup ./bin/datasource-mgr < /dev/null > "${LOG_DIR}/datasource_mgr.log" 2>&1 &
         echo $! > "${PIDS_DIR}/datasource-mgr.pid"

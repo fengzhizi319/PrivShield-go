@@ -2,12 +2,12 @@ go 1.25.0
 
 use (
 	./console/app-lz/bff-go
-	./console/bff-go
-	./engine-go
+	./console/engine-console/bff-go
+	./console/mock-datasource
 	./pkg
-	./privacy-go-sdk
 	./scripts/dev
 	./services/audit-log
-	./services/datasource-mgr
+	./services/privacy-engine
+	./services/privacy-engine/sdk
 	./services/service-hub
 )

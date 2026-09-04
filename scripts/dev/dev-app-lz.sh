@@ -51,8 +51,8 @@ APP_LZ_DIR="$PROJECT_ROOT/console/app-lz"
 PIDS_DIR="$PROJECT_ROOT/.pids"
 LOGS_DIR="$PROJECT_ROOT/.logs"
 DATA_DIR="$PROJECT_ROOT/data"
-CERT_DIR="$PROJECT_ROOT/console/bff-go/certs"
-GEN_CERTS="$PROJECT_ROOT/console/bff-go/scripts/gen-certs.sh"
+CERT_DIR="$PROJECT_ROOT/console/engine-console/bff-go/certs"
+GEN_CERTS="$PROJECT_ROOT/console/engine-console/bff-go/scripts/gen-certs.sh"
 TLCP_CERT_DIR="$PROJECT_ROOT/config/certs/tlcp"
 GO_BIN="${GO_BIN:-go}"
 
@@ -211,7 +211,7 @@ start_engine() {
         AGENT_TLCP_SIGN_KEY_FILE="$TLCP_CERT_DIR/server-sign.key" \
         AGENT_TLCP_ENC_CERT_FILE="$TLCP_CERT_DIR/server-enc.crt" \
         AGENT_TLCP_ENC_KEY_FILE="$TLCP_CERT_DIR/server-enc.key" \
-        "$GO_BIN" run ./engine-go/cmd/privshield-agent \
+        "$GO_BIN" run ./services/privacy-engine/cmd/privshield-agent \
             > "${LOGS_DIR}/agent_app_lz.log" 2>&1 &
     elif [[ "$MTLS_MODE" == "true" ]]; then
         PRIVACY_REST_HOST=127.0.0.1 PRIVACY_REST_PORT="$port" \
@@ -222,14 +222,14 @@ start_engine() {
         AGENT_TLS_CA_FILE="$CERT_DIR/ca.crt" \
         AGENT_AUTH_INTERNAL_MTLS_ENABLED=true \
         AGENT_AUTH_MTLS_WHITELIST_FILE="$PROJECT_ROOT/config/mtls-whitelist.yaml" \
-        "$GO_BIN" run ./engine-go/cmd/privshield-agent \
+        "$GO_BIN" run ./services/privacy-engine/cmd/privshield-agent \
             > "${LOGS_DIR}/agent_app_lz.log" 2>&1 &
     else
         PRIVACY_REST_HOST=127.0.0.1 PRIVACY_REST_PORT="$port" \
         PRIVACY_GRPC_HOST=127.0.0.1 PRIVACY_GRPC_PORT=50051 \
         AGENT_TLS_ENABLED=false \
         AGENT_AUTH_INTERNAL_MTLS_ENABLED=false \
-        "$GO_BIN" run ./engine-go/cmd/privshield-agent \
+        "$GO_BIN" run ./services/privacy-engine/cmd/privshield-agent \
             > "${LOGS_DIR}/agent_app_lz.log" 2>&1 &
     fi
     echo $! > "$pid_file"
@@ -296,7 +296,7 @@ start_datasource_mgr() {
     local port=8083 pid_file="$PIDS_DIR/datasource-mgr.pid"
 
     echo "🔨 编译 Datasource Mgr..."
-    cd "${PROJECT_ROOT}/services/datasource-mgr"
+    cd "${PROJECT_ROOT}/console/mock-datasource"
     "$GO_BIN" build -o bin/datasource-mgr ./cmd/server
 
     # 总是重启以确保加载最新编译的二进制

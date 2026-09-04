@@ -36,7 +36,7 @@ done
 # ── 解析脚本目录，初始化全局变量 ──────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || (cd "$SCRIPT_DIR/../.." && pwd -P))"
-CONSOLE_DIR="$PROJECT_ROOT/console"
+CONSOLE_DIR="$PROJECT_ROOT/console/engine-console"
 PIDS_DIR="$PROJECT_ROOT/.pids"
 LOGS_DIR="$PROJECT_ROOT/.logs"
 
@@ -264,7 +264,7 @@ launch_agent() {
         if [[ -f "$PROJECT_ROOT/bin/privshield-agent" ]]; then
             exec "$PROJECT_ROOT/bin/privshield-agent" >> "$agent_log" 2>&1
         else
-            exec go run ./engine-go/cmd/privshield-agent >> "$agent_log" 2>&1
+            exec go run ./services/privacy-engine/cmd/privshield-agent >> "$agent_log" 2>&1
         fi
     ) &
     AGENT_PID=$!

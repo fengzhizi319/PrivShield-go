@@ -71,22 +71,22 @@ fi
 
 # ── 步骤 3：执行前端静态编译类型检查 ─────────────────────────────────────
 echo -e "\n${YELLOW}[3/4] 验证 Web 前端 TypeScript 类型系统...${NC}"
-if [ -d "console/web" ]; then
-    if [ -d "console/web/node_modules" ]; then
+if [ -d "console/engine-console/web" ]; then
+    if [ -d "console/engine-console/web/node_modules" ]; then
         echo -e "正在执行 TypeScript 类型构建校验 (tsc)..."
-        (cd console/web && npx tsc --noEmit) && echo -e "${GREEN}TypeScript 类型检查通过！${NC}" || {
+        (cd console/engine-console/web && npx tsc --noEmit) && echo -e "${GREEN}TypeScript 类型检查通过！${NC}" || {
             echo -e "${RED}[错误] TypeScript 类型校验报错，请修正！${NC}"
             ERRORS=$((ERRORS + 1))
         }
     else
-        echo -e "${YELLOW}未找到 console/web/node_modules。可执行: cd console/web && pnpm install${NC}"
+        echo -e "${YELLOW}未找到 console/engine-console/web/node_modules。可执行: cd console/engine-console/web && pnpm install${NC}"
     fi
 fi
 
 # ── 步骤 4：检查 Go 引擎与微服务代码编译 ─────────────────────────────────
 echo -e "\n${YELLOW}[4/4] 验证 Go 引擎与微服务可构建性...${NC}"
 if command -v go &> /dev/null; then
-    if CGO_ENABLED=0 go build ./engine-go/cmd/... ./services/service-hub/cmd/... ./services/datasource-mgr/cmd/... ./services/audit-log/cmd/... ./console/bff-go/cmd/... >/dev/null 2>&1; then
+    if CGO_ENABLED=0 go build ./services/privacy-engine/cmd/... ./services/service-hub/cmd/... ./console/mock-datasource/cmd/... ./services/audit-log/cmd/... ./console/engine-console/bff-go/cmd/... >/dev/null 2>&1; then
         echo -e "Go 全栈模块编译构建: ${GREEN}[OK]${NC}"
     else
         echo -e "${RED}[错误] Go 模块编译失败！${NC}"

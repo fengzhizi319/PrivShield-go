@@ -53,7 +53,7 @@ fi
 echo "📦 准备 PrivShield-Go 原生引擎 Docker 镜像..."
 (
     cd "$PROJECT_ROOT"
-    docker build -f engine-go/Dockerfile -t privshield-go:1.0.0 . >/dev/null 2>&1 || true
+    docker build -f services/privacy-engine/Dockerfile -t privshield-go:1.0.0 . >/dev/null 2>&1 || true
 )
 
 # ── 前置准备：确保前端与 Go 二进制已就绪（加速 Docker 本地构建） ───────────
@@ -76,7 +76,7 @@ if [[ "$BUILD_FLAG" == "--build" ]]; then
     export GOPROXY="${GOPROXY:-https://goproxy.cn,https://goproxy.io,https://mirrors.aliyun.com/goproxy/,direct}"
     (cd "$PROJECT_ROOT/console/app-lz/bff-go" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
     (cd "$PROJECT_ROOT/services/service-hub" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
-    (cd "$PROJECT_ROOT/services/datasource-mgr" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
+    (cd "$PROJECT_ROOT/console/mock-datasource" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
     (cd "$PROJECT_ROOT/services/audit-log" && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bin/server ./cmd/server 2>/dev/null || true)
 fi
 

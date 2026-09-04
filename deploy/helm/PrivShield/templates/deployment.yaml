@@ -86,7 +86,7 @@ spec:
           env:
             # ── 基础配置 ──
             {{- if eq .Values.engineType "go" }}
-            # Go 引擎（privshield-agent）只读取 AGENT_* 变量名（engine-go/internal/config/config.go），
+            # Go 引擎（privshield-agent）只读取 AGENT_* 变量名（services/privacy-engine/internal/config/config.go），
             # 容器编排必须显式置 0.0.0.0，否则仅环回可达、外部容器无法调用。
             - name: AGENT_REST_HOST
               value: "0.0.0.0"

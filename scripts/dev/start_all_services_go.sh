@@ -37,7 +37,7 @@ cd "$PROJECT_ROOT"
 
 LOG_DIR="$PROJECT_ROOT/.logs"
 PIDS_DIR="$PROJECT_ROOT/.pids"
-ENGINE_GO_DIR="$PROJECT_ROOT/engine-go"
+ENGINE_GO_DIR="$PROJECT_ROOT/services/privacy-engine"
 mkdir -p "$LOG_DIR" "$PIDS_DIR"
 
 REST_PORT="${PRIVACY_REST_PORT:-8079}"
@@ -113,9 +113,9 @@ echo -e "Go Agent PID: ${GREEN}$(cat "${PIDS_DIR}/agent-go.pid")${NC} (日志: $
 
 # 2. 启动 Console BFF 代理
 echo -e "\n${YELLOW}[2/3] 启动 Console BFF 代理网关...${NC}"
-if [ -d "$PROJECT_ROOT/console/bff-go" ]; then
+if [ -d "$PROJECT_ROOT/console/engine-console/bff-go" ]; then
     (
-        cd "$PROJECT_ROOT/console/bff-go"
+        cd "$PROJECT_ROOT/console/engine-console/bff-go"
         go build -o bin/backend-go ./cmd/server
         nohup ./bin/backend-go < /dev/null > "${LOG_DIR}/console_bff_go.log" 2>&1 &
         echo $! > "${PIDS_DIR}/console-go.pid"
@@ -137,7 +137,7 @@ if [ "$WITH_SERVICES" = true ]; then
     echo -e "  • service-hub (PID $(cat "${PIDS_DIR}/service-hub.pid"))"
 
     (
-        cd "$PROJECT_ROOT/services/datasource-mgr"
+        cd "$PROJECT_ROOT/console/mock-datasource"
         go build -o bin/datasource-mgr ./cmd/server
         nohup ./bin/datasource-mgr < /dev/null > "${LOG_DIR}/datasource_mgr.log" 2>&1 &
         echo $! > "${PIDS_DIR}/datasource-mgr.pid"

@@ -4,7 +4,7 @@
 # Build context: . (Project root)
 # 构建上下文：项目根目录
 #
-# docker build -f console/bff-go/Dockerfile -t bff-go:latest .
+# docker build -f console/engine-console/bff-go/Dockerfile -t bff-go:latest .
 #
 # 本 Dockerfile 采用多阶段构建（Multi-stage Build），将「编译」和「运行」分离到
 # 两个独立的基础镜像中。最终镜像仅包含静态二进制 + 最少系统库 + 非 root 用户。
@@ -25,9 +25,9 @@ RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
 
 # Copy shared pkg/ and module source
 COPY pkg/ ./pkg/
-COPY console/bff-go/ ./console/bff-go/
+COPY console/engine-console/bff-go/ ./console/engine-console/bff-go/
 
-WORKDIR /app/console/bff-go
+WORKDIR /app/console/engine-console/bff-go
 RUN if [ -f "./bin/server" ]; then \
         cp ./bin/server /app/server; \
     elif [ -f "./bin/backend-go" ]; then \
