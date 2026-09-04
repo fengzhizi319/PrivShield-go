@@ -1,1 +1,0 @@
-../../console/docs/modes.md

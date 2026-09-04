@@ -1,1 +1,0 @@
-../../../console/bff-go/docs/api_reference.md

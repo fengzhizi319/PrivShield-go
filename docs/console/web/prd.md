@@ -1,1 +1,0 @@
-../../../console/web/docs/prd.md

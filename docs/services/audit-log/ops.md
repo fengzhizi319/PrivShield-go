@@ -1,1 +1,0 @@
-../../../services/audit-log/docs/ops.md

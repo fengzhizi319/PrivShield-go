@@ -1,1 +1,0 @@
-../../../services/datasource-mgr/docs/prd.md

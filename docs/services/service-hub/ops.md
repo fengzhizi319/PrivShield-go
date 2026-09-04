@@ -1,1 +1,0 @@
-../../../services/service-hub/docs/ops.md

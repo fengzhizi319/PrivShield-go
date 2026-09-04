@@ -4,7 +4,6 @@ repo_url: https://github.com/fengzhizi319/PrivShield-go
 edit_uri: edit/main/docs/
 
 theme:
-  # Material 主题配合中英双语内容、代码块复制和编辑按钮，适合技术型文档站点。
   name: material
   language: zh
   palette:
@@ -31,10 +30,6 @@ theme:
     - content.action.edit
 
 markdown_extensions:
-  # 这些扩展主要用于让架构/运维文档更易读：
-  # - admonition/details 用于提示、警告和折叠说明
-  # - superfences + mermaid 用于时序图、流程图和嵌套代码块
-  # - tabbed / tasklist / toc / attr_list 用于更结构化的 API 与操作指南
   - admonition
   - pymdownx.details
   - pymdownx.superfences:
@@ -53,18 +48,12 @@ markdown_extensions:
   - tables
   - toc:
       permalink: true
-      # 使用 pymdownx slugify 保持中文字符与英文术语，与所有中文文档手写的
-      # 目录锚点（如 #32-健康医疗信息-health-information）保持一致。
       slugify: !!python/object/apply:pymdownx.slugs.slugify
         kwds:
           case: lower
   - attr_list
   - md_in_html
 
-# MkDocs 1.6+ 链接验证策略：
-# - 源码文件（engine/、services/、tests/ 等）不在 docs/ 内，但文档中需要引用；
-#   将其设为 ignore 避免 strict 模式误报。
-# - 锚点仍保留 warn，确保文档内部 TOC/交叉引用正确。
 validation:
   omitted_files: ignore
   links:
@@ -74,7 +63,6 @@ validation:
   anchors: warn
 
 plugins:
-  # search：支持中英混合检索；minify：减少生成站点体积。
   - search:
       lang:
         - zh
@@ -85,184 +73,23 @@ plugins:
 docs_dir: docs
 
 nav:
-  # 导航按“学习路径”组织：先看概览，再看设计/示例/运维/测试，方便不同角色快速定位。
   - 首页: index.md
   - 快速开始: quickstart.md
+  - 高可用与可靠性综述: reliability.md
 
   - 架构设计:
-    - 总体架构设计: architecture/architecture-design.md
-    - 设计实现总结: architecture/architecture-summary.md
-    - 生产级架构优化与高可用演进: architecture/production_optimization_design.md
-
-  - 隐私原语:
-    - 数据脱敏 Masking:
-      - 概览: masking/README.md
-      - 架构设计: masking/design.md
-      - API 参考: masking/api_reference.md
-      - 使用示例: masking/examples.md
-      - 运维指南: masking/ops.md
-      - 需求文档: masking/prd.md
-      - 测试指南: masking/testing.md
-    - 差分隐私 DP:
-      - 概览: dp/README.md
-      - 架构设计: dp/design.md
-      - API 参考: dp/api_reference.md
-      - 使用示例: dp/examples.md
-      - 运维指南: dp/ops.md
-      - 需求文档: dp/prd.md
-      - 测试指南: dp/testing.md
-    - K-匿名:
-      - 概览: k_anonymity/README.md
-      - 架构设计: k_anonymity/design.md
-      - API 参考: k_anonymity/api_reference.md
-      - 使用示例: k_anonymity/examples.md
-      - 运维指南: k_anonymity/ops.md
-      - 需求文档: k_anonymity/prd.md
-      - 测试指南: k_anonymity/testing.md
-    - 查询混淆 QoL:
-      - 概览: qol/README.md
-      - 架构设计: qol/design.md
-      - API 参考: qol/api_reference.md
-      - 使用示例: qol/examples.md
-      - 运维指南: qol/ops.md
-      - 需求文档: qol/prd.md
-      - 测试指南: qol/testing.md
-
-  - 数据分类:
-    - 动态分类分级（多标准适配）:
-      - 概览: dynclassification/README.md
-      - 需求文档: dynclassification/prd.md
-      - 架构设计: dynclassification/design.md
-      - 三层漏斗设计: dynclassification/three_layer_funnel_design.md
-      - 裁决算法机制: dynclassification/funnel_adjudication.md
-      - 降级与 Override 规则: dynclassification/downgrade_override_design.md
-      - 规则解析与编写: dynclassification/rule_parsing_guide.md
-      - 标准生成器算法: dynclassification/standard_profile_generator.md
-      - CUDA sm120 环境构建: dynclassification/cuda_sm120_setup.md
-      - TensorRT 编译优化 Pipeline: dynclassification/model_optimization_pipeline.md
-      - API 参考: dynclassification/api_reference.md
-      - 使用示例: dynclassification/examples.md
-      - 运维指南: dynclassification/ops.md
-      - 测试指南: dynclassification/testing.md
-      - 评审修改意见: dynclassification/修改意见.md
-
-  - 医疗数据流水线:
-    - 流水线模块:
-      - 概览: medical_pipeline/README.md
-      - 架构设计: medical_pipeline/design.md
-      - API 参考: medical_pipeline/api_reference.md
-      - 使用示例: medical_pipeline/examples.md
-      - 运维指南: medical_pipeline/ops.md
-      - 需求文档: medical_pipeline/prd.md
-      - 测试指南: medical_pipeline/testing.md
-      - 脱敏算法标准规范: medical_pipeline/医疗健康数据分类分级与隐私脱敏算法标准规范.md
-    - 端到端流水线:
-      - 流水线设计（实施版，旧版）: medical_pipeline/design-legacy.md
-      - 流水线设计（Gemini 草案）: medical_pipeline/design-gemini.md
-      - 医疗数据流水线设计: medical_pipeline/medical_data_pipeline_design.md
-      - 流水线需求文档（旧版）: medical_pipeline/prd-legacy.md
-
-  - LoRA 微调:
-    - 概览: llmlora/README.md
-    - 模型架构图谱: llmlora/qwen3_5_0_8b_architecture.md
-    - Qwen3.8-27B-FP8 架构: llmlora/Qwen3.8-27B-FP8-architecture.md
-    - 数据生成方案: llmlora/data_generation_plan.md
-    - 微调与评估指南: llmlora/finetuning_and_eval_guide.md
-    - 设计与工作流: llmlora/design_and_workflow.md
-    - 批量训练与推理: llmlora/batch_training_and_inference.md
-    - 推理优化: llmlora/inference_optimization.md
-    - KV Cache 计算详解: llmlora/不同上下文的kv计算.md
-
-  - 分类分级标准:
-    - GB/T 35273-2020 个人信息安全规范: standard/GB_T_35273-2020_信息安全技术个人信息安全规范.md
-    - GB/T 43697-2024 数据分类分级规则: standard/GB_T_43697-2024_数据安全技术数据分类分级规则.md
-    - JR/T 0197-2020 金融数据安全分级指南: standard/JR_T_0197-2020_金融数据安全数据安全分级指南.md
-    - 四川省健康医疗大数据应用指南: standard/四川省健康医疗大数据应用指南.md
-    - 广东省健康医疗数据分类分级规范: standard/广东省健康医疗数据安全分类分级管理技术规范.md
-
-  - 企业级中台微服务:
-    - 架构与流通模型: architecture/services.md
-    - Service Hub 调度中枢:
-      - 学习指南: services/service-hub/learning-guide.md
-      - 详细设计: services/service-hub/design.md
-      - API 参考: services/service-hub/api.md
-      - 运维指南: services/service-hub/ops.md
-      - 需求文档: services/service-hub/prd.md
-      - 可靠性能力: services/service-hub/reliability.md
-      - 测试指南: services/service-hub/testing.md
-    - Datasource Mgr 数据源:
-      - 学习指南: services/datasource-mgr/learning-guide.md
-      - 详细设计: services/datasource-mgr/design.md
-      - API 参考: services/datasource-mgr/api.md
-      - 运维指南: services/datasource-mgr/ops.md
-      - 需求文档: services/datasource-mgr/prd.md
-      - 可靠性能力: services/datasource-mgr/reliability.md
-      - 测试指南: services/datasource-mgr/testing.md
-    - Audit Log 审计存证:
-      - 学习指南: services/audit-log/learning-guide.md
-      - 详细设计: services/audit-log/design.md
-      - API 参考: services/audit-log/api.md
-      - 运维指南: services/audit-log/ops.md
-      - 需求文档: services/audit-log/prd.md
-      - 可靠性能力: services/audit-log/reliability.md
-      - 测试指南: services/audit-log/testing.md
-
-  - 统一控制台与 BFF:
-    - 控制台与双 BFF 架构: architecture/console.md
-    - 运行模式说明: console/modes.md
-    - 控制台学习指南: console/learning-guide.md
-    - Go BFF 网关:
-      - 概览: console/bff-go/README.md
-      - 详细设计: console/bff-go/design.md
-      - API 参考: console/bff-go/api_reference.md
-      - 运维指南: console/bff-go/ops.md
-      - 需求文档: console/bff-go/prd.md
-      - 可靠性能力: console/bff-go/reliability.md
-      - 测试指南: console/bff-go/testing.md
-    - Web 前端控制台:
-      - 概览: console/web/README.md
-      - 详细设计: console/web/design.md
-      - API 参考: console/web/api_reference.md
-      - 运维指南: console/web/ops.md
-      - 需求文档: console/web/prd.md
-      - 测试指南: console/web/testing.md
-
-  - 基础设施:
-    - 高并发架构设计 (10k QPS):
-      - 概览: high_concurrency/README.md
-      - 架构设计: high_concurrency/design.md
-    - 网关与负载均衡:
-      - 概览: gateway_balancer/README.md
-      - 架构设计: gateway_balancer/design.md
-      - Hub Kubernetes 目标架构: gateway_balancer/new_design.md
-      - API 参考: gateway_balancer/api_reference.md
-      - 优化策略: gateway_balancer/optimizations.md
-      - 使用示例: gateway_balancer/examples.md
-      - 运维指南: gateway_balancer/ops.md
-      - 可靠性能力: gateway_balancer/reliability.md
-      - 需求文档: gateway_balancer/prd.md
-      - 测试指南: gateway_balancer/testing.md
+      - 总体架构设计: architecture/architecture-design.md
+      - 柳州政务云数据安全架构: architecture/liuzhou_govcloud_data_security_architecture.md
+      - 设计实现总结: architecture/architecture-summary.md
+      - 生产级架构优化与高可用演进: architecture/production_optimization_design.md
+      - 统一设计规范: architecture/unified_design_specifications.md
+      - 新 API 设计规范: architecture/new_api_design.md
+      - 基础库公共 API 重构设计: architecture/pkg_public_api_refactor_design.md
+      - 业务中台架构与流通模型: architecture/services.md
+      - 控制台与接入网关架构: architecture/console.md
+      - 柳州政务云全栈性能报告: architecture/liuzhou_govcloud_e2e_full_stack_performance_report.md
 
   - 生产部署:
-    # 部署部分单独列出，避免把安全、可观测性和安装参数混在一起。
-    - 安全 TLS/Auth/Rate Limit:
-      - 概览: production_security/README.md
-      - 安全要求与编码规范: production_security/security_requirements.md
-      - 架构设计: production_security/design.md
-      - API 参考: production_security/api_reference.md
-      - 使用示例: production_security/examples.md
-      - 运维指南: production_security/ops.md
-      - 需求文档: production_security/prd.md
-      - 测试指南: production_security/testing.md
-    - 可观测性:
-      - 概览: production_observability/README.md
-      - 架构设计: production_observability/design.md
-      - API 参考: production_observability/api_reference.md
-      - 使用示例: production_observability/examples.md
-      - 运维指南: production_observability/ops.md
-      - 需求文档: production_observability/prd.md
-      - 测试指南: production_observability/testing.md
-    - 部署 K8s/Helm/Docker:
       - 概览: deployment/README.md
       - 架构设计: deployment/design.md
       - 使用示例: deployment/examples.md
@@ -271,12 +98,35 @@ nav:
       - 测试指南: deployment/testing.md
       - 从代码到 K8s: deployment/from_code_to_k8s.md
 
-  - 审计与报告:
-    - 2026 全项目审计报告: audit_reports/2026_full_project_audit_report.md
-    - 生产级演进三周计划: project_management/三周计划.md
-    - 全栈代码审计综合分析报告: reports/分析报告.md
-    - 主流数据安全产品洞察报告: reports/主流数据安全产品洞察报告.md
-    - 专利技术交底书:
+  - 生产安全治理:
+      - 概览: production_security/README.md
+      - 安全要求与编码规范: production_security/security_requirements.md
+      - 架构设计: production_security/design.md
+      - 鉴权部署安全分析: production_security/auth_deployment_security_analysis.md
+      - 合规差距分析: production_security/compliance_gap_analysis.md
+      - API 参考: production_security/api_reference.md
+      - 使用示例: production_security/examples.md
+      - 运维指南: production_security/ops.md
+      - 需求文档: production_security/prd.md
+      - 测试指南: production_security/testing.md
+
+  - 生产可观测性:
+      - 概览: production_observability/README.md
+      - 架构设计: production_observability/design.md
+      - API 参考: production_observability/api_reference.md
+      - 使用示例: production_observability/examples.md
+      - 运维指南: production_observability/ops.md
+      - 需求文档: production_observability/prd.md
+      - 测试指南: production_observability/testing.md
+
+  - 分类分级标准体系:
+      - GB/T 35273-2020 个人信息安全规范: standard/GB_T_35273-2020_信息安全技术个人信息安全规范.md
+      - GB/T 43697-2024 数据分类分级规则: standard/GB_T_43697-2024_数据安全技术数据分类分级规则.md
+      - JR/T 0197-2020 金融数据安全分级指南: standard/JR_T_0197-2020_金融数据安全数据安全分级指南.md
+      - 四川省健康医疗大数据应用指南: standard/四川省健康医疗大数据应用指南.md
+      - 广东省健康医疗数据分类分级规范: standard/广东省健康医疗数据安全分类分级管理技术规范.md
+
+  - 专利技术交底书:
       - 概览: patent/README.md
       - 专利1-三层漏斗动态分类分级: patent/patent_01_dynamic_classification_funnel.md
       - 专利2-统一隐私 Sidecar: patent/patent_02_unified_privacy_sidecar.md
@@ -294,41 +144,54 @@ nav:
       - 专利14-双协议负载均衡与分布式预算: patent/专利10-面向隐私计算网关的双协议负载均衡与分布式预算一致性自愈方法及系统.md
       - 专利15-硬件根密钥会话委托授权: patent/专利11-基于硬件根密钥的多级衰减会话委托授权方法及系统.md
       - 专利16-零知识证明跨域隐私授权: patent/专利12-结合零知识证明与乐观审计的跨域数据隐私授权方法及系统.md
-    - 归档文档:
+
+  - 审计与性能报告:
+      - 2026 全项目审计报告: audit_reports/2026_full_project_audit_report.md
+      - 全栈代码审计综合分析报告: reports/分析报告.md
+      - 性能基线测试报告: reports/benchmark_baseline.md
+      - 主流数据安全产品洞察报告: reports/主流数据安全产品洞察报告.md
+
+  - 架构演进与归档:
+      - 目录架构重构与服务拆分规划方案: archive/directory_and_service_reorganization_plan.md
       - 目录架构重构与迁移设计: archive/migration-design.md
+      - Go 引擎架构与 ONNX CUDA 设计: archive/go_engine_architecture_and_ner_cuda_design.md
+      - 全栈中间件与安全体系详解: archive/全栈中间件与安全体系详解.md
+      - 统一设计草案: archive/unified_design.md
 
-  - 技术学习指南:
-    - 差分隐私与预算记账: learning/tech-differential-privacy.md
-    - K-匿名与 Mondrian 泛化: learning/tech-k-anonymity.md
-    - 动态分类分级与三层漏斗: learning/tech-dynamic-classification-funnel.md
-    - AI/ML 推理加速与微调: learning/tech-ai-ml-inference-runtime.md
-    - 医疗数据治理与图像打码: learning/tech-medical-informatics-pipeline.md
-    - 反向代理与网关技术: learning/tech-reverse-proxy.md
-    - 高性能网关与负载均衡: learning/tech-gateway-load-balancer.md
-    - 双向 mTLS 与安全治理: learning/tech-security-mtls-cryptography.md
-    - 可观测性与分布式追踪: learning/tech-observability-metrics-tracing.md
-    - 测试工程与性能基准: learning/tech-testing-benchmark-qa.md
-    - Docker 与云原生部署: learning/tech-docker-cloud-native-devops.md
-    - FastAPI: learning/tech-fastapi.md
-    - uvicorn: learning/tech-uvicorn.md
-    - Pydantic: learning/tech-pydantic.md
-    - gRPC & Protobuf: learning/tech-grpc-protobuf.md
-    - httpx: learning/tech-httpx.md
-    - Go + Gin: learning/tech-go-gin.md
-    - 数据处理: learning/tech-data-processing.md
-    - React: learning/tech-react.md
-    - TypeScript: learning/tech-typescript.md
-    - Vite 热重载与构建: learning/vite.md
-    - Vite 技术栈详解: learning/tech-vite.md
-    - TailwindCSS: learning/tech-tailwindcss.md
-    - PostCSS: learning/tech-postcss.md
-    - pnpm: learning/tech-pnpm.md
-    - ESLint: learning/tech-eslint.md
-    - Vitest: learning/tech-vitest.md
-    - Testing Library: learning/tech-testing-library.md
+  - 技术学习树:
+      - 差分隐私与预算记账: learning/tech-differential-privacy.md
+      - K-匿名与 Mondrian 泛化: learning/tech-k-anonymity.md
+      - 动态分类分级与三层漏斗: learning/tech-dynamic-classification-funnel.md
+      - AI/ML 推理加速与微调: learning/tech-ai-ml-inference-runtime.md
+      - 医疗数据治理与图像打码: learning/tech-medical-informatics-pipeline.md
+      - 反向代理与网关技术: learning/tech-reverse-proxy.md
+      - 高性能网关与负载均衡: learning/tech-gateway-load-balancer.md
+      - 双向 mTLS 与安全治理: learning/tech-security-mtls-cryptography.md
+      - 可观测性与分布式追踪: learning/tech-observability-metrics-tracing.md
+      - 测试工程与性能基准: learning/tech-testing-benchmark-qa.md
+      - Docker 与云原生部署: learning/tech-docker-cloud-native-devops.md
+      - FastAPI: learning/tech-fastapi.md
+      - uvicorn: learning/tech-uvicorn.md
+      - Pydantic: learning/tech-pydantic.md
+      - gRPC & Protobuf: learning/tech-grpc-protobuf.md
+      - httpx: learning/tech-httpx.md
+      - Go + Gin: learning/tech-go-gin.md
+      - 数据处理: learning/tech-data-processing.md
+      - React: learning/tech-react.md
+      - TypeScript: learning/tech-typescript.md
+      - Vite 热重载与构建: learning/vite.md
+      - Vite 技术栈详解: learning/tech-vite.md
+      - TailwindCSS: learning/tech-tailwindcss.md
+      - PostCSS: learning/tech-postcss.md
+      - pnpm: learning/tech-pnpm.md
+      - ESLint: learning/tech-eslint.md
+      - Vitest: learning/tech-vitest.md
+      - Testing Library: learning/tech-testing-library.md
 
-  - 共享基础库:
-    - Go 共享包设计: pkg/design.md
-
-  - 附录:
-    - 个性化配置: dynclassification/personalized_profiles.md
+  - 项目规划与管理:
+      - 隐私计算平台-团队汇报与落地规划: project_management/隐私计算平台-团队汇报与落地规划0819.md
+      - 四周计划-学习Review与完善: project_management/四周计划-学习Review与完善.md
+      - 第一周学习资料与计划: project_management/第一周学习资料与计划-engine-go网关与安全体系Review.md
+      - 第二周学习资料与计划: project_management/第二周学习资料与计划-审计不可篡改体系与密码学基础Review.md
+      - 第三周学习资料与计划: project_management/第三周学习资料与计划-audit-log与service-hub服务Review与跨服务集成.md
+      - 第四周学习资料与计划: project_management/第四周学习资料与计划-可观测性闭环与性能压测和生产就绪.md
