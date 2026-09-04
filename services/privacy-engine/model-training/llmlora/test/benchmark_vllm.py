@@ -32,11 +32,13 @@ from pathlib import Path
 # 导入类型注解字典、列表与任意类型
 from typing import Dict, List, Any
 
-# 解析当前测试脚本的祖父目录作为项目根目录绝对路径 (PrivShield 根路径)
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-# 若仓库根路径不在 Python 模块加载路径列表中，则将其动态注入到搜索路径首位
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+_LLMLORA_DIR = Path(__file__).resolve().parents[1]
+_MODEL_TRAINING_DIR = _LLMLORA_DIR.parent
+_REPO_ROOT = _MODEL_TRAINING_DIR.parent.parent.parent
+
+for _p in (_MODEL_TRAINING_DIR, _REPO_ROOT):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 # 从 vLLM 核心推理引擎库导入离线 LLM 推理器与采样控制参数类
 from vllm import LLM, SamplingParams
@@ -209,14 +211,14 @@ def main():
     parser.add_argument(
         "--model-path",
         type=str,
-        default=str(_REPO_ROOT / "llmlora" / "output" / "models" / "Qwen3.5-0.8B-Privacy-Classifier-Smoother"),
+        default=str(_LLMLORA_DIR / "output" / "models" / "Qwen3.5-0.8B-Privacy-Classifier-Smoother"),
         help="待评测模型所在的物理路径",
     )
     # 添加测试集数据文件路径参数
     parser.add_argument(
         "--test-data",
         type=str,
-        default=str(_REPO_ROOT / "llmlora" / "data" / "test.jsonl"),
+        default=str(_LLMLORA_DIR / "data" / "test.jsonl"),
         help="评测测试集 JSONL 文件路径",
     )
     # 添加最大上下文序列长度参数

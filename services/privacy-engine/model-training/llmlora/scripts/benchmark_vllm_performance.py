@@ -25,9 +25,13 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 # 保证当前模块正确导入
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+_LLMLORA_DIR = Path(__file__).resolve().parents[1]
+_MODEL_TRAINING_DIR = _LLMLORA_DIR.parent
+_REPO_ROOT = _MODEL_TRAINING_DIR.parent.parent.parent
+
+for _p in (_MODEL_TRAINING_DIR, _REPO_ROOT):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 # 强制禁用实验性 V1 引擎，保证本地 GPU 稳定兼容
 os.environ["VLLM_USE_V1"] = "0"
@@ -146,13 +150,13 @@ def main():
     parser.add_argument(
         "--model-path",
         type=str,
-        default=str(_REPO_ROOT / "llmlora" / "output" / "models" / "Qwen3.5-0.8B-Privacy-Classifier-Smoother"),
+        default=str(_LLMLORA_DIR / "output" / "models" / "Qwen3.5-0.8B-Privacy-Classifier-Smoother"),
         help="合并模型路径或基座模型路径",
     )
     parser.add_argument(
         "--test-data",
         type=str,
-        default=str(_REPO_ROOT / "llmlora" / "data" / "test.jsonl"),
+        default=str(_LLMLORA_DIR / "data" / "test.jsonl"),
         help="测试集数据路径",
     )
     parser.add_argument(

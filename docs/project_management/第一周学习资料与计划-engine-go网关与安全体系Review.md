@@ -1018,14 +1018,16 @@ func (gb *GatewayBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
                           │                              ├─ SelectNode() → P2C-EWMA 选节点│
                           │                              ├─ node.ReverseProxy() → 获取代理│
                           │                              └─ proxy.ServeHTTP() → 转发     │
+                          │  gRPC: UnknownServiceHandler → SelectNode() → rawCodec      │
+                          │        → 双向流转发（按 RPC 选择节点，流内保持节点粘性）       │
                           └──────────────────────┬───────────────────────────────────────┘
-                                                 │ HTTP 请求
+                                          │ HTTP 请求 / gRPC 流
                                                  ▼
                           ┌──────────────────────────────────────────────────────────────┐
-                          │              privshield-agent (Agent 进程)                    │
-                          │  server_rest.go → RESTServerRunner                           │
+                          │       privshield-agent 集群（N 个 Agent 实例）                │
+                          │  每个实例：                                                     │
                           │  :8079 (REST)    中间件漏斗 → 44 项隐私原语路由               │
-                          │  :50051 (gRPC)   gRPC Servicer → RawCodec 统一分发            │
+                          │  :50051 (gRPC)   Protobuf PrivacyService 类型化 RPC 分发      │
                           └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -1047,7 +1049,7 @@ func (gb *GatewayBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 ```go
 // ① 解析后端 Agent 地址列表（逗号分隔）
-backends := pkgconfig.EnvString("GATEWAY_BACKENDS", "127.0.0.1:8079")
+backends := pkgconfig.EnvString("ENGINE_GATEWAY_BACKENDS", "127.0.0.1:8079")
 addresses := strings.Split(backends, ",")
 
 // ② 选择调度策略（默认 P2C-EWMA）
@@ -1220,7 +1222,7 @@ proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 | 维度 | HTTP 反向代理 (`http_proxy.go`) | gRPC 透明流代理 (`grpc_proxy.go`) |
 |------|-------------------------------|----------------------------------|
 | **核心机制** | `httputil.ReverseProxy` (标准库) | `grpc.UnknownServiceHandler` + `rawCodec` |
-| **编解码** | HTTP/1.1 文本协议，无需编解码 | `rawCodec` 零编解码字节透传（不 marshal/unmarshal protobuf） |
+| **编解码** | HTTP 请求/响应由标准库处理 | Gateway 使用 `rawCodec` 透传 protobuf 字节；Agent 仍按 Protobuf 类型化分发 |
 | **连接管理** | `sharedTransport` 共享连接池 | `GrpcProxyServer.connPool` (map + RWMutex) |
 | **代理粒度** | 请求级（每个 HTTP Request 独立转发） | RPC 级（per-RPC 选择后端，双向流并发转发） |
 | **流转发** | 标准库内部 `io.CopyBuffer` 流式拷贝 | 两个 goroutine 双向并发 `RecvMsg/SendMsg` |
@@ -1264,7 +1266,7 @@ gRPC 支持四种通信模式：
 | Client Streaming | 客户端发送流，服务端返回一个响应 | — |
 | **Bidirectional Streaming** | 双向流，双方可同时发送和接收 | **gRPC 透明代理** |
 
-本项目的 gRPC 代理使用 `UnknownServiceHandler` 拦截所有未注册的 gRPC 方法，通过 `rawCodec` 实现零编解码字节透传，配合两个 goroutine 实现双向流转发。
+本项目的 gRPC 代理使用 `UnknownServiceHandler` 拦截所有未注册的 gRPC 方法。Gateway 侧通过 `rawCodec` 避免 protobuf 的二次 marshal/unmarshal，配合两个 goroutine 实现双向流转发；每个 RPC 建立时先由 `LoadBalancer.SelectNode()` 选择 Agent，流存续期间保持该节点。
 
 ### P3：mTLS 双向认证基础
 
@@ -1605,22 +1607,22 @@ engine-go/cmd/
                               │  HTTP 反向代理            gRPC 透明流代理         │
                               │  ┌─────────────────┐    ┌──────────────────┐   │
                               │  │ Gin NoRoute()    │    │ UnknownService   │   │
-                              │  │ → P2C-EWMA 选节点│    │ → rawCodec 透传  │   │
+                              │  │ → P2C-EWMA 选节点│    │ → SelectNode()   │   │
                               │  │ → ReverseProxy() │    │ → 双向流转发     │   │
                               │  │ → 熔断器联动     │    │ → 熔断器联动     │   │
                               │  └────────┬────────┘    └────────┬─────────┘   │
-                              │           │   共享 LoadBalancer   │             │
+                              │           │   共享 LoadBalancer  │             │
                               └───────────┼──────────────────────┼─────────────┘
                                           │                      │
                             ┌─────────────▼──────────────────────▼─────────────┐
-                            │            privshield-agent（Agent 进程）          │
+                            │       privshield-agent 集群（N 个 Agent 实例）     │
                             │                                                  │
                             │  REST :8079               gRPC :50051            │
                             │  ┌─────────────────┐    ┌──────────────────┐    │
                             │  │ 12 层中间件漏斗  │    │ Keepalive 保活   │    │
                             │  │ → 44 项隐私原语  │    │ → mTLS CN 白名单 │    │
                             │  │ → 3 层分类漏斗   │    │ → 64MB 报文限制  │    │
-                            │  │ → 预算会计       │    │ → RawCodec 分发  │    │
+                            │  │ → 预算会计       │    │ → Protobuf 分发   │    │
                             │  │ → DICOM 脱敏     │    │ → 同一 Privacy   │    │
                             │  └─────────────────┘    │   Service        │    │
                             │                          └──────────────────┘    │
@@ -1634,7 +1636,7 @@ engine-go/cmd/
 | **核心职责** | 执行隐私计算（脱敏/DP/K-匿名/分类分级/DICOM） | L7 流量代理（负载均衡/熔断/EWMA 调度） |
 | **监听端口** | REST `:8079` + gRPC `:50051` | HTTP `:8000` + gRPC `:50000` |
 | **业务逻辑** | 全部 44 项隐私原语 + 3 层分类漏斗 + 预算会计 | **零业务逻辑**，纯流量转发 |
-| **安全体系** | API Key 鉴权 + mTLS CN 白名单 + WAF + IP 白名单 | IP 白名单 + WAF + SecurityHeaders（**不终止 TLS、不校验凭据**） |
+| **安全体系** | REST：API Key 鉴权 + WAF + IP 白名单；gRPC：mTLS/API 鉴权（按配置） | HTTP：IP 白名单 + WAF + SecurityHeaders；gRPC：独立透明代理（不经过 Gin 中间件；不终止 TLS、不校验凭据） |
 | **状态管理** | PrivacyService（分类缓存、预算计数器、熔断器） | LoadBalancer（InFlight 计数器、EWMA 延迟、熔断器） |
 | **配置来源** | `LoadAgent()`：YAML + .env + 环境变量三级驱动 | `LoadGateway()`：纯环境变量 |
 
@@ -1743,7 +1745,7 @@ type LoadBalancer = pgateway.LoadBalancer
 | API Key 鉴权 | 支持（`PRIVACY_AUTH_ENABLED`） | 不校验（由后端 Agent 强制） |
 | RequireTLS | 强制 TLS 否则拒绝启动 | 仅声明"必须加密"，不自行终止 TLS |
 
-**设计哲学**：Gateway 采用**"零信任透传"**原则——自身不终止 TLS、也不校验入站凭据，所有安全校验推迟到 Agent 端执行。这避免了"Gateway 解密 → 明文传输 → Agent 再加密"的冗余开销和安全风险。
+**设计哲学**：Gateway 对 TLS 和入站凭据采用**"零信任透传"**原则——自身不终止 TLS、也不校验入站凭据；但 HTTP 链路仍执行 IP 白名单、WAF、响应头和可选限流，业务鉴权由 Agent 端执行。gRPC 监听器独立于 Gin，不经过这些 HTTP 中间件。
 
 ### 2.8 启动流程对比（7 阶段 vs 单阶段）
 
@@ -1805,19 +1807,19 @@ type LoadBalancer = pgateway.LoadBalancer
 └──────────────┘
 ```
 
-环境变量 `GATEWAY_BACKENDS` 控制 Gateway 连接哪些 Agent：
+环境变量 `ENGINE_GATEWAY_BACKENDS` 控制 Gateway 连接哪些 Agent。该列表当前被 HTTP 和 gRPC 代理共用，但 HTTP 与 gRPC 的 Agent 端口分别是 `:8079` 和 `:50051`，因此当前配置模型无法在同一个 Gateway 实例中同时表达两套后端地址。下图的双协议路径是逻辑架构；生产部署若同时启用两种协议，应先为两种协议提供独立后端列表（或分别运行 Gateway 实例）。
 
 ```bash
 # 单 Agent（开发模式）
-GATEWAY_BACKENDS=127.0.0.1:8079
+ENGINE_GATEWAY_BACKENDS=127.0.0.1:8079
 
 # 多 Agent 集群（生产模式）
-GATEWAY_BACKENDS=10.0.1.10:8079,10.0.1.11:8079,10.0.1.12:8079
+ENGINE_GATEWAY_BACKENDS=10.0.1.10:8079,10.0.1.11:8079,10.0.1.12:8079
 ```
 
 ### 2.10 一句话总结
 
-> **`privshield-agent` 是"做事的"**（隐私计算引擎，承载全部业务逻辑与安全体系），**`privshield-gateway` 是"派活的"**（L7 流量网关，只做负载均衡 + 熔断 + 指标上报）。两者是独立的 Go 二进制进程，通过 TCP 通信，共享 `pkg/gateway` 负载均衡库和 `engine-go/internal/config` 配置门禁。Gateway 采用零信任透传原则，不终止 TLS、不校验凭据，所有安全校验推迟到 Agent 端执行——这是典型的**"纵深防御 + 关注点分离"**架构。
+> **`privshield-agent` 是"做事的"**（隐私计算引擎，承载全部业务逻辑与安全体系），**`privshield-gateway` 是"派活的"**（L7 流量网关，负责协议代理、负载均衡、熔断与指标上报）。两者是独立的 Go 二进制进程，通过 TCP 通信，共享 `pkg/gateway` 负载均衡库和 `engine-go/internal/config` 配置门禁。Gateway 不终止 TLS、不校验入站凭据；HTTP 仍执行边缘防护，业务鉴权由 Agent 完成，这是典型的**"纵深防御 + 关注点分离"**架构。
 
 ---
 
@@ -4863,7 +4865,7 @@ func (r *Runtime) Validate() error {
 └── cfg.Validate() → 网关不终止 TLS，鉴权由后端 Agent 承担
 
 阶段 2：组件初始化
-├── 解析 GATEWAY_BACKENDS（逗号分隔的后端地址列表）
+├── 解析 ENGINE_GATEWAY_BACKENDS（逗号分隔的后端地址列表）
 ├── gateway.NewLoadBalancer(addresses, strategy) → P2C/RR/LC 负载均衡器
 └── observability.NewGatewayMetrics() → 网关专用 Prometheus 指标
 

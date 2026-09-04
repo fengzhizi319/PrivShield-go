@@ -1,6 +1,6 @@
 # Qwen3.5-0.8B LoRA 专精模型微调与数据蒸馏方案概览
 
-> 本文档针对在 `PrivShield` Sidecar 架构中引入 **Qwen3.5-0.8B**（基座 `llmlora/basemodels/qwen3.5-0.8b` / `cmeee_merged`，约 752M 参数）替换 Layer-3 大模型（分类分级仲裁、脱敏与文本无痕抹平）进行全面效果评估，并提供基于 Layer-1 规则漏斗自动蒸馏训练数据的完整方案。
+> 本文档针对在 `PrivShield` Sidecar 架构中引入 **Qwen3.5-0.8B**（微调工程位于 [`services/privacy-engine/model-training/llmlora/`](../../model-training/llmlora/)，产出位于 `services/privacy-engine/.models/Qwen3.5-0.8B-Privacy-Classifier-Smoother`）替换 Layer-3 大模型（分类分级仲裁、脱敏与文本无痕抹平）进行全面效果评估，并提供基于 Layer-1 规则漏斗自动蒸馏训练数据的完整方案。
 >
 > **本方案不考虑图片 OCR，仅针对纯文本分类分级与脱敏场景。**
 
@@ -99,7 +99,7 @@ LlmAdapter._lazy_init()
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `PRIVACY_LLM_TEXT_ENGINE` | `auto` | 文本推理引擎：`auto` / `qwen_lora` / `qwen2vl` / `none` |
-| `PRIVACY_LLM_MODEL_PATH` | `.models/Qwen3.5-0.8B-Privacy-Classifier-Smoother` | 微调模型路径 |
+| `PRIVACY_LLM_MODEL_PATH` | `services/privacy-engine/.models/Qwen3.5-0.8B-Privacy-Classifier-Smoother` | 微调模型路径 |
 
 ---
 

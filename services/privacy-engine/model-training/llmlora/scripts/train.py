@@ -21,9 +21,13 @@ import sys
 from pathlib import Path
 
 # 支持从任意工作目录启动 / Allow launching from any cwd
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+_LLMLORA_DIR = Path(__file__).resolve().parents[1]
+_MODEL_TRAINING_DIR = _LLMLORA_DIR.parent
+_REPO_ROOT = _MODEL_TRAINING_DIR.parent.parent.parent
+
+for _p in (_MODEL_TRAINING_DIR, _REPO_ROOT):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 from llmlora.src.models.trainer import run_lora_training  # noqa: E402
 from llmlora.src.utils.config import Config  # noqa: E402

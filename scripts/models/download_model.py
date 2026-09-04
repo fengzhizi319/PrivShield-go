@@ -61,7 +61,11 @@ def main():
         local_dir = args.output_dir
     else:
         model_name = model_id.split("/")[-1]
-        local_dir = os.path.join(project_root, ".models", model_name)
+        engine_models_dir = os.path.join(project_root, "services", "privacy-engine", ".models")
+        if os.path.isdir(engine_models_dir):
+            local_dir = os.path.join(engine_models_dir, model_name)
+        else:
+            local_dir = os.path.join(project_root, ".models", model_name)
     
     print(f"[*] 目标保存路径: {local_dir}")
     os.makedirs(local_dir, exist_ok=True)

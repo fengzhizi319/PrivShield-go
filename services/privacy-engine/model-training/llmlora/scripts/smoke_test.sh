@@ -17,7 +17,7 @@ echo "=========================================================="
 echo "[3/3] 快速评估合并模型 (10 条样本)"
 echo "=========================================================="
 "$VENV_PY" -m llmlora.scripts.evaluate \
-    --model-path llmlora/output/models/Qwen3.5-0.8B-Privacy-Classifier-Smoother \
+    --model-path "$LLMLORA_DIR/output/models/Qwen3.5-0.8B-Privacy-Classifier-Smoother" \
     --max-samples 10
 
 echo "[smoke_test] 全链路冒烟通过 ✅"

@@ -13,7 +13,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 # 默认使用合并模型（除非显式指定 --model-path）
 # Default to merged model unless --model-path is explicitly specified
 if [[ " $* " != *" --model-path "* ]]; then
-    set -- --model-path llmlora/output/models/Qwen3.5-0.8B-Privacy-Classifier-Smoother "$@"
+    set -- --model-path "$LLMLORA_DIR/output/models/Qwen3.5-0.8B-Privacy-Classifier-Smoother" "$@"
 fi
 
 exec "$VENV_PY" -m llmlora.scripts.evaluate "$@"

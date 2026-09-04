@@ -23,11 +23,13 @@ from pathlib import Path
 # 导入类型提示泛型：字典、列表与任意类型
 from typing import Dict, List, Any
 
-# 解析当前脚本所在位置的上两级目录作为代码仓库根目录 (PrivShield 根路径)
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-# 若仓库根目录未包含在 Python 模块搜索路径中，则优先插入到 sys.path 首位
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+_LLMLORA_DIR = Path(__file__).resolve().parents[1]
+_MODEL_TRAINING_DIR = _LLMLORA_DIR.parent
+_REPO_ROOT = _MODEL_TRAINING_DIR.parent.parent.parent
+
+for _p in (_MODEL_TRAINING_DIR, _REPO_ROOT):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 # 导入 PyTorch 深度学习框架
 import torch
@@ -215,14 +217,14 @@ def main():
     parser.add_argument(
         "--model-path",
         type=str,
-        default=str(_REPO_ROOT / "llmlora" / "output" / "models" / "Qwen3.5-0.8B-Privacy-Classifier-Smoother"),
+        default=str(_LLMLORA_DIR / "output" / "models" / "Qwen3.5-0.8B-Privacy-Classifier-Smoother"),
         help="待评测模型权重的本地物理路径",
     )
     # 添加测试集数据文件路径参数配置
     parser.add_argument(
         "--test-data",
         type=str,
-        default=str(_REPO_ROOT / "llmlora" / "data" / "test.jsonl"),
+        default=str(_LLMLORA_DIR / "data" / "test.jsonl"),
         help="评测使用的 JSONL 测试集文件路径",
     )
     # 添加可选的测试结果 JSON 输出文件路径参数配置

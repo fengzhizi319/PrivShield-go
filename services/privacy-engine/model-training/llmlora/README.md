@@ -1,12 +1,14 @@
 # llmlora — Qwen3.5 基座 LoRA 专精微调（纯文本隐私分类分级与无痕抹平）
 
-基于 `basemodels/qwen3.5-0.8b`（原版 Qwen3.5 0.8B CausalLM，约 752M 参数）做 LoRA SFT，
-专门面向**纯文本**场景（不考虑图片 OCR）：
+本工程位于 `services/privacy-engine/model-training/llmlora/`，专为 **PrivShield 核心隐私计算引擎（privacy-engine）** 的 Layer-3 仲裁与无痕抹平模块服务。
+
+基于 `basemodels/qwen3.5-0.8b`（原版 Qwen3.5 0.8B CausalLM，约 752M 参数）做 LoRA SFT，专门面向**纯文本**场景（不考虑图片 OCR）：
 
 - **分类分级仲裁**：L1~L5 密级裁定（Ground Truth 来自项目 Layer-1 规则引擎）
 - **无痕抹平脱敏**：上下文自然重写（Natural Context Rewriting），零泄漏 QA 保证
+- **产物自动就绪**：合并导出模型默认自动同步至 Agent 生产部署目录 `services/privacy-engine/.models/Qwen3.5-0.8B-Privacy-Classifier-Smoother`
 
-完整设计方案见 [docs/llmlora/design_and_workflow.md](../docs/llmlora/design_and_workflow.md)。
+完整设计方案见 [docs/llmlora/design_and_workflow.md](../../docs/llmlora/design_and_workflow.md)。
 
 ---
 
@@ -18,14 +20,14 @@
 | torch | 继承系统环境（支持 CUDA） | venv 以 `--system-site-packages` 创建 |
 | peft / accelerate / datasets / faker | venv 内安装 | LoRA 注入与数据蒸馏 |
 
-训练环境独立于主项目，位于 `llmlora/.venv`，首次使用先执行 `setup_env.sh`。
+训练环境独立于主项目，位于 `services/privacy-engine/model-training/llmlora/.venv`，首次使用先执行 `setup_env.sh`。
 
 ---
 
 ## 2. 目录结构
 
 ```text
-llmlora/
+services/privacy-engine/model-training/llmlora/
 ├── .venv/                        # 独立训练环境（transformers 5.x）
 ├── basemodels/
 │   └── qwen3.5-0.8b/             # 原版 Qwen3.5 0.8B CausalLM 基座
@@ -48,28 +50,29 @@ llmlora/
 
 ## 3. 常用命令脚本（`scripts/`）
 
-所有脚本自动定位仓库根目录、校验独立 venv，可在任意目录执行；额外参数原样透传给对应 Python 入口。
+所有脚本自动定位仓库根目录与隐私引擎目录、配置 PYTHONPATH、校验独立 venv，可在任意目录执行；额外参数原样透传给对应 Python 入口。
 
 | 脚本 | 用途 |
 |---|---|
 | `scripts/setup_env.sh` | 创建/更新独立训练环境（transformers 5.14.1 等依赖）并校验版本 |
 | `scripts/generate_data.sh` | 生成训练/验证/测试数据（规则引擎打标 + 零泄漏 QA + 跨分割去重） |
-| `scripts/train.sh` | LoRA 训练一键启动（默认训练完自动合并导出并同步复制至 `.models/Qwen3.5-0.8B-Privacy-Classifier-Smoother`） |
+| `scripts/train.sh` | LoRA 训练一键启动（默认训练完自动合并导出并同步复制至 `services/privacy-engine/.models/Qwen3.5-0.8B-Privacy-Classifier-Smoother`） |
 | `scripts/evaluate.sh` | Benchmark 评估（JSON 合法率/密级 Acc/实体 F1/零泄漏/延迟） |
 | `scripts/smoke_test.sh` | 端到端冒烟：小数据生成 → 10 步训练 + 合并 → 快速评估 |
 
 ### 3.1 首次使用：搭建环境
 
 ```bash
-./llmlora/scripts/setup_env.sh
-# 指定解释器：PYTHON_BIN=/path/to/python ./llmlora/scripts/setup_env.sh
+# 从仓库任意位置执行
+./services/privacy-engine/model-training/llmlora/scripts/setup_env.sh
+# 指定解释器：PYTHON_BIN=/path/to/python ./services/privacy-engine/model-training/llmlora/scripts/setup_env.sh
 ```
 
 ### 3.2 数据生成
 
 ```bash
-./llmlora/scripts/generate_data.sh                          # sh 包装默认 1000/100/50
-./llmlora/scripts/generate_data.sh --train-size 2000 --seed 123
+./services/privacy-engine/model-training/llmlora/scripts/generate_data.sh                          # 默认 1000/100/50
+./services/privacy-engine/model-training/llmlora/scripts/generate_data.sh --train-size 2000 --seed 123
 ```
 
 > **双默认说明**：`generate_data.sh` 不传参时注入 `--train-size 1000 --dev-size 100 --test-size 50`（开发调试用小批量）；
@@ -86,10 +89,11 @@ llmlora/
 ### 3.3 训练
 
 ```bash
-./llmlora/scripts/train.sh                                  # 超参默认取 Config / llmlora/.env，自动合并
-./llmlora/scripts/train.sh --epochs 5 --lr 1e-4             # 显式传参优先于 .env
-./llmlora/scripts/train.sh --max-steps 10 --no-merge        # 冒烟快跑
-./llmlora/scripts/train.sh --resume-from-checkpoint <dir>   # 断点续训
+# 超参默认取 Config / .env，自动合并并同步到 services/privacy-engine/.models/
+./services/privacy-engine/model-training/llmlora/scripts/train.sh
+./services/privacy-engine/model-training/llmlora/scripts/train.sh --epochs 5 --lr 1e-4             # 显式传参优先于 .env
+./services/privacy-engine/model-training/llmlora/scripts/train.sh --max-steps 10 --no-merge        # 冒烟快跑
+./services/privacy-engine/model-training/llmlora/scripts/train.sh --resume-from-checkpoint <dir>   # 断点续训
 ```
 
 > **超参优先级**：CLI 显式传参 > `llmlora/.env`（`LLMLORA_*` 环境变量）> `src/utils/config.py` 内置默认值。
@@ -105,16 +109,16 @@ llmlora/
 
 ```bash
 # PyTorch 后端（默认）
-./llmlora/scripts/evaluate.sh                               # 默认评估合并模型（全部测试样本）
-./llmlora/scripts/evaluate.sh --max-samples 20
+./services/privacy-engine/model-training/llmlora/scripts/evaluate.sh                               # 默认评估合并模型
+./services/privacy-engine/model-training/llmlora/scripts/evaluate.sh --max-samples 20
 
 # vLLM 后端（更快，约 7x 加速）
-./llmlora/scripts/evaluate.sh --backend vllm --max-samples 20
+./services/privacy-engine/model-training/llmlora/scripts/evaluate.sh --backend vllm --max-samples 20
 
 # 基座 + LoRA adapter 模式
-./llmlora/scripts/evaluate.sh \
-    --model-path llmlora/basemodels/qwen3.5-0.8b \
-    --adapter-path llmlora/output/saves/qwen35-privacy-lora
+./services/privacy-engine/model-training/llmlora/scripts/evaluate.sh \
+    --model-path services/privacy-engine/model-training/llmlora/basemodels/qwen3.5-0.8b \
+    --adapter-path services/privacy-engine/model-training/llmlora/output/saves/qwen35-privacy-lora
 ```
 
 > 注意：使用合并模型时默认**不再叠加** adapter（避免双重应用 LoRA 权重）；
@@ -131,18 +135,7 @@ llmlora/
 ### 3.5 端到端冒烟测试
 
 ```bash
-./llmlora/scripts/smoke_test.sh
-```
-
-### 3.6 等价的原生命令（不用脚本时）
-
-```bash
-cd /path/to/PrivShield
-
-llmlora/.venv/bin/python -m llmlora.scripts.generate_data --train-size 1000 --dev-size 100 --test-size 50
-llmlora/.venv/bin/python -m llmlora.scripts.train --epochs 3 --batch-size 4
-llmlora/.venv/bin/python -m llmlora.scripts.evaluate --model-path llmlora/output/models/Qwen3.5-0.8B-Privacy-Classifier-Smoother
-llmlora/.venv/bin/python -m llmlora.scripts.evaluate --backend vllm --model-path llmlora/output/models/Qwen3.5-0.8B-Privacy-Classifier-Smoother
+./services/privacy-engine/model-training/llmlora/scripts/smoke_test.sh
 ```
 
 ---
@@ -160,10 +153,9 @@ llmlora/.venv/bin/python -m llmlora.scripts.evaluate --backend vllm --model-path
 | `--max-length` | 512 | 单样本最大 token 长度 |
 | `--lora-r` / `--lora-alpha` / `--lora-dropout` | 32 / 64 / 0.05 | LoRA 超参 |
 | `--dtype` | auto | auto / bf16 / fp16 / fp32 |
+| `--agent-model-dir` | `services/privacy-engine/.models/Qwen3.5-0.8B-Privacy-Classifier-Smoother` | 训练合并后自动同步的目标路径 |
 | `--no-merge` | — | 训练后不自动合并导出 |
-
-> `llmlora/.env` 中的 `LLMLORA_*` 变量会覆盖上表内置默认值（如 `LLMLORA_BATCH_SIZE`）；
-> CLI 显式传参优先级最高。
+| `--no-copy-to-agent` | — | 训练合并后不自动复制到 Agent .models 部署目录 |
 
 ---
 

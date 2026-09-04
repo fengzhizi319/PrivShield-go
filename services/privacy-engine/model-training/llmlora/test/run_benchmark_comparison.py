@@ -14,9 +14,13 @@ import time
 from pathlib import Path
 from typing import Dict, Any
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+_LLMLORA_DIR = Path(__file__).resolve().parents[1]
+_MODEL_TRAINING_DIR = _LLMLORA_DIR.parent
+_REPO_ROOT = _MODEL_TRAINING_DIR.parent.parent.parent
+
+for _p in (_MODEL_TRAINING_DIR, _REPO_ROOT):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 
 def run_benchmark_subprocess(cmd_args: list[str]) -> Dict[str, Any]:
@@ -99,19 +103,19 @@ def main():
     parser.add_argument(
         "--model-path",
         type=str,
-        default=str(_REPO_ROOT / "llmlora" / "output" / "models" / "Qwen3.5-0.8B-Privacy-Classifier-Smoother"),
+        default=str(_LLMLORA_DIR / "output" / "models" / "Qwen3.5-0.8B-Privacy-Classifier-Smoother"),
         help="合并模型路径",
     )
     parser.add_argument(
         "--test-data",
         type=str,
-        default=str(_REPO_ROOT / "llmlora" / "data" / "test.jsonl"),
+        default=str(_LLMLORA_DIR / "data" / "test.jsonl"),
         help="测试数据 JSONL 路径",
     )
     parser.add_argument(
         "--report-out",
         type=str,
-        default=str(_REPO_ROOT / "llmlora" / "test" / "benchmark_report.md"),
+        default=str(_LLMLORA_DIR / "test" / "benchmark_report.md"),
         help="测试报告 Markdown 保存路径",
     )
     args = parser.parse_args()

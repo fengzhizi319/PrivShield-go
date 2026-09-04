@@ -71,8 +71,9 @@ def main():
     model_id = args.model_id
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(os.path.dirname(current_dir))
-    models_dir = args.output_dir if args.output_dir else os.path.join(project_root, ".models")
+    engine_models_dir = os.path.join(project_root, "services", "privacy-engine", ".models")
+    default_dir = engine_models_dir if os.path.isdir(engine_models_dir) else os.path.join(project_root, ".models")
+    models_dir = args.output_dir if args.output_dir else default_dir
     os.makedirs(models_dir, exist_ok=True)
 
     # 优先尝试从 ModelScope 进行下载

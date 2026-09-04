@@ -17,6 +17,14 @@ pytest.importorskip("transformers", reason="需要 llmlora 训练环境（transf
 pytest.importorskip("peft", reason="需要 llmlora 训练环境（peft）")
 pytest.importorskip("datasets", reason="需要 llmlora 训练环境（datasets）")
 
+import sys
+from pathlib import Path
+
+_THIS_DIR = Path(__file__).resolve().parent
+_MODEL_TRAINING_DIR = _THIS_DIR.parent.parent
+if str(_MODEL_TRAINING_DIR) not in sys.path:
+    sys.path.insert(0, str(_MODEL_TRAINING_DIR))
+
 from llmlora.src.models.trainer import LoRATrainingRunner
 from llmlora.src.utils.config import Config
 

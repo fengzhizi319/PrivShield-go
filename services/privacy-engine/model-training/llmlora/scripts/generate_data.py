@@ -36,9 +36,14 @@ from faker import Faker
 
 # 保证从任意工作目录运行时都能导入 llmlora 与 PrivShield
 # Ensure llmlora and PrivShield are importable from any cwd
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+_LLMLORA_DIR = Path(__file__).resolve().parents[1]
+_MODEL_TRAINING_DIR = _LLMLORA_DIR.parent
+_ENGINE_DIR = _MODEL_TRAINING_DIR.parent
+_REPO_ROOT = _ENGINE_DIR.parent.parent
+
+for _p in (_MODEL_TRAINING_DIR, _REPO_ROOT):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 from llmlora.src.utils.metrics import find_leaked_values  # noqa: E402
 
@@ -542,13 +547,13 @@ def main() -> None:
     parser.add_argument(
         "--output-dir",
         type=str,
-        default=str(_REPO_ROOT / "llmlora" / "data"),
+        default=str(_LLMLORA_DIR / "data"),
         help="数据导出目录",
     )
     parser.add_argument(
         "--rules-dir",
         type=str,
-        default=str(_REPO_ROOT / "rules"),
+        default=str(_ENGINE_DIR / "rules" if (_ENGINE_DIR / "rules").exists() else _REPO_ROOT / "rules"),
         help="项目规则库目录",
     )
     parser.add_argument("--seed", type=int, default=42, help="随机种子")

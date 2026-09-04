@@ -63,8 +63,9 @@ data/sanitized_images/
 site/
 
 # llmlora basemodels & output
-/llmlora/basemodels/
-/llmlora/output/
+services/privacy-engine/model-training/llmlora/basemodels/
+services/privacy-engine/model-training/llmlora/output/
+services/privacy-engine/model-training/llmlora/.venv/
 
 # Legacy package directory (renamed to engine/)
 /PrivShield/
@@ -94,6 +95,6 @@ console/app-lz/bff-go/bin/
 .env.*
 !.env.example
 !.env*.example
-/llmlora/.env
-/llmlora/.env.*
-!/llmlora/.env*.example
+services/privacy-engine/model-training/llmlora/.env
+services/privacy-engine/model-training/llmlora/.env.*
+!services/privacy-engine/model-training/llmlora/.env*.example

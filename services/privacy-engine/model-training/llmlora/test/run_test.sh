@@ -8,15 +8,19 @@
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+LLMLORA_DIR="$(dirname "$SCRIPT_DIR")"
+MODEL_TRAINING_DIR="$(dirname "$LLMLORA_DIR")"
+ENGINE_DIR="$(dirname "$MODEL_TRAINING_DIR")"
+REPO_ROOT="$(cd "$ENGINE_DIR/../.." && pwd)"
 
-VENV_PY="$REPO_ROOT/llmlora/.venv/bin/python"
+VENV_PY="$LLMLORA_DIR/.venv/bin/python"
 if [ ! -f "$VENV_PY" ]; then
-    VENV_PY="python"
+    VENV_PY="python3"
 fi
 
 # 确保 venv bin 目录在 PATH 中（ninja 等工具）
-export PATH="$REPO_ROOT/llmlora/.venv/bin:$PATH"
+export PATH="$LLMLORA_DIR/.venv/bin:$PATH"
+export PYTHONPATH="$MODEL_TRAINING_DIR:$REPO_ROOT:${PYTHONPATH:-}"
 
 export VLLM_USE_V1=0
 export VLLM_USE_V2_MODEL_RUNNER=0

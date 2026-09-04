@@ -18,17 +18,30 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
 
-# 仓库根目录：llmlora/ -> llmlora/src -> llmlora/src/utils -> 上三级即仓库根
-# Repository root: three levels up from this file (utils -> src -> llmlora -> repo root)
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-LLMLORA_DIR = _REPO_ROOT / "llmlora"
+_THIS_FILE = Path(__file__).resolve()
+LLMLORA_DIR = _THIS_FILE.parents[2]
+MODEL_TRAINING_DIR = LLMLORA_DIR.parent
+ENGINE_DIR = MODEL_TRAINING_DIR.parent
 
-# 自动尝试从 llmlora/.env 或根目录 .env 加载环境变量
+# 仓库根目录 (PrivShield)
+if len(_THIS_FILE.parents) >= 7 and (_THIS_FILE.parents[6] / "services").exists():
+    _REPO_ROOT = _THIS_FILE.parents[6]
+else:
+    cur = LLMLORA_DIR
+    while cur.parent != cur:
+        if (cur / "go.work").exists() or (cur / "services").exists():
+            break
+        cur = cur.parent
+    _REPO_ROOT = cur
+
+# 自动尝试从 llmlora/.env、engine/.env 或根目录 .env 加载环境变量
 # Automatically load environment variables from llmlora/.env or repo root .env
 try:
     import dotenv
     if (LLMLORA_DIR / ".env").exists():
         dotenv.load_dotenv(LLMLORA_DIR / ".env")
+    elif (ENGINE_DIR / ".env").exists():
+        dotenv.load_dotenv(ENGINE_DIR / ".env")
     elif (_REPO_ROOT / ".env").exists():
         dotenv.load_dotenv(_REPO_ROOT / ".env")
 except ImportError:
@@ -83,7 +96,10 @@ class Config:
     # 规则库目录（供数据生成管道对接项目规则引擎）
     # Rules directory (used by the data pipeline to plug in the project rule engine)
     rules_dir: str = field(
-        default_factory=lambda: _env("LLMLORA_RULES_DIR", str(_REPO_ROOT / "rules"))
+        default_factory=lambda: _env(
+            "LLMLORA_RULES_DIR",
+            str(ENGINE_DIR / "rules" if (ENGINE_DIR / "rules").exists() else _REPO_ROOT / "rules"),
+        )
     )
 
     # 数据集目录 / Dataset directory
@@ -110,11 +126,15 @@ class Config:
     )
 
     # Agent 主模型部署目录（训练合并后自动同步的目标路径）
-    # Target deployment directory for PrivShield
+    # Target deployment directory for PrivShield (services/privacy-engine/.models)
     agent_model_dir: str = field(
         default_factory=lambda: _env(
             "LLMLORA_AGENT_MODEL_DIR",
-            str(_REPO_ROOT / ".models" / "Qwen3.5-0.8B-Privacy-Classifier-Smoother"),
+            str(
+                (ENGINE_DIR / ".models" / "Qwen3.5-0.8B-Privacy-Classifier-Smoother")
+                if (ENGINE_DIR / ".models").exists()
+                else (_REPO_ROOT / ".models" / "Qwen3.5-0.8B-Privacy-Classifier-Smoother")
+            ),
         )
     )
 

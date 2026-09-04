@@ -19,8 +19,11 @@ fi
 
 # 参数默认值配置
 HOST="${PRIVACY_LLM_API_HOST:-127.0.0.1}"
-PORT="${PRIVACY_LLM_API_PORT:-8000}"
-MODEL_PATH="${PRIVACY_LLM_MODEL_PATH:-.models/Qwen3.5-0.8B-Privacy-Classifier-Smoother}"
+DEFAULT_MODEL_PATH="services/privacy-engine/.models/Qwen3.5-0.8B-Privacy-Classifier-Smoother"
+if [ ! -d "$ROOT_DIR/$DEFAULT_MODEL_PATH" ] && [ -d "$ROOT_DIR/.models/Qwen3.5-0.8B-Privacy-Classifier-Smoother" ]; then
+    DEFAULT_MODEL_PATH=".models/Qwen3.5-0.8B-Privacy-Classifier-Smoother"
+fi
+MODEL_PATH="${PRIVACY_LLM_MODEL_PATH:-$DEFAULT_MODEL_PATH}"
 SERVED_NAME="${PRIVACY_LLM_MODEL_NAME:-Qwen3.5-0.8B-Privacy-Classifier-Smoother}"
 GPU_UTIL="${PRIVACY_VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
 
