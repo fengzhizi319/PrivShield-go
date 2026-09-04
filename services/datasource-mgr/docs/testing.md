@@ -20,7 +20,7 @@
 ## 2. 核心安全测试用例
 
 ### 2.1 HTTPS 双向认证与公钥固定测试 (`TestBuildServerTLSConfig_HTTPS_MTLS`)
-1. **Case 1 (合法双向认证)**：客户端挂载 `ca.crt` 根证书与匹配固定公钥 `client.pub` 的客户端私钥证书，访问 `https://127.0.0.1:<port>/api/health`，断言返回 **200 OK**；
+1. **Case 1 (合法双向认证)**：客户端挂载 `ca.crt` 根证书与匹配固定公钥 `client.pub` 的客户端私钥证书，访问 `https://127.0.0.1:<port>/health`，断言返回 **200 OK**；
 2. **Case 2 (未挂载客户端证书)**：未提供证书直接请求 HTTPS 端口，底层 TLS 握手立即断开并报错 `tls: client didn't provide a certificate`，断言请求被严格阻断；
 3. **Case 3 (公钥不匹配伪造证书)**：使用由合法 CA 签发但公钥非 `client.pub` 的证书访问，握手阶段被 `VerifyPeerCertificate` 阻断，实现零信任安全防御。
 

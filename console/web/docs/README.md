@@ -2,7 +2,7 @@
 
 本目录包含 Privacy 测试控制台 **Web 前端**（`console/web`）的全套 SDLC 文档。
 
-前端是一个 **React 18 + TypeScript + Vite + Tailwind CSS** 单页应用，以三栏布局（顶部导航 + 侧边导航 + 主区域）组织 `PrivShield` 的全部可测试接口，支持示例加载、请求编辑、JSON 高亮响应、cURL 导出、请求历史与批量测试。它通过统一的 `/api/*` 契约与 Go BFF（REST 入口 / gRPC 上游）通信。
+前端是一个 **React 18 + TypeScript + Vite + Tailwind CSS** 单页应用，以三栏布局（顶部导航 + 侧边导航 + 主区域）组织 `PrivShield` 的全部可测试接口，支持示例加载、请求编辑、JSON 高亮响应、cURL 导出、请求历史与批量测试。它通过统一的 `/v1/*` 契约与 Go BFF（REST 入口 / gRPC 上游）通信。
 
 ## 文档清单
 

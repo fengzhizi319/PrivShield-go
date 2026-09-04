@@ -100,7 +100,7 @@ npm run build        # 等价于 tsc && vite build
 
 - `src/main.tsx` - 应用入口
 - `src/App.tsx` - 根组件：全局状态 + 三栏布局 + 视图路由
-- `src/api/client.ts` - 后端 API 调用封装（唯一 fetch 出口）
+- `src/v1/client.ts` - 后端 API 调用封装（唯一 fetch 出口）
 - `src/types/api.ts` - 前后端数据契约（TS 类型定义）
 - `src/lib/categories.ts` - 分类元数据（顺序 / 图标 / 配色）
 - `src/lib/curl.ts` - cURL 命令生成

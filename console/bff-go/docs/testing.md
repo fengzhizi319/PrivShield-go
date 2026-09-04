@@ -21,20 +21,20 @@ Go BFF（`console/bff-go`）是控制台与 PrivShield Agent 之间的薄代理�
 
 ## 2. 单元测试用例说明
 
-### 2.1 `/api/health`
+### 2.1 `/health`
 
 | 用例 | 场景 | 断言要点 |
 |---|---|---|
 | `TestHealth_OK` | agent 可达 | 返回 200；`status == "ok"`；含 `via` 与 `protocol` |
 | `TestHealth_AgentUnreachable` | agent 不可达 | 仍返回 **200**；agent 状态为 `"unreachable"`；含 `error` 字段 |
 
-### 2.2 `/api/samples`
+### 2.2 `/v1/samples`
 
 | 用例 | 场景 | 断言要点 |
 |---|---|---|
 | `TestSamples` | 获取示例 | 返回 200；`samples` 数量与 `get_samples()` 一致；首条含 `path` |
 
-### 2.3 `/api/proxy`
+### 2.3 `/v1/proxy`
 
 | 用例 | 场景 | 断言要点 |
 |---|---|---|
@@ -42,7 +42,7 @@ Go BFF（`console/bff-go`）是控制台与 PrivShield Agent 之间的薄代理�
 | `TestProxy_InvalidBody` | 缺少必填字段 `path` | 返回 **400**；响应含 `error` 字段 |
 | `TestProxy_UpstreamError` | 上游返回错误 | **透传**状态码与错误信息 |
 
-### 2.4 `/api/batch`
+### 2.4 `/v1/batch`
 
 | 用例 | 场景 | 断言要点 |
 |---|---|---|
@@ -66,9 +66,9 @@ go test -v ./internal/grpcserver
 
 `console/bff-go/tests/integration_test.go` 在真实端口上启动 BFF，并连接 mock 或真实 agent：
 
-- 探测 `/api/health`、`/api/samples` 是否能正常返回；
-- 验证 `/api/proxy` 路径转发与响应包装；
-- 验证文件上传 `/api/upload` 的 multipart 处理。
+- 探测 `/health`、`/v1/samples` 是否能正常返回；
+- 验证 `/v1/proxy` 路径转发与响应包装；
+- 验证文件上传 `/v1/upload` 的 multipart 处理。
 
 前置条件：
 
@@ -111,7 +111,7 @@ go test ./pkg/... ./services/service-hub/... ./services/datasource-mgr/... ./ser
 
 ## 7. 测试覆盖建议
 
-- `/api/upload` 大文件/超大文件拒绝分支；
+- `/v1/upload` 大文件/超大文件拒绝分支；
 - gRPC Server 在 `ConsoleGRPCEnabled=false` 时不启动分支；
 - mTLS 公钥固定（`ConsoleTLSPinnedPubKeyFile`）拒绝非法客户端分支；
 - 限流中间件（`CONSOLE_RATE_LIMIT`）命中与跳过分支。

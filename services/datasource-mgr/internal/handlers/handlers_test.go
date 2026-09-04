@@ -47,14 +47,14 @@ func newTestRouter() *gin.Engine {
 	return r
 }
 
-// TestHealth verifies that GET /api/health returns 200 OK and correct service identifiers.
+// TestHealth verifies that GET /health returns 200 OK and correct service identifiers.
 // TestHealth 验证存活健康探针端点：
-// 1. 发送 HTTP GET /api/health 请求；
+// 1. 发送 HTTP GET /health 请求；
 // 2. 断言 HTTP 状态码为 200 OK；
 // 3. 验证 JSON 响应体中的 backend 为 "ok" 且 via 标识为 "datasource-mgr"。
 func TestHealth(t *testing.T) {
 	r := newTestRouter()
-	req, _ := http.NewRequest("GET", "/api/health", nil)
+	req, _ := http.NewRequest("GET", "/health", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -69,14 +69,14 @@ func TestHealth(t *testing.T) {
 	}
 }
 
-// TestListDataSources verifies GET /api/datasources returns the full mock directory.
+// TestListDataSources verifies GET /v1/datasources returns the full mock directory.
 // TestListDataSources 验证数据源列表查询端点：
-// 1. 请求 GET /api/datasources；
+// 1. 请求 GET /v1/datasources；
 // 2. 断言返回状态码 200 OK；
 // 3. 校验返回的数据源总数至少为 2 个（包含医保与康养）。
 func TestListDataSources(t *testing.T) {
 	r := newTestRouter()
-	req, _ := http.NewRequest("GET", "/api/datasources", nil)
+	req, _ := http.NewRequest("GET", "/v1/datasources", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -91,13 +91,13 @@ func TestListDataSources(t *testing.T) {
 	}
 }
 
-// TestGetDataSource verifies GET /api/datasources/:id returns metadata for a registered datasource.
+// TestGetDataSource verifies GET /v1/datasources/:id returns metadata for a registered datasource.
 // TestGetDataSource 验证单个数据源元数据查询端点：
-// 1. 请求 GET /api/datasources/ds_yibao；
+// 1. 请求 GET /v1/datasources/ds_yibao；
 // 2. 断言状态码 200 OK 且返回的 ID 精确匹配 "ds_yibao"。
 func TestGetDataSource(t *testing.T) {
 	r := newTestRouter()
-	req, _ := http.NewRequest("GET", "/api/datasources/ds_yibao", nil)
+	req, _ := http.NewRequest("GET", "/v1/datasources/ds_yibao", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -112,11 +112,11 @@ func TestGetDataSource(t *testing.T) {
 	}
 }
 
-// TestGetDataSourceNotFound verifies GET /api/datasources/:id returns 404 for unknown datasource.
+// TestGetDataSourceNotFound verifies GET /v1/datasources/:id returns 404 for unknown datasource.
 // TestGetDataSourceNotFound 验证查询不存在的数据源时返回 404 Not Found 错误。
 func TestGetDataSourceNotFound(t *testing.T) {
 	r := newTestRouter()
-	req, _ := http.NewRequest("GET", "/api/datasources/non_existent", nil)
+	req, _ := http.NewRequest("GET", "/v1/datasources/non_existent", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -125,13 +125,13 @@ func TestGetDataSourceNotFound(t *testing.T) {
 	}
 }
 
-// TestTestConnection verifies POST /api/datasources/:id/test returns success and latency.
+// TestTestConnection verifies POST /v1/datasources/:id/test returns success and latency.
 // TestTestConnection 验证数据源连通性测试端点：
-// 1. 发送 POST /api/datasources/ds_kangyang/test 请求；
+// 1. 发送 POST /v1/datasources/ds_kangyang/test 请求；
 // 2. 校验返回成功标识 Success=true 且 DataSourceID 匹配。
 func TestTestConnection(t *testing.T) {
 	r := newTestRouter()
-	req, _ := http.NewRequest("POST", "/api/datasources/ds_kangyang/test", nil)
+	req, _ := http.NewRequest("POST", "/v1/datasources/ds_kangyang/test", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -146,13 +146,13 @@ func TestTestConnection(t *testing.T) {
 	}
 }
 
-// TestGetMetadata verifies GET /api/datasources/:id/metadata returns table schemas.
+// TestGetMetadata verifies GET /v1/datasources/:id/metadata returns table schemas.
 // TestGetMetadata 验证数据源 Schema 元数据探查端点：
-// 1. 请求 GET /api/datasources/ds_yibao/metadata；
+// 1. 请求 GET /v1/datasources/ds_yibao/metadata；
 // 2. 校验返回状态码 200 OK，包含数据表清单且 DataSourceID 为 "ds_yibao"。
 func TestGetMetadata(t *testing.T) {
 	r := newTestRouter()
-	req, _ := http.NewRequest("GET", "/api/datasources/ds_yibao/metadata", nil)
+	req, _ := http.NewRequest("GET", "/v1/datasources/ds_yibao/metadata", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -167,11 +167,11 @@ func TestGetMetadata(t *testing.T) {
 	}
 }
 
-// TestGetAccessAudit verifies GET /api/datasources/:id/audit returns mock audit log records.
+// TestGetAccessAudit verifies GET /v1/datasources/:id/audit returns mock audit log records.
 // TestGetAccessAudit 验证模拟数据源访问审计日志查询端点。
 func TestGetAccessAudit(t *testing.T) {
 	r := newTestRouter()
-	req, _ := http.NewRequest("GET", "/api/datasources/ds_yibao/audit", nil)
+	req, _ := http.NewRequest("GET", "/v1/datasources/ds_yibao/audit", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -180,11 +180,11 @@ func TestGetAccessAudit(t *testing.T) {
 	}
 }
 
-// TestSeedDataSources verifies POST /api/datasources/seed returns seed initialization message.
+// TestSeedDataSources verifies POST /v1/datasources/seed returns seed initialization message.
 // TestSeedDataSources 验证模拟数据源重新初始化/播种端点返回 200 OK。
 func TestSeedDataSources(t *testing.T) {
 	r := newTestRouter()
-	req, _ := http.NewRequest("POST", "/api/datasources/seed", nil)
+	req, _ := http.NewRequest("POST", "/v1/datasources/seed", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -205,16 +205,16 @@ func TestMockHelpersDisabled(t *testing.T) {
 	srv := New(cfg, nil, slog.Default(), nil)
 	srv.RegisterRoutes(r)
 
-	// 1. POST /api/datasources/seed -> 404
-	reqSeed, _ := http.NewRequest("POST", "/api/datasources/seed", nil)
+	// 1. POST /v1/datasources/seed -> 404
+	reqSeed, _ := http.NewRequest("POST", "/v1/datasources/seed", nil)
 	wSeed := httptest.NewRecorder()
 	r.ServeHTTP(wSeed, reqSeed)
 	if wSeed.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for disabled /seed, got %d", wSeed.Code)
 	}
 
-	// 2. GET /api/datasources/ds_yibao/audit -> 404
-	reqAudit, _ := http.NewRequest("GET", "/api/datasources/ds_yibao/audit", nil)
+	// 2. GET /v1/datasources/ds_yibao/audit -> 404
+	reqAudit, _ := http.NewRequest("GET", "/v1/datasources/ds_yibao/audit", nil)
 	wAudit := httptest.NewRecorder()
 	r.ServeHTTP(wAudit, reqAudit)
 	if wAudit.Code != http.StatusNotFound {
@@ -222,9 +222,9 @@ func TestMockHelpersDisabled(t *testing.T) {
 	}
 }
 
-// TestGetRecordByIDCard verifies GET /api/datasources/:id/record-by-id returns a single record.
+// TestGetRecordByIDCard verifies GET /v1/datasources/:id/record-by-id returns a single record.
 // TestGetRecordByIDCard 验证按身份证号查询单条记录端点：
-// 1. 请求 GET /api/datasources/ds_yibao/record-by-id?id_card_no=110101196809171010；
+// 1. 请求 GET /v1/datasources/ds_yibao/record-by-id?id_card_no=110101196809171010；
 // 2. 验证响应状态码 200 OK，found=true，且记录包含匹配的 id_card_no；
 // 3. 查询不存在的身份证号时 found=false；
 // 4. 缺少 id_card_no 参数时返回 400。
@@ -232,7 +232,7 @@ func TestGetRecordByIDCard(t *testing.T) {
 	r := newTestRouter()
 
 	// 1. 正常查询：使用 yibao.csv 第一行的身份证号
-	req, _ := http.NewRequest("GET", "/api/datasources/ds_yibao/record-by-id?id_card_no=110101196809171010", nil)
+	req, _ := http.NewRequest("GET", "/v1/datasources/ds_yibao/record-by-id?id_card_no=110101196809171010", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -264,7 +264,7 @@ func TestGetRecordByIDCard(t *testing.T) {
 	}
 
 	// 2. 查询不存在的身份证号
-	req2, _ := http.NewRequest("GET", "/api/datasources/ds_yibao/record-by-id?id_card_no=000000000000000000", nil)
+	req2, _ := http.NewRequest("GET", "/v1/datasources/ds_yibao/record-by-id?id_card_no=000000000000000000", nil)
 	w2 := httptest.NewRecorder()
 	r.ServeHTTP(w2, req2)
 
@@ -278,7 +278,7 @@ func TestGetRecordByIDCard(t *testing.T) {
 	}
 
 	// 3. 缺少 id_card_no 参数时应返回 400
-	req3, _ := http.NewRequest("GET", "/api/datasources/ds_yibao/record-by-id", nil)
+	req3, _ := http.NewRequest("GET", "/v1/datasources/ds_yibao/record-by-id", nil)
 	w3 := httptest.NewRecorder()
 	r.ServeHTTP(w3, req3)
 

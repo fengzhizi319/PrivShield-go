@@ -148,26 +148,26 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 /**
  * 获取后端与 agent 的连通性状态 / Fetch backend-to-agent connectivity status
  *
- * 调用后端 /api/health 端点，返回后端自身状态及其与 agent 的通信结果。
- * Calls backend /api/health endpoint, returns backend's own status and its communication result with agent.
+ * 调用后端 /health 端点，返回后端自身状态及其与 agent 的通信结果。
+ * Calls backend /health endpoint, returns backend's own status and its communication result with agent.
  *
  * @returns 健康检查结果（包含 backend/agent/agent_url/protocol 等字段）/ Health check result
  */
 export async function fetchHealth(): Promise<ConsoleHealth> {
-  return request<ConsoleHealth>('/api/health');
+  return request<ConsoleHealth>('/health');
 }
 
 /**
  * 获取所有端点示例列表 / Fetch all endpoint sample list
  *
- * 后端 /api/samples 返回 { samples: [...] } 结构，本函数解包后返回纯数组。
- * Backend /api/samples returns { samples: [...] } structure; this function unwraps and returns the plain array.
+ * 后端 /v1/samples 返回 { samples: [...] } 结构，本函数解包后返回纯数组。
+ * Backend /v1/samples returns { samples: [...] } structure; this function unwraps and returns the plain array.
  *
  * @returns 端点示例数组（用于侧边栏与总览页渲染）/ Endpoint samples array (for sidebar & overview rendering)
  */
 export async function fetchSamples(): Promise<EndpointSample[]> {
   // 请求后端示例接口 / Request backend samples endpoint
-  const data = await request<{ samples: EndpointSample[] }>('/api/samples');
+  const data = await request<{ samples: EndpointSample[] }>('/v1/samples');
   // 解包 samples 字段返回纯数组 / Unwrap samples field and return plain array
   return data.samples;
 }
@@ -177,7 +177,7 @@ export async function fetchSamples(): Promise<EndpointSample[]> {
  *
  * 详细逻辑 / Detailed Logic：
  *   1. 将 ProxyRequest 序列化为 JSON；
- *   2. POST 到后端 /api/proxy；
+ *   2. POST 到后端 /v1/proxy；
  *   3. 后端转发到 agent 并包装响应（含 status/duration_ms/data/via/protocol）；
  *   4. 后端返回非 2xx 时抛出 Error（携带 detail），由调用方展示。
  *
@@ -185,7 +185,7 @@ export async function fetchSamples(): Promise<EndpointSample[]> {
  * @returns 包装后的代理响应 / Wrapped proxy response
  */
 export async function proxyRequest(req: ProxyRequest): Promise<ProxyResponse> {
-  return request<ProxyResponse>('/api/proxy', {
+  return request<ProxyResponse>('/v1/proxy', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' }, // JSON 请求体 / JSON request body
     body: JSON.stringify(req), // 序列化请求对象 / Serialize request object
@@ -203,7 +203,7 @@ export async function proxyRequest(req: ProxyRequest): Promise<ProxyResponse> {
  * @returns 批量测试汇总响应（total/passed/failed/results）/ Batch test summary response
  */
 export async function batchRequest(requests: BatchRequestItem[]): Promise<BatchResponse> {
-  return request<BatchResponse>('/api/batch', {
+  return request<BatchResponse>('/v1/batch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' }, // JSON 请求体 / JSON request body
     body: JSON.stringify({ requests }), // 包装为 { requests: [...] } 结构 / Wrap as { requests: [...] } structure
@@ -216,7 +216,7 @@ export async function batchRequest(requests: BatchRequestItem[]): Promise<BatchR
  *
  * 详细逻辑 / Detailed Logic：
  *   1. 构造 FormData，附加 file、operation、params 三个字段；
- *   2. POST 到后端 /api/upload；
+ *   2. POST 到后端 /v1/upload；
  *   3. 后端转发到 agent 的 process_file 端点，返回包装后的处理结果。
  *
  * 注意：不手动设置 Content-Type，由浏览器自动生成带 boundary 的 multipart 头。
@@ -243,7 +243,7 @@ export async function uploadFile(
 
   // 发送 POST 请求，不设置 Content-Type（浏览器自动添加 multipart/form-data + boundary）
   // Send POST request without Content-Type (browser auto-adds multipart/form-data + boundary)
-  return request<UploadResponse>('/api/upload', {
+  return request<UploadResponse>('/v1/upload', {
     method: 'POST',
     body: form, // FormData 作为请求体 / FormData as request body
   });
@@ -259,7 +259,7 @@ export async function uploadFile(
  * @returns 负载均衡测试响应（含各节点命中数/成功率/延迟）/ LB test response (per-node hits/success rate/latency)
  */
 export async function lbTest(req: LbTestRequest): Promise<LbTestResponse> {
-  return request<LbTestResponse>('/api/lb_test', {
+  return request<LbTestResponse>('/v1/lb_test', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' }, // JSON 请求体 / JSON request body
     body: JSON.stringify(req), // 序列化请求对象 / Serialize request object
@@ -322,7 +322,7 @@ export async function fetchStandards(): Promise<StandardsResponse> {
  * @returns 压测结果汇总（QPS/延迟分布/成功率）/ Test result summary
  */
 export async function concurrencyTest(req: ConcurrencyTestRequest): Promise<ConcurrencyTestResponse> {
-  return request<ConcurrencyTestResponse>('/api/concurrency_test', {
+  return request<ConcurrencyTestResponse>('/v1/concurrency_test', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
@@ -334,7 +334,7 @@ export async function concurrencyTest(req: ConcurrencyTestRequest): Promise<Conc
  * Medical privacy pipeline: classifies & desensitizes medical records or kangyang.csv.
  */
 export async function runMedicalPipeline(req: MedicalPipelineRequest = {}): Promise<MedicalPipelineResponse> {
-  const raw = await request<any>('/api/medical_pipeline', {
+  const raw = await request<any>('/v1/medical_pipeline', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
@@ -351,7 +351,7 @@ export async function runMedicalPipeline(req: MedicalPipelineRequest = {}): Prom
  * Yibao pipeline: classifies & desensitizes 18-field medical insurance records or yibao.csv.
  */
 export async function runYibaoPipeline(req: MedicalPipelineRequest = {}): Promise<MedicalPipelineResponse> {
-  const raw = await request<any>('/api/yibao_pipeline', {
+  const raw = await request<any>('/v1/yibao_pipeline', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...req, dataset: 'yibao' }),

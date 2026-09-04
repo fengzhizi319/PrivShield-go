@@ -46,7 +46,7 @@ func TestHealthCheck(t *testing.T) {
 	router := SetupRouter(h)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodGet, "/api/health", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/health", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -65,15 +65,15 @@ func TestHealthCheck(t *testing.T) {
 // TestGetTopology 验证服务拓扑探测端点。
 //
 // 测试步骤：
-//  1. GET /api/lz/topology?protocol=rest → 验证返回 4 个服务
+//  1. GET /v1/lz/topology?protocol=rest → 验证返回 4 个服务
 //  2. 验证固定顺序：service-hub → engine → datasource-mgr → audit-log
-//  3. GET /api/lz/topology?protocol=grpc → 验证 gRPC 协议视角也能正常返回
+//  3. GET /v1/lz/topology?protocol=grpc → 验证 gRPC 协议视角也能正常返回
 func TestGetTopology(t *testing.T) {
 	h := setupTestRouter()
 	router := SetupRouter(h)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodGet, "/api/lz/topology?protocol=rest", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/v1/lz/topology?protocol=rest", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -98,7 +98,7 @@ func TestGetTopology(t *testing.T) {
 
 	// 测试 gRPC 协议视角的拓扑查询
 	w2 := httptest.NewRecorder()
-	req2, _ := http.NewRequest(http.MethodGet, "/api/lz/topology?protocol=grpc", nil)
+	req2, _ := http.NewRequest(http.MethodGet, "/v1/lz/topology?protocol=grpc", nil)
 	router.ServeHTTP(w2, req2)
 	if w2.Code != http.StatusOK {
 		t.Fatalf("expected status 200 for grpc query, got %d", w2.Code)
@@ -108,15 +108,15 @@ func TestGetTopology(t *testing.T) {
 // TestGetSuitesAndRun 验证测试套件的获取和执行。
 //
 // 测试步骤：
-//  1. GET /api/lz/suites → 验证返回可用套件列表
-//  2. POST /api/lz/suites/run → 执行 TS-01/02/03，验证返回 3 个结果
+//  1. GET /v1/lz/suites → 验证返回可用套件列表
+//  2. POST /v1/lz/suites/run → 执行 TS-01/02/03，验证返回 3 个结果
 func TestGetSuitesAndRun(t *testing.T) {
 	h := setupTestRouter()
 	router := SetupRouter(h)
 
 	// 步骤 1：获取可用套件列表
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodGet, "/api/lz/suites", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/v1/lz/suites", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -132,7 +132,7 @@ func TestGetSuitesAndRun(t *testing.T) {
 	data, _ := json.Marshal(runPayload)
 
 	w2 := httptest.NewRecorder()
-	req2, _ := http.NewRequest(http.MethodPost, "/api/lz/suites/run", bytes.NewReader(data))
+	req2, _ := http.NewRequest(http.MethodPost, "/v1/lz/suites/run", bytes.NewReader(data))
 	req2.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w2, req2)
 
@@ -156,7 +156,7 @@ func TestGetLeases(t *testing.T) {
 	router := SetupRouter(h)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodGet, "/api/lz/tasks/leases", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/v1/lz/tasks/leases", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -178,7 +178,7 @@ func TestGetDataApiDefinitions(t *testing.T) {
 	router := SetupRouter(h)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodGet, "/api/lz/data-api/definitions", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/v1/lz/data-api/definitions", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -211,7 +211,7 @@ func TestGetDataApiDefinitions(t *testing.T) {
 func TestInvokeDataApiContractAndFailClosed(t *testing.T) {
 	// 构造 mock service-hub（app-lz BFF 只访问 service-hub，不直连下游）
 	mockHub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/hub/fetch-and-desensitize" && r.Method == http.MethodPost {
+		if r.URL.Path == "/v1/hub/fetch-and-desensitize" && r.Method == http.MethodPost {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -255,7 +255,7 @@ func TestInvokeDataApiContractAndFailClosed(t *testing.T) {
 	}
 	data, _ := json.Marshal(invokePayload)
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodPost, "/api/lz/data-api/invoke", bytes.NewReader(data))
+	req, _ := http.NewRequest(http.MethodPost, "/v1/lz/data-api/invoke", bytes.NewReader(data))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -289,7 +289,7 @@ func TestInvokeDataApiContractAndFailClosed(t *testing.T) {
 	// 2. 未知 api_code (shebao)
 	invUnknown, _ := json.Marshal(models.DataApiInvokeRequest{APICode: "api3_shebao"})
 	w2 := httptest.NewRecorder()
-	req2, _ := http.NewRequest(http.MethodPost, "/api/lz/data-api/invoke", bytes.NewReader(invUnknown))
+	req2, _ := http.NewRequest(http.MethodPost, "/v1/lz/data-api/invoke", bytes.NewReader(invUnknown))
 	req2.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w2, req2)
 	if w2.Code != http.StatusBadRequest {
@@ -299,7 +299,7 @@ func TestInvokeDataApiContractAndFailClosed(t *testing.T) {
 	// 3. 预留数据源 (api_id=3)
 	invReserved, _ := json.Marshal(models.DataApiInvokeRequest{ApiID: 3})
 	w3 := httptest.NewRecorder()
-	req3, _ := http.NewRequest(http.MethodPost, "/api/lz/data-api/invoke", bytes.NewReader(invReserved))
+	req3, _ := http.NewRequest(http.MethodPost, "/v1/lz/data-api/invoke", bytes.NewReader(invReserved))
 	req3.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w3, req3)
 	if w3.Code != http.StatusConflict {
@@ -312,7 +312,7 @@ func TestInvokeDataApiContractAndFailClosed(t *testing.T) {
 		DatasourceID: "ds_kangyang",
 	})
 	w4 := httptest.NewRecorder()
-	req4, _ := http.NewRequest(http.MethodPost, "/api/lz/data-api/invoke", bytes.NewReader(invMismatch))
+	req4, _ := http.NewRequest(http.MethodPost, "/v1/lz/data-api/invoke", bytes.NewReader(invMismatch))
 	req4.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w4, req4)
 	if w4.Code != http.StatusBadRequest {
@@ -328,7 +328,7 @@ func TestTraceMiddlewareRegistered(t *testing.T) {
 
 	// 1. 无请求头时自动生成 trace ID
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodGet, "/api/health", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/health", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -348,7 +348,7 @@ func TestTraceMiddlewareRegistered(t *testing.T) {
 
 	// 2. 上游传入 X-Request-ID 时应透传
 	w2 := httptest.NewRecorder()
-	req2, _ := http.NewRequest(http.MethodGet, "/api/health", nil)
+	req2, _ := http.NewRequest(http.MethodGet, "/health", nil)
 	req2.Header.Set("X-Request-ID", "req-test-upstream-123")
 	router.ServeHTTP(w2, req2)
 
@@ -360,7 +360,7 @@ func TestTraceMiddlewareRegistered(t *testing.T) {
 	}
 }
 
-// newRateLimitTestEnv 构造一个带 mock 上游的 Handler，使 /api/lz/topology 快速返回，
+// newRateLimitTestEnv 构造一个带 mock 上游的 Handler，使 /v1/lz/topology 快速返回，
 // 避免不可达上游的 10s 探测超时导致限流桶在两次请求之间重新充能。
 func newRateLimitTestEnv(t *testing.T, rps, burst int) (*Handler, *gin.Engine) {
 	t.Helper()
@@ -398,10 +398,10 @@ func TestRateLimitMiddleware(t *testing.T) {
 	_, router := newRateLimitTestEnv(t, 1, 2)
 
 	// 突发 2 次应成功（桶容量 2）
-	// 注意：/health 和 /api/health 被 RateLimit 中间件豁免，使用 /api/lz/topology 测试
+	// 注意：/health 和 /health 被 RateLimit 中间件豁免，使用 /v1/lz/topology 测试
 	for i := 0; i < 2; i++ {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest(http.MethodGet, "/api/lz/topology", nil)
+		req, _ := http.NewRequest(http.MethodGet, "/v1/lz/topology", nil)
 		router.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("request %d: expected 200, got %d", i+1, w.Code)
@@ -410,7 +410,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 
 	// 第 3 次应被限流（桶已耗尽）
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodGet, "/api/lz/topology", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/v1/lz/topology", nil)
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusTooManyRequests {
 		t.Errorf("expected 429 after burst exhausted, got %d", w.Code)
@@ -424,7 +424,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 
 	for i := 0; i < 10; i++ {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest(http.MethodGet, "/api/lz/topology", nil)
+		req, _ := http.NewRequest(http.MethodGet, "/v1/lz/topology", nil)
 		router2.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("RPS=0: request %d: expected 200, got %d", i+1, w.Code)
@@ -441,7 +441,7 @@ func TestAuthMiddleware(t *testing.T) {
 	r1 := SetupRouter(h1)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/lz/topology", nil)
+	req, _ := http.NewRequest("GET", "/v1/lz/topology", nil)
 	r1.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Errorf("auth disabled: expected 200, got %d", w.Code)
@@ -459,7 +459,7 @@ func TestAuthMiddleware(t *testing.T) {
 	r2 := SetupRouter(h2)
 
 	w2 := httptest.NewRecorder()
-	req2, _ := http.NewRequest("GET", "/api/lz/topology", nil)
+	req2, _ := http.NewRequest("GET", "/v1/lz/topology", nil)
 	r2.ServeHTTP(w2, req2)
 	if w2.Code != http.StatusUnauthorized {
 		t.Errorf("auth enabled + no token: expected 401, got %d", w2.Code)
@@ -467,7 +467,7 @@ func TestAuthMiddleware(t *testing.T) {
 
 	// 场景 3：认证启用 + 健康检查端点豁免 → 200
 	w3 := httptest.NewRecorder()
-	req3, _ := http.NewRequest("GET", "/api/health", nil)
+	req3, _ := http.NewRequest("GET", "/health", nil)
 	r2.ServeHTTP(w3, req3)
 	if w3.Code != http.StatusOK {
 		t.Errorf("health endpoint: expected 200, got %d", w3.Code)

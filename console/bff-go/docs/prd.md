@@ -8,7 +8,7 @@ Privacy 测试控制台后端是 `PrivShield` 的配套**测试与演示工具**
 
 Python 后端在其中的定位是「**代理层 + 静态服务器**」：
 
-- 对浏览器：提供控制台 SPA 页面与统一的 `/api/*` 接口；
+- 对浏览器：提供控制台 SPA 页面与统一的 `/v1/*` 接口；
 - 对 agent：作为 HTTP 客户端转发请求，屏蔽跨域、二进制载荷与错误格式差异。
 
 它**不实现任何隐私算法**，所有计算均由 agent 完成。
@@ -30,7 +30,7 @@ Python 后端在其中的定位是「**代理层 + 静态服务器**」：
 | 接口调试 | 接入开发者 | 编辑请求体、查看响应与耗时，复制 cURL 命令到终端复现 |
 | 回归测试 | QA | 使用批量测试一键跑完某分类（或全部）接口，查看通过率 |
 | 演示 | 产品 / 售前 | 向客户直观展示脱敏、差分隐私等能力的输入输出 |
-| 连通性排查 | 运维 | 通过 `/api/health` 区分「后端故障」与「agent 不可达」 |
+| 连通性排查 | 运维 | 通过 `/health` 区分「后端故障」与「agent 不可达」 |
 
 ## 4. 功能需求
 
@@ -38,7 +38,7 @@ Python 后端在其中的定位是「**代理层 + 静态服务器**」：
 
 | ID | 需求 |
 |---|---|
-| CB-PROXY-1 | 提供 `POST /api/proxy`，把 `{method, path, body}` 转发到 agent 并返回统一包装响应 |
+| CB-PROXY-1 | 提供 `POST /v1/proxy`，把 `{method, path, body}` 转发到 agent 并返回统一包装响应 |
 | CB-PROXY-2 | 支持 `raw_payload_b64` + `content_type` 转发二进制请求载荷（如 Arrow IPC 输入） |
 | CB-PROXY-3 | 记录并返回每次转发耗时 `duration_ms` |
 | CB-PROXY-4 | agent 非 2xx 时透传状态码与 `detail`；网络错误返回 502 |
@@ -48,7 +48,7 @@ Python 后端在其中的定位是「**代理层 + 静态服务器**」：
 
 | ID | 需求 |
 |---|---|
-| CB-BATCH-1 | 提供 `POST /api/batch`，顺序转发一组请求 |
+| CB-BATCH-1 | 提供 `POST /v1/batch`，顺序转发一组请求 |
 | CB-BATCH-2 | 单个请求失败不中断批次，吸收异常并记入该条结果 |
 | CB-BATCH-3 | 汇总返回 `total / passed / failed` 与逐条 `results` |
 
@@ -56,9 +56,9 @@ Python 后端在其中的定位是「**代理层 + 静态服务器**」：
 
 | ID | 需求 |
 |---|---|
-| CB-AUX-1 | 提供 `GET /api/health`，返回后端状态、agent 连通性与探测延迟 |
-| CB-AUX-2 | agent 不可达时 `/api/health` 仍返回 200，`agent` 字段为 `"unreachable"` |
-| CB-AUX-3 | 提供 `GET /api/samples`，返回全部端点的示例数据（含分类、描述、默认请求体） |
+| CB-AUX-1 | 提供 `GET /health`，返回后端状态、agent 连通性与探测延迟 |
+| CB-AUX-2 | agent 不可达时 `/health` 仍返回 200，`agent` 字段为 `"unreachable"` |
+| CB-AUX-3 | 提供 `GET /v1/samples`，返回全部端点的示例数据（含分类、描述、默认请求体） |
 | CB-AUX-4 | 示例数据标注 `backend`（`rest` / `both`），标识端点在双后端中的可用性 |
 
 ### 4.4 静态托管（CB-STATIC）
@@ -85,14 +85,14 @@ Python 后端在其中的定位是「**代理层 + 静态服务器**」：
 | 可用性 | 无状态，可随时重启；agent 故障不影响后端自身存活 |
 | 安全 | Pydantic 校验全部输入；API Key 仅置于请求头；不持久化任何请求数据 |
 | 可维护性 | 模块按职责拆分；代码含详细中文注释；契约与前端 `types/api.ts` 对应 |
-| 兼容性 | Python 3.10+；与 Go 后端保持相同 `/api/*` 契约 |
+| 兼容性 | Python 3.10+；与 Go 后端保持相同 `/v1/*` 契约 |
 
 ## 6. 验收标准
 
-- [ ] `./run.sh` 启动后，`GET /api/health` 返回 `backend: "ok"`。
-- [ ] agent 运行时，`POST /api/proxy` 转发 `/v1/privacy/mask` 返回统一包装的正确结果。
-- [ ] agent 停止时，`/api/health` 返回 200 且 `agent: "unreachable"`，`/api/proxy` 返回 502。
-- [ ] `POST /api/batch` 对混合成功/失败的请求返回正确的 `total/passed/failed`。
-- [ ] `GET /api/samples` 返回的示例数量与 `get_samples()` 一致。
+- [ ] `./run.sh` 启动后，`GET /health` 返回 `backend: "ok"`。
+- [ ] agent 运行时，`POST /v1/proxy` 转发 `/v1/privacy/mask` 返回统一包装的正确结果。
+- [ ] agent 停止时，`/health` 返回 200 且 `agent: "unreachable"`，`/v1/proxy` 返回 502。
+- [ ] `POST /v1/batch` 对混合成功/失败的请求返回正确的 `total/passed/failed`。
+- [ ] `GET /v1/samples` 返回的示例数量与 `get_samples()` 一致。
 - [ ] 构建前端后，浏览器访问 `http://127.0.0.1:8081` 可打开控制台（当前由 Go BFF 托管；历史 Python 后端使用 8080）。
 - [ ] `pytest tests -v` 全部通过。

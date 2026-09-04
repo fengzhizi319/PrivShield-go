@@ -12,7 +12,7 @@
 //  5. 【readerKey 为空降级】：验证 readerKey 为空时与 Auth(apiKey) 完全同构（存量部署零影响）；
 //  6. 【健康探活豁免】：验证 /health 路径豁免认证；
 //  7. 【/metrics 鉴权】：验证 /metrics 纳入鉴权（P1-6），无 Key 返回 401；
-//  8. 【路径边界安全】：验证前缀匹配必须以 "/" 为边界，防止 /api/audit/logs 越到 /api/audit/logs-backup；
+//  8. 【路径边界安全】：验证前缀匹配必须以 "/" 为边界，防止 /v1/audit/logs 越到 /v1/audit/logs-backup；
 //  9. 【响应体不泄露】：验证拒绝响应体包含统一 FORBIDDEN 文案，不泄露可枚举信息。
 // ==============================================================================
 
@@ -30,12 +30,12 @@ import (
 // readerEndpoints 复刻 services/audit-log 的只读核验白名单：
 // 读端点 + 验真端点放行，写存证与报表导出刻意排除。
 var readerEndpoints = []ReadOnlyEndpoint{
-	{Method: http.MethodGet, Path: "/api/audit/logs"},
-	{Method: http.MethodGet, Path: "/api/audit/stats"},
-	{Method: http.MethodGet, Path: "/api/audit/snapshots"},
-	{Method: http.MethodPost, Path: "/api/audit/snapshots/verify"},
-	{Method: http.MethodGet, Path: "/api/audit/chain/verify"},
-	{Method: http.MethodPost, Path: "/api/audit/chain/verify"},
+	{Method: http.MethodGet, Path: "/v1/audit/logs"},
+	{Method: http.MethodGet, Path: "/v1/audit/stats"},
+	{Method: http.MethodGet, Path: "/v1/audit/snapshots"},
+	{Method: http.MethodPost, Path: "/v1/audit/snapshots/verify"},
+	{Method: http.MethodGet, Path: "/v1/audit/chain/verify"},
+	{Method: http.MethodPost, Path: "/v1/audit/chain/verify"},
 }
 
 func newRoleRouter(apiKey, readerKey string) *gin.Engine {
@@ -44,9 +44,9 @@ func newRoleRouter(apiKey, readerKey string) *gin.Engine {
 	r.Use(AuthWithRoles(apiKey, readerKey, readerEndpoints))
 	// 覆盖 GET/POST 两类方法，让「同一资源不同方法」的越权路径可被断言。
 	for _, p := range []string{
-		"/api/audit/logs", "/api/audit/logs/:id", "/api/audit/stats",
-		"/api/audit/snapshots", "/api/audit/snapshots/verify",
-		"/api/audit/chain/verify", "/api/audit/report", "/api/audit/logs-backup",
+		"/v1/audit/logs", "/v1/audit/logs/:id", "/v1/audit/stats",
+		"/v1/audit/snapshots", "/v1/audit/snapshots/verify",
+		"/v1/audit/chain/verify", "/v1/audit/report", "/v1/audit/logs-backup",
 	} {
 		r.GET(p, func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
 		r.POST(p, func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
@@ -68,13 +68,13 @@ func doWithKey(r *gin.Engine, method, path, key string) int {
 func TestAuthWithRoles_ReaderAllowsVerificationReads(t *testing.T) {
 	r := newRoleRouter("write-key", "reader-key")
 	cases := []struct{ method, path string }{
-		{http.MethodGet, "/api/audit/logs"},
-		{http.MethodGet, "/api/audit/logs/abc123"},
-		{http.MethodGet, "/api/audit/stats"},
-		{http.MethodGet, "/api/audit/snapshots"},
-		{http.MethodPost, "/api/audit/snapshots/verify"},
-		{http.MethodGet, "/api/audit/chain/verify"},
-		{http.MethodPost, "/api/audit/chain/verify"},
+		{http.MethodGet, "/v1/audit/logs"},
+		{http.MethodGet, "/v1/audit/logs/abc123"},
+		{http.MethodGet, "/v1/audit/stats"},
+		{http.MethodGet, "/v1/audit/snapshots"},
+		{http.MethodPost, "/v1/audit/snapshots/verify"},
+		{http.MethodGet, "/v1/audit/chain/verify"},
+		{http.MethodPost, "/v1/audit/chain/verify"},
 	}
 	for _, tc := range cases {
 		if code := doWithKey(r, tc.method, tc.path, "reader-key"); code != http.StatusOK {
@@ -87,10 +87,10 @@ func TestAuthWithRoles_ReaderAllowsVerificationReads(t *testing.T) {
 func TestAuthWithRoles_ReaderDeniedOnWriteEndpoints(t *testing.T) {
 	r := newRoleRouter("write-key", "reader-key")
 	cases := []struct{ method, path string }{
-		{http.MethodPost, "/api/audit/logs"},       // 写存证
-		{http.MethodPost, "/api/audit/report"},     // 报表导出
-		{http.MethodGet, "/api/audit/logs-backup"}, // 前缀近似但非白名单子路径
-		{http.MethodPost, "/api/audit/snapshots"},  // 快照写入面
+		{http.MethodPost, "/v1/audit/logs"},       // 写存证
+		{http.MethodPost, "/v1/audit/report"},     // 报表导出
+		{http.MethodGet, "/v1/audit/logs-backup"}, // 前缀近似但非白名单子路径
+		{http.MethodPost, "/v1/audit/snapshots"},  // 快照写入面
 	}
 	for _, tc := range cases {
 		code := doWithKey(r, tc.method, tc.path, "reader-key")
@@ -104,9 +104,9 @@ func TestAuthWithRoles_ReaderDeniedOnWriteEndpoints(t *testing.T) {
 func TestAuthWithRoles_FullKeyKeepsWriteAccess(t *testing.T) {
 	r := newRoleRouter("write-key", "reader-key")
 	for _, tc := range []struct{ method, path string }{
-		{http.MethodPost, "/api/audit/logs"},
-		{http.MethodPost, "/api/audit/report"},
-		{http.MethodGet, "/api/audit/chain/verify"},
+		{http.MethodPost, "/v1/audit/logs"},
+		{http.MethodPost, "/v1/audit/report"},
+		{http.MethodGet, "/v1/audit/chain/verify"},
 	} {
 		if code := doWithKey(r, tc.method, tc.path, "write-key"); code != http.StatusOK {
 			t.Errorf("writer %s %s: status = %d, want 200", tc.method, tc.path, code)
@@ -117,10 +117,10 @@ func TestAuthWithRoles_FullKeyKeepsWriteAccess(t *testing.T) {
 // TestAuthWithRoles_UnknownAndMissingKeys 未知 Key 与缺 Token 仍按 401/401 处理（不因角色机制降级为放行）。
 func TestAuthWithRoles_UnknownAndMissingKeys(t *testing.T) {
 	r := newRoleRouter("write-key", "reader-key")
-	if code := doWithKey(r, http.MethodGet, "/api/audit/chain/verify", "guessed-key"); code != http.StatusUnauthorized {
+	if code := doWithKey(r, http.MethodGet, "/v1/audit/chain/verify", "guessed-key"); code != http.StatusUnauthorized {
 		t.Errorf("unknown key: status = %d, want 401", code)
 	}
-	if code := doWithKey(r, http.MethodGet, "/api/audit/chain/verify", ""); code != http.StatusUnauthorized {
+	if code := doWithKey(r, http.MethodGet, "/v1/audit/chain/verify", ""); code != http.StatusUnauthorized {
 		t.Errorf("missing token: status = %d, want 401", code)
 	}
 }
@@ -128,10 +128,10 @@ func TestAuthWithRoles_UnknownAndMissingKeys(t *testing.T) {
 // TestAuthWithRoles_EmptyReaderKeyDegradesToSingleKey readerKey 为空时必须与 Auth(apiKey) 完全同构（存量部署零影响）。
 func TestAuthWithRoles_EmptyReaderKeyDegradesToSingleKey(t *testing.T) {
 	r := newRoleRouter("write-key", "")
-	if code := doWithKey(r, http.MethodGet, "/api/audit/chain/verify", "reader-key"); code != http.StatusUnauthorized {
+	if code := doWithKey(r, http.MethodGet, "/v1/audit/chain/verify", "reader-key"); code != http.StatusUnauthorized {
 		t.Errorf("empty readerKey, foreign key: status = %d, want 401", code)
 	}
-	if code := doWithKey(r, http.MethodPost, "/api/audit/logs", "write-key"); code != http.StatusOK {
+	if code := doWithKey(r, http.MethodPost, "/v1/audit/logs", "write-key"); code != http.StatusOK {
 		t.Errorf("empty readerKey, write key: status = %d, want 200", code)
 	}
 }
@@ -161,16 +161,16 @@ func TestAuthWithRoles_MetricsRequiresAuth(t *testing.T) {
 	}
 }
 
-// TestIsReadOnlyEndpoint_PathBoundary 前缀匹配必须以 "/" 为边界，防止 /api/audit/logs 越到 /api/audit/logs-backup。
+// TestIsReadOnlyEndpoint_PathBoundary 前缀匹配必须以 "/" 为边界，防止 /v1/audit/logs 越到 /v1/audit/logs-backup。
 func TestIsReadOnlyEndpoint_PathBoundary(t *testing.T) {
-	getLogs := []ReadOnlyEndpoint{{Method: http.MethodGet, Path: "/api/audit/logs"}}
-	if !IsReadOnlyEndpoint(http.MethodGet, "/api/audit/logs/", getLogs) {
+	getLogs := []ReadOnlyEndpoint{{Method: http.MethodGet, Path: "/v1/audit/logs"}}
+	if !IsReadOnlyEndpoint(http.MethodGet, "/v1/audit/logs/", getLogs) {
 		t.Error("trailing slash form of the exact path should match")
 	}
-	if IsReadOnlyEndpoint(http.MethodGet, "/api/audit/logs-backup", getLogs) {
-		t.Error("sibling path must not match a /api/audit/logs prefix entry")
+	if IsReadOnlyEndpoint(http.MethodGet, "/v1/audit/logs-backup", getLogs) {
+		t.Error("sibling path must not match a /v1/audit/logs prefix entry")
 	}
-	if IsReadOnlyEndpoint(http.MethodPost, "/api/audit/logs", getLogs) {
+	if IsReadOnlyEndpoint(http.MethodPost, "/v1/audit/logs", getLogs) {
 		t.Error("method must be checked, not only path")
 	}
 }
@@ -179,7 +179,7 @@ func TestIsReadOnlyEndpoint_PathBoundary(t *testing.T) {
 func TestAuthWithRoles_ReaderKeyNeverTreatedAsWriteKey(t *testing.T) {
 	r := newRoleRouter("write-key", "reader-key")
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodPost, "/api/audit/logs", nil)
+	req, _ := http.NewRequest(http.MethodPost, "/v1/audit/logs", nil)
 	req.Header.Set("Authorization", "Bearer reader-key")
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {

@@ -237,10 +237,10 @@ check_microservice() {
         WARNINGS=$((WARNINGS + 1))
     fi
 }
-check_microservice "BFF-Go 代理网关" "http://127.0.0.1:8081/api/health"
-check_microservice "Service Hub 调度中枢" "http://127.0.0.1:8082/api/health"
-check_microservice "Datasource Mgr 数据源" "http://127.0.0.1:8083/api/health"
-check_microservice "Audit Log 审计日志" "http://127.0.0.1:8084/api/health"
+check_microservice "BFF-Go 代理网关" "http://127.0.0.1:8081/health"
+check_microservice "Service Hub 调度中枢" "http://127.0.0.1:8082/health"
+check_microservice "Datasource Mgr 数据源" "http://127.0.0.1:8083/health"
+check_microservice "Audit Log 审计日志" "http://127.0.0.1:8084/health"
 
 # ── 可选：PostgreSQL 连通性检查 ────────────────────────────────────────
 PG_DSN="${SERVICE_HUB_PG_DSN:-}"

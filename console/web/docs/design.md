@@ -63,7 +63,7 @@ graph TD
 ### 3.1 双协议一键热切换 (Dual-Protocol Switching)
 
 前端通过 Go BFF 与核心 Agent 通信，支持在 REST 与 gRPC 两种上游协议间切换：
-1. **统一契约保障**：Go BFF 对前端暴露 `/api/*` 路由与统一 JSON 返回结构；
+1. **统一契约保障**：Go BFF 对前端暴露 `/v1/*` 路由与统一 JSON 返回结构；
 2. **协议热切换**：用户通过顶栏 `BackendSelector` 切换时，调用 `setBaseUrl('?protocol=rest')` 或 `setBaseUrl('?protocol=grpc')` 切换上游协议标识；
 3. **协议透传验证**：响应面板根据返回体中的 `via`（`go-grpc`）与 `protocol`（`REST` / `gRPC`）实时显示通信徽标，验证切换生效。
 
@@ -98,28 +98,28 @@ graph TD
 
 ```nginx
 # Go BFF 代理
-location /api/ {
-    proxy_pass http://console-backend-go:8081/api/;
+location /v1/ {
+    proxy_pass http://console-backend-go:8081/v1/;
 }
 
 # Go BFF 兼容别名
-location /api/go/ {
+location /v1/go/ {
     proxy_pass http://console-backend-go:8081/;
 }
 
 # Service Hub 调度中枢
-location /api/hub/ {
-    proxy_pass http://privacy-service-hub:8082/api/hub/;
+location /v1/hub/ {
+    proxy_pass http://privacy-service-hub:8082/v1/hub/;
 }
 
 # Datasource Manager 数据源管理
-location /api/datasources {
-    proxy_pass http://privacy-datasource-mgr:8083/api/datasources;
+location /v1/datasources {
+    proxy_pass http://privacy-datasource-mgr:8083/v1/datasources;
 }
 
 # Audit Log 脱敏审计日志
-location /api/audit/ {
-    proxy_pass http://privacy-audit-log:8084/api/audit/;
+location /v1/audit/ {
+    proxy_pass http://privacy-audit-log:8084/v1/audit/;
 }
 
 # SPA 前端路由回退

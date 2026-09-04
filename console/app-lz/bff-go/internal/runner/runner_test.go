@@ -32,7 +32,7 @@ func TestRunSuites_WithMockAuditLog(t *testing.T) {
 	// app-lz BFF 只访问 service-hub，service-hub 内部编排 datasource-mgr / engine-go / audit-log
 	mockSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/hub/fetch-and-desensitize":
+		case "/v1/hub/fetch-and-desensitize":
 			if r.Method == http.MethodPost {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
@@ -52,7 +52,7 @@ func TestRunSuites_WithMockAuditLog(t *testing.T) {
 				})
 				return
 			}
-		case "/api/hub/audit/logs", "/api/audit/logs":
+		case "/v1/hub/audit/logs", "/v1/audit/logs":
 			if r.Method == http.MethodPost {
 				w.WriteHeader(http.StatusCreated)
 				_ = json.NewEncoder(w).Encode(map[string]string{
@@ -80,7 +80,7 @@ func TestRunSuites_WithMockAuditLog(t *testing.T) {
 				},
 				"via": "service-hub",
 			})
-		case "/api/hub/audit/verify":
+		case "/v1/hub/audit/verify":
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"snapshot_id":   "snap-12345",
@@ -91,7 +91,7 @@ func TestRunSuites_WithMockAuditLog(t *testing.T) {
 				"source":        "service-hub",
 				"via":           "service-hub",
 			})
-		case "/api/audit/snapshots":
+		case "/v1/audit/snapshots":
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"total": 1,
@@ -105,7 +105,7 @@ func TestRunSuites_WithMockAuditLog(t *testing.T) {
 				},
 				"via": "audit-log",
 			})
-		case "/api/audit/snapshots/verify":
+		case "/v1/audit/snapshots/verify":
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"snapshot_id": "snap-12345",

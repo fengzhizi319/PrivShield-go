@@ -336,7 +336,7 @@ GO_CONSOLE_PID=$!
 PIDS+=("$GO_CONSOLE_PID")
 write_pid "$GO_CONSOLE_PID_FILE" "$GO_CONSOLE_PID"
 
-wait_for_service "$CONSOLE_URL/api/health" "Go BFF"
+wait_for_service "$CONSOLE_URL/health" "Go BFF"
 
 echo ""
 echo "================================================================="

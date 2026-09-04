@@ -95,7 +95,7 @@ func TestPermissionForRESTPath(t *testing.T) {
 		{"/debug/pprof/heap", "ops:admin"},
 		// 未知路径（fail-closed：默认归入 admin 权限）
 		{"/unknown", "admin"},
-		{"/api/v2/something", "admin"},
+		{"/v2/something", "admin"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
@@ -171,22 +171,19 @@ func TestServiceHubPermissionForPath(t *testing.T) {
 	}{
 		{"/health", ""},
 		{"/readyz", ""},
-		{"/api/health", ""},
 		{"/metrics", ""},
-		{"/api/hub/status", "hub:read"},
-		{"/api/hub/tasks", "hub:read"},
-		{"/api/hub/tasks/abc-123", "hub:read"},
-		{"/api/hub/pipeline", "hub:read"},
-		{"/api/hub/dispatch", "hub:dispatch"},
-		{"/api/hub/dispatch/", "hub:dispatch"}, // 尾部斜杠不应绕过 Scope 校验
-		{"/api/hub/classify", "hub:dispatch"},
-		{"/api/hub/classify/", "hub:dispatch"}, // 尾部斜杠不应绕过 Scope 校验
-		{"/api/hub/tasks/", "hub:read"},        // 尾部斜杠归一化
-		{"/api/hub/topology", "hub:read"},
-		{"/api/hub/audit/logs", "hub:read"},
-		{"/api/hub/audit/verify", "hub:dispatch"},
-		{"/api/hub/datasources", "hub:read"},
-		{"/api/hub/fetch-and-desensitize", "hub:dispatch"},
+		{"/v1/hub/status", "hub:read"},
+		{"/v1/hub/tasks", "hub:read"},
+		{"/v1/hub/tasks/abc-123", "hub:read"},
+		{"/v1/hub/pipeline", "hub:read"},
+		{"/v1/hub/dispatch", "hub:dispatch"},
+		{"/v1/hub/dispatch/", "hub:dispatch"}, // 尾部斜杠不应绕过 Scope 校验
+		{"/v1/hub/tasks/", "hub:read"},        // 尾部斜杠归一化
+		{"/v1/hub/topology", "hub:read"},
+		{"/v1/hub/audit/logs", "hub:read"},
+		{"/v1/hub/audit/verify", "hub:dispatch"},
+		{"/v1/hub/datasources", "hub:read"},
+		{"/v1/hub/fetch-and-desensitize", "hub:dispatch"},
 		{"/unknown", "admin"},
 	}
 	for _, tt := range tests {

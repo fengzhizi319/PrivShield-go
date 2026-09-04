@@ -9,7 +9,7 @@
  * 主要配置项 / Key configurations:
  *   - plugins: React 快速刷新插件 / React Fast Refresh plugin
  *   - resolve.alias: '@' 路径别名指向 src/ / '@' path alias points to src/
- *   - server.proxy: 开发模式下 /api 请求代理到 Go gRPC 后端 8081 / Dev mode proxies /api to Go gRPC backend 8081
+ *   - server.proxy: 开发模式下 /v1 与 /health 请求代理到 Go BFF 后端 8081 / Dev mode proxies /v1 and /health to Go BFF backend 8081
  *   - build: 输出到 dist/ 目录 / Output to dist/ directory
  *   - test: Vitest 单元测试配置 (jsdom 环境) / Vitest unit test config (jsdom environment)
  */
@@ -34,11 +34,17 @@ export default defineConfig({
   server: {
     port: 5173,  // 开发服务器端口 / Dev server port
     proxy: {
-      // 开发模式下将 /api 前缀的请求代理到 Go gRPC 控制台后端
-      // In dev mode, proxy /api-prefixed requests to the Go gRPC console backend
-      '/api': {
+      // 开发模式下将 /v1 前缀的请求代理到 Go 控制台 BFF
+      // In dev mode, proxy /v1-prefixed requests to the Go console BFF
+      '/v1': {
         target: process.env.VITE_PROXY_TARGET || 'http://127.0.0.1:8081',  // 代理目标（优先环境变量，默认 Go 后端 8081）
         changeOrigin: true,               // 修改 Origin 头以匹配目标 / Modify Origin header to match target
+      },
+      // BFF 自身健康检查（无前缀端点）
+      // Health check endpoint (unprefixed)
+      '/health': {
+        target: process.env.VITE_PROXY_TARGET || 'http://127.0.0.1:8081',
+        changeOrigin: true,
       },
     },
   },

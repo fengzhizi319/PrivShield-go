@@ -39,7 +39,7 @@ func main() {
 			}
 			payload, _ = json.Marshal(reqBody)
 		case "hub":
-			url = "http://127.0.0.1:8082/api/hub/dispatch"
+			url = "http://127.0.0.1:8082/v1/hub/dispatch"
 			reqBody := map[string]interface{}{
 				"api_code":      "api1_yibao",
 				"datasource_id": "ds_yibao",

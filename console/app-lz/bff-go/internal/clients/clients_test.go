@@ -15,7 +15,7 @@ import (
 )
 
 // TestD01_GetDatasourcesPathAndFallback 验证 D-01 修复：
-// 1. 发起请求路径必须为 /api/hub/datasources（通过 service-hub 编排）
+// 1. 发起请求路径必须为 /v1/hub/datasources（通过 service-hub 编排）
 // 2. 真实上游 200 时 Source 标为 "service-hub"
 // 3. 上游不可达时返回 fallback 兜底且 Source="fallback"
 func TestD01_GetDatasourcesPathAndFallback(t *testing.T) {
@@ -41,8 +41,8 @@ func TestD01_GetDatasourcesPathAndFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if requestedPath != "/api/hub/datasources" {
-		t.Errorf("expected path /api/hub/datasources, got %s", requestedPath)
+	if requestedPath != "/v1/hub/datasources" {
+		t.Errorf("expected path /v1/hub/datasources, got %s", requestedPath)
 	}
 	if resp.Source != "service-hub" {
 		t.Errorf("expected Source=service-hub, got %s", resp.Source)
@@ -71,8 +71,8 @@ func TestD01_GetDatasourcesPathAndFallback(t *testing.T) {
 }
 
 // TestD02_AuditPathsAndVerify 验证 D-02 修复：
-// 1. GetAuditLogs 请求路径为 /api/hub/audit/logs（通过 service-hub 编排）
-// 2. VerifyAudit 调 /api/hub/audit/verify
+// 1. GetAuditLogs 请求路径为 /v1/hub/audit/logs（通过 service-hub 编排）
+// 2. VerifyAudit 调 /v1/hub/audit/verify
 // 3. 失败时绝不合成 MerkleValid: true
 func TestD02_AuditPathsAndVerify(t *testing.T) {
 	paths := make([]string, 0)
@@ -80,7 +80,7 @@ func TestD02_AuditPathsAndVerify(t *testing.T) {
 		paths = append(paths, r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/api/hub/audit/logs":
+		case "/v1/hub/audit/logs":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"total": 1,
 				"logs": []map[string]any{
@@ -99,7 +99,7 @@ func TestD02_AuditPathsAndVerify(t *testing.T) {
 				},
 				"via": "service-hub",
 			})
-		case "/api/hub/audit/verify":
+		case "/v1/hub/audit/verify":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"snapshot_id":  "snap-001",
 				"merkle_valid": true,
@@ -140,9 +140,9 @@ func TestD02_AuditPathsAndVerify(t *testing.T) {
 		t.Errorf("expected SnapshotID=snap-001, got %s", vResp.SnapshotID)
 	}
 
-	// 验证请求路径全为 canonical（无 /api/v1/）
+	// 验证请求路径全为 canonical（无旧版 /api/ 前缀）
 	for _, p := range paths {
-		if strings.HasPrefix(p, "/api/v1/") {
+		if strings.HasPrefix(p, "/api/") {
 			t.Errorf("D-02 violation: deprecated path called: %s", p)
 		}
 	}
@@ -286,8 +286,8 @@ func TestGetDatasourceRecordByIDCard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetDatasourceRecordByIDCard(yibao) unexpected error: %v", err)
 	}
-	if requestedPath != "/api/hub/fetch-and-desensitize" {
-		t.Errorf("expected path /api/hub/fetch-and-desensitize, got %s", requestedPath)
+	if requestedPath != "/v1/hub/fetch-and-desensitize" {
+		t.Errorf("expected path /v1/hub/fetch-and-desensitize, got %s", requestedPath)
 	}
 	if requestedIDCard != "110101196809171010" {
 		t.Errorf("expected id_card_no 110101196809171010, got %s", requestedIDCard)
@@ -298,11 +298,11 @@ func TestGetDatasourceRecordByIDCard(t *testing.T) {
 }
 
 // TestD03_RecordAuditRealAndNoForging 验证 D-03 修复：
-// 真实 RecordAudit 会向 service-hub 的 POST /api/hub/audit/logs 发送请求并返回真实 ID
+// 真实 RecordAudit 会向 service-hub 的 POST /v1/hub/audit/logs 发送请求并返回真实 ID
 func TestD03_RecordAuditRealAndNoForging(t *testing.T) {
 	receivedDatasource := ""
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/hub/audit/logs" && r.Method == http.MethodPost {
+		if r.URL.Path == "/v1/hub/audit/logs" && r.Method == http.MethodPost {
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			receivedDatasource, _ = body["datasource"].(string)
@@ -341,7 +341,7 @@ func TestD03_RecordAuditRealAndNoForging(t *testing.T) {
 // 验证 BFF GetTask 能正确解包 service-hub 返回的 {"task": {...}, "via": "service-hub"} 外壳
 func TestP02_GetTaskEnvelopeUnpack(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/hub/tasks/task-12345") {
+		if strings.HasPrefix(r.URL.Path, "/v1/hub/tasks/task-12345") {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"task": map[string]any{
@@ -390,19 +390,19 @@ func TestP1_OutboundHeadersInjected(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 
 		switch r.URL.Path {
-		case "/api/hub/tasks":
+		case "/v1/hub/tasks":
 			_ = json.NewEncoder(w).Encode(models.TasksResponse{Total: 0, Tasks: []models.Task{}})
-		case "/api/hub/datasources":
+		case "/v1/hub/datasources":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"total":       1,
 				"datasources": []map[string]any{{"id": naming.DSYibao, "datasource_id": naming.DSYibao, "name": "医保", "category": "medical"}},
 				"via":         "service-hub",
 			})
-		case "/api/hub/audit/logs":
+		case "/v1/hub/audit/logs":
 			_ = json.NewEncoder(w).Encode(map[string]any{"total": 0, "logs": []models.AuditLogItem{}, "via": "service-hub"})
-		case "/api/hub/pipeline":
+		case "/v1/hub/pipeline":
 			_ = json.NewEncoder(w).Encode(map[string]any{"mode": "pipeline_telemetry", "stages": []map[string]any{}})
-		case "/api/hub/dispatch":
+		case "/v1/hub/dispatch":
 			_ = json.NewEncoder(w).Encode(models.DispatchResponse{TaskID: "task-p1-123", Status: "accepted", Via: "service-hub"})
 		default:
 			http.NotFound(w, r)
@@ -434,11 +434,11 @@ func TestP1_OutboundHeadersInjected(t *testing.T) {
 	}
 
 	expectations := map[string]string{
-		"/api/hub/tasks":       cfg.HubAPIKey,
-		"/api/hub/datasources": cfg.HubAPIKey,
-		"/api/hub/audit/logs":  cfg.HubAPIKey,
-		"/api/hub/pipeline":    cfg.HubAPIKey,
-		"/api/hub/dispatch":    cfg.HubAPIKey,
+		"/v1/hub/tasks":       cfg.HubAPIKey,
+		"/v1/hub/datasources": cfg.HubAPIKey,
+		"/v1/hub/audit/logs":  cfg.HubAPIKey,
+		"/v1/hub/pipeline":    cfg.HubAPIKey,
+		"/v1/hub/dispatch":    cfg.HubAPIKey,
 	}
 
 	for path, expectedKey := range expectations {

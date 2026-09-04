@@ -8,8 +8,8 @@
 //    使用 crypto/subtle.ConstantTimeCompare 执行密钥校验，杜绝通过网络响应时间反推密钥字符的时序攻击（Timing Attack）；
 // 3. 【灵活放行机制】：
 //    - apiKey 为空串时：视为开发/本地调试模式，自动放行所有请求；
-//    - 健康探针白名单：/health 与 /api/health 绝对豁免鉴权，确保 K8s 与云负载均衡探活畅通；
-//    - 作用域边界：/api/* 业务路径与 /metrics 强制鉴权（P1-6），仅 /health、/readyz 豁免；
+//    - 健康探针白名单：/health 与 /readyz 绝对豁免鉴权，确保 K8s 与云负载均衡探活畅通；
+//    - 作用域边界：/v1/* 业务路径与 /metrics 强制鉴权（P1-6），仅 /health、/readyz 豁免；
 // 4. 【统一错误信封】：未携带 Token 或 Key 错误时，统一调用 AbortWithError 输出 HTTP 401 信封。
 // 5. 【权责分离 (AuthWithRoles)】：存证核验专区只需读、写入方只需写；只读核验员 Key 的可访问端点
 //    由「方法 + 路径」白名单显式列出，越权直接 403（不静默降级为可读）。
@@ -40,8 +40,8 @@ import (
 // 执行逻辑：
 // 1. 若 apiKey 为空：跳过鉴权直接调用 c.Next()（开发模式兼容）；
 // 2. 检查请求路径 path：
-//   - 若为 "/health"、"/readyz" 或 "/api/health"：直接 c.Next() 放行（探活豁免）；
-//   - 若不以 "/api/" 开头且不是 "/metrics"：直接 c.Next() 放行（非核心路径豁免）；
+//   - 若为 "/health" 或 "/readyz"：直接 c.Next() 放行（探活豁免）；
+//   - 若不以 "/v1/" 开头且不是 "/metrics"：直接 c.Next() 放行（非核心路径豁免）；
 //
 // 3. 从 Authorization 请求头解析 Bearer 令牌；若未提供或格式非法，立即响应 401 UNAUTHORIZED；
 // 4. 使用 subtle.ConstantTimeCompare 校验传入的 Token 与服务端 apiKey 是否完全一致；
@@ -61,13 +61,13 @@ func Auth(apiKey string) gin.HandlerFunc {
 		path := c.Request.URL.Path
 
 		// 健康检查端点豁免
-		if path == "/health" || path == "/readyz" || path == "/api/health" {
+		if path == "/health" || path == "/readyz" {
 			c.Next()
 			return
 		}
 
 		// 非核心路径豁免（/metrics 不在此列 —— P1-6 纳入鉴权）
-		if !strings.HasPrefix(path, "/api/") && path != "/metrics" {
+		if !strings.HasPrefix(path, "/v1/") && path != "/metrics" {
 			c.Next()
 			return
 		}
@@ -106,7 +106,7 @@ func Auth(apiKey string) gin.HandlerFunc {
 //  3. token == readerKey 但未命中白名单                 → 403 FORBIDDEN（显式拒绝，绝不静默降级为可读）；
 //  4. 两把 Key 都不匹配                                 → 401 UNAUTHORIZED。
 //
-// 白名单必须带 method：同一 /api/audit/logs 上 GET 是查询、POST 是写入，只比路径会把写权限漏给核验员。
+// 白名单必须带 method：同一 /v1/audit/logs 上 GET 是查询、POST 是写入，只比路径会把写权限漏给核验员。
 // readerKey 为空时完全退化为 Auth(apiKey) 的既有语义（存量部署零影响），是否启用由部署方显式决定。
 // apiKey 为空仍是开发态放行（与 Auth 一致；非环回暴露时 P0-1 启动门禁已保证 apiKey 非空）。
 func AuthWithRoles(apiKey, readerKey string, readOnly []ReadOnlyEndpoint) gin.HandlerFunc {
@@ -122,12 +122,12 @@ func AuthWithRoles(apiKey, readerKey string, readOnly []ReadOnlyEndpoint) gin.Ha
 		}
 
 		path := c.Request.URL.Path
-		if path == "/health" || path == "/readyz" || path == "/api/health" {
+		if path == "/health" || path == "/readyz" {
 			c.Next()
 			return
 		}
-		// /metrics 纳入鉴权（P1-6）：非 /api/ 且非 /metrics 的路径才豁免
-		if !strings.HasPrefix(path, "/api/") && path != "/metrics" {
+		// /metrics 纳入鉴权（P1-6）：非 /v1/ 且非 /metrics 的路径才豁免
+		if !strings.HasPrefix(path, "/v1/") && path != "/metrics" {
 			c.Next()
 			return
 		}
@@ -170,8 +170,8 @@ func AuthWithRoles(apiKey, readerKey string, readOnly []ReadOnlyEndpoint) gin.Ha
 }
 
 // ReadOnlyEndpoint 描述一条允许只读核验员访问的端点。
-// Path 为前缀，匹配以 "/" 为边界：/api/audit/logs 覆盖 /api/audit/logs/123，
-// 但不覆盖 /api/audit/logs-backup。
+// Path 为前缀，匹配以 "/" 为边界：/v1/audit/logs 覆盖 /v1/audit/logs/123，
+// 但不覆盖 /v1/audit/logs-backup。
 type ReadOnlyEndpoint struct {
 	Method string
 	Path   string

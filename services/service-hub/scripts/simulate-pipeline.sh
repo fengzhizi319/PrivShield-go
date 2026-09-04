@@ -10,9 +10,9 @@
 # 模拟执行逻辑：
 #   1. 健康检查：探测目标 service-hub 是否正常运行，若未运行则提示启动命令并退出；
 #   2. 循环分发任务（默认 20 批）：
-#      - POST /api/hub/classify: 提交包含患者医保敏感字段的自动分类与自适应脱敏请求；
-#      - POST /api/hub/dispatch: 穿插（每 3 批）提交普通脱敏任务；
-#      - GET /api/hub/status & GET /api/hub/tasks: 穿插（每 5 批）执行状态与任务列表查询；
+#      - POST /v1/hub/classify: 提交包含患者医保敏感字段的自动分类与自适应脱敏请求；
+#      - POST /v1/hub/dispatch: 穿插（每 3 批）提交普通脱敏任务；
+#      - GET /v1/hub/status & GET /v1/hub/tasks: 穿插（每 5 批）执行状态与任务列表查询；
 #   3. 终端打印执行进度指示符（绿色 ✓ 代表成功，红色 x 代表异常）；
 #   4. 输出汇总与 Grafana 仪表盘访问指引。
 #
@@ -51,7 +51,7 @@ echo " 模拟批次: $COUNT 个任务"
 echo "========================================================"
 
 # ── 1. 检查目标服务健康状态 ──────────────────────────────────────────────────
-if ! curl -s -f "$HUB_URL/api/health" > /dev/null; then
+if ! curl -s -f "$HUB_URL/health" > /dev/null; then
   echo "❌ 错误: Service Hub 未在 $HUB_URL 运行，请先启动服务！"
   echo "💡 提示: bash ./scripts/dev/dev-start-new-modules.sh 或 cd services/service-hub && bash run.sh"
   exit 1
@@ -64,8 +64,8 @@ for ((i=1; i<=COUNT; i++)); do
   # 2a. 构造包含医疗与身份敏感信息的 JSON 载荷
   PAYLOAD="{\"source\":\"dept_hospital_test\",\"operation\":\"auto_desensitize\",\"priority\":$((i%3+1)),\"payload\":{\"patient_id\":\"P00$i\",\"name\":\"张测试$i\",\"id_card\":\"51010419900101123$((i%10))\",\"diagnosis\":\"急性胃肠炎\",\"medical_fee\":$((100+i*20))}}"
   
-  # 提交分类分级与自动脱敏任务 (/api/hub/classify)
-  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$HUB_URL/api/hub/classify" \
+  # 提交分类分级与自动脱敏任务 (/v1/hub/classify)
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$HUB_URL/v1/hub/classify" \
     -H "Content-Type: application/json" \
     -d "$PAYLOAD" || echo "000")
   
@@ -75,17 +75,17 @@ for ((i=1; i<=COUNT; i++)); do
     printf "x"
   fi
   
-  # 2b. 穿插提交直接脱敏任务 (/api/hub/dispatch)
+  # 2b. 穿插提交直接脱敏任务 (/v1/hub/dispatch)
   if (( i % 3 == 0 )); then
-    curl -s -o /dev/null -X POST "$HUB_URL/api/hub/dispatch" \
+    curl -s -o /dev/null -X POST "$HUB_URL/v1/hub/dispatch" \
       -H "Content-Type: application/json" \
       -d "{\"source\":\"yibao_settlement\",\"operation\":\"mask_id\",\"priority\":2,\"payload\":{\"record_id\":\"REC$i\"}}" || true
   fi
   
-  # 2c. 穿插查询中枢状态与任务明细 (/api/hub/status & /api/hub/tasks)
+  # 2c. 穿插查询中枢状态与任务明细 (/v1/hub/status & /v1/hub/tasks)
   if (( i % 5 == 0 )); then
-    curl -s -o /dev/null "$HUB_URL/api/hub/status" || true
-    curl -s -o /dev/null "$HUB_URL/api/hub/tasks?limit=10" || true
+    curl -s -o /dev/null "$HUB_URL/v1/hub/status" || true
+    curl -s -o /dev/null "$HUB_URL/v1/hub/tasks?limit=10" || true
   fi
   
   sleep 0.1

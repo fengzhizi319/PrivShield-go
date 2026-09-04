@@ -50,8 +50,8 @@ const realAgentAddr = "127.0.0.1:50051"
 //     Retry connecting agent gRPC Health 3 times, t.Skip on failure
 //  2. 建立稳定连接，构造完整 Gin 路由 + httptest 服务器
 //     Establish stable connection, build full Gin routes + httptest server
-//  3. 验证 /api/health、/api/proxy (mask)、/api/samples 三个端点
-//     Verify /api/health, /api/proxy (mask), /api/samples three endpoints
+//  3. 验证 /health、/v1/proxy (mask)、/v1/samples 三个端点
+//     Verify /health, /v1/proxy (mask), /v1/samples three endpoints
 func TestIntegration_HealthAndProxy(t *testing.T) {
 	// 尝试连接真实 agent，如果未启动则跳过。为了兼容 agent 启动较慢的情况，重试 3 次。
 	// Attempt to connect to real agent; skip if not running. Retry 3 times to accommodate slow agent startup.
@@ -123,15 +123,15 @@ func TestIntegration_HealthAndProxy(t *testing.T) {
 	ts := httptest.NewServer(router)
 	defer ts.Close()
 
-	// 1. 测试 /api/health：验证后端自身正常且能获取 agent 健康信息。
-	// 1. Test /api/health: verify backend itself is ok and can retrieve agent health info.
-	healthResp, err := http.Get(ts.URL + "/api/health")
+	// 1. 测试 /health：验证后端自身正常且能获取 agent 健康信息。
+	// 1. Test /health: verify backend itself is ok and can retrieve agent health info.
+	healthResp, err := http.Get(ts.URL + "/health")
 	if err != nil {
-		t.Fatalf("GET /api/health failed: %v", err)
+		t.Fatalf("GET /health failed: %v", err)
 	}
 	defer healthResp.Body.Close()
 	if healthResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected /api/health 200, got %d", healthResp.StatusCode)
+		t.Fatalf("expected /health 200, got %d", healthResp.StatusCode)
 	}
 	var healthBody map[string]any
 	if err := json.NewDecoder(healthResp.Body).Decode(&healthBody); err != nil {
@@ -144,8 +144,8 @@ func TestIntegration_HealthAndProxy(t *testing.T) {
 		t.Fatalf("expected agent health info, got nil")
 	}
 
-	// 2. 测试 /api/proxy 转发 /v1/privacy/mask：验证完整的 REST→gRPC→agent 链路。
-	// 2. Test /api/proxy forwarding /v1/privacy/mask: verify full REST→gRPC→agent chain.
+	// 2. 测试 /v1/proxy 转发 /v1/privacy/mask：验证完整的 REST→gRPC→agent 链路。
+	// 2. Test /v1/proxy forwarding /v1/privacy/mask: verify full REST→gRPC→agent chain.
 	reqBody := map[string]any{
 		"method": "POST",
 		"path":   "/v1/privacy/mask",
@@ -155,13 +155,13 @@ func TestIntegration_HealthAndProxy(t *testing.T) {
 		},
 	}
 	b, _ := json.Marshal(reqBody)
-	proxyResp, err := http.Post(ts.URL+"/api/proxy", "application/json", bytes.NewReader(b))
+	proxyResp, err := http.Post(ts.URL+"/v1/proxy", "application/json", bytes.NewReader(b))
 	if err != nil {
-		t.Fatalf("POST /api/proxy failed: %v", err)
+		t.Fatalf("POST /v1/proxy failed: %v", err)
 	}
 	defer proxyResp.Body.Close()
 	if proxyResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected /api/proxy 200, got %d", proxyResp.StatusCode)
+		t.Fatalf("expected /v1/proxy 200, got %d", proxyResp.StatusCode)
 	}
 	var proxyBody map[string]any
 	if err := json.NewDecoder(proxyResp.Body).Decode(&proxyBody); err != nil {
@@ -176,15 +176,15 @@ func TestIntegration_HealthAndProxy(t *testing.T) {
 		t.Fatalf("expected non-empty masked result, got %+v", data)
 	}
 
-	// 3. 测试 /api/samples：验证内置示例列表非空。
-	// 3. Test /api/samples: verify built-in sample list is non-empty.
-	samplesResp, err := http.Get(ts.URL + "/api/samples")
+	// 3. 测试 /v1/samples：验证内置示例列表非空。
+	// 3. Test /v1/samples: verify built-in sample list is non-empty.
+	samplesResp, err := http.Get(ts.URL + "/v1/samples")
 	if err != nil {
-		t.Fatalf("GET /api/samples failed: %v", err)
+		t.Fatalf("GET /v1/samples failed: %v", err)
 	}
 	defer samplesResp.Body.Close()
 	if samplesResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected /api/samples 200, got %d", samplesResp.StatusCode)
+		t.Fatalf("expected /v1/samples 200, got %d", samplesResp.StatusCode)
 	}
 	var samplesBody struct {
 		Samples []any `json:"samples"`

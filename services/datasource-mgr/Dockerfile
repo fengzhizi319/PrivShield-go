@@ -53,7 +53,7 @@ EXPOSE 8083 50053
 VOLUME ["/app/data"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8083/api/health || exit 1
+    CMD curl -f http://localhost:8083/health || exit 1
 
 USER privacy
 

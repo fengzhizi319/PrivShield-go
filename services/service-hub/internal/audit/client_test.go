@@ -38,8 +38,8 @@ type capturedRequest struct {
 	idempotencyKey string
 }
 
-// evidenceStub is a programmable stand-in for audit-log's POST /api/audit/logs endpoint.
-// evidenceStub 是 audit-log 建单端点（POST /api/audit/logs）的可编程替身：
+// evidenceStub is a programmable stand-in for audit-log's POST /v1/audit/logs endpoint.
+// evidenceStub 是 audit-log 建单端点（POST /v1/audit/logs）的可编程替身：
 // 记录全部请求，并可切换为返回指定的状态码/响应体，用于验证 fail-closed 语义。
 type evidenceStub struct {
 	t    *testing.T
@@ -725,18 +725,18 @@ func TestMultiReplicaEndpointsRoundRobin(t *testing.T) {
 // TestAuditClient_Health_GetLogs_Verify tests Health, GetLogs, and Verify methods.
 func TestAuditClient_Health_GetLogs_Verify(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
 	})
-	mux.HandleFunc("/api/audit/logs", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/audit/logs", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"total": 1,
 			"logs":  []map[string]any{{"id": "log-1", "task_id": "task-1"}},
 		})
 	})
-	mux.HandleFunc("/api/audit/snapshots", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/audit/snapshots", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"total": 1,
@@ -749,7 +749,7 @@ func TestAuditClient_Health_GetLogs_Verify(t *testing.T) {
 			},
 		})
 	})
-	mux.HandleFunc("/api/audit/snapshots/verify", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/audit/snapshots/verify", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"snapshot_id": "snap-1",

@@ -169,7 +169,7 @@ var Registry = []Entry{
 2. **验证数据源切片提取**：  
    `datasource-mgr` 会根据注册表中的 `FileName: "xx1.csv"` 自动定位文件，支持通过 REST 接口拉取 JSON 格式的原始记录切片：
    ```bash
-   curl -s http://127.0.0.1:8083/api/datasources/ds_xx1/sample?limit=2 | jq .
+   curl -s http://127.0.0.1:8083/v1/datasources/ds_xx1/sample?limit=2 | jq .
    ```
 
 ---
@@ -254,7 +254,7 @@ var schemas = map[string]schema{
 ```
 
 > **底层生效机制**：
-> `catalog.Definitions()` 会自动遍历 `pkg/naming.Registry`，与 `schemas` 映射表动态合并生成 `models.DataApiDef` 列表供前端接口 `/api/lz/data-api/definitions` 拉取，前端卡片与字段手风琴对比组件自动渲染展示。
+> `catalog.Definitions()` 会自动遍历 `pkg/naming.Registry`，与 `schemas` 映射表动态合并生成 `models.DataApiDef` 列表供前端接口 `/v1/lz/data-api/definitions` 拉取，前端卡片与字段手风琴对比组件自动渲染展示。
 
 ---
 

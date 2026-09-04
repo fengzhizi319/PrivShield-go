@@ -4,7 +4,7 @@
 //   - Handler: 持有所有依赖（config, ClientPool, TestRunner）
 //   - SetupRouter: 注册所有 API 路由 + SPA 静态文件回退
 //
-// API 路由分组（/api/lz/*）：
+// API 路由分组（/v1/lz/*）：
 //  1. 拓扑探测与流水线状态：GET /topology, POST /probe/all, GET /pipeline
 //  2. 任务管理：GET /tasks, GET /tasks/:id, GET /tasks/leases, POST /tasks/dispatch
 //  3. 测试套件：GET /suites, POST /suites/run
@@ -76,15 +76,15 @@ func NewHandler(cfg *config.Config, pool *clients.ClientPool, runner *runner.Tes
 //
 // 路由结构：
 //
-//	/api/auth/*        — 用户认证（注册/登录/当前用户）
-//	/api/health          — BFF 自身健康检查
-//	/api/lz/topology     — 服务拓扑探测
-//	/api/lz/pipeline     — 6 阶段流水线状态
-//	/api/lz/tasks/*      — 任务管理（列表/详情/租约/派发）
-//	/api/lz/suites/*     — E2E 测试套件（仅 admin）
-//	/api/lz/audit/*      — 审计日志与 Merkle 验真
-//	/api/lz/metrics*     — Prometheus 指标（仅 admin）
-//	/api/lz/data-api/*   — 预设数据 API
+//	/v1/auth/*        — 用户认证（注册/登录/当前用户）
+//	/health          — BFF 自身健康检查
+//	/v1/lz/topology     — 服务拓扑探测
+//	/v1/lz/pipeline     — 6 阶段流水线状态
+//	/v1/lz/tasks/*      — 任务管理（列表/详情/租约/派发）
+//	/v1/lz/suites/*     — E2E 测试套件（仅 admin）
+//	/v1/lz/audit/*      — 审计日志与 Merkle 验真
+//	/v1/lz/metrics*     — Prometheus 指标（仅 admin）
+//	/v1/lz/data-api/*   — 预设数据 API
 //	/*                   — SPA 静态文件回退（NoRoute handler）
 func SetupRouter(h *Handler) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode) // 生产模式，关闭 Gin 调试日志
@@ -130,23 +130,22 @@ func SetupRouter(h *Handler) *gin.Engine {
 	}
 
 	// ── 健康检查（两个路径均支持，兼容不同探测配置）──
-	r.GET("/api/health", h.HealthCheck)
 	r.GET("/health", h.HealthCheck)
 
 	// ── 本 BFF 自身的 Prometheus 端点（§7.2）──
-	// 区别于 /api/lz/metrics（代理 service-hub 指标）。
+	// 区别于 /v1/lz/metrics（代理 service-hub 指标）。
 	if h.mc != nil {
 		r.GET("/metrics", h.mc.Handler())
 	}
 
 	// ── 认证路由（公开，无需 JWT）──
 	if h.authHandler != nil {
-		authGroup := r.Group("/api/auth")
+		authGroup := r.Group("/v1/auth")
 		h.authHandler.RegisterRoutes(authGroup)
 	}
 
 	// ── App-LZ API 分组（需认证，user + admin 均可）──
-	api := r.Group("/api/lz")
+	api := r.Group("/v1/lz")
 	{
 		// 1. 拓扑探测（GET 和 POST 均支持，POST 用于强制刷新）
 		api.GET("/topology", h.GetTopology)
@@ -241,7 +240,7 @@ func (g *gzipResponseWriter) Write(data []byte) (int, error) {
 // 逻辑：
 //  1. 检查 staticDir 是否存在，不存在则跳过
 //  2. 注册 NoRoute handler：对所有未匹配 API 路由的请求
-//     a. /api/* 路径 → 返回 404 JSON
+//     a. /v1/* 路径 → 返回 404 JSON
 //     b. 磁盘上存在的文件 → 直接返回静态文件
 //     c. 其他路径 → 回退到 index.html（SPA 前端路由）
 //     d. index.html 也不存在 → 返回纯文本提示
@@ -260,7 +259,7 @@ func setupStaticServing(r *gin.Engine, staticDir string) {
 	// NoRoute handler：处理所有未匹配的路由
 	r.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path
-		// /api/* 路径不应回退到 SPA，直接返回 404
+		// /v1/* 路径不应回退到 SPA，直接返回 404
 		if strings.HasPrefix(path, "/api") {
 			middleware.AbortWithError(c, http.StatusNotFound, "NOT_FOUND", "api route not found", nil)
 			return
@@ -462,7 +461,7 @@ func (h *Handler) GetDataApiDefinitions(c *gin.Context) {
 // InvokeDataApi 通过 service-hub 调度中枢编排完整的预设数据 API 会话。
 //
 // app-lz BFF 作为外部模拟程序，不直接访问 datasource-mgr / engine-go / audit-log，
-// 所有数据请求统一通过 service-hub 的 POST /api/hub/fetch-and-desensitize 接口编排，
+// 所有数据请求统一通过 service-hub 的 POST /v1/hub/fetch-and-desensitize 接口编排，
 // 由 service-hub 内部串联 ② 数据拉取 → ③ 分类分级+脱敏 → ④ 审计存证 → ⑤ 结果返回。
 //
 // 执行流程（3 阶段）：

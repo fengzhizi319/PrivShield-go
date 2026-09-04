@@ -59,7 +59,7 @@
 
 ### 3.2 接口与全栈集成需求 (F-2)
 - **F-2.1 REST API**: 暴露 `POST /v1/medical/process`、`POST /v1/medical/sanitize` 及 `POST /v1/medical/sanitize/batch`。
-- **F-2.2 Go BFF 代理**: `console/bff-go` 暴露 `POST /api/medical_pipeline`，支持无缝加载预置样例与自定义上传。
+- **F-2.2 Go BFF 代理**: `console/bff-go` 暴露 `POST /v1/medical_pipeline`，支持无缝加载预置样例与自定义上传。
 - **F-2.3 控制台可视化**: 前端 `MedicalPipelinePanel.tsx` 支持双结构报告左右分栏对比、敏感等级图谱与高危命中标识。
 
 ---

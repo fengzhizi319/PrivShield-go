@@ -147,7 +147,7 @@ def main() -> None:
             "field_name": "id_card",
         }
     elif args.target == "hub":
-        target_url = "http://127.0.0.1:8082/api/hub/dispatch"
+        target_url = "http://127.0.0.1:8082/v1/hub/dispatch"
         payload = {
             "source": "ds_yibao",
             "operation": "mask",

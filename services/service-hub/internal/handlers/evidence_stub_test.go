@@ -16,7 +16,7 @@ import (
 // audit-log 存证桩服务（P0-6 出域 ↔ 存证绑定）
 // ─────────────────────────────────────────────────────────────
 //
-// evidenceStub 复刻 audit-log 真实建单端点 POST /api/audit/logs 的契约：
+// evidenceStub 复刻 audit-log 真实建单端点 POST /v1/audit/logs 的契约：
 //   - operation / status 为 binding:"required"，非白名单枚举一律 400；
 //   - 调用方携带非空 prev_hash 一律 400（链头只能由存储层指派）；
 //   - 成功返回 201 + {id, snapshot_id, integrity_hash, prev_hash, via}。
@@ -70,12 +70,12 @@ func (s *evidenceStub) handle(w http.ResponseWriter, r *http.Request) {
 	status, body := s.status, s.body
 	s.mu.Unlock()
 
-	if r.Method == http.MethodGet && (r.URL.Path == "/api/health" || r.URL.Path == "/health") {
+	if r.Method == http.MethodGet && r.URL.Path == "/health" {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "via": "audit-log"})
 		return
 	}
-	if r.Method == http.MethodGet && r.URL.Path == "/api/audit/logs" {
+	if r.Method == http.MethodGet && r.URL.Path == "/v1/audit/logs" {
 		w.Header().Set("Content-Type", "application/json")
 		s.mu.Lock()
 		recs := s.records
@@ -86,7 +86,7 @@ func (s *evidenceStub) handle(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"total": len(recs), "logs": recs, "via": "audit-log"})
 		return
 	}
-	if r.Method == http.MethodGet && r.URL.Path == "/api/audit/snapshots" {
+	if r.Method == http.MethodGet && r.URL.Path == "/v1/audit/snapshots" {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"total": 1,
@@ -101,7 +101,7 @@ func (s *evidenceStub) handle(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if r.Method == http.MethodPost && r.URL.Path == "/api/audit/snapshots/verify" {
+	if r.Method == http.MethodPost && r.URL.Path == "/v1/audit/snapshots/verify" {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"snapshot_id": "snap-test-1",
@@ -113,8 +113,8 @@ func (s *evidenceStub) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Method != http.MethodPost || r.URL.Path != "/api/audit/logs" {
-		writeEnvelope(w, http.StatusNotFound, "NOT_FOUND", "evidence stub only serves POST /api/audit/logs")
+	if r.Method != http.MethodPost || r.URL.Path != "/v1/audit/logs" {
+		writeEnvelope(w, http.StatusNotFound, "NOT_FOUND", "evidence stub only serves POST /v1/audit/logs")
 		return
 	}
 

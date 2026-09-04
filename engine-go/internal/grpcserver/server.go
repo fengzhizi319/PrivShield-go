@@ -1,8 +1,8 @@
 // Package grpcserver 提供 gRPC 服务端实现。
 //
 // 采用标准 protobuf 生成桩代码 (engine-go/internal/grpcserver/proto)，实现类型安全的
-// RegisterPrivacyServiceServer 接口。所有 44 个 RPC 方法通过
-// 标准 gRPC 协议与微服务及控制台 BFF 进行低延迟通信。
+// RegisterPrivacyServiceServer 接口。gRPC 只需注册一次 PrivacyService，具体 RPC
+// 由 protobuf 生成的 ServiceDesc 自动分发；所有 RPC 通过标准 gRPC 协议与微服务及控制台 BFF 通信。
 package grpcserver
 
 import (

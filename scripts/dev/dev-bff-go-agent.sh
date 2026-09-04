@@ -242,7 +242,7 @@ GO_CONSOLE_PID=$!
 PIDS+=("$GO_CONSOLE_PID")
 write_pid "$GO_CONSOLE_PID_FILE" "$GO_CONSOLE_PID"
 
-wait_for_service "$CONSOLE_URL/api/health" "Go gRPC 代理后端"
+wait_for_service "$CONSOLE_URL/health" "Go gRPC 代理后端"
 
 # 7. 启动 Vite 前端热开发服务器
 echo "启动 Vite 前端开发服务器 (UI: $VITE_URL)..."

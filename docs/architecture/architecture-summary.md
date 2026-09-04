@@ -112,7 +112,7 @@ gRPC (RawCodec, :50051) ←→  PrivacyService (统一编排业务中枢)  ←�
 - **`datasource-mgr` (:8083 / :50053)**：多源异构资产纳管、内置医保与康养模拟库（`yibao.csv` & `kangyang.csv`）、动态元数据自动探查与样本切片安全提取；
   - 📖 [可靠性能力详解](../../services/datasource-mgr/docs/reliability.md)
 - **`audit-log` (:8084 / :50054)**：基于 9 要素特征的不可篡改 SHA-256 / SM3 存证哈希链与 SM4-GCM 快照加密；
-  - **在线核验**：`POST /api/audit/chain/verify` 接口实时定位断裂节点；
+  - **在线核验**：`POST /v1/audit/chain/verify` 接口实时定位断裂节点；
   - 📖 [可靠性能力详解](../../services/audit-log/docs/reliability.md)
 
 ---

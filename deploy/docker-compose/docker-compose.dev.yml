@@ -198,7 +198,7 @@ services:
       - frontend
       - backend
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8082/api/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8082/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -240,7 +240,7 @@ services:
       - frontend
       - backend
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8083/api/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8083/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -288,7 +288,7 @@ services:
       - frontend
       - backend
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8084/api/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8084/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3

@@ -61,7 +61,7 @@ EXPOSE 8081
 # 容器健康检查
 # Container health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8081/api/health || exit 1
+    CMD curl -f http://localhost:8081/health || exit 1
 
 # 切换到非 root 用户
 # Switch to non-root user

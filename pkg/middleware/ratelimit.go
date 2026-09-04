@@ -336,7 +336,7 @@ func RateLimitWithEndpoints(defaultRPS int, defaultBurst int, perEndpoint map[st
 
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
-		if path == "/health" || path == "/api/health" {
+		if path == "/health" {
 			c.Next()
 			return
 		}

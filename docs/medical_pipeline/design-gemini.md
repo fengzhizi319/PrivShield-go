@@ -39,7 +39,7 @@ flowchart TD
 
     subgraph Endpoints [通信层与后端通道]
         MP --> Service[PrivacyService / MedicalRoute]
-        Service --> GoBackend[Go Console Backend :8081 /api/privacy]
+        Service --> GoBackend[Go Console Backend :8081 /v1/privacy]
         GoBackend --> WebUI[Web 控制台 :5173]
     end
 ```
@@ -133,7 +133,7 @@ func (p *MedicalPrivacyPipeline) ProcessRecord(record map[string]any) (map[strin
    - REST 路由: `POST /v1/medical/process`
    - gRPC 接口: `ProcessMedical`
 2. **Go 控制台后端**：
-   - Go BFF: 在 `console/bff-go/internal/handlers/handlers.go` 暴露 `POST /api/medical_pipeline`。
+   - Go BFF: 在 `console/bff-go/internal/handlers/handlers.go` 暴露 `POST /v1/medical_pipeline`。
    - 数据源直接加载 `data/kangyang.csv` 与 `data/yibao.csv`。
 3. **Web 控制台 (`console/web`)**：
    - 视图组件: `MedicalPipelinePanel.tsx`。

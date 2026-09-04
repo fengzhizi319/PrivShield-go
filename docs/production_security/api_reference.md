@@ -180,9 +180,9 @@ class Identity:
 
 | REST 路径 | 对应权限 Scope |
 |---|---|
-| `/api/hub/status`, `/api/hub/tasks`, `/api/hub/tasks/:id`, `/api/hub/pipeline` | `hub:read` |
-| `/api/hub/dispatch`, `/api/hub/classify` | `hub:dispatch` |
-| `/health`, `/readyz`, `/api/health`, `/metrics` | 无需特定权限（已认证即可） |
+| `/v1/hub/status`, `/v1/hub/tasks`, `/v1/hub/tasks/:id`, `/v1/hub/pipeline` | `hub:read` |
+| `/v1/hub/dispatch`, `/v1/hub/classify` | `hub:dispatch` |
+| `/health`, `/readyz`, `/health`, `/metrics` | 无需特定权限（已认证即可） |
 
 ### 2.4 认证与鉴权依赖 (`security/auth.py`)
 

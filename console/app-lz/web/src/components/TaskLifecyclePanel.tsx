@@ -235,7 +235,7 @@ export const TaskLifecyclePanel: React.FC<TaskLifecyclePanelProps> = ({
             <IconPlay className="w-4 h-4 text-indigo-400" />
             新建脱敏任务
             <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
-              → service-hub /api/hub/dispatch
+              → service-hub /v1/hub/dispatch
             </span>
           </h2>
 

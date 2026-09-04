@@ -55,14 +55,14 @@ docker run -d \
 # P64 fix: wait for container to become healthy
 echo -n "Waiting for audit-log to be healthy"
 for i in $(seq 1 30); do
-  if curl -sf --max-time 3 "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; then
+  if curl -sf --max-time 3 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
     echo " OK"
     echo ""
     echo "Audit Log deployed successfully!"
-    echo "  REST Health: http://127.0.0.1:${PORT}/api/health"
+    echo "  REST Health: http://127.0.0.1:${PORT}/health"
     echo "  gRPC:        127.0.0.1:${GRPC_PORT}"
-    echo "  Logs:        http://127.0.0.1:${PORT}/api/audit/logs"
-    echo "  Stats:       http://127.0.0.1:${PORT}/api/audit/stats"
+    echo "  Logs:        http://127.0.0.1:${PORT}/v1/audit/logs"
+    echo "  Stats:       http://127.0.0.1:${PORT}/v1/audit/stats"
     echo "  Data:        ${DATA_DIR} → /app/data (SQLite persistent)"
     exit 0
   fi

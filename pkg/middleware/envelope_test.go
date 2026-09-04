@@ -25,7 +25,7 @@ func TestAbortWithError_Format(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("GET", "/api/test", nil)
+	c.Request = httptest.NewRequest("GET", "/v1/test", nil)
 	c.Request.Header.Set("X-Request-ID", "req-test-envelope-001")
 
 	AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "参数校验失败", "field 'name' is required")
@@ -66,7 +66,7 @@ func TestRespondWithSuccess_Format(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("GET", "/api/test", nil)
+	c.Request = httptest.NewRequest("GET", "/v1/test", nil)
 	c.Request.Header.Set("X-Request-ID", "req-success-001")
 
 	RespondWithSuccess(c, http.StatusOK, "操作成功", map[string]string{"key": "value"})
@@ -119,7 +119,7 @@ func TestAbortWithError_GeneratesTraceID(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	// No X-Request-ID header set / 不携带请求头
-	c.Request = httptest.NewRequest("GET", "/api/test", nil)
+	c.Request = httptest.NewRequest("GET", "/v1/test", nil)
 
 	AbortWithError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "服务器内部错误", nil)
 

@@ -13,7 +13,7 @@
 | [`deploy-k8s.sh`](deploy-k8s.sh) | Kubernetes | 使用 `deploy/k8s/` 目录下的自包含清单独立部署到 K8s（支持 `--with-postgres`） | 单服务独立发布 / K8s 集群部署 |
 | [`stop-k8s.sh`](stop-k8s.sh) | Kubernetes | 卸载与清理 `service-hub` 在 K8s 中的所有独立资源与 PostgreSQL 资源 | 集群资源清理 / 卸载下线 |
 | [`gen-certs.sh`](gen-certs.sh) | 安全/证书 | 生成 TLS 1.3 服务端证书、客户端证书及 CA 根证书，用于 gRPC/REST 双向认证 | mTLS 安全联调与生产证书准备 |
-| [`health-check.sh`](health-check.sh) | 运维探针 | 对 `/api/health`、`/api/hub/status` 与 `/api/hub/pipeline` 进行自动化探测 | 服务健康检查 / 巡检监控 |
+| [`health-check.sh`](health-check.sh) | 运维探针 | 对 `/health`、`/v1/hub/status` 与 `/v1/hub/pipeline` 进行自动化探测 | 服务健康检查 / 巡检监控 |
 | [`simulate-pipeline.sh`](simulate-pipeline.sh) | 业务仿真 | 模拟完整的 6 阶段流水线请求调度（`ingest ➔ fetch ➔ classify ➔ desensitize ➔ return ➔ audit`） | E2E 业务联调 / 演示汇报 |
 | [`test-scripts.sh`](test-scripts.sh) | 测试套件 | 全自动化测试所有运维脚本（静态检查、Shell 语法扫描、参数解析、证书生成与离线容错） | 脚本质量保障 / CI 回归测试 |
 

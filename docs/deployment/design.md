@@ -810,26 +810,26 @@ sqlite3.OperationalError: unable to open database file
 
 ---
 
-### 13.7 跨组件探针与健康检查端点一致性（`/health` 与 `/api/health`）
+### 13.7 跨组件探针与健康检查端点一致性（`/health` 与 `/health`）
 
 #### 陷阱场景
 Docker Compose 配置的 `healthcheck` 探测 `http://localhost:8080/health` 或 `http://localhost:8081/health` 时返回 HTTP 404，导致容器一直处于 `(health: starting)` 甚至被标记为 `unhealthy` 触发依赖熔断。
 
 #### 根本原因
-控制台代理后端路由设计时将业务健康检查注册在 `/api/health`（带 `/api` 前缀以适配前端路由代理与 API 网关），而标准 Docker HEALTHCHECK 与部分 K8s Liveness 探针习惯探测根路径 `/health`。
+控制台代理后端路由设计时将业务健康检查注册在 `/health`（带 `/api` 前缀以适配前端路由代理与 API 网关），而标准 Docker HEALTHCHECK 与部分 K8s Liveness 探针习惯探测根路径 `/health`。
 
 #### 最佳实践与解法
 在 Python 后端（FastAPI）与 Go 后端（Gin）中**双重注册**健康检查端点，兼顾标准容器探针与 API 代理调用：
 - **FastAPI**:
   ```python
   @app.get("/health")
-  @app.get("/api/health")
+  @app.get("/health")
   async def health(): ...
   ```
 - **Gin**:
   ```go
   r.GET("/health", s.Health)
-  r.GET("/api/health", s.Health)
+  r.GET("/health", s.Health)
   ```
 
 ---

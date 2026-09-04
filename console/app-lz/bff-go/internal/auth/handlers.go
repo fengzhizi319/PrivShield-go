@@ -1,9 +1,9 @@
 // handlers.go 实现用户注册、登录和当前用户信息 HTTP 端点。
 //
 // 端点清单：
-//   POST /api/auth/register  → 用户注册（公开）
-//   POST /api/auth/login     → 用户登录（公开）
-//   GET  /api/auth/me        → 获取当前用户信息（需认证）
+//   POST /v1/auth/register  → 用户注册（公开）
+//   POST /v1/auth/login     → 用户登录（公开）
+//   GET  /v1/auth/me        → 获取当前用户信息（需认证）
 
 package auth
 
@@ -103,7 +103,7 @@ type ChangePasswordRequest struct {
 
 // HandleRegister 处理用户注册请求。
 //
-// POST /api/auth/register
+// POST /v1/auth/register
 // Body: {"username": "...", "password": "...", "display_name": "...", "role": "user|admin"}
 // Response 201: {"token": "...", "user": {...}}
 func (h *Handlers) HandleRegister(c *gin.Context) {
@@ -175,7 +175,7 @@ func (h *Handlers) HandleRegister(c *gin.Context) {
 
 // HandleLogin 处理用户登录请求。
 //
-// POST /api/auth/login
+// POST /v1/auth/login
 // Body: {"username": "...", "password": "..."}
 // Response 200: {"token": "...", "user": {...}}
 func (h *Handlers) HandleLogin(c *gin.Context) {
@@ -225,7 +225,7 @@ func (h *Handlers) HandleLogin(c *gin.Context) {
 			h.logger.Warn("admin login rejected: TOTP not enabled", "username", user.Username)
 			c.JSON(http.StatusForbidden, gin.H{
 				"code":    "TOTP_REQUIRED",
-				"message": "Admin users must enable TOTP before login. Use POST /api/auth/totp/enable first.",
+				"message": "Admin users must enable TOTP before login. Use POST /v1/auth/totp/enable first.",
 				"via":     "app-lz-bff",
 			})
 			return
@@ -277,7 +277,7 @@ func (h *Handlers) HandleLogin(c *gin.Context) {
 
 // HandleMe 获取当前登录用户信息。
 //
-// GET /api/auth/me
+// GET /v1/auth/me
 // Authorization: Bearer <token>
 // Response 200: {"username": "...", "display_name": "...", "role": "..."}
 func (h *Handlers) HandleMe(c *gin.Context) {
@@ -314,7 +314,7 @@ func (h *Handlers) HandleMe(c *gin.Context) {
 
 // HandleLogout 吊销当前用户的 JWT 令牌。
 //
-// POST /api/auth/logout
+// POST /v1/auth/logout
 // Authorization: Bearer <token>
 // Response 200: {"message": "Logged out", "via": "app-lz-bff"}
 func (h *Handlers) HandleLogout(c *gin.Context) {
@@ -334,7 +334,7 @@ func (h *Handlers) HandleLogout(c *gin.Context) {
 
 // HandleEnableTOTP 处理启用 TOTP 多因素认证请求。
 //
-// POST /api/auth/totp/enable
+// POST /v1/auth/totp/enable
 // Authorization: Bearer <token>
 // Response 200: {"secret": "...", "auth_url": "...", "enabled": true, "via": "app-lz-bff"}
 //
@@ -391,7 +391,7 @@ func (h *Handlers) HandleEnableTOTP(c *gin.Context) {
 
 // HandleValidateTOTP 处理 TOTP 码校验请求。
 //
-// POST /api/auth/totp/validate
+// POST /v1/auth/totp/validate
 // Authorization: Bearer <token>
 // Body: {"code": "123456"}
 // Response 200: {"valid": true, "message": "...", "via": "app-lz-bff"}
@@ -468,7 +468,7 @@ func (h *Handlers) HandleValidateTOTP(c *gin.Context) {
 
 // HandleChangePassword 处理用户修改密码请求。
 //
-// POST /api/auth/change-password
+// POST /v1/auth/change-password
 // Authorization: Bearer <token>
 // Body: {"old_password": "...", "new_password": "..."}
 // Response 200: {"message": "Password changed successfully", "via": "app-lz-bff"}

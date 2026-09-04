@@ -22,12 +22,12 @@ npm run dev
 ```
 
 - 开发服务器默认 `http://127.0.0.1:5173`；
-- Vite 已配置代理：`/api/*` 自动转发到 `http://127.0.0.1:8081`（Go BFF），因此开发前需先启动后端；
+- Vite 已配置代理：`/v1/*` 自动转发到 `http://127.0.0.1:8081`（Go BFF），因此开发前需先启动后端；
 - 路径别名 `@` 指向 `src/`。
 
 ```mermaid
 graph LR
-    Dev[浏览器 :5173] -- /api/* --> Vite[Vite Dev Server]
+    Dev[浏览器 :5173] -- /v1/* --> Vite[Vite Dev Server]
     Vite -- 代理 --> Backend[Go BFF :8081]
     Backend -- gRPC --> Agent[agent :8079]
 ```
@@ -53,7 +53,7 @@ npm run build        # 等价于 tsc && vite build
 
 1. **本地 / 单机**：构建后由 Go BFF 托管，浏览器访问 `http://127.0.0.1:8081`。
 2. **生产同源**：控制台与后端同域部署，`api/client.ts` 的 `API_BASE` 默认为空串（同源），无需额外配置。
-3. **独立静态托管**（可选）：把 `dist/` 放到 Nginx / CDN，并配置 `/api/*` 反向代理到后端；此时需保证 CORS 允许跨域。
+3. **独立静态托管**（可选）：把 `dist/` 放到 Nginx / CDN，并配置 `/v1/*` 反向代理到后端；此时需保证 CORS 允许跨域。
 
 ## 5. 后端切换说明
 
@@ -69,7 +69,7 @@ npm run build        # 等价于 tsc && vite build
 | 现象 | 可能原因 | 处理 |
 |---|---|---|
 | `npm run build` 报类型错误 | 代码与契约不一致 | 按提示修复；重点检查 `types/api.ts` 与后端模型是否同步 |
-| 开发页空白 / 404 | 后端未启动，`/api/samples` 代理失败 | 先启动 Go 后端（`cd console/bff-go && go run ./cmd/server`） |
+| 开发页空白 / 404 | 后端未启动，`/v1/samples` 代理失败 | 先启动 Go 后端（`cd console/bff-go && go run ./cmd/server`） |
 | 切换协议后报连接失败 | Go BFF 未监听 | 确认 `8081` 端口服务已启动 |
 | 样式丢失 / 类名未生效 | Tailwind 未扫描到字面量类名 | 分类配色须以字面量写在 `categories.ts`，不可动态拼接 |
 | 构建后页面仍为旧版 | 浏览器缓存了 `index.html` | `index.html` 不应强缓存；必要时强制刷新 |

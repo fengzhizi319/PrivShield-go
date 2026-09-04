@@ -14,7 +14,7 @@
 4. **快照样本国密 SM4-GCM 信封加密**：对出域快照数据执行应用层 SM4-GCM 动态信封加密（`enc:v1:...`），确保审计库自身零明文隐私泄露；
 5. **内存微批聚合刷盘 (`pkg/store/flusher`)**：通过内存无锁环形队列 + 定量(200条)/定时(20ms)微批刷盘机制，将单机 SQLite 写入性能推升至 **3,000 ~ 5,000 QPS**，且优雅停机保证 100% 刷盘零丢数据；
 6. **存储底座自适应与平滑容灾**：支持 PostgreSQL Phase B 分布式存证，具备**自动连通性探针回退**（PG 故障/未配置平滑回退 SQLite WAL）、**基于 CPU 核心数自适应连接池**与**按月自动分区索引预建**；
-7. **全链在线验真与合规报告**：提供 `POST /api/audit/chain/verify` 毫秒级全链连续性验真接口与 SQL 级合规报告（`GenerateReport`）。
+7. **全链在线验真与合规报告**：提供 `POST /v1/audit/chain/verify` 毫秒级全链连续性验真接口与 SQL 级合规报告（`GenerateReport`）。
 
 ---
 
@@ -30,7 +30,7 @@ graph TD
     end
 
     subgraph AuditLogService [Audit Log 微服务 :8084 / :50054]
-        HTTPRouter[Gin REST 路由层<br/>/api/audit/* :8084]
+        HTTPRouter[Gin REST 路由层<br/>/v1/audit/* :8084]
         GRPCRouter[gRPC Server :50054<br/>SM2 / TLS 1.3 mTLS]
         MiddlewareStack[9层统一中间件链<br/>Auth / TraceID / Logger / Recovery / CORS / MaxBodySize / RateLimit]
         PromMetrics[Prometheus Collector<br/>/metrics]
@@ -87,7 +87,7 @@ sequenceDiagram
     Note over Flusher,Store: 定量 (200条) 或 定时 (20ms) 触发单事务 SaveLogsBatch(...)
     Flusher->>Store: 批量事务落盘
 
-    Auditor->>AuditGRPC: POST /api/audit/chain/verify (limit=0 全量)
+    Auditor->>AuditGRPC: POST /v1/audit/chain/verify (limit=0 全量)
     AuditGRPC->>Flusher: 触发同步 Flush() 确保读取最新链条
     AuditGRPC->>Store: 读取存证日志序列（按 seq / rowid 顺序）
     AuditGRPC->>Engine: 逐行重算国密 SM3 连续哈希

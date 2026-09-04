@@ -13,7 +13,7 @@ import (
 // audit-log 存证桩服务（P0-6：gRPC / 租约工作器的 ⑥ 存证阶段）
 // ─────────────────────────────────────────────────────────────
 //
-// evidenceStub 模拟 audit-log 的建单端点 POST /api/audit/logs：
+// evidenceStub 模拟 audit-log 的建单端点 POST /v1/audit/logs：
 // 默认 201 受理并回写标识，可编程切换为 4xx/5xx 以验证 fail-closed 语义，
 // 并完整记录每一次提交的请求体，供断言 task_id / datasource_id / 指纹绑定。
 type evidenceStub struct {
@@ -68,7 +68,7 @@ func (s *evidenceStub) handle(w http.ResponseWriter, r *http.Request) {
 	status, deny := s.status, s.deny
 	s.mu.Unlock()
 
-	if r.Method != http.MethodPost || r.URL.Path != "/api/audit/logs" {
+	if r.Method != http.MethodPost || r.URL.Path != "/v1/audit/logs" {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}

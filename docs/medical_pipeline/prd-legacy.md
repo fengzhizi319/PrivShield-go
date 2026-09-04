@@ -44,8 +44,8 @@
 | 编号 | 需求 | 优先级 |
 |---|---|---|
 | F-3.1 | kangyang.csv 复制到 Python 后端和 Go 后端的合适目录 | P0 |
-| F-3.2 | Python 后端新增 `/api/pipeline/process` 端点，代理转发到 agent | P0 |
-| F-3.3 | Go 后端新增 `/api/pipeline/process` 端点，通过 gRPC 调用 agent | P0 |
+| F-3.2 | Python 后端新增 `/v1/pipeline/process` 端点，代理转发到 agent | P0 |
+| F-3.3 | Go 后端新增 `/v1/pipeline/process` 端点，通过 gRPC 调用 agent | P0 |
 | F-3.4 | 前端新增 MedicalPipelinePanel 面板，展示分级结果和脱敏数据 | P0 |
 | F-3.5 | 前端面板支持「执行 kangyang.csv 分级脱敏」一键操作 | P1 |
 | F-3.6 | 前端面板支持上传自定义 CSV 文件 | P2 |
@@ -86,8 +86,8 @@
 
 ### 4.3 全栈联调验收
 
-- [ ] Python 后端 `/api/pipeline/process` 返回正确结果
-- [ ] Go 后端 `/api/pipeline/process` 返回正确结果
+- [ ] Python 后端 `/v1/pipeline/process` 返回正确结果
+- [ ] Go 后端 `/v1/pipeline/process` 返回正确结果
 - [ ] 前端面板在 Python 后端模式下正常展示分级 + 脱敏结果
 - [ ] 前端面板在 Go 后端模式下正常展示分级 + 脱敏结果
 - [ ] 中英文切换正常

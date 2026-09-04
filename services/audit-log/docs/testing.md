@@ -11,7 +11,7 @@
 | 测试包 | 测试文件 | 覆盖内容与核心断言 |
 |---|---|---|
 | `internal/grpcserver` | `server_test.go` | **全部 9 个 gRPC 方法**（Health/RecordAudit/GetAuditLog/ListAuditLogs/GetAuditStats/ListSnapshots/VerifyIntegrity/VerifyChain/GenerateReport）、原子快照创建与样本信封解密、mTLS 凭证构造、CA 链校验与 CN 白名单校验 |
-| `internal/handlers` | `handlers_test.go` | **HTTP REST Handler 层**（Health、创建审计日志、日志检索过滤、统计概览、快照列表、快照样本 SM4-GCM 信封加密/解密、国密 SM3 9 要素完整性校验、全链路连续哈希链验真 `/api/audit/chain/verify`、合规报告生成、参数超大拦截防 DoS） |
+| `internal/handlers` | `handlers_test.go` | **HTTP REST Handler 层**（Health、创建审计日志、日志检索过滤、统计概览、快照列表、快照样本 SM4-GCM 信封加密/解密、国密 SM3 9 要素完整性校验、全链路连续哈希链验真 `/v1/audit/chain/verify`、合规报告生成、参数超大拦截防 DoS） |
 | `pkg/store/flusher` | `flusher_test.go` | **内存微批异步聚合刷盘器**（定量 200 条批量刷盘、定时 20ms 窗口超时刷盘、20 协程高并发无锁入队一致性与优雅停机同步清空） |
 | `internal/config` | `config_test.go` | 默认配置、自定义环境变量加载（`PGDSN`、`EncryptionKey`、`ArchiveDir`）、`Address()`、`GRPCAddress()`、`AgentBaseURLs()` 多节点轮询与 mTLS 配置解析 |
 | `internal/models` | `models_test.go` | 审计日志、快照存证、合规报告等核心数据结构的 JSON 序列化与反序列化双向无损性验证 |
@@ -53,7 +53,7 @@ go test ./pkg/... ./services/audit-log/... ./services/service-hub/... ./services
 - `TestHealth`：GET `/health` 与 `/readyz` 探活及响应头；
 - `TestCreateLog` / `TestGetLog` / `TestListLogsWithFilter`；
 - `TestVerifyIntegrity`：验证 9 要素国密 SM3 存证完整性；
-- `TestVerifyChainEndpoint`：验证 POST `/api/audit/chain/verify` 对历史区块链式哈希链的连续性对账；
+- `TestVerifyChainEndpoint`：验证 POST `/v1/audit/chain/verify` 对历史区块链式哈希链的连续性对账；
 - `TestEnvelopeEncryptionOfSnapshots`：验证快照落盘时的 `enc:v1:` 国密 SM4-GCM 加密以及读取时的透明解密；
 - `TestCreateLogParametersTooLarge`：超大参数攻击拦截（防内存耗尽 DoS）；
 - `TestComputeIntegrityHash`：验证国密 SM3 哈希确定性、哈希链连续性与雪崩效应。

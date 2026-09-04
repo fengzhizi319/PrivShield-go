@@ -91,7 +91,7 @@ func main() {
 	// 将 Gin 设置为发布模式，关闭调试日志输出，提升性能
 	gin.SetMode(gin.ReleaseMode)
 	// 创建 HTTP 处理器实例，持有 gRPC 客户端引用与配置信息，
-	// 内部实现了 /api/health、/api/samples、/api/proxy、/api/batch 等接口
+	// 内部实现了 /health、/v1/samples、/v1/proxy、/v1/batch 等接口
 	server := handlers.New(client, cfg, logger, mc)
 	// 创建一个新的 Gin 引擎实例（包含默认的 Logger + Recovery 中间件）
 	router := gin.New()

@@ -365,7 +365,7 @@ PrivShield 将审计系统独立部署在政务云独立审计虚拟机主机乙
    ```
    v1 历史格式（`enc:v1:`，SHA-256 弱派生）仅保留解密能力，不再写入。空密钥时 `EncryptString` 返回 `ErrEmptyKey`（Fail-Closed，不静默降级为明文）。
 5. **在线核验与秒级验真**：
-   暴露 `POST /api/audit/chain/verify` 接口，支持毫秒级对账核验全链条完整性（检测物理删行、调序或未授权篡改），支持合规审计报告导出。
+   暴露 `POST /v1/audit/chain/verify` 接口，支持毫秒级对账核验全链条完整性（检测物理删行、调序或未授权篡改），支持合规审计报告导出。
 
 ---
 
@@ -568,9 +568,9 @@ Identity { ServiceType: "external", Name: "portal", Scopes: ["privacy:mask", "cl
 
 | 权限 Scope | 覆盖路由 | 说明 |
 |---|---|---|
-| `hub:read` | `/api/hub/status`、`/api/hub/tasks`、`/api/hub/tasks/:id`、`/api/hub/pipeline` | 只读查询：状态概览、任务列表/详情、流水线监控 |
-| `hub:dispatch` | `/api/hub/dispatch`、`/api/hub/classify` | 写操作：任务分发与分类调度 |
-| *（无需特定权限）* | `/health`、`/readyz`、`/api/health`、`/metrics` | 健康探针与监控指标（已认证即可访问） |
+| `hub:read` | `/v1/hub/status`、`/v1/hub/tasks`、`/v1/hub/tasks/:id`、`/v1/hub/pipeline` | 只读查询：状态概览、任务列表/详情、流水线监控 |
+| `hub:dispatch` | `/v1/hub/dispatch`、`/v1/hub/classify` | 写操作：任务分发与分类调度 |
+| *（无需特定权限）* | `/health`、`/readyz`、`/health`、`/metrics` | 健康探针与监控指标（已认证即可访问） |
 
 **双模式鉴权**：
 - **Scope-based 模式**（`SERVICE_HUB_API_KEYS` 已配置时启用）：支持多 Key 多 Scope 细粒度鉴权，格式 `token1:reader:hub:read;token2:admin:*`；

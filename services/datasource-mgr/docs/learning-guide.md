@@ -76,7 +76,7 @@ flowchart TB
         end
 
         subgraph ProtocolLayers ["双协议接入层 (Concurrent Dual Listeners)"]
-            GinHTTPS["Gin HTTPS / HTTP REST 路由层<br/>:8083 (生产 HTTPS mTLS / 开发 Insecure HTTP)<br/>/api/datasources/*"]
+            GinHTTPS["Gin HTTPS / HTTP REST 路由层<br/>:8083 (生产 HTTPS mTLS / 开发 Insecure HTTP)<br/>/v1/datasources/*"]
             GRPCSrv["gRPC Server :50053<br/>(TLS 1.3 / SM2 mTLS + CN 白名单)<br/>DataSourceManagerServiceServer"]
         end
 
@@ -305,16 +305,16 @@ bash scripts/dev-run.sh        # 开发模式（免 mTLS，127.0.0.1，text 日�
 
 ```bash
 # 1. 数据源资产目录
-curl -s http://127.0.0.1:8083/api/datasources | jq .
+curl -s http://127.0.0.1:8083/v1/datasources | jq .
 
 # 2. 探查医保数据源 Schema（必须包含 19 字段）
-curl -s http://127.0.0.1:8083/api/datasources/ds_yibao/metadata | jq .
+curl -s http://127.0.0.1:8083/v1/datasources/ds_yibao/metadata | jq .
 
 # 3. 按身份证号查询医保单条记录（核心抽取入口）
-curl -s "http://127.0.0.1:8083/api/datasources/ds_yibao/record-by-id?id_card_no=110101196809171010" | jq .
+curl -s "http://127.0.0.1:8083/v1/datasources/ds_yibao/record-by-id?id_card_no=110101196809171010" | jq .
 
 # 4. 按身份证号查询康养单条记录（必须包含 27 字段）
-curl -s "http://127.0.0.1:8083/api/datasources/ds_kangyang/record-by-id?id_card_no=110105198402151071" | jq .
+curl -s "http://127.0.0.1:8083/v1/datasources/ds_kangyang/record-by-id?id_card_no=110105198402151071" | jq .
 ```
 
 ### 7.3 gRPC 接口演练

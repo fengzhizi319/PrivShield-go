@@ -106,8 +106,8 @@ func httpPost(t *testing.T, url string, payload any) (int, map[string]any) {
 //	Step 1. 探针巡检：并发检查 Agent、service-hub、datasource-mgr、audit-log 全部 4 个微服务的健康状态；
 //	Step 2. 申请模拟数据：向 datasource-mgr API 1 (医保数据) 抽取 5 条样本数据；
 //	Step 3. 提交任务：
-//	        3a. 向 service-hub /api/hub/classify 提交自动分类定级 + 自适应脱敏任务；
-//	        3b. 向 service-hub /api/hub/dispatch 提交直接指定 mask 算子的脱敏任务；
+//	        3a. 向 service-hub /v1/hub/classify 提交自动分类定级 + 自适应脱敏任务；
+//	        3b. 向 service-hub /v1/hub/dispatch 提交直接指定 mask 算子的脱敏任务；
 //	Step 4. 等待执行：等待 6 阶段流水线在后台完成调度处理；
 //	Step 5. 校验结果：查询已完成任务列表，断言任务状态为 completed 且敏感字段已被成功遮蔽；
 //	Step 6. 审计存证：将分类分级与脱敏的操作元数据写入 audit-log 审计中心；
@@ -126,21 +126,21 @@ func TestRealE2E_FullFlow(t *testing.T) {
 	t.Logf("  ✅ PrivShield Agent: %v", agentHealth["status"])
 
 	// 1.2 检查 service-hub 调度中枢
-	status, hubHealth := httpGet(t, serviceHubURL+"/api/health")
+	status, hubHealth := httpGet(t, serviceHubURL+"/health")
 	if status != 200 {
 		t.Fatalf("service-hub not healthy: HTTP %d", status)
 	}
 	t.Logf("  ✅ service-hub: %v (agent=%v)", hubHealth["backend"], hubHealth["agent"])
 
 	// 1.3 检查 datasource-mgr 数据源管理微服务
-	status, dsHealth := httpGet(t, datasourceURL+"/api/health")
+	status, dsHealth := httpGet(t, datasourceURL+"/health")
 	if status != 200 {
 		t.Fatalf("datasource-mgr not healthy: HTTP %d", status)
 	}
 	t.Logf("  ✅ datasource-mgr: %v", dsHealth["backend"])
 
 	// 1.4 检查 audit-log 审计微服务
-	status, alHealth := httpGet(t, auditLogURL+"/api/health")
+	status, alHealth := httpGet(t, auditLogURL+"/health")
 	if status != 200 {
 		t.Fatalf("audit-log not healthy: HTTP %d", status)
 	}
@@ -163,7 +163,7 @@ func TestRealE2E_FullFlow(t *testing.T) {
 			"medical_fee":  15000.50,
 		},
 	}
-	status, classifyResp := httpPost(t, serviceHubURL+"/api/hub/dispatch", classifyPayload)
+	status, classifyResp := httpPost(t, serviceHubURL+"/v1/hub/dispatch", classifyPayload)
 	if status != 202 {
 		t.Fatalf("classify dispatch failed: HTTP %d: %v", status, classifyResp)
 	}
@@ -181,7 +181,7 @@ func TestRealE2E_FullFlow(t *testing.T) {
 			"diagnosis":    "糖尿病",
 		},
 	}
-	status, dispatchResp := httpPost(t, serviceHubURL+"/api/hub/dispatch", dispatchPayload)
+	status, dispatchResp := httpPost(t, serviceHubURL+"/v1/hub/dispatch", dispatchPayload)
 	if status != 202 {
 		t.Fatalf("dispatch failed: HTTP %d: %v", status, dispatchResp)
 	}
@@ -198,7 +198,7 @@ func TestRealE2E_FullFlow(t *testing.T) {
 	t.Log("═══ Step 5: 拿到脱敏数据 — 验证任务结果 ═══")
 
 	// 查询已完成任务
-	status, tasksResp := httpGet(t, serviceHubURL+"/api/hub/tasks?status=completed")
+	status, tasksResp := httpGet(t, serviceHubURL+"/v1/hub/tasks?status=completed")
 	if status != 200 {
 		t.Fatalf("list tasks failed: HTTP %d", status)
 	}
@@ -208,10 +208,10 @@ func TestRealE2E_FullFlow(t *testing.T) {
 
 	if completedTotal < 2 {
 		// 检查是否有在途或失败任务
-		_, runningResp := httpGet(t, serviceHubURL+"/api/hub/tasks?status=running")
+		_, runningResp := httpGet(t, serviceHubURL+"/v1/hub/tasks?status=running")
 		runningTotal := int(runningResp["total"].(float64))
 
-		_, failedResp := httpGet(t, serviceHubURL+"/api/hub/tasks?status=failed")
+		_, failedResp := httpGet(t, serviceHubURL+"/v1/hub/tasks?status=failed")
 		failedTotal := int(failedResp["total"].(float64))
 
 		t.Logf("  ⏳ 运行中: %d, 已完成: %d, 失败: %d", runningTotal, completedTotal, failedTotal)
@@ -251,7 +251,7 @@ func TestRealE2E_FullFlow(t *testing.T) {
 		"status":         "success",
 		"security_level": level,
 	}
-	status, auditResp := httpPost(t, auditLogURL+"/api/audit/logs", auditPayload)
+	status, auditResp := httpPost(t, auditLogURL+"/v1/audit/logs", auditPayload)
 	if status != 201 {
 		t.Fatalf("create audit log failed: HTTP %d: %v", status, auditResp)
 	}
@@ -261,7 +261,7 @@ func TestRealE2E_FullFlow(t *testing.T) {
 	// ── Step 7: 查询审计统计，验证记录 ─────────────────────────────────
 	t.Log("═══ Step 7: 查询审计统计，验证记录 ═══")
 
-	status, statsResp := httpGet(t, auditLogURL+"/api/audit/stats")
+	status, statsResp := httpGet(t, auditLogURL+"/v1/audit/stats")
 	if status != 200 {
 		t.Fatalf("get stats failed: HTTP %d", status)
 	}
@@ -273,7 +273,7 @@ func TestRealE2E_FullFlow(t *testing.T) {
 	}
 
 	// 验证审计记录详情字段
-	status, auditDetail := httpGet(t, auditLogURL+"/api/audit/logs/"+auditID)
+	status, auditDetail := httpGet(t, auditLogURL+"/v1/audit/logs/"+auditID)
 	if status != 200 {
 		t.Fatalf("get audit detail failed: HTTP %d", status)
 	}
@@ -288,7 +288,7 @@ func TestRealE2E_FullFlow(t *testing.T) {
 	// ── 完整性与合规报告验证 ──────────────────────────────────────────
 	t.Log("═══ 完整性验证 ═══")
 
-	status, snapResp := httpGet(t, auditLogURL+"/api/audit/snapshots")
+	status, snapResp := httpGet(t, auditLogURL+"/v1/audit/snapshots")
 	if status != 200 {
 		t.Fatalf("list snapshots failed: HTTP %d", status)
 	}
@@ -296,7 +296,7 @@ func TestRealE2E_FullFlow(t *testing.T) {
 	t.Logf("  📊 快照数量: %d", snapTotal)
 
 	// 生成 24h 周期数据合规报告
-	status, reportResp := httpPost(t, auditLogURL+"/api/audit/report", map[string]any{"period": "24h"})
+	status, reportResp := httpPost(t, auditLogURL+"/v1/audit/report", map[string]any{"period": "24h"})
 	if status != 200 {
 		t.Fatalf("generate report failed: HTTP %d: %v", status, reportResp)
 	}
@@ -386,7 +386,7 @@ func TestRealE2E_MultiServiceCoordination(t *testing.T) {
 	t.Log("═══ 多服务协调测试 ═══")
 
 	// 1. 从 datasource-mgr 读取真实模拟数据源
-	status, dsResp := httpGet(t, datasourceURL+"/api/datasources/ds_yibao")
+	status, dsResp := httpGet(t, datasourceURL+"/v1/datasources/ds_yibao")
 	if status != 200 {
 		t.Fatalf("get datasource: HTTP %d", status)
 	}
@@ -402,7 +402,7 @@ func TestRealE2E_MultiServiceCoordination(t *testing.T) {
 			"id_card":      "510101199304041234",
 		},
 	}
-	status, dispatchResp := httpPost(t, serviceHubURL+"/api/hub/dispatch", dispatchPayload)
+	status, dispatchResp := httpPost(t, serviceHubURL+"/v1/hub/dispatch", dispatchPayload)
 	if status != 202 {
 		t.Fatalf("dispatch: HTTP %d", status)
 	}
@@ -413,7 +413,7 @@ func TestRealE2E_MultiServiceCoordination(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// 4. 验证 service-hub 任务状态
-	status, hubStatus := httpGet(t, serviceHubURL+"/api/hub/status")
+	status, hubStatus := httpGet(t, serviceHubURL+"/v1/hub/status")
 	if status != 200 {
 		t.Fatalf("hub status: HTTP %d", status)
 	}
@@ -427,13 +427,13 @@ func TestRealE2E_MultiServiceCoordination(t *testing.T) {
 		"status":     "success",
 		"user":       "e2e-coordination",
 	}
-	status, _ = httpPost(t, auditLogURL+"/api/audit/logs", auditPayload)
+	status, _ = httpPost(t, auditLogURL+"/v1/audit/logs", auditPayload)
 	if status != 201 {
 		t.Fatalf("audit log: HTTP %d", status)
 	}
 
 	// 6. 验证 datasource-mgr 审计追踪
-	status, auditTrail := httpGet(t, datasourceURL+"/api/datasources/"+dsID+"/audit")
+	status, auditTrail := httpGet(t, datasourceURL+"/v1/datasources/"+dsID+"/audit")
 	if status != 200 {
 		t.Fatalf("ds audit: HTTP %d", status)
 	}
@@ -444,7 +444,7 @@ func TestRealE2E_MultiServiceCoordination(t *testing.T) {
 	t.Logf("  ✅ 数据源审计追踪: %d 条记录", auditTotal)
 
 	// 7. 验证 audit-log 总体统计
-	status, stats := httpGet(t, auditLogURL+"/api/audit/stats")
+	status, stats := httpGet(t, auditLogURL+"/v1/audit/stats")
 	if status != 200 {
 		t.Fatalf("audit stats: HTTP %d", status)
 	}

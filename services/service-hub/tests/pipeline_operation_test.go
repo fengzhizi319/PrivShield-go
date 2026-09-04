@@ -65,7 +65,7 @@ func newEngineStub(level string) *httptest.Server {
 
 func newEvidenceStub() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/audit/logs" {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/audit/logs" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -106,7 +106,7 @@ func testConfig(t *testing.T, engineURL, evidenceURL string) *config.Config {
 
 // TestPipelineOperationDerivationIsIdenticalAcrossRESTandGRPC is the P1-1 dual-path
 // guarantee: the same data and the same caller request must end in the same applied
-// operator whether it entered through POST /api/hub/dispatch or the Dispatch RPC.
+// operator whether it entered through POST /v1/hub/dispatch or the Dispatch RPC.
 // A second, drifting derivation rule in either entry point fails this test.
 //
 // TestPipelineOperationDerivationIsIdenticalAcrossRESTandGRPC 是 P1-1 的双路径一致性保证：
@@ -154,7 +154,7 @@ func TestPipelineOperationDerivationIsIdenticalAcrossRESTandGRPC(t *testing.T) {
 				"source": "ds_yibao", "operation": tc.requested, "payload": payload,
 			})
 			w := httptest.NewRecorder()
-			req, _ := http.NewRequest("POST", "/api/hub/dispatch", bytes.NewReader(raw))
+			req, _ := http.NewRequest("POST", "/v1/hub/dispatch", bytes.NewReader(raw))
 			req.Header.Set("Content-Type", "application/json")
 			router.ServeHTTP(w, req)
 			if w.Code != http.StatusAccepted {
@@ -223,7 +223,7 @@ func TestPipelineFailsClosedWithoutClassificationOnBothPaths(t *testing.T) {
 		"payload": []map[string]any{{"id_card": "110101199001011234"}},
 	})
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/hub/dispatch", bytes.NewReader(raw))
+	req, _ := http.NewRequest("POST", "/v1/hub/dispatch", bytes.NewReader(raw))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusAccepted {

@@ -8,7 +8,7 @@
 #   2. 执行 docker build 构建最新生产镜像（默认标签：privshield-service-hub:1.8.0）；
 #   3. 检查并安全删除旧容器实例；
 #   4. 挂载持久化存储卷（SQLite 数据持久化至 /app/data）并注入生产环境变量启动容器；
-#   5. 启动后自动进行最多 30 次（每次 1 秒）的健康检查轮询（/api/health），确保服务真正就绪。
+#   5. 启动后自动进行最多 30 次（每次 1 秒）的健康检查轮询（/health），确保服务真正就绪。
 #
 # 支持的环境变量配置：
 #   SERVICE_HUB_IMAGE: 镜像名称与标签（默认 privshield-service-hub:1.8.0）
@@ -95,15 +95,15 @@ docker run -d \
   "$IMAGE_NAME"
 
 # ── 6. 部署后健康巡检 ────────────────────────────────────────────────────────
-# 轮询探测 /api/health 端点，最多等待 30 秒
+# 轮询探测 /health 端点，最多等待 30 秒
 echo -n "Waiting for service-hub to be healthy"
 for i in $(seq 1 30); do
-  if curl -sf --max-time 3 "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; then
+  if curl -sf --max-time 3 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
     echo " OK"
     echo ""
     echo "Service Hub deployed successfully!"
-    echo "  REST Health: http://127.0.0.1:${PORT}/api/health"
-    echo "  Status:      http://127.0.0.1:${PORT}/api/hub/status"
+    echo "  REST Health: http://127.0.0.1:${PORT}/health"
+    echo "  Status:      http://127.0.0.1:${PORT}/v1/hub/status"
     echo "  gRPC:        127.0.0.1:${GRPC_PORT}"
     echo "  Data:        ${DATA_DIR} → /app/data (SQLite persistent)"
     exit 0

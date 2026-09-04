@@ -50,8 +50,8 @@ flowchart TD
 
     subgraph Endpoints [通信层与后端通道]
         MP --> Service[PrivacyService / MedicalRoute]
-        Service --> PyBackend[Python Console Backend /api/medical_pipeline]
-        Service --> GoBackend[Go Console Backend /api/medical_pipeline]
+        Service --> PyBackend[Python Console Backend /v1/medical_pipeline]
+        Service --> GoBackend[Go Console Backend /v1/medical_pipeline]
     end
 
     subgraph Frontend [Web 前端控制台]
@@ -189,9 +189,9 @@ class MedicalPrivacyPipeline:
 
 1. **Agent 接口层**：
    - REST 路由: `POST /v1/medical/process`（已实现，`engine/routers/medical.py`）
-   - gRPC 接口: ~~在 `proto/privacy.proto` 补充 `MedicalProcessRequest` 与 `MedicalProcessResponse`~~ **（未实现，规划中）**——当前 `proto/privacy.proto` 与 `grpc_server.py` 均无医疗 Pipeline 消息与方法；Go 控制台的 `/api/medical_pipeline` 实际走 REST 代理通道。
+   - gRPC 接口: ~~在 `proto/privacy.proto` 补充 `MedicalProcessRequest` 与 `MedicalProcessResponse`~~ **（未实现，规划中）**——当前 `proto/privacy.proto` 与 `grpc_server.py` 均无医疗 Pipeline 消息与方法；Go 控制台的 `/v1/medical_pipeline` 实际走 REST 代理通道。
 2. **Go & Python 控制台后端**：
-   - Go BFF: 在 `console/bff-go/internal/handlers/handlers.go` 增加 `POST /api/medical_pipeline`。
+   - Go BFF: 在 `console/bff-go/internal/handlers/handlers.go` 增加 `POST /v1/medical_pipeline`。
    - 将 `kangyang.csv` 部署到 `console/bff-go/internal/samples/kangyang.csv`。
 
 > **历史说明**：早期设计同时要求 Python REST BFF（`console/backend/app/main.py`）实现相同路由，该实现已移除。

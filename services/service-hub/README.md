@@ -85,19 +85,19 @@ make build
 |---|---|---|---|
 | GET | `/health` | 免密 | 存活探针（Liveness Probe，进程存活即返回 200） |
 | GET | `/readyz` | 免密 | 就绪探针（Readiness Probe，检查 Agent+Datasource 连通性，失败返回 503） |
-| GET | `/api/health` | 免密 | 综合健康检查（兼容别名，返回自身与上下游延迟） |
-| GET | `/api/hub/status` | 可选 | 调度中枢运行状态概览 |
-| GET | `/api/hub/tasks` | 可选 | 任务列表（支持分页与 `?status=` 过滤） |
-| GET | `/api/hub/tasks/:id` | 可选 | 获取单个任务详情 |
-| POST | `/api/hub/dispatch` | 可选 | 手动分发隐私处理任务到流水线 |
-| GET | `/api/hub/pipeline` | 可选 | 流水线 6 阶段实时活跃状态 |
-| POST | `/api/hub/classify` | 可选 | 智能分类分级 + 自动策略脱敏分发 |
-| POST | `/api/hub/fetch-and-desensitize` | 可选 | 按身份证号端到端查询+脱敏（同步，需 `hub:dispatch` scope） |
-| GET | `/api/hub/topology` | 可选 | **外部编排**：网格拓扑与微服务健康状态全景探针 |
-| GET | `/api/hub/datasources` | 可选 | **外部编排**：数据源资产目录查询代理 |
-| GET | `/api/hub/audit/logs` | 可选 | **外部编排**：不可篡改审计日志查询代理 |
-| POST | `/api/hub/audit/logs` | 可选 | **外部编排**：审计存证日志写入代理 |
-| POST | `/api/hub/audit/verify` | 可选 | **外部编排**：Merkle Tree 完整性验真代理 |
+| GET | `/health` | 免密 | 综合健康检查（兼容别名，返回自身与上下游延迟） |
+| GET | `/v1/hub/status` | 可选 | 调度中枢运行状态概览 |
+| GET | `/v1/hub/tasks` | 可选 | 任务列表（支持分页与 `?status=` 过滤） |
+| GET | `/v1/hub/tasks/:id` | 可选 | 获取单个任务详情 |
+| POST | `/v1/hub/dispatch` | 可选 | 手动分发隐私处理任务到流水线 |
+| GET | `/v1/hub/pipeline` | 可选 | 流水线 6 阶段实时活跃状态 |
+| POST | `/v1/hub/classify` | 可选 | 智能分类分级 + 自动策略脱敏分发 |
+| POST | `/v1/hub/fetch-and-desensitize` | 可选 | 按身份证号端到端查询+脱敏（同步，需 `hub:dispatch` scope） |
+| GET | `/v1/hub/topology` | 可选 | **外部编排**：网格拓扑与微服务健康状态全景探针 |
+| GET | `/v1/hub/datasources` | 可选 | **外部编排**：数据源资产目录查询代理 |
+| GET | `/v1/hub/audit/logs` | 可选 | **外部编排**：不可篡改审计日志查询代理 |
+| POST | `/v1/hub/audit/logs` | 可选 | **外部编排**：审计存证日志写入代理 |
+| POST | `/v1/hub/audit/verify` | 可选 | **外部编排**：Merkle Tree 完整性验真代理 |
 | GET | `/metrics` | 免密 | Prometheus 监控指标采集端点 |
 
 ---

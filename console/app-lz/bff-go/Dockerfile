@@ -42,7 +42,7 @@ RUN chown -R privacy:privacy /app
 EXPOSE 8085
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8085/api/health || exit 1
+    CMD curl -f http://localhost:8085/health || exit 1
 
 USER privacy
 

@@ -193,7 +193,7 @@ start_service_hub() {
     echo $! > "$pid_file"
     log_info "service-hub started (PID $(cat "$pid_file"))"
 
-    wait_for_service "service-hub" "http://127.0.0.1:${port}/api/health" 10
+    wait_for_service "service-hub" "http://127.0.0.1:${port}/health" 10
 }
 
 # ── 3. datasource-mgr (Go) ───────────────────────────────────────────
@@ -219,7 +219,7 @@ start_datasource_mgr() {
     echo $! > "$pid_file"
     log_info "datasource-mgr started (PID $(cat "$pid_file"))"
 
-    wait_for_service "datasource-mgr" "http://127.0.0.1:${port}/api/health" 10
+    wait_for_service "datasource-mgr" "http://127.0.0.1:${port}/health" 10
 }
 
 # ── 4. audit-log (Go) ────────────────────────────────────────────────
@@ -245,7 +245,7 @@ start_audit_log() {
     echo $! > "$pid_file"
     log_info "audit-log started (PID $(cat "$pid_file"))"
 
-    wait_for_service "audit-log" "http://127.0.0.1:${port}/api/health" 10
+    wait_for_service "audit-log" "http://127.0.0.1:${port}/health" 10
 }
 
 # ── 主流程：先检查依赖，再按顺序启动全部服务 ────────────────────────

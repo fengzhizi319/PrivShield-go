@@ -62,15 +62,15 @@ graph TD
 
 ### 2.1 主控制台 BFF 网关 (`console/bff-go:8081` / `:50055`)
 - **高性能 REST ➔ gRPC 转换**：对外暴露统一 REST/JSON 接口，内部通过 gRPC 与 Agent 通信，利用 Protobuf 强契约与 HTTP/2 多路复用大幅削减通信握手延迟；
-- **文件级隐私处理 (`POST /api/upload`)**：支持 CSV/JSON 文件上传，流式解析并调用底层脱敏/K-匿名能力；
+- **文件级隐私处理 (`POST /v1/upload`)**：支持 CSV/JSON 文件上传，流式解析并调用底层脱敏/K-匿名能力；
 - **复合安全中间件**：将 API Key 鉴权与滑动窗口限流（`CONSOLE_RATE_LIMIT`，默认 600 req/min）整合，内置后台协程定期清理过期 IP 防止内存泄漏；当 `PRIVACY_AUTH_MTLS_WHITELIST_FILE` 指向 `config/mtls-whitelist.yaml` 时，可选的入站 gRPC 服务（`:50055`）会注册 `NewWhitelistInterceptor()` unary/stream 拦截器，按客户端 CN 进行 method-scope 鉴权并支持 5 秒 mtime 热重载。
-- **负载均衡策略测试器 (`POST /api/lb_test`)**：用于对多后端 Agent 进行负载分发与熔断切换演练；
+- **负载均衡策略测试器 (`POST /v1/lb_test`)**：用于对多后端 Agent 进行负载分发与熔断切换演练；
 - **静态 SPA 托管**：可独立挂载并托管 `console/web/dist` 前端构建产物，实现单二进制交付；
 - 📖 [可靠性能力详解](../../console/bff-go/docs/reliability.md)
 
 ### 2.2 业务调度之眼 BFF (`console/app-lz/bff-go:8085`)
 - **3 阶段流通会话编排 (`InvokeDataApi`)**：通过 service-hub 统一编排 `ingest` → `hub_orchestrate` → `return` 业务闭环；app-lz BFF 不直接访问 datasource-mgr / engine-go / audit-log，所有数据操作由 service-hub 内部编排（拉取 + 脱敏 + 审计存证）；
-- **动态数据 API 目录 (`GET /api/lz/data-api/definitions`)**：彻底废除前端写死 API 列表的逻辑，统一动态拉取数据源卡片；
+- **动态数据 API 目录 (`GET /v1/lz/data-api/definitions`)**：彻底废除前端写死 API 列表的逻辑，统一动态拉取数据源卡片；
 - **内置 E2E 自动化测试套件 (`TestRunner`)**：支持在界面一键触发 TS-01 ~ TS-04 自动化测试用例并实时可视化输出；
 - **9 层统一中间件栈**：全量装配 `pkg/middleware`（含 TraceMiddleware、MaxBodySize、MaxConcurrent、RateLimit 与统一错误信封）。
 
@@ -87,13 +87,13 @@ BFF 网关层提供了面向不同业务场景的聚合路由定义：
 
 | 路由前缀 / 端点 | 处理组件 | 上游微服务 | 功能说明 |
 |---|---|---|---|
-| `/api/privacy/*` | `console/bff-go` | `privshield-agent:50051` | 隐私计算原语（脱敏、DP、K-匿名、查询混淆）gRPC 代理 |
-| `/api/upload` | `console/bff-go` | `privshield-agent:50051` | 文件隐私处理（CSV/JSON 解析与脱敏） |
-| `/api/lb_test` | `console/bff-go` | 可配置 Agent REST 后端 | 负载均衡策略测试（round-robin / random / least-connections） |
-| `/api/lz/data-api/invoke` | `app-lz/bff-go` | `service-hub:8082`（统一编排入口） | 通过 service-hub 编排 3 阶段会话：ingest → hub_orchestrate → return |
-| `/api/lz/tasks/dispatch` | `app-lz/bff-go` | `service-hub:8082` | 流水线任务派发 |
-| `/api/lz/audit/*` | `app-lz/bff-go` | `audit-log:8084`（只读监控） | 9 要素哈希链存证查询与在线验真（仅审计监控模块直连） |
-| `/api/lz/suites` / `/api/lz/suites/run` | `app-lz/bff-go` | 内置 TestRunner | 获取 / 执行 TS-01~TS-04 自动化 E2E 测试套件 |
+| `/v1/privacy/*` | `console/bff-go` | `privshield-agent:50051` | 隐私计算原语（脱敏、DP、K-匿名、查询混淆）gRPC 代理 |
+| `/v1/upload` | `console/bff-go` | `privshield-agent:50051` | 文件隐私处理（CSV/JSON 解析与脱敏） |
+| `/v1/lb_test` | `console/bff-go` | 可配置 Agent REST 后端 | 负载均衡策略测试（round-robin / random / least-connections） |
+| `/v1/lz/data-api/invoke` | `app-lz/bff-go` | `service-hub:8082`（统一编排入口） | 通过 service-hub 编排 3 阶段会话：ingest → hub_orchestrate → return |
+| `/v1/lz/tasks/dispatch` | `app-lz/bff-go` | `service-hub:8082` | 流水线任务派发 |
+| `/v1/lz/audit/*` | `app-lz/bff-go` | `audit-log:8084`（只读监控） | 9 要素哈希链存证查询与在线验真（仅审计监控模块直连） |
+| `/v1/lz/suites` / `/v1/lz/suites/run` | `app-lz/bff-go` | 内置 TestRunner | 获取 / 执行 TS-01~TS-04 自动化 E2E 测试套件 |
 
 ---
 

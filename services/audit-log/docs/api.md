@@ -95,7 +95,7 @@ message VerifyIntegrityResponse {
 
 ### 3.1 审计日志与存证检索
 
-#### `GET /api/audit/logs`
+#### `GET /v1/audit/logs`
 - **说明**：支持多维度过滤检索脱敏审计流水，底层经由 SQL 级分页下推。
 - **参数**：
   - `task_id`：任务 ID 过滤
@@ -139,7 +139,7 @@ message VerifyIntegrityResponse {
 }
 ```
 
-#### `POST /api/audit/logs`
+#### `POST /v1/audit/logs`
 - **说明**：写入审计流水。自动由 `pkg/store/flusher` 异步批量聚合刷盘，单机支持 **3,000 ~ 5,000 QPS**。
 - **请求体**：
 ```json
@@ -162,18 +162,18 @@ message VerifyIntegrityResponse {
 }
 ```
 
-#### `GET /api/audit/logs/:id`
+#### `GET /v1/audit/logs/:id`
 - **说明**：查询指定 ID 的单条审计日志。
 
 ---
 
 ### 3.2 不可篡改快照与国密 SM3 链式对账
 
-#### `GET /api/audit/snapshots`
+#### `GET /v1/audit/snapshots`
 - **说明**：获取脱敏前后样本快照与国密 SM3 存证指纹（快照文本由国密 SM4-GCM 信封加密保护 `enc:v1:...`）。
 - **参数**：`limit` (默认 20), `offset` (默认 0)
 
-#### `POST /api/audit/snapshots/verify`
+#### `POST /v1/audit/snapshots/verify`
 - **说明**：对指定的快照重新计算国密 SM3 哈希并与存证哈希比对，验证数据样本是否遭受篡改。
 - **请求体**：`{"snapshot_id": "snap-1"}`
 - **响应**：
@@ -188,7 +188,7 @@ message VerifyIntegrityResponse {
 }
 ```
 
-#### `POST /api/audit/chain/verify`
+#### `POST /v1/audit/chain/verify`
 - **说明**：全链路国密 SM3 区块链式连续哈希链（Hash Chain）核验，毫秒级检测是否有任何历史记录被物理删除、篡改、注入或乱序。
 - **请求体**：`{"limit": 1000}`
 - **响应**：
@@ -208,9 +208,9 @@ message VerifyIntegrityResponse {
 
 ### 3.3 统计分析与合规报告
 
-#### `GET /api/audit/stats`
+#### `GET /v1/audit/stats`
 - **说明**：SQL 级聚合脱敏与治理指标，包含各操作频次、成功率分布、等级构成比及平均处理延迟。
 - **参数**：`period` (`1h` | `24h` | `7d` | `30d`，默认 `24h`)
 
-#### `POST /api/audit/report`
+#### `POST /v1/audit/report`
 - **说明**：生成权威合规评估报告，提供基于 DB51/T 2989—2023 与 GB/T 39786-2021 的治理合规评分与建议。

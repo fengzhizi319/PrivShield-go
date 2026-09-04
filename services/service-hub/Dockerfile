@@ -60,9 +60,9 @@ EXPOSE 8082 50052
 # 声明数据卷用于 SQLite 数据持久化（生产部署时需绑定挂载到宿主机目录）
 VOLUME ["/app/data"]
 
-# 容器原生健康检查探针：每 30 秒轮询探测 /api/health
+# 容器原生健康检查探针：每 30 秒轮询探测 /health
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8082/api/health || exit 1
+    CMD curl -f http://localhost:8082/health || exit 1
 
 # 切换为非 root 安全用户执行
 USER privacy

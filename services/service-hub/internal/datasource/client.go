@@ -240,9 +240,9 @@ func (c *Client) doHTTP(req *http.Request) ([]byte, error) {
 // ─────────────────────────────────────────────────────────────
 
 // Health checks datasource-mgr connectivity via HTTP REST.
-// Health 通过 HTTP GET /api/health 探测 datasource-mgr 的健康状态。
+// Health 通过 HTTP GET /health 探测 datasource-mgr 的健康状态。
 func (c *Client) Health(ctx context.Context) (map[string]any, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/health", nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -261,7 +261,7 @@ func (c *Client) Health(ctx context.Context) (map[string]any, error) {
 
 // ListDataSources fetches the list of mock datasources via HTTP REST.
 func (c *Client) ListDataSources(ctx context.Context) (map[string]any, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/datasources", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/datasources", nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -280,7 +280,7 @@ func (c *Client) ListDataSources(ctx context.Context) (map[string]any, error) {
 
 // GetDataSource fetches a single datasource by ID via HTTP REST.
 func (c *Client) GetDataSource(ctx context.Context, id string) (map[string]any, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/datasources/"+url.PathEscape(id), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/datasources/"+url.PathEscape(id), nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -299,7 +299,7 @@ func (c *Client) GetDataSource(ctx context.Context, id string) (map[string]any, 
 
 // TestConnection tests datasource connectivity via HTTP REST.
 func (c *Client) TestConnection(ctx context.Context, id string) (map[string]any, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/datasources/"+url.PathEscape(id)+"/test", bytes.NewReader(nil))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/datasources/"+url.PathEscape(id)+"/test", bytes.NewReader(nil))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -477,9 +477,9 @@ func (c *Client) GetDataSourceGRPC(ctx context.Context, id string) (*dspb.DataSo
 
 // FetchRecordByIDCard fetches a single record from datasource-mgr by ID card number via HTTP REST.
 // FetchRecordByIDCard 通过 HTTP REST 按身份证号从指定数据源精确查询单条记录。
-// 调用 datasource-mgr GET /api/datasources/:id/record-by-id?id_card_no=xxx 端点。
+// 调用 datasource-mgr GET /v1/datasources/:id/record-by-id?id_card_no=xxx 端点。
 func (c *Client) FetchRecordByIDCard(ctx context.Context, datasourceID, idCardNo string) (map[string]any, error) {
-	path := fmt.Sprintf("/api/datasources/%s/record-by-id?id_card_no=%s",
+	path := fmt.Sprintf("/v1/datasources/%s/record-by-id?id_card_no=%s",
 		url.PathEscape(datasourceID), url.QueryEscape(idCardNo))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {

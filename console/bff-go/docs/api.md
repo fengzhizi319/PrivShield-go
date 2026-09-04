@@ -1,19 +1,19 @@
 # Go gRPC 代理后端 HTTP API 文档
 
-本后端为前端测试控制台提供统一的 HTTP/JSON 接口，所有 gRPC 操作都通过 `/api/proxy` 转发。
+本后端为前端测试控制台提供统一的 HTTP/JSON 接口，所有 gRPC 操作都通过 `/v1/proxy` 转发。
 
 默认监听地址：`http://127.0.0.1:8081`
 
 ---
 
-## 1. GET /api/health
+## 1. GET /health
 
 检查 Go 代理本身以及上游 agent 的健康状态。
 
 ### 请求
 
 ```bash
-curl -s http://127.0.0.1:8081/api/health | jq
+curl -s http://127.0.0.1:8081/health | jq
 ```
 
 ### 成功响应（HTTP 200）
@@ -42,14 +42,14 @@ curl -s http://127.0.0.1:8081/api/health | jq
 
 ---
 
-## 2. GET /api/samples
+## 2. GET /v1/samples
 
 返回所有 gRPC 支持的端点示例，供前端加载到测试控制台中。
 
 ### 请求
 
 ```bash
-curl -s http://127.0.0.1:8081/api/samples | jq
+curl -s http://127.0.0.1:8081/v1/samples | jq
 ```
 
 ### 响应示例
@@ -87,7 +87,7 @@ curl -s http://127.0.0.1:8081/api/samples | jq
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `method` | string | 前端使用的 HTTP 方法 |
-| `path` | string | 转发到 `/api/proxy` 时使用的 path |
+| `path` | string | 转发到 `/v1/proxy` 时使用的 path |
 | `label` | string | 前端展示名称 |
 | `category` | string | 分类（Masking、DP、K-Anonymity 等） |
 | `description` | string | 说明 |
@@ -96,7 +96,7 @@ curl -s http://127.0.0.1:8081/api/samples | jq
 
 ---
 
-## 3. POST /api/proxy
+## 3. POST /v1/proxy
 
 统一代理入口，将 JSON 请求转换为 gRPC 调用。
 
@@ -167,7 +167,7 @@ curl -s http://127.0.0.1:8081/api/samples | jq
 ### 4.1 单字段脱敏
 
 ```bash
-curl -s -X POST http://127.0.0.1:8081/api/proxy \
+curl -s -X POST http://127.0.0.1:8081/v1/proxy \
   -H "Content-Type: application/json" \
   -d '{
     "method": "POST",
@@ -182,7 +182,7 @@ curl -s -X POST http://127.0.0.1:8081/api/proxy \
 ### 4.2 差分隐私计数
 
 ```bash
-curl -s -X POST http://127.0.0.1:8081/api/proxy \
+curl -s -X POST http://127.0.0.1:8081/v1/proxy \
   -H "Content-Type: application/json" \
   -d '{
     "method": "POST",
@@ -198,7 +198,7 @@ curl -s -X POST http://127.0.0.1:8081/api/proxy \
 ### 4.3 K-匿名单条记录
 
 ```bash
-curl -s -X POST http://127.0.0.1:8081/api/proxy \
+curl -s -X POST http://127.0.0.1:8081/v1/proxy \
   -H "Content-Type: application/json" \
   -d '{
     "method": "POST",
@@ -214,7 +214,7 @@ curl -s -X POST http://127.0.0.1:8081/api/proxy \
 ### 4.4 查询混淆
 
 ```bash
-curl -s -X POST http://127.0.0.1:8081/api/proxy \
+curl -s -X POST http://127.0.0.1:8081/v1/proxy \
   -H "Content-Type: application/json" \
   -d '{
     "method": "POST",
@@ -230,7 +230,7 @@ curl -s -X POST http://127.0.0.1:8081/api/proxy \
 ### 4.5 字段分类
 
 ```bash
-curl -s -X POST http://127.0.0.1:8081/api/proxy \
+curl -s -X POST http://127.0.0.1:8081/v1/proxy \
   -H "Content-Type: application/json" \
   -d '{
     "method": "POST",
@@ -265,4 +265,4 @@ curl -s -X POST http://127.0.0.1:8081/api/proxy \
 | 200 | 成功 |
 | 400 | 请求体非法或 gRPC 调用参数错误 |
 | 502 | 上游 agent 不可达 |
-| 404 | 请求了未映射的 path（由 `/api/proxy` 返回 `unsupported gRPC path`） |
+| 404 | 请求了未映射的 path（由 `/v1/proxy` 返回 `unsupported gRPC path`） |

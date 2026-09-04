@@ -148,7 +148,7 @@ start_service_hub() {
         ./bin/service-hub > "${LOGS_DIR}/service-hub_e2e.log" 2>&1 &
     echo $! > "$pid_file"
     log_info "service-hub started (PID $(cat "$pid_file"))"
-    wait_for_service "service-hub" "http://127.0.0.1:${port}/api/health" 10
+    wait_for_service "service-hub" "http://127.0.0.1:${port}/health" 10
 }
 
 # ── 3. datasource-mgr (Go) ─────────────────────────────────────────────
@@ -169,7 +169,7 @@ start_datasource_mgr() {
         ./bin/datasource-mgr > "${LOGS_DIR}/datasource-mgr_e2e.log" 2>&1 &
     echo $! > "$pid_file"
     log_info "datasource-mgr started (PID $(cat "$pid_file"))"
-    wait_for_service "datasource-mgr" "http://127.0.0.1:${port}/api/health" 10
+    wait_for_service "datasource-mgr" "http://127.0.0.1:${port}/health" 10
 }
 
 # ── 4. audit-log (Go) ──────────────────────────────────────────────────
@@ -190,7 +190,7 @@ start_audit_log() {
         ./bin/audit-log > "${LOGS_DIR}/audit-log_e2e.log" 2>&1 &
     echo $! > "$pid_file"
     log_info "audit-log started (PID $(cat "$pid_file"))"
-    wait_for_service "audit-log" "http://127.0.0.1:${port}/api/health" 10
+    wait_for_service "audit-log" "http://127.0.0.1:${port}/health" 10
 }
 
 # ── 主流程 ──────────────────────────────────────────────────────────────

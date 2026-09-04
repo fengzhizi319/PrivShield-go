@@ -105,7 +105,7 @@ type Config struct {
 
 	// ConsoleAPIKey：可选的控制台 API Key。
 	// 对应环境变量 CONSOLE_API_KEY，默认空（不鉴权）。
-	// 非空时 /api/*（除 /api/health）需携带 Authorization: Bearer <key>。
+	// 非空时 /v1/*（除 /health）需携带 Authorization: Bearer <key>。
 	ConsoleAPIKey string
 
 	// ConsoleRateLimit：每分钟每客户端 IP 的最大请求数。

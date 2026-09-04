@@ -330,8 +330,8 @@ func (c *Client) WithAuth(ctx context.Context) context.Context {
 //   - Status: service status string (e.g. "ok")
 //   - Namespace: budget namespace name
 //
-// Used by /api/health endpoint; frontend uses it to verify backend connectivity.
-// 该方法用于 /api/health 接口，前端通过它判断后端连接是否正常。
+// Used by /health endpoint; frontend uses it to verify backend connectivity.
+// 该方法用于 /health 接口，前端通过它判断后端连接是否正常。
 func (c *Client) Health(ctx context.Context) (*pb.HealthResponse, error) {
 	// 先通过 WithAuth 附加认证元数据，再发起空请求的 Health RPC 调用
 	return c.client.Health(c.WithAuth(ctx), &pb.HealthRequest{})

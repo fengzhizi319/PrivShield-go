@@ -15,7 +15,7 @@
 | [`deploy-k8s.sh`](deploy-k8s.sh) | Kubernetes | 使用 `deploy/k8s/` 目录下的自包含清单独立部署到 K8s | 单服务独立发布 / K8s 集群部署 |
 | [`stop-k8s.sh`](stop-k8s.sh) | Kubernetes | 卸载与清理 `datasource-mgr` 在 K8s 中的所有独立资源 | 集群资源清理 / 卸载下线 |
 | [`gen-certs.sh`](gen-certs.sh) | 安全/证书 | 生成测试根 CA、服务端证书、客户端证书，并自动导出客户端公钥 PEM | mTLS 证书生成与公钥固定链准备 |
-| [`health-check.sh`](health-check.sh) | 运维探针 | 探测 `/api/health` 与 `/api/v1/yibao` 端点连通性 | 服务探活与数据集可读性检查 |
+| [`health-check.sh`](health-check.sh) | 运维探针 | 探测 `/health` 与 `/v1/yibao` 端点连通性 | 服务探活与数据集可读性检查 |
 
 ---
 

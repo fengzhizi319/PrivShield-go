@@ -83,14 +83,14 @@ graph TD
     end
 
     subgraph ServiceHubNode [service-hub 数据流通调度中枢 :8082 / :50052]
-        HubHTTP[REST /api/hub/*]
+        HubHTTP[REST /v1/hub/*]
         HubGRPC[gRPC :50052]
         PipelineEngine[6 阶段自动化流水线引擎<br/>Ingest ➔ Fetch ➔ Classify ➔ Desensitize ➔ Return ➔ Audit]
         TaskStore[(TaskStore 任务存储<br/>SQLite WAL / Memory)]
     end
 
     subgraph DatasourceMgrNode [datasource-mgr 模拟数据源中台 :8083 / :50053]
-        DSHTTP[REST /api/v1/* /api/datasources/*]
+        DSHTTP[REST /v1/* /v1/datasources/*]
         DSGRPC[gRPC :50053]
         DS1[(API 1: yibao.csv 医保结算)]
         DS2[(API 2: kangyang.csv 康养档案)]
@@ -104,7 +104,7 @@ graph TD
     end
 
     subgraph AuditLogNode [audit-log 脱敏审计存证中台 :8084 / :50054]
-        AuditHTTP[REST /api/audit/*]
+        AuditHTTP[REST /v1/audit/*]
         AuditGRPC[gRPC :50054]
         HashEngine[8 要素 SHA-256 签名引擎]
         AuditStore[(SQLite WAL 存证账本<br/>Append-Only 不可篡改)]
@@ -157,14 +157,14 @@ graph TD
 #### 3.2 模拟数据源与资产管理微服务 ([services/datasource-mgr](services/datasource-mgr))
 * **核心职责**：专为开发联调、沙箱演练与数据探查设计的轻量级仿真数据中台，对外提供 HTTPS REST (`:8083`) 与 gRPC (`:50053`) 双协议。
 * **4 大内置独立模拟数据源体系**：
-  * **API 1 医保数据源** (`GET /api/v1/yibao` / `GetYibaoData`)：就医结算明细，含身份证号、患者姓名、就医诊断、社保卡号、自费金额与统筹支付等高敏字段；
-  * **API 2 康养数据源** (`GET /api/v1/kangyang` / `GetKangyangData`)：健康档案与体格指标，含老人编号、慢病史、体检血压、生活自理等级评估等；
-  * **API 3 预留政务数据源 3** (`GET /api/v1/mock3` / `GetMockData3`)：政务跨部门协同与审批流水模拟；
-  * **API 4 预留企业数据源 4** (`GET /api/v1/mock4` / `GetMockData4`)：财务税收与企业统计报表模拟。
+  * **API 1 医保数据源** (`GET /v1/yibao` / `GetYibaoData`)：就医结算明细，含身份证号、患者姓名、就医诊断、社保卡号、自费金额与统筹支付等高敏字段；
+  * **API 2 康养数据源** (`GET /v1/kangyang` / `GetKangyangData`)：健康档案与体格指标，含老人编号、慢病史、体检血压、生活自理等级评估等；
+  * **API 3 预留政务数据源 3** (`GET /v1/mock3` / `GetMockData3`)：政务跨部门协同与审批流水模拟；
+  * **API 4 预留企业数据源 4** (`GET /v1/mock4` / `GetMockData4`)：财务税收与企业统计报表模拟。
 * **纯无状态架构与沙箱安全**：
   * **无状态自愈**：无本地状态机与持久化队列，具备秒级热启动与水平扩缩容能力；
   * **数据源沙箱隔离 (LFI 防护)**：严格限制 CSV 文件白名单与基名校验，硬性限制单次最多加载 50,000 行，阻断任意目录穿越与系统文件逃逸；
-  * **资产目录与元数据探查**：提供数据源 CRUD 目录、动态分页样本抽样（`/api/datasources/:id/records`）、Schema 元数据探查（`/api/datasources/:id/metadata`）与访问审计日志追踪。
+  * **资产目录与元数据探查**：提供数据源 CRUD 目录、动态分页样本抽样（`/v1/datasources/:id/records`）、Schema 元数据探查（`/v1/datasources/:id/metadata`）与访问审计日志追踪。
 * 📖 [设计文档](services/datasource-mgr/docs/design.md) · [学习指南](services/datasource-mgr/docs/learning-guide.md) · [可靠性能力](services/datasource-mgr/docs/reliability.md)
 
 #### 3.3 脱敏审计与不可篡改存证微服务 ([services/audit-log](services/audit-log))
@@ -176,7 +176,7 @@ graph TD
 * **只增不改 (Append-Only) 与数据库完整性校验**：
   * 存储层严格遵循 Append-Only 规范，代码级杜绝 `UPDATE` 与 `DELETE` 接口；
   * 采用 SQLite WAL 读写分离引擎，启动自动执行 `PRAGMA integrity_check` 坏库阻断；
-  * 提供在线动态存证核验（`POST /api/audit/snapshots/verify`）以及独立离线校验脚本（`scripts/prod/verify_audit.sh`）。
+  * 提供在线动态存证核验（`POST /v1/audit/snapshots/verify`）以及独立离线校验脚本（`scripts/prod/verify_audit.sh`）。
 * **SQL 级高性能合规报告与多维统计**：
   * 基于 SQLite 原生 SQL 聚合引擎（`GetStats` / `GenerateReport`）执行毫秒级多维统计（按算子、等级、时间段、用户），从架构上杜绝大数据集载入内存导致的 OOM 隐患。
 * **业务合规存证 vs 基础设施运维日志 (Loki / ELK) 职责分离**：

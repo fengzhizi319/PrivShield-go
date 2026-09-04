@@ -32,15 +32,15 @@ import (
 const moduleVia = "audit-log"
 
 // auditReadOnlyEndpoints 是「只读核验员 Key」可访问的 方法+路径 白名单（第十二章 P1-6 ②③）。
-// 只放查询与验真端点；POST /api/audit/logs（写存证）与 POST /api/audit/report（报表导出）
+// 只放查询与验真端点；POST /v1/audit/logs（写存证）与 POST /v1/audit/report（报表导出）
 // 刻意排除——核验专区是「被查者」，不得具备任何写入能力。
 var auditReadOnlyEndpoints = []middleware.ReadOnlyEndpoint{
-	{Method: http.MethodGet, Path: "/api/audit/logs"},
-	{Method: http.MethodGet, Path: "/api/audit/stats"},
-	{Method: http.MethodGet, Path: "/api/audit/snapshots"},
-	{Method: http.MethodPost, Path: "/api/audit/snapshots/verify"},
-	{Method: http.MethodGet, Path: "/api/audit/chain/verify"},
-	{Method: http.MethodPost, Path: "/api/audit/chain/verify"},
+	{Method: http.MethodGet, Path: "/v1/audit/logs"},
+	{Method: http.MethodGet, Path: "/v1/audit/stats"},
+	{Method: http.MethodGet, Path: "/v1/audit/snapshots"},
+	{Method: http.MethodPost, Path: "/v1/audit/snapshots/verify"},
+	{Method: http.MethodGet, Path: "/v1/audit/chain/verify"},
+	{Method: http.MethodPost, Path: "/v1/audit/chain/verify"},
 	{Method: http.MethodGet, Path: "/metrics"},
 }
 
@@ -89,18 +89,18 @@ func AuditLogPermissionForPath(method, path string) string {
 		path = path[:len(path)-1]
 	}
 	switch {
-	case path == "/health" || path == "/readyz" || path == "/api/health", path == "/metrics":
+	case path == "/health" || path == "/readyz", path == "/metrics":
 		return ""
-	case path == "/api/audit/logs" && method == http.MethodPost,
-		path == "/api/audit/report" && method == http.MethodPost:
+	case path == "/v1/audit/logs" && method == http.MethodPost,
+		path == "/v1/audit/report" && method == http.MethodPost:
 		return "audit:write"
-	case path == "/api/audit/logs" && method == http.MethodGet,
-		strings.HasPrefix(path, "/api/audit/logs/") && method == http.MethodGet,
-		path == "/api/audit/stats" && method == http.MethodGet,
-		path == "/api/audit/snapshots" && method == http.MethodGet:
+	case path == "/v1/audit/logs" && method == http.MethodGet,
+		strings.HasPrefix(path, "/v1/audit/logs/") && method == http.MethodGet,
+		path == "/v1/audit/stats" && method == http.MethodGet,
+		path == "/v1/audit/snapshots" && method == http.MethodGet:
 		return "audit:read"
-	case path == "/api/audit/snapshots/verify" && method == http.MethodPost,
-		path == "/api/audit/chain/verify":
+	case path == "/v1/audit/snapshots/verify" && method == http.MethodPost,
+		path == "/v1/audit/chain/verify":
 		return "audit:verify"
 	default:
 		// fail-closed：未显式映射的非豁免路径默认归入最高 admin 权限，防止空 scope 绕过
@@ -151,12 +151,12 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 		method := c.Request.Method
 
 		// 健康探针豁免
-		if path == "/health" || path == "/readyz" || path == "/api/health" {
+		if path == "/health" || path == "/readyz" {
 			c.Next()
 			return
 		}
 		// 非核心路径豁免（/metrics 纳入鉴权，P1-6）
-		if !strings.HasPrefix(path, "/api/") && path != "/metrics" {
+		if !strings.HasPrefix(path, "/v1/") && path != "/metrics" {
 			c.Next()
 			return
 		}
@@ -226,7 +226,7 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 	}
 	r.Use(middleware.CORS(s.cfg.CORSOrigins))
 	// P1-6 权责分离：数据局核验专区持「只读核验员 Key」，只能命中 auditReadOnlyEndpoints
-	// 这张 方法+路径 白名单；写入端点（POST /api/audit/logs）与报表导出（POST /api/audit/report）
+	// 这张 方法+路径 白名单；写入端点（POST /v1/audit/logs）与报表导出（POST /v1/audit/report）
 	// 不在表内，越权直接 403。ReaderAPIKey 为空则退化为原单 Key 语义。
 	// 同时支持 AUDIT_LOG_API_KEYS / KeyStore 的 scope-based 热轮转鉴权。
 	r.Use(s.authMiddleware())
@@ -239,18 +239,17 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 			"readonly_endpoints", len(auditReadOnlyEndpoints))
 	}
 
-	r.GET("/health", s.Health)     // Liveness probe / 存活探针
-	r.GET("/readyz", s.Readyz)     // Readiness probe / 就绪探针
-	r.GET("/api/health", s.Health) // Alias for backward compat / 向后兼容别名
-	r.GET("/api/audit/logs", s.ListLogs)
-	r.POST("/api/audit/logs", s.CreateLog)
-	r.GET("/api/audit/logs/:id", s.GetLog)
-	r.GET("/api/audit/stats", s.GetStats)
-	r.GET("/api/audit/snapshots", s.ListSnapshots)
-	r.POST("/api/audit/snapshots/verify", s.VerifyIntegrity)
-	r.GET("/api/audit/chain/verify", s.VerifyChain)  // Hash chain continuous integrity verification (GET)
-	r.POST("/api/audit/chain/verify", s.VerifyChain) // Hash chain continuous integrity verification (POST)
-	r.POST("/api/audit/report", s.GenerateReport)
+	r.GET("/health", s.Health) // Liveness probe / 存活探针
+	r.GET("/readyz", s.Readyz) // Readiness probe / 就绪探针
+	r.GET("/v1/audit/logs", s.ListLogs)
+	r.POST("/v1/audit/logs", s.CreateLog)
+	r.GET("/v1/audit/logs/:id", s.GetLog)
+	r.GET("/v1/audit/stats", s.GetStats)
+	r.GET("/v1/audit/snapshots", s.ListSnapshots)
+	r.POST("/v1/audit/snapshots/verify", s.VerifyIntegrity)
+	r.GET("/v1/audit/chain/verify", s.VerifyChain)  // Hash chain continuous integrity verification (GET)
+	r.POST("/v1/audit/chain/verify", s.VerifyChain) // Hash chain continuous integrity verification (POST)
+	r.POST("/v1/audit/report", s.GenerateReport)
 	r.GET("/metrics", s.mc.Handler())
 }
 

@@ -738,7 +738,7 @@ func (s *GRPCServer) processTask(task *store.Task, operation, payloadJSON string
 }
 
 // submitEvidence performs the single outbound-flow evidence write of stage ⑥.
-// submitEvidence 执行 ⑥ 审计存证阶段唯一的出域留痕提交（POST /api/audit/logs）。
+// submitEvidence 执行 ⑥ 审计存证阶段唯一的出域留痕提交（POST /v1/audit/logs）。
 //
 // 返回的 error 一旦非空即代表「这次出域没有被证明留痕」，调用方 MUST 让任务失败：
 // gRPC 直连与本地工作器路径写 task.Status=failed 并落盘，租约路径返回 *store.TaskFailure。

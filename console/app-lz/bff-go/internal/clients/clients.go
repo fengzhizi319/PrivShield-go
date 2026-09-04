@@ -97,7 +97,7 @@ func (c *ClientPool) setHeaders(req *http.Request, serviceID string, requestID s
 // ProbeNode 探测单个上游微服务的健康状态和往返延迟。
 //
 // 探测流程：
-//  1. REST 探测：向 /api/health 发 GET 请求，失败则回退到 /health（无前缀）
+//  1. REST 探测：向 /health 发 GET 请求（所有中台服务统一的无前缀存活探针）
 //  2. gRPC 探测：通过 TCP Dial 检测端口可达性（800ms 超时）
 //  3. 综合判断：根据前端选择的活跃协议（rest/grpc）设置整体状态
 //
@@ -124,31 +124,12 @@ func (c *ClientPool) ProbeNode(ctx context.Context, id, name, httpURL, grpcAddr,
 	}
 
 	// ── 步骤 1：REST 健康探测 ────────────────────────────────────────
-	// 先尝试 /api/health，失败后回退到 /health（兼容不同服务的路由前缀）
 	startREST := time.Now()
-	healthURL := strings.TrimRight(httpURL, "/") + "/api/health"
+	healthURL := strings.TrimRight(httpURL, "/") + "/health"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
 	c.setHeaders(req, id, "")
 	if err == nil {
 		resp, errREST := c.httpClient.Do(req)
-		if errREST != nil || (resp != nil && resp.StatusCode >= 400) {
-			if resp != nil {
-				_ = resp.Body.Close()
-			}
-			// 回退到 /health（无 /api 前缀）
-			healthURL2 := strings.TrimRight(httpURL, "/") + "/health"
-			req2, err2 := http.NewRequestWithContext(ctx, http.MethodGet, healthURL2, nil)
-			c.setHeaders(req2, id, "")
-			if err2 == nil {
-				resp2, err2Resp := c.httpClient.Do(req2)
-				if err2Resp == nil && resp2.StatusCode < 400 {
-					resp = resp2
-					errREST = nil
-				} else if resp2 != nil {
-					_ = resp2.Body.Close()
-				}
-			}
-		}
 
 		durationREST := time.Since(startREST)
 		node.RESTRTTMs = float64(durationREST.Microseconds()) / 1000.0
@@ -208,7 +189,7 @@ func (c *ClientPool) GetTopology(ctx context.Context, protocol string) models.To
 		protocol = "rest"
 	}
 
-	url := fmt.Sprintf("%s/api/hub/topology?protocol=%s", strings.TrimRight(c.cfg.HubURL, "/"), url.QueryEscape(protocol))
+	url := fmt.Sprintf("%s/v1/hub/topology?protocol=%s", strings.TrimRight(c.cfg.HubURL, "/"), url.QueryEscape(protocol))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return c.degradedTopology(protocol, err.Error())
@@ -296,11 +277,11 @@ func (c *ClientPool) degradedTopology(protocol, detail string) models.TopologyRe
 
 // DispatchTask 向 Service Hub 派发一个新的数据处理任务。
 //
-// 调用路径：POST {HubURL}/api/hub/dispatch
+// 调用路径：POST {HubURL}/v1/hub/dispatch
 // 请求体包含：source（数据来源）、operation（隐私操作类型）、payload（原始数据）、priority（优先级）。
 // 返回新创建的任务 ID 和初始状态。
 func (c *ClientPool) DispatchTask(ctx context.Context, req models.DispatchRequest) (models.DispatchResponse, error) {
-	url := strings.TrimRight(c.cfg.HubURL, "/") + "/api/hub/dispatch"
+	url := strings.TrimRight(c.cfg.HubURL, "/") + "/v1/hub/dispatch"
 	data, _ := json.Marshal(req)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
@@ -332,10 +313,10 @@ func (c *ClientPool) DispatchTask(ctx context.Context, req models.DispatchReques
 
 // ListTasks 从 Service Hub 查询任务列表，支持按状态筛选和分页。
 //
-// 调用路径：GET {HubURL}/api/hub/tasks?status=xxx&limit=n&offset=n
+// 调用路径：GET {HubURL}/v1/hub/tasks?status=xxx&limit=n&offset=n
 // 返回任务总数和当前页的任务列表。
 func (c *ClientPool) ListTasks(ctx context.Context, status string, limit, offset int) (models.TasksResponse, error) {
-	url := fmt.Sprintf("%s/api/hub/tasks?status=%s&limit=%d&offset=%d",
+	url := fmt.Sprintf("%s/v1/hub/tasks?status=%s&limit=%d&offset=%d",
 		strings.TrimRight(c.cfg.HubURL, "/"), status, limit, offset)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -359,10 +340,10 @@ func (c *ClientPool) ListTasks(ctx context.Context, status string, limit, offset
 
 // GetTask 根据任务 ID 查询单个任务的完整详情。
 //
-// 调用路径：GET {HubURL}/api/hub/tasks/{taskID}
+// 调用路径：GET {HubURL}/v1/hub/tasks/{taskID}
 // 若任务不存在返回 404，转换为 error 返回。
 func (c *ClientPool) GetTask(ctx context.Context, taskID string) (*models.Task, error) {
-	url := fmt.Sprintf("%s/api/hub/tasks/%s", strings.TrimRight(c.cfg.HubURL, "/"), taskID)
+	url := fmt.Sprintf("%s/v1/hub/tasks/%s", strings.TrimRight(c.cfg.HubURL, "/"), taskID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	c.setHeaders(req, "hub", "")
 	if err != nil {
@@ -401,12 +382,12 @@ func (c *ClientPool) GetTask(ctx context.Context, taskID string) (*models.Task, 
 
 // GetDatasources 通过唯一调度中枢 service-hub 查询已注册的数据源目录。
 //
-// canonical 调用路径：GET {HubURL}/api/hub/datasources
+// canonical 调用路径：GET {HubURL}/v1/hub/datasources
 //
 // 降级策略：服务不可达 / 非 2xx / 解析失败 / 空列表时，返回由 pkg/naming 注册表
 // 派生的兜底目录，并把 Source 标为 "fallback" + Detail 写明原因（9.3 不变式 4）。
 func (c *ClientPool) GetDatasources(ctx context.Context) (models.DatasourcesResponse, error) {
-	path := "/api/hub/datasources"
+	path := "/v1/hub/datasources"
 	url := strings.TrimRight(c.cfg.HubURL, "/") + path
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	c.setHeaders(req, "hub", "")
@@ -651,7 +632,7 @@ func sampleKangyangRecord(i int) map[string]any {
 
 // GetAuditLogs 从 audit-log 服务获取审计日志条目。
 //
-// canonical 调用路径：GET {AuditURL}/api/audit/logs?limit=&offset=&datasource=&task_id=&api_code=
+// canonical 调用路径：GET {AuditURL}/v1/audit/logs?limit=&offset=&datasource=&task_id=&api_code=
 // （旧实现误用 /api/v1/audit/logs，上游不存在该路径 → 恒 404 静默降级，即 D-02）
 //
 // rawDatasourceID 为空表示不过滤；非空时先归一化，未知值直接 400（不静默回落）。
@@ -671,7 +652,7 @@ func (c *ClientPool) GetAuditLogsFiltered(ctx context.Context, limit, offset int
 		datasourceID = resolved
 	}
 
-	path := fmt.Sprintf("/api/hub/audit/logs?limit=%d&offset=%d", limit, offset)
+	path := fmt.Sprintf("/v1/hub/audit/logs?limit=%d&offset=%d", limit, offset)
 	if datasourceID != "" {
 		path += "&datasource=" + datasourceID
 	}
@@ -783,12 +764,12 @@ func defaultAuditLogs() []models.AuditLogItem {
 	return items
 }
 
-// RecordAudit 通过唯一调度中枢 service-hub 写入一条存证（POST /api/hub/audit/logs）。
+// RecordAudit 通过唯一调度中枢 service-hub 写入一条存证（POST /v1/hub/audit/logs）。
 //
 // 返回上游生成的记录 ID；上游不可达时返回 *UpstreamError（UPSTREAM_UNAVAILABLE/503），
 // 调用方必须将该阶段标为 skipped/error，不得伪造 audit_entry_id（修复 D-03）。
 func (c *ClientPool) RecordAudit(ctx context.Context, req models.AuditRecordRequest) (string, error) {
-	path := "/api/hub/audit/logs"
+	path := "/v1/hub/audit/logs"
 	if strings.TrimSpace(req.Datasource) == "" && strings.TrimSpace(req.APICode) != "" {
 		if dsID, ok := naming.DataSourceForAPICode(req.APICode); ok {
 			req.Datasource = dsID
@@ -861,11 +842,11 @@ func (c *ClientPool) RecordAudit(ctx context.Context, req models.AuditRecordRequ
 //
 // canonical 调用链路：
 //
-//	POST {HubURL}/api/hub/audit/verify
+//	POST {HubURL}/v1/hub/audit/verify
 //
 // 上游不可达时返回 MerkleValid=false + Source="fallback"，绝不合成“验真通过”。
 func (c *ClientPool) VerifyAudit(ctx context.Context) (models.AuditVerifyResponse, error) {
-	verifyURL := strings.TrimRight(c.cfg.HubURL, "/") + "/api/hub/audit/verify"
+	verifyURL := strings.TrimRight(c.cfg.HubURL, "/") + "/v1/hub/audit/verify"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, verifyURL, nil)
 	c.setHeaders(req, "hub", "")
 	if err != nil {
@@ -879,7 +860,7 @@ func (c *ClientPool) VerifyAudit(ctx context.Context) (models.AuditVerifyRespons
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return degradedVerify(fmt.Sprintf("service-hub returned HTTP %d for /api/hub/audit/verify", resp.StatusCode)), nil
+		return degradedVerify(fmt.Sprintf("service-hub returned HTTP %d for /v1/hub/audit/verify", resp.StatusCode)), nil
 	}
 
 	var verifyResult struct {
@@ -1174,9 +1155,9 @@ func max(a, b float64) float64 {
 	return b
 }
 
-// GetPipelineStatus queries the 6-stage pipeline telemetry from service-hub (/api/hub/pipeline).
+// GetPipelineStatus queries the 6-stage pipeline telemetry from service-hub (/v1/hub/pipeline).
 func (c *ClientPool) GetPipelineStatus(ctx context.Context) (map[string]any, error) {
-	url := strings.TrimRight(c.cfg.HubURL, "/") + "/api/hub/pipeline"
+	url := strings.TrimRight(c.cfg.HubURL, "/") + "/v1/hub/pipeline"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	c.setHeaders(req, "hub", "")
 	if err != nil {
@@ -1229,9 +1210,9 @@ func (c *ClientPool) ProcessMedicalRecords(ctx context.Context, records []map[st
 
 // ProcessAgentRecords 通过 service-hub 调度中枢派发批处理任务。
 //
-// 调用路径：POST {HubURL}/api/hub/dispatch
+// 调用路径：POST {HubURL}/v1/hub/dispatch
 func (c *ClientPool) ProcessAgentRecords(ctx context.Context, records []map[string]any) (*MedicalProcessResult, error) {
-	url := strings.TrimRight(c.cfg.HubURL, "/") + "/api/hub/dispatch"
+	url := strings.TrimRight(c.cfg.HubURL, "/") + "/v1/hub/dispatch"
 	data, _ := json.Marshal(map[string]any{
 		"datasource_id": "ds_yibao",
 		"api_code":      "api1_yibao",
@@ -1270,9 +1251,9 @@ func (c *ClientPool) ProcessAgentRecords(ctx context.Context, records []map[stri
 
 // MaskRecordViaEngine 通过 service-hub 进行单条记录脱敏。
 //
-// 调用路径：POST {HubURL}/api/hub/dispatch
+// 调用路径：POST {HubURL}/v1/hub/dispatch
 func (c *ClientPool) MaskRecordViaEngine(ctx context.Context, record map[string]any) (map[string]any, error) {
-	url := strings.TrimRight(c.cfg.HubURL, "/") + "/api/hub/dispatch"
+	url := strings.TrimRight(c.cfg.HubURL, "/") + "/v1/hub/dispatch"
 	data, _ := json.Marshal(map[string]any{
 		"datasource_id": "ds_yibao",
 		"api_code":      "api1_yibao",
@@ -1301,16 +1282,16 @@ func (c *ClientPool) MaskRecordViaEngine(ctx context.Context, record map[string]
 }
 
 // FetchAndDesensitizeViaHub 将按身份证号查询+分类分级+脱敏+审计存证的完整链路
-// 统一委托给 service-hub 的 POST /api/hub/fetch-and-desensitize 同步端到端接口。
+// 统一委托给 service-hub 的 POST /v1/hub/fetch-and-desensitize 同步端到端接口。
 //
-// 调用路径：POST {HubURL}/api/hub/fetch-and-desensitize
+// 调用路径：POST {HubURL}/v1/hub/fetch-and-desensitize
 // 请求体：{"datasource_id": "ds_yibao", "id_card_no": "510101198503151234"}
 // 响应体：包含 level / sanitized_data / classification_report / summary / audit_task_id
 //
 // app-lz BFF 作为外部模拟程序，不直接访问 datasource-mgr / engine-go / audit-log，
 // 所有数据请求统一通过 service-hub 调度中枢编排（P0-2 唯一调度入口）。
 func (c *ClientPool) FetchAndDesensitizeViaHub(ctx context.Context, datasourceID, idCardNo string) (map[string]any, error) {
-	url := strings.TrimRight(c.cfg.HubURL, "/") + "/api/hub/fetch-and-desensitize"
+	url := strings.TrimRight(c.cfg.HubURL, "/") + "/v1/hub/fetch-and-desensitize"
 	body, _ := json.Marshal(map[string]string{
 		"datasource_id": datasourceID,
 		"id_card_no":    idCardNo,
@@ -1353,12 +1334,12 @@ func (c *ClientPool) FetchAndDesensitizeViaHub(ctx context.Context, datasourceID
 // GetLeasesFromHub 查询 Service Hub 的 running 状态任务，并推导租约信息。
 //
 // 执行流程：
-//  1. 调用 GET {HubURL}/api/hub/tasks?status=running&limit=100 获取所有运行中任务
+//  1. 调用 GET {HubURL}/v1/hub/tasks?status=running&limit=100 获取所有运行中任务
 //  2. 按 lease_owner（Worker ID）分组
 //  3. 计算每个任务的租约剩余秒数（time.Until(leaseExpiresAt)）
 //  4. 返回按 Worker 分组的租约信息 + 孤儿任务恢复状态
 func (c *ClientPool) GetLeasesFromHub(ctx context.Context) (models.LeasedTasksResponse, error) {
-	url := strings.TrimRight(c.cfg.HubURL, "/") + "/api/hub/tasks?status=running&limit=100"
+	url := strings.TrimRight(c.cfg.HubURL, "/") + "/v1/hub/tasks?status=running&limit=100"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	c.setHeaders(req, "hub", "")
 	if err != nil {

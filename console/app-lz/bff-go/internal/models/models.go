@@ -319,7 +319,7 @@ func (a *AuditLogItem) NormalizeAliases() {
 }
 
 // AuditRecordRequest is the outbound payload used by the BFF to write a real
-// evidence entry into audit-log (POST /api/audit/logs).
+// evidence entry into audit-log (POST /v1/audit/logs).
 // AuditRecordRequest 是 BFF 向 audit-log 写入真实存证的请求体。
 type AuditRecordRequest struct {
 	Datasource    string `json:"datasource"`

@@ -4,7 +4,7 @@
 // 【测试套件设计目标与覆盖范围】
 // 本测试文件验证 Package middleware 中通用 Gin 中间件套件的正确性与边界防御：
 //  1. 【CORS 跨域测试】：通配符放行、白名单精确过滤、非白名单拦截、Preflight OPTIONS 204 快速响应；
-//  2. 【Auth 鉴权测试】：空 Key 开发放行、健康检查豁免、Bearer Token 校验正确/错误、非 /api/ 路径豁免；
+//  2. 【Auth 鉴权测试】：空 Key 开发放行、健康检查豁免、Bearer Token 校验正确/错误、非 /v1/ 路径豁免；
 //  3. 【RequestID 追踪测试】：入站头透传、缺失时基于安全随机数自动生成、Downstream Context 绑定；
 //  4. 【StructuredLogger 日志测试】：结构化日志字段输出与 nil Logger 兜底；
 //  5. 【Recovery 异常恢复测试】：Panic 拦截、日志记录与 500 统一信封输出；
@@ -130,10 +130,10 @@ func TestCORS_PreflightOptions(t *testing.T) {
 func TestAuth_EmptyKey_SkipsAuth(t *testing.T) {
 	r := gin.New()
 	r.Use(Auth(""))
-	r.GET("/api/test", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
+	r.GET("/v1/test", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/test", nil)
+	req, _ := http.NewRequest("GET", "/v1/test", nil)
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -141,14 +141,14 @@ func TestAuth_EmptyKey_SkipsAuth(t *testing.T) {
 	}
 }
 
-// TestAuth_HealthExempt 验证 /health 与 /api/health 路径即使配置了 API Key 也能免鉴权访问。
+// TestAuth_HealthExempt 验证 /health 与 /readyz 路径即使配置了 API Key 也能免鉴权访问。
 func TestAuth_HealthExempt(t *testing.T) {
 	r := gin.New()
 	r.Use(Auth("secret-key"))
 	r.GET("/health", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
-	r.GET("/api/health", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
+	r.GET("/readyz", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
 
-	for _, path := range []string{"/health", "/api/health"} {
+	for _, path := range []string{"/health", "/readyz"} {
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest("GET", path, nil)
 		r.ServeHTTP(w, req)
@@ -162,10 +162,10 @@ func TestAuth_HealthExempt(t *testing.T) {
 func TestAuth_ValidKey(t *testing.T) {
 	r := gin.New()
 	r.Use(Auth("my-secret"))
-	r.GET("/api/test", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
+	r.GET("/v1/test", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/test", nil)
+	req, _ := http.NewRequest("GET", "/v1/test", nil)
 	req.Header.Set("Authorization", "Bearer my-secret")
 	r.ServeHTTP(w, req)
 
@@ -178,10 +178,10 @@ func TestAuth_ValidKey(t *testing.T) {
 func TestAuth_InvalidKey(t *testing.T) {
 	r := gin.New()
 	r.Use(Auth("my-secret"))
-	r.GET("/api/test", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
+	r.GET("/v1/test", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/test", nil)
+	req, _ := http.NewRequest("GET", "/v1/test", nil)
 	req.Header.Set("Authorization", "Bearer wrong-key")
 	r.ServeHTTP(w, req)
 
@@ -203,10 +203,10 @@ func TestAuth_InvalidKey(t *testing.T) {
 func TestAuth_MissingToken(t *testing.T) {
 	r := gin.New()
 	r.Use(Auth("my-secret"))
-	r.GET("/api/test", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
+	r.GET("/v1/test", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/test", nil)
+	req, _ := http.NewRequest("GET", "/v1/test", nil)
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
@@ -229,7 +229,7 @@ func TestAuth_MetricsRequiresAuth(t *testing.T) {
 	}
 }
 
-// TestAuth_NonCorePath_Exempt 验证非核心路径（非 /api/* 且非 /metrics）仍免鉴权。
+// TestAuth_NonCorePath_Exempt 验证非核心路径（非 /v1/* 且非 /metrics）仍免鉴权。
 func TestAuth_NonCorePath_Exempt(t *testing.T) {
 	r := gin.New()
 	r.Use(Auth("my-secret"))
@@ -483,14 +483,14 @@ func TestMaxConcurrent(t *testing.T) {
 func TestRateLimit_AllowsUnderBurstAndRejectsOver(t *testing.T) {
 	r := gin.New()
 	r.Use(RateLimit(2, 2)) // 2 RPS, burst 2
-	r.GET("/api/data", func(c *gin.Context) {
+	r.GET("/v1/data", func(c *gin.Context) {
 		c.JSON(200, gin.H{"data": "ok"})
 	})
 
 	// 2 requests allowed immediately / 突发配额 2 次放行
 	for i := 0; i < 2; i++ {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/data", nil)
+		req, _ := http.NewRequest("GET", "/v1/data", nil)
 		req.RemoteAddr = "192.168.1.100:1234"
 		r.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
@@ -500,7 +500,7 @@ func TestRateLimit_AllowsUnderBurstAndRejectsOver(t *testing.T) {
 
 	// 3rd request immediately should be rate limited (429) / 第 3 次请求立即被 429 限流
 	w3 := httptest.NewRecorder()
-	req3, _ := http.NewRequest("GET", "/api/data", nil)
+	req3, _ := http.NewRequest("GET", "/v1/data", nil)
 	req3.RemoteAddr = "192.168.1.100:1234"
 	r.ServeHTTP(w3, req3)
 	if w3.Code != http.StatusTooManyRequests {

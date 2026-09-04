@@ -55,14 +55,14 @@ func setupMockDatasourceServer(t *testing.T) (*httptest.Server, *grpc.Server, ne
 
 	mux := http.NewServeMux()
 
-	// 1. 注册 HTTP /api/health 端点
-	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+	// 1. 注册 HTTP /health 端点
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "backend": "ok"})
 	})
 
 	// 2. 注册数据源列表端点
-	mux.HandleFunc("/api/datasources", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/datasources", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"total":       2,
@@ -71,7 +71,7 @@ func setupMockDatasourceServer(t *testing.T) (*httptest.Server, *grpc.Server, ne
 	})
 
 	// 7. 注册数据源连通性测试端点
-	mux.HandleFunc("/api/datasources/ds_yibao/test", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/datasources/ds_yibao/test", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"datasource_id": "ds_yibao",

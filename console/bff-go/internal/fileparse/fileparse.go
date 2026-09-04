@@ -1,11 +1,11 @@
 // Package fileparse parses uploaded CSV/JSON data files into a unified records + schema structure.
 // Package fileparse 把上传的 CSV/JSON 数据文件解析为统一的 records + schema 结构。
 //
-// The Go backend's /api/upload endpoint receives files from the frontend, then uses this
+// The Go backend's /v1/upload endpoint receives files from the frontend, then uses this
 // package to parse them into []map[string]string (each record, values unified as strings)
 // and []string (column name order), for further construction of gRPC RecordEntry messages
 // (whose Fields field is map[string]string).
-// 控制台 Go 后端的 /api/upload 端点收到前端上传的文件后，用本包解析为
+// 控制台 Go 后端的 /v1/upload 端点收到前端上传的文件后，用本包解析为
 // []map[string]string（每条记录，值统一为字符串）与 []string（列名顺序），
 // 以便进一步构造 gRPC 的 RecordEntry（其 Fields 即 map[string]string）。
 // Values are unified to strings to stay consistent with the agent's records API semantics.

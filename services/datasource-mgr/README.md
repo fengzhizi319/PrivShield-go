@@ -8,10 +8,10 @@
 
 - **固定模拟数据库**：内置脱敏场景常用的医保就医结算数据（`yibao.csv`）与康养健康档案数据（`kangyang.csv`）；
 - **四级接口契约分级体系**（调度流水线以「按身份证号查询单条记录」为唯一取数模型）：
-  - **Class A 核心生产契约 (P0)**：按身份证号查询单条记录（`GET /api/datasources/:id/record-by-id?id_card_no=xxx` / `rpc GetRecordByIDCard`）、数据源连通性自测（`POST /api/datasources/:id/test` / `rpc TestConnection`）、服务存活探针（`GET /health` / `rpc Health`）；
-  - **Class B 可选元数据契约 (P2)**：资产目录 / 详情（`GET /api/datasources`、`GET /api/datasources/:id`）、Schema 元数据探查（`GET /api/datasources/:id/metadata`）；
+  - **Class A 核心生产契约 (P0)**：按身份证号查询单条记录（`GET /v1/datasources/:id/record-by-id?id_card_no=xxx` / `rpc GetRecordByIDCard`）、数据源连通性自测（`POST /v1/datasources/:id/test` / `rpc TestConnection`）、服务存活探针（`GET /health` / `rpc Health`）；
+  - **Class B 可选元数据契约 (P2)**：资产目录 / 详情（`GET /v1/datasources`、`GET /v1/datasources/:id`）、Schema 元数据探查（`GET /v1/datasources/:id/metadata`）；
   - **Class C 容器基础设施端点**：K8s 就绪探针（`GET /readyz`）、Prometheus 监控指标（`GET /metrics`）；
-  - **Class D 本地 Mock 辅助（生产严禁开放）**：数据播种重置（`POST /api/datasources/seed`）与本地测试桩审计（`GET /api/datasources/:id/audit`），受 `DATASOURCE_MGR_ENABLE_MOCK_HELPERS` 开关控制（生产模式设为 `false` 物理屏蔽）。
+  - **Class D 本地 Mock 辅助（生产严禁开放）**：数据播种重置（`POST /v1/datasources/seed`）与本地测试桩审计（`GET /v1/datasources/:id/audit`），受 `DATASOURCE_MGR_ENABLE_MOCK_HELPERS` 开关控制（生产模式设为 `false` 物理屏蔽）。
 - **双协议通信支持**：对外提供 HTTP/HTTPS REST（端口 `:8083`），对内提供高性能 gRPC（端口 `:50053`）；
 - **全链路 mTLS 双向认证与公钥固定**：HTTP/HTTPS 与 gRPC 服务均支持 TLS 1.3 客户端证书校验与客户端公钥固定（Public Key Pinning）；
 - **测试证书持久入库**：预置全套测试证书链与已固定的公钥文件（`certs/client.pub`），无需每次测试重新生成，保障公钥固定机制可复现；

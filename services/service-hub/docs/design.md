@@ -34,7 +34,7 @@ graph TD
     end
 
     subgraph ServiceHub [Service Hub 调度中枢 :8082 / :50052 (主机甲 · ECS)]
-        HTTPHandler[HTTP REST 路由层<br/>/api/hub/* :8082]
+        HTTPHandler[HTTP REST 路由层<br/>/v1/hub/* :8082]
         GRPCHandler[gRPC 服务层<br/>ServiceHubServiceServer :50052]
         MiddlewareStack[9层中间件链<br/>Auth / CORS / Logger / TraceID / Recovery / RateLimit]
         MetricsCol[Prometheus Collector<br/>/metrics]
@@ -93,7 +93,7 @@ graph TD
 | **3. 分类与脱敏** | `classify` | 一次调用 engine `POST /v1/agent/process`（404 时兼容 `POST /v1/medical/process`），一体化完成分类分级与脱敏处理 | `internal/agent.Client.ProcessAgent()` |
 | **4. 状态追踪** | `desensitize` | 不执行独立脱敏动作；已在 `classify` 的一体化调用中完成 | 状态机快速流转 |
 | **5. 返回** | `return` | 当前为状态追踪阶段，不写入额外结果对象 | 状态机快速流转 |
-| **6. 出域存证** | `audit` | 调用 `submitEvidence` 向 `audit-log` 提交出域存证（`POST /api/audit/logs`），提交失败即任务 `failed`（P0-6 fail-closed），成功后写为 `completed/done` | `internal/audit/client.go` |
+| **6. 出域存证** | `audit` | 调用 `submitEvidence` 向 `audit-log` 提交出域存证（`POST /v1/audit/logs`），提交失败即任务 `failed`（P0-6 fail-closed），成功后写为 `completed/done` | `internal/audit/client.go` |
 
 ---
 

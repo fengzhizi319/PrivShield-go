@@ -176,10 +176,10 @@ if [ "$CHECK_ALL" = true ]; then
             FAILED_CHECKS=$((FAILED_CHECKS + 1))
         fi
     }
-    check_http_svc "BFF-Go 网关" "http://127.0.0.1:8081/api/health"
-    check_http_svc "Service Hub 调度中枢" "http://127.0.0.1:8082/api/health"
-    check_http_svc "Datasource Mgr 数据源" "http://127.0.0.1:8083/api/health"
-    check_http_svc "Audit Log 审计日志" "http://127.0.0.1:8084/api/health"
+    check_http_svc "BFF-Go 网关" "http://127.0.0.1:8081/health"
+    check_http_svc "Service Hub 调度中枢" "http://127.0.0.1:8082/health"
+    check_http_svc "Datasource Mgr 数据源" "http://127.0.0.1:8083/health"
+    check_http_svc "Audit Log 审计日志" "http://127.0.0.1:8084/health"
 else
     echo -e "\n${YELLOW}[4/4] 跳过微服务群检查 (使用 --all 启用)${NC}"
 fi

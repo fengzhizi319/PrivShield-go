@@ -58,7 +58,7 @@ flowchart TD
     end
 
     subgraph S4 ["4. 统一健康探测与全栈可观测性 (Observability & Health Probing)"]
-        DualProbe["三端点健康探测 (/health + /api/health + /readyz)"]
+        DualProbe["三端点健康探测 (/health + /health + /readyz)"]
         PromMetrics["RED 指标命名规范 (Rate / Errors / Duration / Gauges)"]
         GrafanaDash["统一 Grafana 仪表盘与 ServiceMonitor"]
     end
@@ -247,7 +247,7 @@ $$\text{IntegrityHash} = \text{SHA256}(\text{Data})$$
 
 - 创世区块的 `prev_hash` 为 `"0000000000000000000000000000000000000000000000000000000000000000"`；
 - 后续每一条存证的 `prev_hash` 严格等于前一条记录的 `integrity_hash`；
-- 通过 `POST /api/audit/chain/verify` 可在 $O(N)$ 复杂度内快速检测出任何历史篡改、行删除或断链异常。
+- 通过 `POST /v1/audit/chain/verify` 可在 $O(N)$ 复杂度内快速检测出任何历史篡改、行删除或断链异常。
 
 ---
 
@@ -260,7 +260,7 @@ $$\text{IntegrityHash} = \text{SHA256}(\text{Data})$$
 | 端点路径 | HTTP 动作 | 用途与判定逻辑 |
 |---|---|---|
 | **`/health`** | `GET` | **容器级存活探针 (Liveness Probe)**：进程启动且事件循环正常即返回 `200 OK` |
-| **`/api/health`** | `GET` | **API 网关/BFF 业务探针**：逻辑与 `/health` 相同，专用于前端路由代理与 API 网关转发 |
+| **`/health`** | `GET` | **API 网关/BFF 业务探针**：逻辑与 `/health` 相同，专用于前端路由代理与 API 网关转发 |
 | **`/readyz`** | `GET` | **就绪探针 (Readiness Probe)**：深度检查核心依赖（数据库连接池、引擎配置解析器、磁盘可写性），未就绪返回 `503` 自动从 Service 摘流 |
 
 ### 5.2 Prometheus 指标命名与 Label 规范 (RED 模式)
@@ -274,10 +274,10 @@ $$\text{IntegrityHash} = \text{SHA256}(\text{Data})$$
 #### 核心指标清单
 1. **请求速率与计数 (Rate)**：
    - `privacy_requests_total{method="POST", path="/v1/privacy/mask", status="200"}`
-   - `http_requests_total{service="service-hub", method="POST", path="/api/hub/dispatch", status="200"}`
+   - `http_requests_total{service="service-hub", method="POST", path="/v1/hub/dispatch", status="200"}`
 2. **请求延迟分布 (Duration)**：
    - `privacy_request_duration_seconds{method="POST", path="/v1/dynclassification/eval"}`
-   - `http_request_duration_seconds{method="POST", path="/api/audit/logs"}`
+   - `http_request_duration_seconds{method="POST", path="/v1/audit/logs"}`
 3. **并发、租约与资源状态 (Gauges)**：
    - `task_lease_conflicts_total`：Service Hub 租约争抢冲突计数
    - `task_lease_expired_total`：Service Hub 超期失效的租约计数

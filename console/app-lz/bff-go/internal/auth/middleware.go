@@ -26,7 +26,7 @@ const (
 //
 // 执行逻辑：
 //  1. authEnabled=false → 放行（开发模式兼容）
-//  2. 健康检查端点 /api/auth/* 公开端点 → 放行
+//  2. 健康检查端点 /v1/auth/* 公开端点 → 放行
 //  3. 提取 Bearer token → 校验 → 注入用户信息到 Context
 //  4. 校验失败 → 401 UNAUTHORIZED
 func JWTAuthMiddleware(jwtMgr *JWTManager, authEnabled bool) gin.HandlerFunc {
@@ -40,13 +40,13 @@ func JWTAuthMiddleware(jwtMgr *JWTManager, authEnabled bool) gin.HandlerFunc {
 		path := c.Request.URL.Path
 
 		// 健康探针豁免
-		if path == "/health" || path == "/readyz" || path == "/api/health" {
+		if path == "/health" || path == "/readyz" {
 			c.Next()
 			return
 		}
 
 		// 公开认证端点豁免
-		if strings.HasPrefix(path, "/api/auth/") {
+		if strings.HasPrefix(path, "/v1/auth/") {
 			c.Next()
 			return
 		}
@@ -87,7 +87,7 @@ func JWTAuthMiddleware(jwtMgr *JWTManager, authEnabled bool) gin.HandlerFunc {
 //
 // 使用方法：
 //
-//	adminRoutes := r.Group("/api/lz")
+//	adminRoutes := r.Group("/v1/lz")
 //	adminRoutes.Use(RequireRole("admin"))
 //	adminRoutes.GET("/metrics", handler)
 func RequireRole(allowedRoles ...string) gin.HandlerFunc {

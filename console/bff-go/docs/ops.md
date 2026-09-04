@@ -70,7 +70,7 @@ corepack pnpm install   # 首次
 corepack pnpm dev       # 打开 http://localhost:5173
 ```
 
-此模式下页面来源是 `http://localhost:5173`，而前端 BackendSelector 会把 API 基址设为后端的**绝对地址**（切到 Go 后端即 `http://127.0.0.1:8081`），因此所有 `/api/*` 请求都是**跨域**的，必须依赖后端的 CORS 中间件（见第 4 节）。
+此模式下页面来源是 `http://localhost:5173`，而前端 BackendSelector 会把 API 基址设为后端的**绝对地址**（切到 Go 后端即 `http://127.0.0.1:8081`），因此所有 `/v1/*` 请求都是**跨域**的，必须依赖后端的 CORS 中间件（见第 4 节）。
 
 > Go 后端没有热重载，修改代码后需手动重新 `go run`。如需边改边跑，可配合 `air` 等工具。
 
@@ -107,7 +107,7 @@ go build -o bin/backend-go ./cmd/server
 ./bin/backend-go
 ```
 
-后端启动时若检测到 `../web/dist` 存在（由 `PRIVACY_CONSOLE_STATIC_DIR` 控制），会自动挂载 `/assets` 静态资源并注册 SPA 回退路由（非 `/api` 路由一律返回 `index.html`）；若目录不存在则打印日志并退化为「API 模式」，仅提供 `/api/*`。
+后端启动时若检测到 `../web/dist` 存在（由 `PRIVACY_CONSOLE_STATIC_DIR` 控制），会自动挂载 `/assets` 静态资源并注册 SPA 回退路由（非 `/api` 路由一律返回 `index.html`）；若目录不存在则打印日志并退化为「API 模式」，仅提供 `/v1/*`。
 
 ### 2.4 双协议切换模式
 
@@ -211,7 +211,7 @@ server: {
 }
 ```
 
-当 API 基址为空（同源）时，请求 `http://localhost:5173/api/*` 会被 Vite 透明转发到后端，不触发 CORS。此方案适合只想对接单一后端的纯前端开发。
+当 API 基址为空（同源）时，请求 `http://localhost:5173/v1/*` 会被 Vite 透明转发到后端，不触发 CORS。此方案适合只想对接单一后端的纯前端开发。
 
 ### 4.5 方案四：反向代理（分离部署）
 
@@ -229,8 +229,8 @@ server {
     }
 
     # API 反向代理到 Go 后端，保持同源，规避 CORS
-    location /api/ {
-        proxy_pass http://127.0.0.1:8081/api/;
+    location /v1/ {
+        proxy_pass http://127.0.0.1:8081/v1/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }
@@ -379,13 +379,13 @@ go build -o bin/backend-go ./cmd/server
 
 ```bash
 # 后端自身 + 上游 agent gRPC 连通性
-curl http://127.0.0.1:8081/api/health
+curl http://127.0.0.1:8081/health
 
 # agent REST 直连健康检查
 curl http://127.0.0.1:8079/health
 ```
 
-`/api/health` 返回 `backend`（本后端状态）、`agent`（上游 gRPC 连通性）、`via`/`protocol`（后端身份标识，Go 后端为 `go-grpc`/`gRPC`）等字段，详见 [api.md](api.md)。
+`/health` 返回 `backend`（本后端状态）、`agent`（上游 gRPC 连通性）、`via`/`protocol`（后端身份标识，Go 后端为 `go-grpc`/`gRPC`）等字段，详见 [api.md](api.md)。
 
 **Go 测试：**
 

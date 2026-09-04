@@ -1,19 +1,19 @@
 # 测试控制台前端（Web）API 参考
 
-本文档描述前端（`console/web`）的**数据契约**（TypeScript 类型定义）与其所依赖的后端 `/api/*` 接口约定。
+本文档描述前端（`console/web`）的**数据契约**（TypeScript 类型定义）与其所依赖的后端 `/v1/*` 接口约定。
 
 - 契约定义于 `console/web/src/types/api.ts`，与后端 Pydantic 模型一一对应；
-- 前端通过 `console/web/src/api/client.ts` 调用后端，基址由 `setBaseUrl()` 控制（默认同源）；
+- 前端通过 `console/web/src/v1/client.ts` 调用后端，基址由 `setBaseUrl()` 控制（默认同源）；
 - 后端接口的完整说明见 [console/bff-go/docs/api_reference.md](../../bff-go/docs/api_reference.md)。
 
 ## 1. 后端接口约定（前端视角）
 
 | 方法 | 路径 | 前端调用方 | 用途 |
 |---|---|---|---|
-| GET | `/api/health` | `fetchHealth()` | 顶栏状态灯、cURL 基址推断 |
-| GET | `/api/samples` | `fetchSamples()` | 渲染侧边栏 / 总览 / 批量测试 |
-| POST | `/api/proxy` | `proxyRequest()` | 单端点测试发送请求 |
-| POST | `/api/batch` | `batchRequest()` | 批量测试 |
+| GET | `/health` | `fetchHealth()` | 顶栏状态灯、cURL 基址推断 |
+| GET | `/v1/samples` | `fetchSamples()` | 渲染侧边栏 / 总览 / 批量测试 |
+| POST | `/v1/proxy` | `proxyRequest()` | 单端点测试发送请求 |
+| POST | `/v1/batch` | `batchRequest()` | 批量测试 |
 
 后端返回非 2xx 时，`client.ts` 抛出携带 `detail` 的 `Error`，由组件捕获并展示。
 
@@ -21,7 +21,7 @@
 
 ### 2.1 EndpointSample（端点示例）
 
-来自 `GET /api/samples`（`{ samples: [...] }`）。**camelCase** 命名。
+来自 `GET /v1/samples`（`{ samples: [...] }`）。**camelCase** 命名。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -37,7 +37,7 @@
 
 ### 2.2 ProxyRequest / ProxyResponse（通用代理）
 
-发往 `POST /api/proxy`。**snake_case** 命名（与后端一致）。
+发往 `POST /v1/proxy`。**snake_case** 命名（与后端一致）。
 
 **ProxyRequest**：
 
@@ -59,7 +59,7 @@
 
 ### 2.3 ConsoleHealth（健康检查）
 
-来自 `GET /api/health`。
+来自 `GET /health`。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -103,8 +103,8 @@
 
 | 场景 | 命名风格 | 示例 |
 |---|---|---|
-| 示例数据（`/api/samples`） | camelCase | `contentType` / `rawPayloadB64` |
-| 代理转发（`/api/proxy` / `/api/batch`） | snake_case | `raw_payload_b64` / `duration_ms` |
+| 示例数据（`/v1/samples`） | camelCase | `contentType` / `rawPayloadB64` |
+| 代理转发（`/v1/proxy` / `/v1/batch`） | snake_case | `raw_payload_b64` / `duration_ms` |
 
 修改任何接口字段时，必须**同步更新** `types/api.ts` 与后端 Pydantic 模型，否则类型检查或运行时会出错。
 
@@ -115,10 +115,10 @@
 | 函数 | 说明 |
 |---|---|
 | `setBaseUrl(baseUrl)` | 切换后端基址（去尾部斜杠）；空串表示同源 |
-| `fetchHealth()` | `GET /api/health` |
-| `fetchSamples()` | `GET /api/samples`，返回 `samples` 数组 |
-| `proxyRequest(req)` | `POST /api/proxy`，非 2xx 抛 Error |
-| `batchRequest(requests)` | `POST /api/batch`，非 2xx 抛 Error |
+| `fetchHealth()` | `GET /health` |
+| `fetchSamples()` | `GET /v1/samples`，返回 `samples` 数组 |
+| `proxyRequest(req)` | `POST /v1/proxy`，非 2xx 抛 Error |
+| `batchRequest(requests)` | `POST /v1/batch`，非 2xx 抛 Error |
 
 ### 4.2 `lib/curl.ts`
 

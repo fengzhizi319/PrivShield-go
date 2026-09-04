@@ -124,9 +124,9 @@ func TestHealthHandler(t *testing.T) {
 	ts, _ := setupTestServer(t, grpcSrv)
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/api/health")
+	resp, err := http.Get(ts.URL + "/health")
 	if err != nil {
-		t.Fatalf("GET /api/health failed: %v", err)
+		t.Fatalf("GET /health failed: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -155,9 +155,9 @@ func TestSamplesHandler(t *testing.T) {
 	ts, _ := setupTestServer(t, grpcSrv)
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/api/samples")
+	resp, err := http.Get(ts.URL + "/v1/samples")
 	if err != nil {
-		t.Fatalf("GET /api/samples failed: %v", err)
+		t.Fatalf("GET /v1/samples failed: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -196,9 +196,9 @@ func TestProxyHandlerMask(t *testing.T) {
 		},
 	}
 	b, _ := json.Marshal(reqBody)
-	resp, err := http.Post(ts.URL+"/api/proxy", "application/json", bytes.NewReader(b))
+	resp, err := http.Post(ts.URL+"/v1/proxy", "application/json", bytes.NewReader(b))
 	if err != nil {
-		t.Fatalf("POST /api/proxy failed: %v", err)
+		t.Fatalf("POST /v1/proxy failed: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -308,14 +308,14 @@ func TestStaticServing(t *testing.T) {
 	}
 
 	// 4. 未注册的 /api 路径返回 404 JSON而非 index.html
-	resp, err = http.Get(ts.URL + "/api/nonexistent")
+	resp, err = http.Get(ts.URL + "/v1/nonexistent")
 	if err != nil {
-		t.Fatalf("GET /api/nonexistent failed: %v", err)
+		t.Fatalf("GET /v1/nonexistent failed: %v", err)
 	}
 	bodyBytes, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound || !strings.Contains(string(bodyBytes), "Not Found") {
-		t.Fatalf("GET /api/nonexistent expected 404 JSON, got status=%d body=%s", resp.StatusCode, bodyBytes)
+		t.Fatalf("GET /v1/nonexistent expected 404 JSON, got status=%d body=%s", resp.StatusCode, bodyBytes)
 	}
 }
 
@@ -340,9 +340,9 @@ func TestBatchHandler(t *testing.T) {
 		},
 	}
 	b, _ := json.Marshal(reqBody)
-	resp, err := http.Post(ts.URL+"/api/batch", "application/json", bytes.NewReader(b))
+	resp, err := http.Post(ts.URL+"/v1/batch", "application/json", bytes.NewReader(b))
 	if err != nil {
-		t.Fatalf("POST /api/batch failed: %v", err)
+		t.Fatalf("POST /v1/batch failed: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -418,9 +418,9 @@ func TestBatchHandler_MixedAndRestFallback(t *testing.T) {
 		},
 	}
 	b, _ := json.Marshal(reqBody)
-	resp, err := http.Post(ts.URL+"/api/batch", "application/json", bytes.NewReader(b))
+	resp, err := http.Post(ts.URL+"/v1/batch", "application/json", bytes.NewReader(b))
 	if err != nil {
-		t.Fatalf("POST /api/batch failed: %v", err)
+		t.Fatalf("POST /v1/batch failed: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -490,7 +490,7 @@ func postUploadMultipart(t *testing.T, url, filename, content, operation, params
 
 	resp, err := http.Post(url, w.FormDataContentType(), &buf)
 	if err != nil {
-		t.Fatalf("POST /api/upload failed: %v", err)
+		t.Fatalf("POST /v1/upload failed: %v", err)
 	}
 	return resp
 }
@@ -518,7 +518,7 @@ func TestUploadHandlerMask(t *testing.T) {
 	defer ts.Close()
 
 	csv := "email,phone\nalice@example.com,13800138000\nbob@example.com,13900139000\n"
-	resp := postUploadMultipart(t, ts.URL+"/api/upload", "data.csv", csv, "mask_dataframe", `{"columns":["email"]}`)
+	resp := postUploadMultipart(t, ts.URL+"/v1/upload", "data.csv", csv, "mask_dataframe", `{"columns":["email"]}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -577,7 +577,7 @@ func TestUploadHandlerKAnonymize(t *testing.T) {
 	defer ts.Close()
 
 	csv := "age,zip\n25,10001\n28,10002\n"
-	resp := postUploadMultipart(t, ts.URL+"/api/upload", "data.csv", csv, "k_anonymize", `{"qi_cols":["age","zip"],"k":3}`)
+	resp := postUploadMultipart(t, ts.URL+"/v1/upload", "data.csv", csv, "k_anonymize", `{"qi_cols":["age","zip"],"k":3}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -616,7 +616,7 @@ func TestUploadHandlerKAnonymizeMissingQiCols(t *testing.T) {
 	defer ts.Close()
 
 	csv := "age,zip\n25,10001\n"
-	resp := postUploadMultipart(t, ts.URL+"/api/upload", "data.csv", csv, "k_anonymize", `{"k":3}`)
+	resp := postUploadMultipart(t, ts.URL+"/v1/upload", "data.csv", csv, "k_anonymize", `{"k":3}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400 without qi_cols, got %d", resp.StatusCode)
@@ -629,7 +629,7 @@ func TestUploadHandlerUnsupportedFormat(t *testing.T) {
 	ts, _ := setupTestServer(t, grpcSrv)
 	defer ts.Close()
 
-	resp := postUploadMultipart(t, ts.URL+"/api/upload", "data.txt", "hello", "mask_dataframe", "")
+	resp := postUploadMultipart(t, ts.URL+"/v1/upload", "data.txt", "hello", "mask_dataframe", "")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", resp.StatusCode)
@@ -642,7 +642,7 @@ func TestUploadHandlerUnsupportedOperation(t *testing.T) {
 	ts, _ := setupTestServer(t, grpcSrv)
 	defer ts.Close()
 
-	resp := postUploadMultipart(t, ts.URL+"/api/upload", "data.csv", "a,b\n1,2\n", "foobar", "")
+	resp := postUploadMultipart(t, ts.URL+"/v1/upload", "data.csv", "a,b\n1,2\n", "foobar", "")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", resp.StatusCode)
@@ -674,9 +674,9 @@ func TestLbTestHandler(t *testing.T) {
 		"strategy":     "round_robin",
 	}
 	b, _ := json.Marshal(reqBody)
-	resp, err := http.Post(ts.URL+"/api/lb_test", "application/json", bytes.NewReader(b))
+	resp, err := http.Post(ts.URL+"/v1/lb_test", "application/json", bytes.NewReader(b))
 	if err != nil {
-		t.Fatalf("POST /api/lb_test failed: %v", err)
+		t.Fatalf("POST /v1/lb_test failed: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -750,7 +750,7 @@ func TestUploadHandlerOversizedFile(t *testing.T) {
 	cfg.MaxUploadBytes = 10
 
 	csv := strings.Repeat("a", 100) // 100 字节 > 10 字节上限
-	resp := postUploadMultipart(t, ts.URL+"/api/upload", "data.csv", csv, "mask_dataframe", "")
+	resp := postUploadMultipart(t, ts.URL+"/v1/upload", "data.csv", csv, "mask_dataframe", "")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected 413, got %d", resp.StatusCode)
@@ -758,7 +758,7 @@ func TestUploadHandlerOversizedFile(t *testing.T) {
 }
 
 // TestSecurityMiddlewareAPIKey 验证配置 CONSOLE_API_KEY 后的鉴权行为：
-// 缺失 / 错误凭证返回 401，正确凭证放行，/api/health 豁免。
+// 缺失 / 错误凭证返回 401，正确凭证放行，/health 豁免。
 func TestSecurityMiddlewareAPIKey(t *testing.T) {
 	grpcSrv := &testPrivacyServer{
 		HealthFunc: func(_ context.Context, _ *pb.HealthRequest) (*pb.HealthResponse, error) {
@@ -776,9 +776,9 @@ func TestSecurityMiddlewareAPIKey(t *testing.T) {
 	defer ts.Close()
 
 	// 1. 缺失 Authorization 头 → 401
-	resp, err := http.Get(ts.URL + "/api/samples")
+	resp, err := http.Get(ts.URL + "/v1/samples")
 	if err != nil {
-		t.Fatalf("GET /api/samples failed: %v", err)
+		t.Fatalf("GET /v1/samples failed: %v", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -786,11 +786,11 @@ func TestSecurityMiddlewareAPIKey(t *testing.T) {
 	}
 
 	// 2. 错误凭证 → 401
-	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/samples", nil)
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/v1/samples", nil)
 	req.Header.Set("Authorization", "Bearer wrong")
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("GET /api/samples with wrong key failed: %v", err)
+		t.Fatalf("GET /v1/samples with wrong key failed: %v", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -798,21 +798,21 @@ func TestSecurityMiddlewareAPIKey(t *testing.T) {
 	}
 
 	// 3. 正确凭证 → 200
-	req, _ = http.NewRequest(http.MethodGet, ts.URL+"/api/samples", nil)
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+"/v1/samples", nil)
 	req.Header.Set("Authorization", "Bearer secret-key")
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("GET /api/samples with correct key failed: %v", err)
+		t.Fatalf("GET /v1/samples with correct key failed: %v", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 with correct key, got %d", resp.StatusCode)
 	}
 
-	// 4. /api/health 豁免鉴权（无需凭证）
-	resp, err = http.Get(ts.URL + "/api/health")
+	// 4. /health 豁免鉴权（无需凭证）
+	resp, err = http.Get(ts.URL + "/health")
 	if err != nil {
-		t.Fatalf("GET /api/health failed: %v", err)
+		t.Fatalf("GET /health failed: %v", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -835,9 +835,9 @@ func TestSecurityMiddlewareRateLimit(t *testing.T) {
 
 	got429 := false
 	for i := 0; i < 5; i++ {
-		resp, err := http.Get(ts.URL + "/api/samples")
+		resp, err := http.Get(ts.URL + "/v1/samples")
 		if err != nil {
-			t.Fatalf("GET /api/samples failed: %v", err)
+			t.Fatalf("GET /v1/samples failed: %v", err)
 		}
 		resp.Body.Close()
 		if resp.StatusCode == http.StatusTooManyRequests {
@@ -856,9 +856,9 @@ func TestLbTestHandlerInvalidScheme(t *testing.T) {
 	ts, _ := setupTestServer(t, grpcSrv)
 	defer ts.Close()
 
-	resp, err := http.Post(ts.URL+"/api/lb_test", "application/json", strings.NewReader(`{"backends":[{"name":"a","url":"file:///etc/passwd"}],"num_requests":3,"strategy":"round_robin"}`))
+	resp, err := http.Post(ts.URL+"/v1/lb_test", "application/json", strings.NewReader(`{"backends":[{"name":"a","url":"file:///etc/passwd"}],"num_requests":3,"strategy":"round_robin"}`))
 	if err != nil {
-		t.Fatalf("POST /api/lb_test failed: %v", err)
+		t.Fatalf("POST /v1/lb_test failed: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
@@ -899,9 +899,9 @@ func TestProxyRestDynClassification(t *testing.T) {
 		"path":   "/v1/dynclassification/standards",
 	}
 	b, _ := json.Marshal(reqBody)
-	resp, err := http.Post(ts.URL+"/api/proxy", "application/json", bytes.NewReader(b))
+	resp, err := http.Post(ts.URL+"/v1/proxy", "application/json", bytes.NewReader(b))
 	if err != nil {
-		t.Fatalf("POST /api/proxy failed: %v", err)
+		t.Fatalf("POST /v1/proxy failed: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -965,9 +965,9 @@ func TestProxyRestErrorPassthrough(t *testing.T) {
 		"body":   map[string]any{"fieldName": "phone"},
 	}
 	b, _ := json.Marshal(reqBody)
-	resp, err := http.Post(ts.URL+"/api/proxy", "application/json", bytes.NewReader(b))
+	resp, err := http.Post(ts.URL+"/v1/proxy", "application/json", bytes.NewReader(b))
 	if err != nil {
-		t.Fatalf("POST /api/proxy failed: %v", err)
+		t.Fatalf("POST /v1/proxy failed: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -999,9 +999,9 @@ func TestLbTestHandlerEmptyBackends(t *testing.T) {
 	ts, _ := setupTestServer(t, grpcSrv)
 	defer ts.Close()
 
-	resp, err := http.Post(ts.URL+"/api/lb_test", "application/json", strings.NewReader(`{"backends":[],"num_requests":3,"strategy":"round_robin"}`))
+	resp, err := http.Post(ts.URL+"/v1/lb_test", "application/json", strings.NewReader(`{"backends":[],"num_requests":3,"strategy":"round_robin"}`))
 	if err != nil {
-		t.Fatalf("POST /api/lb_test failed: %v", err)
+		t.Fatalf("POST /v1/lb_test failed: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
@@ -1009,7 +1009,7 @@ func TestLbTestHandlerEmptyBackends(t *testing.T) {
 	}
 }
 
-// TestConcurrencyTestHandler 验证并发压测接口 /api/concurrency_test。
+// TestConcurrencyTestHandler 验证并发压测接口 /v1/concurrency_test。
 func TestConcurrencyTestHandler(t *testing.T) {
 	grpcSrv := &testPrivacyServer{
 		MaskFunc: func(ctx context.Context, req *pb.MaskRequest) (*pb.MaskResponse, error) {
@@ -1020,9 +1020,9 @@ func TestConcurrencyTestHandler(t *testing.T) {
 	defer ts.Close()
 
 	reqBody := `{"path":"/v1/privacy/mask","method":"POST","concurrency":5,"total_requests":10}`
-	resp, err := http.Post(ts.URL+"/api/concurrency_test", "application/json", strings.NewReader(reqBody))
+	resp, err := http.Post(ts.URL+"/v1/concurrency_test", "application/json", strings.NewReader(reqBody))
 	if err != nil {
-		t.Fatalf("POST /api/concurrency_test failed: %v", err)
+		t.Fatalf("POST /v1/concurrency_test failed: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -1054,14 +1054,14 @@ func TestConcurrencyTestHandler_BlockedPath(t *testing.T) {
 		"/v1/ops/health",
 		"/v1/ops/config",
 		"/v1/internal/debug",
-		"/api/samples",
+		"/v1/samples",
 		"/metrics",
 	}
 	for _, p := range blockedPaths {
 		reqBody := fmt.Sprintf(`{"path":%q,"method":"GET","concurrency":2,"total_requests":4}`, p)
-		resp, err := http.Post(ts.URL+"/api/concurrency_test", "application/json", strings.NewReader(reqBody))
+		resp, err := http.Post(ts.URL+"/v1/concurrency_test", "application/json", strings.NewReader(reqBody))
 		if err != nil {
-			t.Fatalf("POST /api/concurrency_test path=%s failed: %v", p, err)
+			t.Fatalf("POST /v1/concurrency_test path=%s failed: %v", p, err)
 		}
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusBadRequest {
@@ -1090,7 +1090,7 @@ func TestIsAllowedConcurrencyPath(t *testing.T) {
 		"/v1/ops/health",
 		"/v1/ops/config",
 		"/v1/internal/debug",
-		"/api/samples",
+		"/v1/samples",
 		"/metrics",
 		"/v1/privacy/../ops/health", // 路径穿越（不会被前缀匹配放行，因为 /v1/privacy/../ops 不匹配任何白名单前缀）
 		"",
@@ -1102,15 +1102,15 @@ func TestIsAllowedConcurrencyPath(t *testing.T) {
 	}
 }
 
-// TestMedicalPipelineHandler 验证医疗敏感数据全流程治理接口 /api/medical_pipeline。
+// TestMedicalPipelineHandler 验证医疗敏感数据全流程治理接口 /v1/medical_pipeline。
 func TestMedicalPipelineHandler(t *testing.T) {
 	grpcSrv := &testPrivacyServer{}
 	ts, _ := setupTestServer(t, grpcSrv)
 	defer ts.Close()
 
-	resp, err := http.Post(ts.URL+"/api/medical_pipeline", "application/json", strings.NewReader(`{"records":[]}`))
+	resp, err := http.Post(ts.URL+"/v1/medical_pipeline", "application/json", strings.NewReader(`{"records":[]}`))
 	if err != nil {
-		t.Fatalf("POST /api/medical_pipeline failed: %v", err)
+		t.Fatalf("POST /v1/medical_pipeline failed: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -1119,15 +1119,15 @@ func TestMedicalPipelineHandler(t *testing.T) {
 	}
 }
 
-// TestPipelineProcessHandler 验证通用分类分级与脱敏流水线接口 /api/pipeline/process。
+// TestPipelineProcessHandler 验证通用分类分级与脱敏流水线接口 /v1/pipeline/process。
 func TestPipelineProcessHandler(t *testing.T) {
 	grpcSrv := &testPrivacyServer{}
 	ts, _ := setupTestServer(t, grpcSrv)
 	defer ts.Close()
 
-	resp, err := http.Post(ts.URL+"/api/pipeline/process", "application/json", strings.NewReader(`{"records":[]}`))
+	resp, err := http.Post(ts.URL+"/v1/pipeline/process", "application/json", strings.NewReader(`{"records":[]}`))
 	if err != nil {
-		t.Fatalf("POST /api/pipeline/process failed: %v", err)
+		t.Fatalf("POST /v1/pipeline/process failed: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -1150,9 +1150,9 @@ func TestBatchTooLarge(t *testing.T) {
 	}
 	body, _ := json.Marshal(map[string]any{"requests": requests})
 
-	resp, err := http.Post(ts.URL+"/api/batch", "application/json", bytes.NewReader(body))
+	resp, err := http.Post(ts.URL+"/v1/batch", "application/json", bytes.NewReader(body))
 	if err != nil {
-		t.Fatalf("POST /api/batch failed: %v", err)
+		t.Fatalf("POST /v1/batch failed: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -1196,9 +1196,9 @@ func TestDualProtocolSwitch(t *testing.T) {
 
 	// 1. 测试 Health 默认走 gRPC
 	{
-		resp, err := http.Get(ts.URL + "/api/health")
+		resp, err := http.Get(ts.URL + "/health")
 		if err != nil {
-			t.Fatalf("GET /api/health failed: %v", err)
+			t.Fatalf("GET /health failed: %v", err)
 		}
 		var h struct {
 			Backend  string `json:"backend"`
@@ -1214,9 +1214,9 @@ func TestDualProtocolSwitch(t *testing.T) {
 
 	// 2. 测试 Health 传 protocol=rest 走 REST
 	{
-		resp, err := http.Get(ts.URL + "/api/health?protocol=rest")
+		resp, err := http.Get(ts.URL + "/health?protocol=rest")
 		if err != nil {
-			t.Fatalf("GET /api/health?protocol=rest failed: %v", err)
+			t.Fatalf("GET /health?protocol=rest failed: %v", err)
 		}
 		var h struct {
 			Backend  string `json:"backend"`
@@ -1237,9 +1237,9 @@ func TestDualProtocolSwitch(t *testing.T) {
 			"path":   "/v1/privacy/mask",
 			"body":   map[string]any{"field_name": "email", "value": "alice@example.com"},
 		})
-		resp, err := http.Post(ts.URL+"/api/proxy", "application/json", bytes.NewReader(reqBody))
+		resp, err := http.Post(ts.URL+"/v1/proxy", "application/json", bytes.NewReader(reqBody))
 		if err != nil {
-			t.Fatalf("POST /api/proxy failed: %v", err)
+			t.Fatalf("POST /v1/proxy failed: %v", err)
 		}
 		var p struct {
 			Via      string `json:"via"`
@@ -1259,9 +1259,9 @@ func TestDualProtocolSwitch(t *testing.T) {
 			"path":   "/v1/privacy/mask",
 			"body":   map[string]any{"field_name": "email", "value": "alice@example.com"},
 		})
-		resp, err := http.Post(ts.URL+"/api/proxy?protocol=rest", "application/json", bytes.NewReader(reqBody))
+		resp, err := http.Post(ts.URL+"/v1/proxy?protocol=rest", "application/json", bytes.NewReader(reqBody))
 		if err != nil {
-			t.Fatalf("POST /api/proxy?protocol=rest failed: %v", err)
+			t.Fatalf("POST /v1/proxy?protocol=rest failed: %v", err)
 		}
 		var p struct {
 			Via      string `json:"via"`
@@ -1281,12 +1281,12 @@ func TestDualProtocolSwitch(t *testing.T) {
 			"path":   "/v1/privacy/mask",
 			"body":   map[string]any{"field_name": "email", "value": "alice@example.com"},
 		})
-		httpReq, _ := http.NewRequest("POST", ts.URL+"/api/proxy", bytes.NewReader(reqBody))
+		httpReq, _ := http.NewRequest("POST", ts.URL+"/v1/proxy", bytes.NewReader(reqBody))
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("X-PrivShield-Protocol", "REST")
 		resp, err := http.DefaultClient.Do(httpReq)
 		if err != nil {
-			t.Fatalf("POST /api/proxy with Header failed: %v", err)
+			t.Fatalf("POST /v1/proxy with Header failed: %v", err)
 		}
 		var p struct {
 			Via      string `json:"via"`

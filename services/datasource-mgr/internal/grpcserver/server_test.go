@@ -315,7 +315,7 @@ func TestBuildServerTLSConfig_HTTPS_MTLS(t *testing.T) {
 	tlsListener := tls.NewListener(rawListener, tlsConfig)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok","mode":"https_mtls"}`))
@@ -334,7 +334,7 @@ func TestBuildServerTLSConfig_HTTPS_MTLS(t *testing.T) {
 	}()
 
 	serverAddr := rawListener.Addr().String()
-	targetURL := fmt.Sprintf("https://%s/api/health", serverAddr)
+	targetURL := fmt.Sprintf("https://%s/health", serverAddr)
 
 	// 3. 读取 CA 证书池
 	caPEM, err := os.ReadFile(caFile)

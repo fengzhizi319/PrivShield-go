@@ -429,13 +429,13 @@ func TestPublicKeysEqualDifferentTypes(t *testing.T) {
 // gRPC Server Method Tests / gRPC 服务方法单元测试
 // ─────────────────────────────────────────────────────────────
 
-// newMockAuditLogServer starts a minimal audit-log stub that accepts POST /api/audit/logs
+// newMockAuditLogServer starts a minimal audit-log stub that accepts POST /v1/audit/logs
 // and returns a 201 Created response with a valid-looking evidence record.
 // newMockAuditLogServer 启动一个接受存证写入的最小 audit-log 占位服务，用于测试流水线 audit 阶段。
 func newMockAuditLogServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/audit/logs" {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/audit/logs" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}

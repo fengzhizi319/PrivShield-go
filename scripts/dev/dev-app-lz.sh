@@ -346,7 +346,7 @@ echo "$BFF_PID" > "$PIDS_DIR/app-lz-bff.pid"
 
 # 等待 BFF 就绪
 for i in {1..30}; do
-    if curl -s "http://127.0.0.1:$BFF_PORT/api/health" >/dev/null 2>&1; then
+    if curl -s "http://127.0.0.1:$BFF_PORT/health" >/dev/null 2>&1; then
         echo "✅ App-LZ Go BFF 已就绪 (PID: $BFF_PID)"
         break
     fi
@@ -395,7 +395,7 @@ trap cleanup INT TERM
 echo "=================================================================="
 echo " ✨ App-LZ 控制台已启动完成！"
 echo " 🌐 前端访问地址: http://localhost:$VITE_PORT"
-echo " 🔌 BFF 接口地址: http://127.0.0.1:$BFF_PORT/api/lz/topology"
+echo " 🔌 BFF 接口地址: http://127.0.0.1:$BFF_PORT/v1/lz/topology"
 echo " 按 Ctrl+C 停止服务"
 echo "=================================================================="
 

@@ -84,12 +84,12 @@ curl -s http://127.0.0.1:8083/readyz | jq .
 curl -s --cacert certs/ca.crt \
   --cert certs/client.crt \
   --key certs/client.key \
-  "https://127.0.0.1:8083/api/datasources/ds_yibao/record-by-id?id_card_no=110101196809171010" | jq .
+  "https://127.0.0.1:8083/v1/datasources/ds_yibao/record-by-id?id_card_no=110101196809171010" | jq .
 ```
 
 ### 3.3 按身份证号查询康养数据 (27 字段)
 ```bash
-curl -s "http://127.0.0.1:8083/api/datasources/ds_kangyang/record-by-id?id_card_no=110105198402151071" | jq .
+curl -s "http://127.0.0.1:8083/v1/datasources/ds_kangyang/record-by-id?id_card_no=110105198402151071" | jq .
 ```
 
 ---
@@ -126,8 +126,8 @@ curl -s "http://127.0.0.1:8083/api/datasources/ds_kangyang/record-by-id?id_card_
 - **适用情况**：需要将整个 PrivShield 体系（`console-web`、`service-hub`、`datasource-mgr`、`audit-log`）统一对外暴露在同一个公网域名与标准端口（如 `https://api.privshield.com`）。
 - **Nginx 作用**：Nginx 统一管理公网泛域名 SSL 证书（自动续签/TLS 卸载），并按 URL 路径路由：
   - `/` ──▶ 静态前端 UI (`console-web:5173`)
-  - `/api/datasources/` ──▶ `datasource-mgr:8083`
-  - `/api/hub/` ──▶ `service-hub:8082`
+  - `/v1/datasources/` ──▶ `datasource-mgr:8083`
+  - `/v1/hub/` ──▶ `service-hub:8082`
 
 #### 场景 3：直接面向不可信公网时的 IP 级令牌桶限流与 WAF 防护
 - **适用情况**：数据源管理服务需要直接暴露给公网第三方调用。
@@ -163,7 +163,7 @@ server {
     ssl_ciphers         HIGH:!aNULL:!MD5;
 
     # ── A. HTTP REST API 反向代理 ──────────────────────────────────────
-    location /api/datasources/ {
+    location /v1/datasources/ {
         proxy_pass http://datasource_mgr_http;
         proxy_http_version 1.1;
         proxy_set_header Connection "";

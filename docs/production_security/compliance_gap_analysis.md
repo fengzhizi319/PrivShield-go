@@ -151,7 +151,7 @@ PrivShield 安全技术栈覆盖：TLS 1.3/mTLS + 国密 TLCP（GB/T 38636-2020�
 | **应通过系统管理员对系统资源进行管理与控制** | ✅ | `/v1/ops/*`、`/debug/pprof*` 限定 `ops:admin` / `ops:diagnostics` |
 | **应对系统安全策略和运行状态进行集中管理** | ❌ | 各微服务独立管理配置，缺少集中安全策略管理平台 |
 | **应对审计记录的读写权限进行严格控制** | ✅ | audit-log 读写分离（P1-6 权责分离） |
-| **应能够根据安全策略对审计记录进行分析并生成报表** | ⚠️ | `POST /api/audit/report` 报表导出，但为简单统计 |
+| **应能够根据安全策略对审计记录进行分析并生成报表** | ⚠️ | `POST /v1/audit/report` 报表导出，但为简单统计 |
 | **应能够集中管控安全策略** | ❌ | 规则/配置分散在各环境变量中 |
 | **应能够集中管控安全事件** | ❌ | 结构化日志独立输出，无 SIEM 集成 |
 | **应能发现网络攻击、入侵及异常行为** | ⚠️ | Prometheus 告警 + 结构化日志，缺少运行时异常行为分析 |
@@ -203,7 +203,7 @@ PrivShield 安全技术栈覆盖：TLS 1.3/mTLS + 国密 TLCP（GB/T 38636-2020�
 | G-01 | 国密 TLS 协议 | 三级等保 通信传输 + 密评 传输机密性 | ✅ | `pkg/tlsutil/tlcp.go` — TLCP 服务端（SM2 双证书、双向认证、纯国密模式），4 个服务 HTTP 入口已接入 |
 | G-02 | 源地址伪造防护 | 三级等保 入侵防范 | ✅ | `pkg/middleware/middleware.go` — `TrustedProxiesFromEnv` + `RealClientIP` |
 | G-03 | 登录失败锁定 | 三级等保 身份鉴别 | ✅ | `console/app-lz/bff-go/internal/auth/userstore.go` — 5 次失败锁定 15 分钟 |
-| G-04 | 密码策略 + 改密 | 三级等保 身份鉴别 | ✅ | `userstore.go:validatePasswordStrength`（12 位 + 3/4 类 + 弱密码字典）+ `POST /api/auth/change-password` |
+| G-04 | 密码策略 + 改密 | 三级等保 身份鉴别 | ✅ | `userstore.go:validatePasswordStrength`（12 位 + 3/4 类 + 弱密码字典）+ `POST /v1/auth/change-password` |
 | G-05 | JWT 令牌吊销 | 三级等保 访问控制 | ✅ | `jwt.go` — SHA-256 黑名单 + `/logout` + 自动清理 |
 | G-06 | SM2 非对称密码 | 密评 算法合规 + 抗抵赖 | ✅ | `pkg/crypto/sm2.go` + 审计写入/核验/快照验真全流程 |
 | G-07 | FPE 国密改造 | 密评 算法合规 | ✅ | `privacy-go-sdk/masking/masking.go` — HMAC-SM3 |

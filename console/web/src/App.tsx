@@ -95,7 +95,7 @@ type View =
 export default function App() {
   // 获取国际化翻译函数 / Get i18n translation function
   const { t } = useI18n();
-  /** 全部端点示例（来自 /api/samples）/ All endpoint samples (from /api/samples) */
+  /** 全部端点示例（来自 /v1/samples）/ All endpoint samples (from /v1/samples) */
   const [samples, setSamples] = useState<EndpointSample[]>([]);
   /** 当前主区域视图状态 / Current main area view state */
   const [view, setView] = useState<View>({ type: 'overview' });

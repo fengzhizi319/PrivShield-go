@@ -2,8 +2,8 @@
 // Package handlers 实现了模拟数据源模块（datasource-mgr）的 HTTP REST 服务端接口。
 //
 // 该文件通过 Gin 框架暴露了一系列 RESTful API 端点：
-// 1. 健康检查与探针（/health, /api/health）；
-// 2. 通用数据源资产查询、记录采样、Schema 元数据探测与连通性测试接口（/api/datasources/*）。
+// 1. 健康检查与探针（/health, /readyz）；
+// 2. 通用数据源资产查询、记录采样、Schema 元数据探测与连通性测试接口（/v1/datasources/*）。
 package handlers
 
 import (
@@ -72,15 +72,15 @@ func DatasourceMgrPermissionForPath(path string) string {
 		path = path[:len(path)-1]
 	}
 	switch {
-	case path == "/health" || path == "/readyz" || path == "/api/health", path == "/metrics":
+	case path == "/health" || path == "/readyz", path == "/metrics":
 		return ""
-	case path == "/api/datasources" || path == "/api/datasources/:id" ||
-		strings.HasPrefix(path, "/api/datasources/") && strings.HasSuffix(path, "/record-by-id") ||
-		strings.HasPrefix(path, "/api/datasources/") && strings.HasSuffix(path, "/metadata") ||
-		strings.HasPrefix(path, "/api/datasources/") && strings.HasSuffix(path, "/audit"):
+	case path == "/v1/datasources" || path == "/v1/datasources/:id" ||
+		strings.HasPrefix(path, "/v1/datasources/") && strings.HasSuffix(path, "/record-by-id") ||
+		strings.HasPrefix(path, "/v1/datasources/") && strings.HasSuffix(path, "/metadata") ||
+		strings.HasPrefix(path, "/v1/datasources/") && strings.HasSuffix(path, "/audit"):
 		return "datasource:read"
-	case strings.HasPrefix(path, "/api/datasources/") && strings.HasSuffix(path, "/test") ||
-		path == "/api/datasources/seed":
+	case strings.HasPrefix(path, "/v1/datasources/") && strings.HasSuffix(path, "/test") ||
+		path == "/v1/datasources/seed":
 		return "datasource:admin"
 	default:
 		// fail-closed：未显式映射的非豁免路径默认归入最高 admin 权限，防止空 scope 绕过
@@ -121,7 +121,7 @@ func (s *Server) scopeAuthMiddleware() gin.HandlerFunc {
 	if len(scopeKeys) > 0 {
 		return func(c *gin.Context) {
 			path := c.Request.URL.Path
-			if path == "/health" || path == "/readyz" || path == "/api/health" {
+			if path == "/health" || path == "/readyz" {
 				c.Next()
 				return
 			}
@@ -178,9 +178,8 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 	r.Use(s.scopeAuthMiddleware())
 
 	// 【Class A / Class C】基础探针与监控基础设施路由
-	r.GET("/health", s.Health)     // Class A: Liveness probe / 存活探针
-	r.GET("/readyz", s.Readyz)     // Class C: Readiness probe / K8s 就绪探针（基础设施）
-	r.GET("/api/health", s.Health) // Class A: Alias for backward compat / 向后兼容别名
+	r.GET("/health", s.Health) // Class A: Liveness probe / 存活探针
+	r.GET("/readyz", s.Readyz) // Class C: Readiness probe / K8s 就绪探针（基础设施）
 
 	// 【Class C】Prometheus 监控指标端点（外部数据局免实现；mc 为 nil 时不注册）
 	if s.mc != nil {
@@ -188,19 +187,19 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 	}
 
 	// 【Class A】数据局核心生产对接端点 (Core Production Contract)
-	r.GET("/api/datasources/:id/record-by-id", s.GetDataSourceRecordByID) // 按身份证号精确抽取记录
-	r.POST("/api/datasources/:id/test", s.TestConnection)                 // 数据源连通性测试
+	r.GET("/v1/datasources/:id/record-by-id", s.GetDataSourceRecordByID) // 按身份证号精确抽取记录
+	r.POST("/v1/datasources/:id/test", s.TestConnection)                 // 数据源连通性测试
 
 	// 【Class B】可选元数据与目录探查端点 (Optional Metadata Discovery)
-	r.GET("/api/datasources", s.ListDataSources)          // 数据源目录列表
-	r.GET("/api/datasources/:id", s.GetDataSource)        // 单个数据源详情
-	r.GET("/api/datasources/:id/metadata", s.GetMetadata) // Schema 元数据探查
+	r.GET("/v1/datasources", s.ListDataSources)          // 数据源目录列表
+	r.GET("/v1/datasources/:id", s.GetDataSource)        // 单个数据源详情
+	r.GET("/v1/datasources/:id/metadata", s.GetMetadata) // Schema 元数据探查
 
 	// 【Class D】本地开发测试桩辅助端点（Mock/Test Only · 生产环境严禁暴露）
 	// 仅在 s.cfg.EnableMockHelpers 为 true 时注册；生产环境配置 DATASOURCE_MGR_ENABLE_MOCK_HELPERS=false 彻底屏蔽。
 	if s.cfg == nil || s.cfg.EnableMockHelpers {
-		r.GET("/api/datasources/:id/audit", s.GetAccessAudit)      // 模拟访问审计日志查询 (Class D)
-		r.POST("/api/datasources/seed", s.SeedDataSourcesEndpoint) // 模拟数据源初始化/重置 (Class D)
+		r.GET("/v1/datasources/:id/audit", s.GetAccessAudit)      // 模拟访问审计日志查询 (Class D)
+		r.POST("/v1/datasources/seed", s.SeedDataSourcesEndpoint) // 模拟数据源初始化/重置 (Class D)
 	}
 }
 

@@ -75,7 +75,7 @@ flowchart TB
     end
 
     subgraph ServiceHub ["service-hub 调度中枢 (:8082 / :50052 - 主机甲 · ECS)"]
-        Router[Gin Router<br/>/api/hub/*]
+        Router[Gin Router<br/>/v1/hub/*]
         GRPCSrv[gRPC Server<br/>ServiceHubServiceServer]
         MW[中间件链: CORS / Auth / TraceID / Recover / Metrics / RateLimit]
         
@@ -123,7 +123,7 @@ flowchart TB
 | **3** | `classify` | 调用 Agent `POST /v1/agent/process`，404 时回退 `POST /v1/medical/process`；一次完成分类与脱敏 | `internal/agent/client.go`: `ProcessAgent` |
 | **4** | `desensitize` | 不执行独立脱敏调用；处理已在 `classify` 一体化完成 | `processTask` 状态机快速流转 |
 | **5** | `return` | 当前为状态追踪标签，不组装或持久化额外结果对象 | `processTask` 状态机快速流转 |
-| **6** | `audit` | 调用 `submitEvidence` 向 audit-log 提交出域存证（`POST /api/audit/logs`）；提交失败即任务 `failed`（P0-6 fail-closed），成功后写入 `completed/done` | `internal/audit/client.go` + `processTask` → `submitEvidence` |
+| **6** | `audit` | 调用 `submitEvidence` 向 audit-log 提交出域存证（`POST /v1/audit/logs`）；提交失败即任务 `failed`（P0-6 fail-closed），成功后写入 `completed/done` | `internal/audit/client.go` + `processTask` → `submitEvidence` |
 
 ### 敏感度等级与隐私原语自动映射策略
 
@@ -342,20 +342,20 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
     // 基础健康检查与服务概览
     r.GET("/health", s.Health)     // Liveness probe / 存活探针
     r.GET("/readyz", s.Readyz)     // Readiness probe / 就绪探针
-    r.GET("/api/health", s.Health) // 兼容别名
-    r.GET("/api/hub/status", s.HubStatus)
+    r.GET("/health", s.Health) // 兼容别名
+    r.GET("/v1/hub/status", s.HubStatus)
 
     // 任务生命周期管理
-    r.GET("/api/hub/tasks", s.ListTasks)
-    r.GET("/api/hub/tasks/:id", s.GetTask)
-    r.POST("/api/hub/dispatch", s.Dispatch)
-    r.POST("/api/hub/classify", s.Dispatch) // 分类分级分发兼容别名
+    r.GET("/v1/hub/tasks", s.ListTasks)
+    r.GET("/v1/hub/tasks/:id", s.GetTask)
+    r.POST("/v1/hub/dispatch", s.Dispatch)
+    r.POST("/v1/hub/classify", s.Dispatch) // 分类分级分发兼容别名
 
     // 按身份证号端到端查询+脱敏（同步）
-    r.POST("/api/hub/fetch-and-desensitize", s.FetchAndDesensitize)
+    r.POST("/v1/hub/fetch-and-desensitize", s.FetchAndDesensitize)
 
     // 流水线状态
-    r.GET("/api/hub/pipeline", s.Pipeline)
+    r.GET("/v1/hub/pipeline", s.Pipeline)
 
     // Prometheus 监控指标导出
     r.GET("/metrics", s.mc.Handler())
@@ -373,8 +373,8 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 ### 5.5 数据源客户端 (`internal/datasource/client.go`)
 
 当调用方发起请求时，`datasource.Client` 提供数据源元数据查询与健康检查能力：
-- `GET http://127.0.0.1:8083/api/datasources` 查询数据源列表。
-- `GET http://127.0.0.1:8083/api/datasources/:id` 查询单个数据源详情。
+- `GET http://127.0.0.1:8083/v1/datasources` 查询数据源列表。
+- `GET http://127.0.0.1:8083/v1/datasources/:id` 查询单个数据源详情。
 - 调用方需在提交任务时显式携带载荷数据，流水线不再自动抽取分页记录。
 
 ### 5.6 gRPC 服务与零信任 mTLS / 公钥固定 (`internal/grpcserver/server.go`)
@@ -484,12 +484,12 @@ bash scripts/dev/dev-start-new-modules.sh
 
 #### 1. 健康检查与就绪探针
 ```bash
-curl -s http://127.0.0.1:8082/api/health | jq .
+curl -s http://127.0.0.1:8082/health | jq .
 ```
 
-#### 2. 发起数据流通流水线任务 (`/api/hub/dispatch`)
+#### 2. 发起数据流通流水线任务 (`/v1/hub/dispatch`)
 ```bash
-curl -s -X POST http://127.0.0.1:8082/api/hub/dispatch \
+curl -s -X POST http://127.0.0.1:8082/v1/hub/dispatch \
   -H "Content-Type: application/json" \
   -d '{
         "source": "ds_yibao",
@@ -648,7 +648,7 @@ flowchart TD
 
    func (s *Server) RegisterRoutes(r *gin.Engine) {
        // ...
-       r.POST("/api/hub/tasks/:id/retry", s.RetryTask)
+       r.POST("/v1/hub/tasks/:id/retry", s.RetryTask)
    }
    ```
 2. **在 `internal/handlers/handlers_test.go` 增加端点测试用例**。

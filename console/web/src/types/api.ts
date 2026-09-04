@@ -6,7 +6,7 @@
  *   - 修改任何接口时，需同步更新本文件与后端模型。
  */
 
-/** 单个端点示例（来自后端 /api/samples）。 */
+/** 单个端点示例（来自后端 /v1/samples）。 */
 export interface EndpointSample {
   method: string;
   path: string;
@@ -26,7 +26,7 @@ export interface EndpointSample {
   backend?: "rest" | "grpc" | "both";
 }
 
-/** 通用代理请求体（发往 /api/proxy）。 */
+/** 通用代理请求体（发往 /v1/proxy）。 */
 export interface ProxyRequest {
   method: string;
   path: string;
@@ -47,7 +47,7 @@ export interface ProxyResponse {
   protocol?: string;
 }
 
-/** 后端健康检查响应（/api/health）。 */
+/** 后端健康检查响应（/health）。 */
 export interface ConsoleHealth {
   backend: string;
   /** agent 健康信息；不可达时为字符串 "unreachable" */
@@ -107,7 +107,7 @@ export interface HistoryEntry {
 /** 数据文件隐私处理支持的操作类型。 */
 export type FileOperation = 'mask_dataframe' | 'k_anonymize';
 
-/** /api/upload 响应中 data 的处理结果。 */
+/** /v1/upload 响应中 data 的处理结果。 */
 export interface UploadData {
   operation: FileOperation;
   /** 输入记录数 */
@@ -118,7 +118,7 @@ export interface UploadData {
   result: any;
 }
 
-/** /api/upload 的统一响应包装（复用 ProxyResponse 结构）。 */
+/** /v1/upload 的统一响应包装（复用 ProxyResponse 结构）。 */
 export interface UploadResponse {
   status: number;
   duration_ms: number;
@@ -138,7 +138,7 @@ export interface LbBackend {
 /** 负载均衡测试支持的策略。 */
 export type LbStrategy = 'round_robin' | 'random' | 'least_connections';
 
-/** 负载均衡测试请求体（发往 /api/lb_test）。 */
+/** 负载均衡测试请求体（发往 /v1/lb_test）。 */
 export interface LbTestRequest {
   backends: LbBackend[];
   num_requests: number;
@@ -444,7 +444,7 @@ export interface ValidateResponse {
   [key: string]: unknown;
 }
 
-/* ==================== 并发压测（/api/concurrency_test） ==================== */
+/* ==================== 并发压测（/v1/concurrency_test） ==================== */
 
 /** 并发压测请求体。 */
 export interface ConcurrencyTestRequest {
@@ -485,7 +485,7 @@ export interface ConcurrencyTestResponse {
   p99_latency_ms: number;
 }
 
-/* ==================== 医疗数据全流程治理（/api/medical_pipeline） ==================== */
+/* ==================== 医疗数据全流程治理（/v1/medical_pipeline） ==================== */
 
 export interface MedicalFieldClassification {
   field_name: string;

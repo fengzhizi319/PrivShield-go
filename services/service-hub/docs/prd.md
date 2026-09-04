@@ -35,7 +35,7 @@
 | ③ | `classify` | 分类与脱敏一体化处理 | 一次调用 Agent `POST /v1/agent/process`（404 时兼容 `POST /v1/medical/process`） |
 | ④ | `desensitize` | 状态追踪 | 快速流转 |
 | ⑤ | `return` | 状态追踪 | 快速流转 |
-| ⑥ | `audit` | 出域存证 | 调用 `submitEvidence` 向 `audit-log` 提交出域存证（`POST /api/audit/logs`），提交失败即任务 `failed`（P0-6 fail-closed），成功后写为 `completed/done` |
+| ⑥ | `audit` | 出域存证 | 调用 `submitEvidence` 向 `audit-log` 提交出域存证（`POST /v1/audit/logs`），提交失败即任务 `failed`（P0-6 fail-closed），成功后写为 `completed/done` |
 
 ### 2.2 敏感度等级到脱敏策略自动映射 (DB51/T 2989—2023)
 
@@ -63,14 +63,14 @@
 |---|---|---|---|
 | GET | `/health` | 免密 | 存活探针（Liveness Probe，进程存活即返回 200） |
 | GET | `/readyz` | 免密 | 就绪探针（Readiness Probe，检查 Agent+Datasource 依赖，失败返回 503） |
-| GET | `/api/health` | 免密 | 存活探针兼容别名，返回自身状态与模块标识 |
-| GET | `/api/hub/status` | 可选 API Key | 调度中枢运行状态（Uptime、排队数、活跃任务数、成功/失败总量） |
-| GET | `/api/hub/tasks` | 可选 API Key | 分页查询任务列表（支持 `?status=` 过滤与 `limit`/`offset` 参数） |
-| GET | `/api/hub/tasks/:id` | 可选 API Key | 查询单个任务详情（包含流水线阶段、耗时与错误信息） |
-| POST | `/api/hub/dispatch` | 可选 API Key | 手动提交指定算子的隐私调度任务（返回 202 Accepted） |
-| POST | `/api/hub/classify` | 可选 API Key | 分类分级分发（`/api/hub/dispatch` 的向后兼容别名） |
-| POST | `/api/hub/fetch-and-desensitize` | 可选 API Key | 按身份证号端到端查询+脱敏（同步，需 `hub:dispatch` scope） |
-| GET | `/api/hub/pipeline` | 可选 API Key | 获取 6 阶段流水线活跃状态与 Agent 连通性 |
+| GET | `/health` | 免密 | 存活探针兼容别名，返回自身状态与模块标识 |
+| GET | `/v1/hub/status` | 可选 API Key | 调度中枢运行状态（Uptime、排队数、活跃任务数、成功/失败总量） |
+| GET | `/v1/hub/tasks` | 可选 API Key | 分页查询任务列表（支持 `?status=` 过滤与 `limit`/`offset` 参数） |
+| GET | `/v1/hub/tasks/:id` | 可选 API Key | 查询单个任务详情（包含流水线阶段、耗时与错误信息） |
+| POST | `/v1/hub/dispatch` | 可选 API Key | 手动提交指定算子的隐私调度任务（返回 202 Accepted） |
+| POST | `/v1/hub/classify` | 可选 API Key | 分类分级分发（`/v1/hub/dispatch` 的向后兼容别名） |
+| POST | `/v1/hub/fetch-and-desensitize` | 可选 API Key | 按身份证号端到端查询+脱敏（同步，需 `hub:dispatch` scope） |
+| GET | `/v1/hub/pipeline` | 可选 API Key | 获取 6 阶段流水线活跃状态与 Agent 连通性 |
 | GET | `/metrics` | 免密 | Prometheus 格式指标导出端点 |
 
 ### 3.2 gRPC 服务接口清单 (`servicehub.ServiceHubService`)

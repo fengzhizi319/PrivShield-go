@@ -12,8 +12,8 @@
 //     将 protobuf 响应转换为前端可消费的 JSON 数据结构
 //
 // Design principles / 设计原则：
-//  1. Frontend uses a unified JSON contract (POST /api/proxy) to send requests
-//     前端使用统一的 JSON 契约（POST /api/proxy）发送请求
+//  1. Frontend uses a unified JSON contract (POST /v1/proxy) to send requests
+//     前端使用统一的 JSON 契约（POST /v1/proxy）发送请求
 //  2. This package identifies the gRPC RPC to call based on the path field
 //     本包根据 path 字段识别应调用的 gRPC RPC
 //  3. Convert JSON body to the corresponding protobuf request message

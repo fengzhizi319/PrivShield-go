@@ -29,7 +29,7 @@
 
 ### 1.3 BFF 在 PrivShield 中的定位与职责
 在 `PrivShield` 体系中，**`console/bff-go`** 承担了控制台官方主力专属网关的核心角色：
-- **向上（面向 Web 前端与外部系统）**：为 React SPA 前端（`console/web`）提供统一的 RESTful JSON / HTTPS 代理接口（如 `/api/proxy`、`/api/batch`、`/api/upload` 等），支持 TLS 1.3 及 mTLS 客户端证书校验，并负责前端静态构建产物的独立托管与 SPA 路由回退；同时提供 BFF 原生 gRPC Server 服务，对外暴露与 Agent 同构的 gRPC 契约；
+- **向上（面向 Web 前端与外部系统）**：为 React SPA 前端（`console/web`）提供统一的 RESTful JSON / HTTPS 代理接口（如 `/v1/proxy`、`/v1/batch`、`/v1/upload` 等），支持 TLS 1.3 及 mTLS 客户端证书校验，并负责前端静态构建产物的独立托管与 SPA 路由回退；同时提供 BFF 原生 gRPC Server 服务，对外暴露与 Agent 同构的 gRPC 契约；
 - **向下（面向核心服务群）**：通过 HTTP/2 gRPC 长连接与底层 `PrivShield Agent`（`:50051`）高效通信（支持 mTLS），并联动中台微服务群（`service-hub`、`datasource-mgr`、`audit-log`）；
 - **对内（业务逻辑与仿真）**：实现 REST 路径到 gRPC 方法的智能映射与分发（`internal/mapper`）、CSV/JSON 文件批量脱敏流式解析、医疗/医保多阶段流水线调度仿真，以及网关负载均衡与并发压力测试。
 
@@ -78,7 +78,7 @@ graph TD
         RESTFallback[REST 服务 :8079<br/>回退调用]
     end
 
-    UI -->|HTTP REST /api/*| Router
+    UI -->|HTTP REST /v1/*| Router
     UI -->|静态资源请求| StaticHost
     Router --> SecMid
     SecMid --> SharedMid
@@ -97,7 +97,7 @@ graph TD
 
 ### 4.1 REST 到 gRPC 的智能映射 (`internal/mapper`)
 
-前端所有针对隐私原语的操作通过 `POST /api/proxy` 发送统一请求：
+前端所有针对隐私原语的操作通过 `POST /v1/proxy` 发送统一请求：
 
 ```json
 {
@@ -140,7 +140,7 @@ graph TD
 
 通过 `PRIVACY_CONSOLE_STATIC_DIR` 环境变量配置前端 `web/dist` 路径：
 1. **带哈希静态资源**：`/assets/*` 映射到 `dist/assets`，由 Gin 提供强缓存；
-2. **SPA 前端路由回退**：对非 `/api/*` 路由统一回退输出 `index.html`，并设置 `Cache-Control: no-cache`，确保版本更新无缝感知；
+2. **SPA 前端路由回退**：对非 `/v1/*` 路由统一回退输出 `index.html`，并设置 `Cache-Control: no-cache`，确保版本更新无缝感知；
 3. **目录不存在优雅降级**：若未构建前端静态文件，服务打印告警并无缝降级为纯 API 模式启动。
 
 ---
@@ -150,14 +150,14 @@ graph TD
 | 方法 | 路径 | 描述 | 响应包装 |
 |---|---|---|---|
 | `GET` | `/health` | 服务健康检查 | `{backend: "ok", agent: {...}, via: "go-grpc"}` |
-| `GET` | `/api/health` | 内部健康检查端点 | 同上 |
-| `GET` | `/api/samples` | 获取全部端点的请求样例与元数据 | `{samples: [...]}` |
-| `POST` | `/api/proxy` | 单请求代理转发（REST ──▶ gRPC） | `{status, duration_ms, data, via, protocol}` |
-| `POST` | `/api/batch` | 批量请求顺序代理转发 | `{results: [...]}` |
-| `POST` | `/api/upload` | CSV/JSON 文件上传与批量脱敏/分类 | `{records, masked_records, summary, ...}` |
-| `POST` | `/api/lb_test` | 网关负载均衡策略仿真压测 | `{results, summary, latency_p95, ...}` |
-| `POST` | `/api/concurrency_test` | 模拟多并发请求测试 | `{total, successful, failed, avg_latency}` |
-| `POST` | `/api/medical_pipeline` | 医疗病历多阶段脱敏流水线测试 | `{stages, result}` |
-| `POST` | `/api/yibao_pipeline` | 医保结算流水线脱敏测试 | `{stages, result}` |
-| `POST` | `/api/pipeline/process` | 自定义流水线处理端点 | `{processed_records}` |
+| `GET` | `/health` | 内部健康检查端点 | 同上 |
+| `GET` | `/v1/samples` | 获取全部端点的请求样例与元数据 | `{samples: [...]}` |
+| `POST` | `/v1/proxy` | 单请求代理转发（REST ──▶ gRPC） | `{status, duration_ms, data, via, protocol}` |
+| `POST` | `/v1/batch` | 批量请求顺序代理转发 | `{results: [...]}` |
+| `POST` | `/v1/upload` | CSV/JSON 文件上传与批量脱敏/分类 | `{records, masked_records, summary, ...}` |
+| `POST` | `/v1/lb_test` | 网关负载均衡策略仿真压测 | `{results, summary, latency_p95, ...}` |
+| `POST` | `/v1/concurrency_test` | 模拟多并发请求测试 | `{total, successful, failed, avg_latency}` |
+| `POST` | `/v1/medical_pipeline` | 医疗病历多阶段脱敏流水线测试 | `{stages, result}` |
+| `POST` | `/v1/yibao_pipeline` | 医保结算流水线脱敏测试 | `{stages, result}` |
+| `POST` | `/v1/pipeline/process` | 自定义流水线处理端点 | `{processed_records}` |
 | `GET` | `/metrics` | Prometheus 指标采集 | 标准 Prometheus 文本格式 |

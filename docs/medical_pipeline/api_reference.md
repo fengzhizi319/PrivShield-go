@@ -187,4 +187,4 @@ func AnonymizeDICOMData(data []byte) ([]byte, error)
 
 ## 4. 控制台 BFF 代理 API (`console/bff-go`)
 
-- **`POST /api/medical_pipeline`**: 医疗流水线代理端点。当客户端未传入 `records` 时，BFF 自动加载内置标准样本 `console/bff-go/internal/samples/kangyang.csv` 并转发至 Go Agent。
+- **`POST /v1/medical_pipeline`**: 医疗流水线代理端点。当客户端未传入 `records` 时，BFF 自动加载内置标准样本 `console/bff-go/internal/samples/kangyang.csv` 并转发至 Go Agent。

@@ -46,9 +46,9 @@ go test ./internal/handlers -v
 
 覆盖的 HTTP 端点：
 
-- `GET /api/health`：断言返回 `backend: ok` 与伪造的 agent 状态。
-- `GET /api/samples`：断言返回非空 samples 列表。
-- `POST /api/proxy`：以 `/v1/privacy/mask` 为例，断言代理返回伪造的脱敏结果。
+- `GET /health`：断言返回 `backend: ok` 与伪造的 agent 状态。
+- `GET /v1/samples`：断言返回非空 samples 列表。
+- `POST /v1/proxy`：以 `/v1/privacy/mask` 为例，断言代理返回伪造的脱敏结果。
 
 这些测试同样使用 `bufconn` 启动伪造的 gRPC 服务器，并通过 `httptest` 模拟 HTTP 调用。
 
@@ -89,9 +89,9 @@ go test ./tests -v
 
 1. 连接真实 agent 并调用 `Health` RPC；
 2. 启动 Go HTTP 服务器（随机端口）；
-3. 通过 `http.Get` 访问 `/api/health`；
-4. 通过 `http.Post` 访问 `/api/proxy`，转发 `/v1/privacy/mask`；
-5. 通过 `http.Get` 访问 `/api/samples`。
+3. 通过 `http.Get` 访问 `/health`；
+4. 通过 `http.Post` 访问 `/v1/proxy`，转发 `/v1/privacy/mask`；
+5. 通过 `http.Get` 访问 `/v1/samples`。
 
 ## 4. 测试关键依赖
 

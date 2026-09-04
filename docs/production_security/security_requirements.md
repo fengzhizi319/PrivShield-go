@@ -136,13 +136,13 @@
 | **SEC-06** | Gin Recovery 中间件向客户端回显 Panic 堆栈敏感信息 | 中危 | `pkg/middleware/middleware.go` | Panic 堆栈收敛至服务端内部结构化日志，HTTP 响应统一返回安全脱敏 JSON |
 | **SEC-07** | SQLite 分页参数未限制上下限导致超大查询与负数偏移越界 | 中危 | `pkg/store/sqlite/` (`audit.go`, `datasources.go`, `tasks.go`) | 引入 `validation.ParsePagination`，强制 `Limit` 夹紧在 1~10000，`Offset >= 0` |
 | **SEC-08** | 全平台存在 Slowloris 慢速挂起与大包 Payload DoS 风险 | 高危 | Go 微服务 `cmd/server/main.go`、`pkg/middleware`、Python 网关 | 配置 `ReadHeaderTimeout: 5s`，引入 `MaxBodySize` (32MB/64MB 413 拦截)、`RateLimit` (IP 令牌桶 429) 与 `MaxConcurrent` (503 熔断) |
-| **SEC-09** | `/api/v1/*` 别名路由完全绕过 Scope 权限校验（`PermissionForRESTPath` 仅匹配 `/v1/` 前缀） | 高危 | `pkg/auth/identity.go` | 归一化 `/api/v1/*` → `/v1/*` 后统一匹配，所有 40+ 别名路由纳入 Scope 鉴权 |
+| **SEC-09** | `/v1/*` 别名路由完全绕过 Scope 权限校验（`PermissionForRESTPath` 仅匹配 `/v1/` 前缀） | 高危 | `pkg/auth/identity.go` | 归一化 `/v1/*` → `/v1/*` 后统一匹配，所有 40+ 别名路由纳入 Scope 鉴权 |
 | **SEC-10** | 根路径直调别名（`/agent/process`、`/medical/process`、`/ops/diagnostics`、`/privacy/process_file`）未映射权限 | 高危 | `pkg/auth/identity.go` | 新增根路径→权限映射，任何已认证用户不再能越权调用 |
 | **SEC-11** | `/v1/dynclassification/classify` 与 `/eval_record` 未映射权限（fall-through 返回空串） | 高危 | `pkg/auth/identity.go` | dynclassification 前缀匹配后默认返回 `dynclassification:read`，write 操作单独匹配 |
-| **SEC-12** | `POST /v1/privacy/budget/reset` 未映射权限（破坏性操作对所有已认证用户开放） | 高危 | `pkg/auth/identity.go` | 新增 `/v1/privacy/budget/reset` 与 `/api/v1/budget/reset` → `privacy:budget` 映射 |
+| **SEC-12** | `POST /v1/privacy/budget/reset` 未映射权限（破坏性操作对所有已认证用户开放） | 高危 | `pkg/auth/identity.go` | 新增 `/v1/privacy/budget/reset` 与 `/v1/budget/reset` → `privacy:budget` 映射 |
 | **SEC-13** | service-hub（对外网提供服务）仅有单 Key 鉴权，无 Scope 细粒度权限校验 | 中危 | `services/service-hub/` | 引入 `SERVICE_HUB_API_KEYS` Scope-based 鉴权，`hub:read` / `hub:dispatch` 细粒度权限分离 |
-| **SEC-14** | `/api/v1/dynclassification/*` 与 `/api/v1/privacy/profile/recommend` 别名路由未注册，权限映射与真实路由不一致 | 中危 | `engine-go/internal/rest/routes.go` | 在 `/api/v1` 别名组补全缺失路由，确保别名入口与主路由权限一致 |
-| **SEC-15** | `ServiceHubPermissionForPath()` 未归一化尾部斜杠，低权限 Key 可通过 `/api/hub/dispatch/` 绕过 Scope 校验 | 中危 | `pkg/auth/identity.go` | 入口统一去除尾部斜杠，保证带 `/` 路径与标准路径映射到同一 Scope |
+| **SEC-14** | `/v1/dynclassification/*` 与 `/v1/privacy/profile/recommend` 别名路由未注册，权限映射与真实路由不一致 | 中危 | `engine-go/internal/rest/routes.go` | 在 `/api/v1` 历史别名组补全缺失路由，确保别名入口与主路由权限一致 |
+| **SEC-15** | `ServiceHubPermissionForPath()` 未归一化尾部斜杠，低权限 Key 可通过 `/v1/hub/dispatch/` 绕过 Scope 校验 | 中危 | `pkg/auth/identity.go` | 入口统一去除尾部斜杠，保证带 `/` 路径与标准路径映射到同一 Scope |
 | **SEC-16** | `ParseAPIKeysEnv()` 未 trim 空格且允许空 token/name 注册，导致 Key 无法命中或空 token 意外放行 | 低危 | `pkg/auth/identity.go` | 对 token/name/scope 统一 TrimSpace，丢弃空 token 或空 name 条目 |
 
 ---

@@ -17,19 +17,19 @@
 
 ## 二、发现漏洞与修复详情
 
-### SEC-09：`/api/v1/*` 别名路由完全绕过 Scope 权限校验（高危）
+### SEC-09：`/v1/*` 别名路由完全绕过 Scope 权限校验（高危）
 
-**漏洞描述**：`PermissionForRESTPath()` 仅识别 `/v1/*` 前缀路径。当请求通过 `/api/v1/*` 别名路由访问时，函数返回空字符串 `""`，中间件将其视为"无需特定权限"，导致所有 40+ 别名路由的 Scope 鉴权完全失效。
+**漏洞描述**：`PermissionForRESTPath()` 仅识别 `/v1/*` 前缀路径。当请求通过 `/v1/*` 别名路由访问时，函数返回空字符串 `""`，中间件将其视为"无需特定权限"，导致所有 40+ 别名路由的 Scope 鉴权完全失效。
 
-**影响范围**：持有 `["health:read"]` 等最低权限 Scope 的外部调用方可通过 `/api/v1/` 前缀调用任意隐私原语接口（脱敏、差分隐私、K-匿名、预算重置等）。
+**影响范围**：持有 `["health:read"]` 等最低权限 Scope 的外部调用方可通过 `/v1/` 前缀调用任意隐私原语接口（脱敏、差分隐私、K-匿名、预算重置等）。
 
 **攻击路径示例**：
 ```text
-GET /api/v1/budget/reset  →  PermissionForRESTPath 返回 ""  →  任何已认证用户可重置隐私预算
-POST /api/v1/dp/count     →  PermissionForRESTPath 返回 ""  →  任何已认证用户可消耗差分隐私预算
+GET /v1/budget/reset  →  PermissionForRESTPath 返回 ""  →  任何已认证用户可重置隐私预算
+POST /v1/dp/count     →  PermissionForRESTPath 返回 ""  →  任何已认证用户可消耗差分隐私预算
 ```
 
-**修复方案**：在 `PermissionForRESTPath()` 入口处增加路径归一化逻辑，将 `/api/v1/*` 自动剥离 `/api` 前缀后与 `/v1/*` 统一匹配。同时补充 `/api/v1/*` 别名路由特有的子路径映射（`/v1/mask*`、`/v1/dp/*`、`/v1/kano/*`、`/v1/qol/*`、`/v1/ldp/*` 等不经过 `/privacy/` 段的路径）。
+**修复方案**：在 `PermissionForRESTPath()` 入口处增加路径归一化逻辑，将 `/v1/*` 自动剥离 `/api` 前缀后与 `/v1/*` 统一匹配。同时补充 `/v1/*` 别名路由特有的子路径映射（`/v1/mask*`、`/v1/dp/*`、`/v1/kano/*`、`/v1/qol/*`、`/v1/ldp/*` 等不经过 `/privacy/` 段的路径）。
 
 **修复文件**：`pkg/auth/identity.go`
 
@@ -65,7 +65,7 @@ POST /api/v1/dp/count     →  PermissionForRESTPath 返回 ""  →  任何已�
 
 **影响范围**：任何已认证用户可重置全部隐私预算计数器，导致差分隐私 $\varepsilon$ 消耗追踪失效，隐私保证被破坏。
 
-**修复方案**：新增 `/v1/privacy/budget/reset` 与 `/api/v1/budget/reset` → `privacy:budget` 映射。
+**修复方案**：新增 `/v1/privacy/budget/reset` 与 `/v1/budget/reset` → `privacy:budget` 映射。
 
 **修复文件**：`pkg/auth/identity.go`
 
@@ -90,18 +90,18 @@ POST /api/v1/dp/count     →  PermissionForRESTPath 返回 ""  →  任何已�
 
 ---
 
-### SEC-14：`/api/v1/dynclassification/*` 与 `/api/v1/privacy/profile/recommend` 别名路由覆盖不全（中危）
+### SEC-14：`/v1/dynclassification/*` 与 `/v1/privacy/profile/recommend` 别名路由覆盖不全（中危）
 
-**漏洞描述**：SEC-09 修复后 `PermissionForRESTPath()` 已能正确归一化 `/api/v1/*` 路径，但 `engine-go/internal/rest/routes.go` 实际只注册了 `/api/v1/dynclassification/eval_record`，未注册 `/api/v1/dynclassification/classify`、`/api/v1/dynclassification/classify/batch`、`/api/v1/dynclassification/profiles/reload` 以及 `/api/v1/privacy/profile/recommend`。这导致权限映射表与真实路由不一致，外部调用方仍可能通过直接访问 `/v1/dynclassification/*` 主路由绕过别名路由的审计与统一入口策略，且在多微服务兼容场景下出现 404 功能缺口。
+**漏洞描述**：SEC-09 修复后 `PermissionForRESTPath()` 已能正确归一化 `/v1/*` 路径，但 `engine-go/internal/rest/routes.go` 实际只注册了 `/v1/dynclassification/eval_record`，未注册 `/v1/dynclassification/classify`、`/v1/dynclassification/classify/batch`、`/v1/dynclassification/profiles/reload` 以及 `/v1/privacy/profile/recommend`。这导致权限映射表与真实路由不一致，外部调用方仍可能通过直接访问 `/v1/dynclassification/*` 主路由绕过别名路由的审计与统一入口策略，且在多微服务兼容场景下出现 404 功能缺口。
 
-**影响范围**：依赖 `/api/v1/*` 前缀的 BFF/网关/外部政务云调用方无法使用动态分类与 Profile 推荐别名，部分场景被迫回退到 `/v1/*` 主路由，削弱统一权限入口与审计覆盖。
+**影响范围**：依赖 `/v1/*` 前缀的 BFF/网关/外部政务云调用方无法使用动态分类与 Profile 推荐别名，部分场景被迫回退到 `/v1/*` 主路由，削弱统一权限入口与审计覆盖。
 
-**修复方案**：在 `engine-go/internal/rest/routes.go` 的 `/api/v1` 别名组中补全缺失路由：
-- `POST /api/v1/dynclassification/classify`
-- `POST /api/v1/dynclassification/classify/batch`
-- `POST /api/v1/dynclassification/eval_record`
-- `POST /api/v1/dynclassification/profiles/reload`
-- `GET  /api/v1/privacy/profile/recommend`
+**修复方案**：在 `engine-go/internal/rest/routes.go` 的 `/api/v1` 历史别名组中补全缺失路由：
+- `POST /v1/dynclassification/classify`
+- `POST /v1/dynclassification/classify/batch`
+- `POST /v1/dynclassification/eval_record`
+- `POST /v1/dynclassification/profiles/reload`
+- `GET  /v1/privacy/profile/recommend`
 
 **修复文件**：`engine-go/internal/rest/routes.go`
 
@@ -109,11 +109,11 @@ POST /api/v1/dp/count     →  PermissionForRESTPath 返回 ""  →  任何已�
 
 ### SEC-15：`ServiceHubPermissionForPath()` 路径尾部斜杠绕过 Scope 校验（中危）
 
-**漏洞描述**：`ServiceHubPermissionForPath()` 对路径进行精确匹配（如 `/api/hub/dispatch`），但未归一化尾部斜杠。当请求路径为 `/api/hub/dispatch/` 或 `/api/hub/classify/` 时，函数返回空字符串，`scopeAuthMiddleware()` 将其视为无需 Scope，任何已认证的低权限调用方均可触发任务分发。
+**漏洞描述**：`ServiceHubPermissionForPath()` 对路径进行精确匹配（如 `/v1/hub/dispatch`），但未归一化尾部斜杠。当请求路径为 `/v1/hub/dispatch/` 或 `/v1/hub/classify/` 时，函数返回空字符串，`scopeAuthMiddleware()` 将其视为无需 Scope，任何已认证的低权限调用方均可触发任务分发。
 
 **影响范围**：持有 `hub:read` 的只读调用方可以通过在路径末尾添加 `/` 的方式调用写操作接口，破坏最小权限原则。
 
-**修复方案**：在 `ServiceHubPermissionForPath()` 入口统一去除尾部斜杠，确保 `/api/hub/dispatch/` 与 `/api/hub/dispatch` 映射到同一权限 `hub:dispatch`。
+**修复方案**：在 `ServiceHubPermissionForPath()` 入口统一去除尾部斜杠，确保 `/v1/hub/dispatch/` 与 `/v1/hub/dispatch` 映射到同一权限 `hub:dispatch`。
 
 **修复文件**：`pkg/auth/identity.go`
 
@@ -182,12 +182,12 @@ if requiredPerm != "" && !identity.HasPermission(requiredPerm) {
 | 测试类别 | 用例数 | 覆盖内容 |
 |---|---|---|
 | `/v1/*` 主路由 | 18 | 所有隐私原语、分类分级、动态分类、运维诊断路径 |
-| `/api/v1/*` 别名路由 | 14 | 归一化后与主路由等价的权限映射 |
+| `/v1/*` 别名路由 | 14 | 归一化后与主路由等价的权限映射 |
 | 根路径直调别名 | 4 | `/agent/process`、`/medical/process`、`/ops/diagnostics`、`/privacy/process_file` |
-| 未知路径 | 2 | `/unknown`、`/api/v2/something` → 返回空串 |
+| 未知路径 | 2 | `/unknown`、`/v1/v2/something` → 返回空串 |
 | `ServiceHubPermissionForPath` | 14 | service-hub 全路由权限映射（含尾部斜杠归一化） |
 | `ParseAPIKeysEnv` | 6 | 空值、单 Key、多 Key、默认通配符、空格裁剪、空 token/name 丢弃 |
-| 别名路由覆盖 | 4 | `/api/v1/dynclassification/*` 与 `/api/v1/privacy/profile/recommend` |
+| 别名路由覆盖 | 4 | `/v1/dynclassification/*` 与 `/v1/privacy/profile/recommend` |
 | service-hub Scope 中间件 | 8 | 读/写 Scope 允许与拒绝、无效/缺失 token 拒绝、Health 豁免 |
 
 ### 3.2 全量回归测试
@@ -206,13 +206,13 @@ ok  	github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/handler
 
 | 攻击场景 | 修复前 | 修复后 |
 |---|---|---|
-| 外部租户通过 `/api/v1/budget/reset` 重置隐私预算 | **成功**（权限绕过） | **阻断**（403 Forbidden） |
-| 低权限用户通过 `/api/v1/dp/count` 消耗 DP 预算 | **成功**（权限绕过） | **阻断**（403 Forbidden） |
+| 外部租户通过 `/v1/budget/reset` 重置隐私预算 | **成功**（权限绕过） | **阻断**（403 Forbidden） |
+| 低权限用户通过 `/v1/dp/count` 消耗 DP 预算 | **成功**（权限绕过） | **阻断**（403 Forbidden） |
 | 仅持有 `health:read` 的 Key 调用 `/ops/diagnostics` | **成功**（根路径无映射） | **阻断**（403 Forbidden） |
 | 低权限 Key 调用 `/v1/dynclassification/classify` | **成功**（fall-through 空串） | **阻断**（需要 `dynclassification:read`） |
-| service-hub 读 Key 调用 `/api/hub/dispatch` | **成功**（无 Scope 区分） | **阻断**（需要 `hub:dispatch`） |
-| 外部调用 `/api/v1/dynclassification/classify` 或 `/api/v1/privacy/profile/recommend` | **404**（别名路由缺失） | **200**（别名路由已注册） |
-| 低权限 Key 调用 `/api/hub/dispatch/` | **成功**（尾部斜杠绕过 Scope） | **阻断**（归一化后需要 `hub:dispatch`） |
+| service-hub 读 Key 调用 `/v1/hub/dispatch` | **成功**（无 Scope 区分） | **阻断**（需要 `hub:dispatch`） |
+| 外部调用 `/v1/dynclassification/classify` 或 `/v1/privacy/profile/recommend` | **404**（别名路由缺失） | **200**（别名路由已注册） |
+| 低权限 Key 调用 `/v1/hub/dispatch/` | **成功**（尾部斜杠绕过 Scope） | **阻断**（归一化后需要 `hub:dispatch`） |
 | 环境变量空格导致 Key 无法命中 | **成功/异常**（空格污染） | **正常**（自动 TrimSpace） |
 | 外部未授权探测 `/gateway/backends` 获取内网拓扑 | **成功**（直接泄露内部实例） | **阻断**（401 Unauthorized，常量时间校验） |
 | 低权限/空 Scope Token 访问未显式映射的新增端点 | **成功**（空串直接绕过检查） | **阻断**（403 Forbidden，Fail-Closed 兜底拦截） |
@@ -237,7 +237,7 @@ ok  	github.com/fengzhizi319/PrivShield-go/services/service-hub/internal/handler
 | `pkg/auth/identity.go` | 修复 + 新增 | 路径归一化、根路径映射、dynclassification 默认 read、budget/reset 映射、`ParseAPIKeysEnv` 空格裁剪与空 Key 丢弃、`ServiceHubPermissionForPath` 尾部斜杠归一化与 Fail-Closed admin 兜底 |
 | `pkg/auth/identity_test.go` | 新增 | 50+ 测试用例覆盖全部修复路径（含 SEC-15/SEC-16/SEC-18） |
 | `engine-go/cmd/privshield-gateway/main.go` | 修复 | `/gateway/backends` 与 `/metrics` 引入 Bearer Token 认证、常量时间校验与统一错误信封 (SEC-17) |
-| `engine-go/internal/rest/routes.go` | 修复 | 补全 `/api/v1/dynclassification/*` 与 `/api/v1/privacy/profile/recommend` 别名路由 (SEC-14) |
+| `engine-go/internal/rest/routes.go` | 修复 | 补全 `/v1/dynclassification/*` 与 `/v1/privacy/profile/recommend` 别名路由 (SEC-14) |
 | `engine-go/internal/rest/routes_test.go` | 新增 | 别名路由覆盖测试 |
 | `engine-go/internal/security/config.go` | 重构 | 删除重复的 `parseAPIKeys`，改用共享的 `pkgauth.LoadAPIKeysFromEnv` |
 | `services/service-hub/internal/config/config.go` | 新增 | `ScopeKeys` 字段、`SERVICE_HUB_API_KEYS` 加载 |

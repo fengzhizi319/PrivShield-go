@@ -60,9 +60,9 @@ func TestNewCollector_IndependentRegistries(t *testing.T) {
 func TestRecordHTTP(t *testing.T) {
 	c := NewCollector("test")
 	// Should not panic
-	c.RecordHTTP("GET", "/api/health", 200, 0.05)
-	c.RecordHTTP("POST", "/api/dispatch", 201, 0.12)
-	c.RecordHTTP("GET", "/api/health", 500, 0.01)
+	c.RecordHTTP("GET", "/health", 200, 0.05)
+	c.RecordHTTP("POST", "/v1/dispatch", 201, 0.12)
+	c.RecordHTTP("GET", "/health", 500, 0.01)
 }
 
 // TestRecordAgentCall 验证上游 Agent 调用指标打点方法正常执行无异常。

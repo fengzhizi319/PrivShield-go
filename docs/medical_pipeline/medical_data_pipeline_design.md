@@ -30,7 +30,7 @@
 | 医疗 CSV 生成与合法校验码 | `scripts/data/generate_medical_data.py` | 扩展现有脚本，不新建第二套同名数据模板 |
 | 医疗病例图片 | `scripts/data/gen_medical_images.py` | 复用 `CaseTemplate`、`TEMPLATES` 和 `render_case()` |
 | 三层分类漏斗 | `engine/dynclassification/service.py` | 以 `classify_record()` / `classify_table()` 为主要入口 |
-| 分类 REST API | `engine/routers/dynclassification.py` | Console 的动态分类请求经 `/api/proxy` 透传 |
+| 分类 REST API | `engine/routers/dynclassification.py` | Console 的动态分类请求经 `/v1/proxy` 透传 |
 | 分类 gRPC API | `engine/grpc_server.py`、`proto/privacy.proto` | Go 对已有可映射 RPC 使用 gRPC；无映射的动态分类路径明确走 REST fallback 或补充正式 RPC |
 | 字段/记录脱敏 | `engine/privacy/masking.py` | 复用 `mask_value()`、`mask_record()` 或批量接口，不复制字段规则 |
 | Go Console | `console/bff-go/internal/handlers`、`internal/mapper` | 新增专用流水线请求时保持既有 `ProxyResponse` 包装；动态分类当前必须处理 REST fallback 差异 |
@@ -52,7 +52,7 @@ graph LR
     P --> M[privacy.masking\nmask field/record]
     C --> R1[classification_result.json/csv\n等级与审计元数据]
     M --> R2[masked_data.csv\n仅保留 L1-L3]
-    UI[React Console] --> GO[Go Console /api/proxy]
+    UI[React Console] --> GO[Go Console /v1/proxy]
     GO --> A2[Agent gRPC 或 REST fallback]
     A2 --> C
     A2 --> M
@@ -258,27 +258,27 @@ POST /v1/medical-pipeline/process
 }
 ```
 
-默认不返回原始值；若实现阶段认为通用 `/api/proxy` 足够，则不新增此端点，只由包级流水线提供 CLI。
+默认不返回原始值；若实现阶段认为通用 `/v1/proxy` 足够，则不新增此端点，只由包级流水线提供 CLI。
 
 ### 7.2 Go BFF Console
 
 Go BFF（`console/bff-go`）作为统一代理：
 
-- `/api/proxy` 透传 pipeline、动态分类和 masking 请求（优先 gRPC，必要时 REST fallback）。
-- `/api/upload` 支持上传 `kangyang.csv`，文件由 Agent 解析；后端不执行算法。
-- `/api/samples` 增加一个医疗流水线示例，请求体使用与 Agent 一致的字段命名。
+- `/v1/proxy` 透传 pipeline、动态分类和 masking 请求（优先 gRPC，必要时 REST fallback）。
+- `/v1/upload` 支持上传 `kangyang.csv`，文件由 Agent 解析；后端不执行算法。
+- `/v1/samples` 增加一个医疗流水线示例，请求体使用与 Agent 一致的字段命名。
 - 响应继续包装为 `status`、`duration_ms`、`data`、`via="go-grpc"` 或 `via="go-rest-proxy"`、`protocol="gRPC"` 或 `protocol="REST"`。
 
 > **历史说明**：早期由 Python Console（`console/backend`）作为薄 REST 代理返回 `via="python-rest"`，该实现已移除。
 
 ### 7.3 Go BFF 与 Agent 契约对齐
 
-Go BFF 必须与 Agent 暴露完全相同的 `/api/*` JSON 契约：
+Go BFF 必须与 Agent 暴露完全相同的 `/v1/*` JSON 契约：
 
 - 若 Agent proto 已有可用的 `DynClassify`/mask RPC，在 `internal/mapper` 增加医疗流水线所需路径映射、请求转换和响应转换。
 - 动态分类当前不在固定 mapper 表中，必须显式测试其 REST fallback；不能仅因 Go 服务名为 gRPC 就假定该请求走 gRPC。
 - 若新增统一 pipeline RPC，则同步更新 `proto/privacy.proto`、生成 Go/Python stubs，并补充 mapper 与 handler 测试。
-- Go 上传 operation 必须补齐与 Python `/api/upload` 对等的 CSV pipeline 操作；在未实现前，前端应将该能力标记为不可用，而不是返回成功的空结果。
+- Go 上传 operation 必须补齐与 Python `/v1/upload` 对等的 CSV pipeline 操作；在未实现前，前端应将该能力标记为不可用，而不是返回成功的空结果。
 - 响应继续使用 `via="go-grpc"`、`protocol="gRPC"`；若动态分类走 REST fallback，应在内部日志或扩展字段中可观测地标明，不能伪装成 gRPC 调用。
 
 ## 8. Web 前端设计
@@ -397,7 +397,7 @@ make docs-build
 
 1. 是否采用 `case_image_path` 扩展列，还是使用 `kangyang.images.json` sidecar。
 2. 默认动态分类标准的 ID，以及该标准中 L4/L5 的确切语义和 rank 映射。
-3. 是否新增 `/v1/medical-pipeline/process`；若不新增，如何通过现有 `/api/upload` 和 `/api/proxy` 组合保证原子性。
+3. 是否新增 `/v1/medical-pipeline/process`；若不新增，如何通过现有 `/v1/upload` 和 `/v1/proxy` 组合保证原子性。
 4. Go 动态分类继续 REST fallback，还是新增/完善正式 gRPC 映射。
 5. 脱敏结果对含有 L4/L5 的整条记录采取“保留行并清空高敏字段”，还是“整行删除”；本方案默认保留稳定行并清空高敏字段，以便与分类结果逐行对照。
 6. `kangyang.csv` 是否作为仓库 fixture 提交；默认建议只提交生成脚本和最小测试 fixture，避免在仓库中长期保存大量医疗语义样本。

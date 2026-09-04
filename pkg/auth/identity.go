@@ -246,27 +246,27 @@ func tokenPrefix(token string) string {
 }
 
 // ServiceHubPermissionForPath 将 service-hub 路由映射为所需权限字符串。
-// 对路径进行尾部斜杠归一化，防止 "/api/hub/dispatch/" 等带斜杠路径绕过 Scope 校验。
+// 对路径进行尾部斜杠归一化，防止 "/v1/hub/dispatch/" 等带斜杠路径绕过 Scope 校验。
 func ServiceHubPermissionForPath(path string) string {
 	// 归一化尾部斜杠：Gin 在部分场景下会保留尾部斜杠，统一去除后匹配。
 	if len(path) > 1 && path[len(path)-1] == '/' {
 		path = path[:len(path)-1]
 	}
 	switch {
-	case path == "/health" || path == "/readyz" || path == "/api/health":
+	case path == "/health" || path == "/readyz":
 		return ""
 	case path == "/metrics":
 		return ""
-	case path == "/api/hub/status" || path == "/api/hub/tasks" ||
-		strings.HasPrefix(path, "/api/hub/tasks/") ||
-		path == "/api/hub/pipeline" ||
-		path == "/api/hub/topology" ||
-		path == "/api/hub/audit/logs" ||
-		path == "/api/hub/datasources":
+	case path == "/v1/hub/status" || path == "/v1/hub/tasks" ||
+		strings.HasPrefix(path, "/v1/hub/tasks/") ||
+		path == "/v1/hub/pipeline" ||
+		path == "/v1/hub/topology" ||
+		path == "/v1/hub/audit/logs" ||
+		path == "/v1/hub/datasources":
 		return "hub:read"
-	case path == "/api/hub/dispatch" || path == "/api/hub/classify" ||
-		path == "/api/hub/fetch-and-desensitize" ||
-		path == "/api/hub/audit/verify":
+	case path == "/v1/hub/dispatch" ||
+		path == "/v1/hub/fetch-and-desensitize" ||
+		path == "/v1/hub/audit/verify":
 		return "hub:dispatch"
 	default:
 		// fail-closed：未显式映射的非豁免路径默认归入最高 admin 权限，防止空 scope 绕过

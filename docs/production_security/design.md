@@ -263,13 +263,13 @@ func (k *KeyConfig) IsExpired() bool {
 
 ```go
 func PermissionForRESTPath(path string) string {
-    // 1. 去除尾部斜杠（防 /api/hub/dispatch/ 绕过精确匹配）
+    // 1. 去除尾部斜杠（防 /v1/hub/dispatch/ 绕过精确匹配）
     // 2. switch-case 前缀匹配（/v1/* 规范前缀 + 根路径直调别名）→ 返回权限字符串
     // 3. 未映射路径返回 "admin"（fail-closed）
 }
 ```
 
-> **历史修复（SEC-09）**：早期版本曾同时注册 `/api/v1/*` 别名路由组，并在函数入口统一执行 `/api/v1/*` → `/v1/*` 前缀归一化，确保别名路由不绕过权限校验。当前版本已整体移除 `/api/v1/*` 别名路由组与归一化逻辑，`/v1/*` 为唯一规范前缀。
+> **历史修复（SEC-09）**：早期版本曾同时注册 `/v1/*` 别名路由组，并在函数入口统一执行 `/v1/*` → `/v1/*` 前缀归一化，确保别名路由不绕过权限校验。当前版本已整体移除 `/v1/*` 别名路由组与归一化逻辑，`/v1/*` 为唯一规范前缀。
 
 ##### Engine 权限映射表
 
@@ -321,26 +321,26 @@ func PermissionForGRPCMethod(method string) string {
 ##### service-hub (`ServiceHubPermissionForPath`)
 | REST 路径 | 对应权限 Scope |
 |---|---|
-| `/api/hub/status`, `/api/hub/tasks`, `/api/hub/tasks/:id`, `/api/hub/pipeline`, `/api/hub/topology`, `/api/hub/audit/logs`, `/api/hub/datasources` | `hub:read` |
-| `/api/hub/dispatch`, `/api/hub/classify`, `/api/hub/fetch-and-desensitize`, `/api/hub/audit/verify` | `hub:dispatch` |
-| `/health`, `/readyz`, `/api/health`, `/metrics` | 豁免放行（健康检查与指标） |
+| `/v1/hub/status`, `/v1/hub/tasks`, `/v1/hub/tasks/:id`, `/v1/hub/pipeline`, `/v1/hub/topology`, `/v1/hub/audit/logs`, `/v1/hub/datasources` | `hub:read` |
+| `/v1/hub/dispatch`, `/v1/hub/classify`, `/v1/hub/fetch-and-desensitize`, `/v1/hub/audit/verify` | `hub:dispatch` |
+| `/health`, `/readyz`, `/health`, `/metrics` | 豁免放行（健康检查与指标） |
 | **未显式声明的其它路径（default）** | **`admin` (Fail-Closed 兜底)** |
 
 ##### datasource-mgr (`DatasourceMgrPermissionForPath`)
 | REST 路径 | 对应权限 Scope |
 |---|---|
-| `/api/datasources`, `/api/datasources/:id`, `/record-by-id`, `/metadata`, `/audit` | `datasource:read` |
-| `/api/datasources/:id/test`, `/api/datasources/seed` | `datasource:admin` |
-| `/health`, `/readyz`, `/api/health`, `/metrics` | 豁免放行 |
+| `/v1/datasources`, `/v1/datasources/:id`, `/record-by-id`, `/metadata`, `/audit` | `datasource:read` |
+| `/v1/datasources/:id/test`, `/v1/datasources/seed` | `datasource:admin` |
+| `/health`, `/readyz`, `/health`, `/metrics` | 豁免放行 |
 | **未显式声明的其它路径（default）** | **`datasource:admin` (Fail-Closed 兜底)** |
 
 ##### audit-log (`AuditLogPermissionForPath`)
 | REST 路径与方法 | 对应权限 Scope |
 |---|---|
-| `GET /api/audit/logs`, `/stats`, `/snapshots` | `audit:read` |
-| `POST /api/audit/logs`, `/report` | `audit:write` |
-| `POST /api/audit/snapshots/verify`, `/api/audit/chain/verify` | `audit:verify` |
-| `/health`, `/readyz`, `/api/health`, `/metrics` | 豁免放行 |
+| `GET /v1/audit/logs`, `/stats`, `/snapshots` | `audit:read` |
+| `POST /v1/audit/logs`, `/report` | `audit:write` |
+| `POST /v1/audit/snapshots/verify`, `/v1/audit/chain/verify` | `audit:verify` |
+| `/health`, `/readyz`, `/health`, `/metrics` | 豁免放行 |
 | **未显式声明的其它路径（default）** | **`audit:admin` (Fail-Closed 兜底)** |
 
 > **Fail-Closed 安全设计**：若外部调用方持有低权限或空 Scope Token，一旦访问未在白名单中显式声明的路由，映射函数一律返回最高管理员权限，鉴权中间件立即返回 `403 Forbidden`，彻底杜绝新增端点时的越权穿透风险。
@@ -626,7 +626,7 @@ enc:v3:<KeyVersion>:<Base64(16B Salt + 12B Nonce + Ciphertext + 16B Tag)>
 ### 7.3 9 要素密码学哈希链 (`services/audit-log`)
 
 $$\text{IntegrityHash} = \text{HMAC-SM3}(\text{prev\_hash} \parallel \text{id} \parallel \text{task\_id} \parallel \text{api\_code} \parallel \text{datasource\_id} \parallel \text{timestamp} \parallel \text{input\_hash} \parallel \text{output\_hash} \parallel \text{algorithm})$$
-形成严格的区块链式链式锚定，辅以 SM2 非对称数字签名与存证，提供秒级在线链完整性核验（`POST /api/audit/chain/verify`）。
+形成严格的区块链式链式锚定，辅以 SM2 非对称数字签名与存证，提供秒级在线链完整性核验（`POST /v1/audit/chain/verify`）。
 
 ### 7.4 国密算法上电已知答案自检 (KAT) 与内存敏感数据安全销毁 (`pkg/crypto/`)
 

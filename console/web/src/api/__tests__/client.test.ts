@@ -37,7 +37,7 @@ describe('client request()', () => {
     await fetchHealth();
 
     expect(mockFetch).toHaveBeenCalledWith(
-      'http://localhost:8081/api/health',
+      'http://localhost:8081/health',
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
@@ -49,7 +49,7 @@ describe('client request()', () => {
     await fetchHealth();
 
     expect(mockFetch).toHaveBeenCalledWith(
-      'http://localhost:8081/api/health',
+      'http://localhost:8081/health',
       expect.anything(),
     );
   });
@@ -149,7 +149,7 @@ describe('client request()', () => {
     await proxyRequest({ path: '/v1/privacy/mask', method: 'POST', body: { value: 'x' } });
 
     const [url, init] = mockFetch.mock.calls[0];
-    expect(url).toBe('/api/proxy');
+    expect(url).toBe('/v1/proxy');
     expect(init.method).toBe('POST');
     expect(init.headers['Content-Type']).toBe('application/json');
     expect(JSON.parse(init.body)).toEqual({ path: '/v1/privacy/mask', method: 'POST', body: { value: 'x' } });

@@ -30,22 +30,22 @@
 | 端点 | 方法 | user | admin | 说明 |
 |------|------|:----:|:-----:|------|
 | `/health`, `/readyz` | GET | ✅ | ✅ | 健康探针，公开无需认证 |
-| `/api/auth/register` | POST | ✅ | ✅ | 用户注册，公开端点 |
-| `/api/auth/login` | POST | ✅ | ✅ | 用户登录，公开端点 |
-| `/api/auth/me` | GET | ✅ | ✅ | 获取当前用户信息 |
-| `/api/lz/topology` | GET | ✅ | ✅ | 服务拓扑查看 |
-| `/api/lz/data-api/definitions` | GET | ✅ | ✅ | 数据 API 定义列表 |
-| `/api/lz/data-api/invoke` | POST | ✅ | ✅ | 调用数据 API |
-| `/api/lz/tasks` | GET | ✅ | ✅ | 任务列表查看 |
-| `/api/lz/tasks/:id` | GET | ✅ | ✅ | 任务详情查看 |
-| `/api/lz/tasks/dispatch` | POST | ✅ | ✅ | 任务派发 |
-| `/api/lz/tasks/leases` | GET | ✅ | ✅ | 租约信息查看 |
-| `/api/lz/audit/logs` | GET | ✅ | ✅ | 审计日志查看 |
-| `/api/lz/probe/all` | POST | ❌ | ✅ | 全集群拓扑探测（管理员） |
-| `/api/lz/metrics` | GET | ❌ | ✅ | Prometheus 原始指标（管理员） |
-| `/api/lz/metrics/parsed` | GET | ❌ | ✅ | 解析后性能指标（管理员） |
-| `/api/lz/suites` | GET | ❌ | ✅ | 测试套件列表（管理员） |
-| `/api/lz/suites/run` | POST | ❌ | ✅ | 执行测试套件（管理员） |
+| `/v1/auth/register` | POST | ✅ | ✅ | 用户注册，公开端点 |
+| `/v1/auth/login` | POST | ✅ | ✅ | 用户登录，公开端点 |
+| `/v1/auth/me` | GET | ✅ | ✅ | 获取当前用户信息 |
+| `/v1/lz/topology` | GET | ✅ | ✅ | 服务拓扑查看 |
+| `/v1/lz/data-api/definitions` | GET | ✅ | ✅ | 数据 API 定义列表 |
+| `/v1/lz/data-api/invoke` | POST | ✅ | ✅ | 调用数据 API |
+| `/v1/lz/tasks` | GET | ✅ | ✅ | 任务列表查看 |
+| `/v1/lz/tasks/:id` | GET | ✅ | ✅ | 任务详情查看 |
+| `/v1/lz/tasks/dispatch` | POST | ✅ | ✅ | 任务派发 |
+| `/v1/lz/tasks/leases` | GET | ✅ | ✅ | 租约信息查看 |
+| `/v1/lz/audit/logs` | GET | ✅ | ✅ | 审计日志查看 |
+| `/v1/lz/probe/all` | POST | ❌ | ✅ | 全集群拓扑探测（管理员） |
+| `/v1/lz/metrics` | GET | ❌ | ✅ | Prometheus 原始指标（管理员） |
+| `/v1/lz/metrics/parsed` | GET | ❌ | ✅ | 解析后性能指标（管理员） |
+| `/v1/lz/suites` | GET | ❌ | ✅ | 测试套件列表（管理员） |
+| `/v1/lz/suites/run` | POST | ❌ | ✅ | 执行测试套件（管理员） |
 
 ### 3.2 前端面板权限
 
@@ -68,19 +68,19 @@
 │  前端 SPA │                    │  App-LZ BFF  │                    │ service-hub  │
 └────┬─────┘                    └──────┬───────┘                    └──────┬───────┘
      │                                 │                                 │
-     │  1. POST /api/auth/register     │                                 │
+     │  1. POST /v1/auth/register     │                                 │
      │  {username, password, role}     │                                 │
      │────────────────────────────────▶│                                 │
      │  2. {token, user}               │                                 │
      │◀────────────────────────────────│                                 │
      │                                 │                                 │
-     │  3. POST /api/auth/login        │                                 │
+     │  3. POST /v1/auth/login        │                                 │
      │  {username, password}           │                                 │
      │────────────────────────────────▶│                                 │
      │  4. {token, user}               │                                 │
      │◀────────────────────────────────│                                 │
      │                                 │                                 │
-     │  5. GET /api/lz/topology        │                                 │
+     │  5. GET /v1/lz/topology        │                                 │
      │  Authorization: Bearer <JWT>    │                                 │
      │────────────────────────────────▶│                                 │
      │                                 │  6. 校验 JWT + 提取 role        │
@@ -127,7 +127,7 @@
 ### 6.1 用户注册
 
 ```
-POST /api/auth/register
+POST /v1/auth/register
 Content-Type: application/json
 
 {
@@ -152,7 +152,7 @@ Response 201:
 ### 6.2 用户登录
 
 ```
-POST /api/auth/login
+POST /v1/auth/login
 Content-Type: application/json
 
 {
@@ -174,7 +174,7 @@ Response 200:
 ### 6.3 获取当前用户
 
 ```
-GET /api/auth/me
+GET /v1/auth/me
 Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
 
 Response 200:

@@ -123,7 +123,7 @@ curl -s http://127.0.0.1:8082/health | jq .
 curl -s http://127.0.0.1:8082/readyz | jq .
 
 # 综合健康状态
-curl -s http://127.0.0.1:8082/api/health | jq .
+curl -s http://127.0.0.1:8082/health | jq .
 ```
 可同时观测：
 - 调度中枢自身状态 (`backend: "ok"`)
@@ -132,12 +132,12 @@ curl -s http://127.0.0.1:8082/api/health | jq .
 
 ### 3.2 提交调度任务
 ```bash
-curl -s -X POST http://127.0.0.1:8082/api/hub/dispatch \
+curl -s -X POST http://127.0.0.1:8082/v1/hub/dispatch \
   -H "Content-Type: application/json" \
   -d '{"datasource_id": "ds_yibao", "operation": "mask"}' | jq .
 ```
 
-任务需在提交时显式携带 `payload`（`fetch` 阶段的分页自动抽取接口已移除）；随后在 `classify` 标签通过一次 Agent 一体化调用（`POST /v1/agent/process`，404 回退 `/v1/medical/process`）完成分类与脱敏，并在 `audit` 标签向 audit-log 提交出域存证（P0-6 fail-closed）。若需按身份证号端到端取数+脱敏，请改用 `POST /api/hub/fetch-and-desensitize`。
+任务需在提交时显式携带 `payload`（`fetch` 阶段的分页自动抽取接口已移除）；随后在 `classify` 标签通过一次 Agent 一体化调用（`POST /v1/agent/process`，404 回退 `/v1/medical/process`）完成分类与脱敏，并在 `audit` 标签向 audit-log 提交出域存证（P0-6 fail-closed）。若需按身份证号端到端取数+脱敏，请改用 `POST /v1/hub/fetch-and-desensitize`。
 
 ### 3.3 查看 Prometheus 监控指标
 ```bash
@@ -167,7 +167,7 @@ curl -s http://127.0.0.1:8082/metrics | head -n 30
 | **前置 Nginx 必要性** | ❌ **无需 Nginx**（点对点直接通信，减少网络跳数） | ✅ **必须/强烈推荐 Nginx**（前置安全隔离与流量收敛） |
 | **SSL/TLS 证书管理** | 采用内部自建 CA 签发 mTLS 双向证书，服务内建校验 | 采用公网权威 CA（如 Let's Encrypt / 商业证书），由 Nginx 统一管理与自动续签 |
 | **DDoS / 突发流量防御** | 内部并发可控，依赖 Go 进程内信号量（`taskSem`）限流 | 极易遭遇恶意 CC 攻击与突发洪峰，需 Nginx 在网络最外层进行 IP 级令牌桶限流 |
-| **域名与端口暴露** | 各微服务使用独立内部端口（8082, 8083, 8084 等） | 统一收敛至标准 443 端口，通过 URL 路径（`/api/hub/`）进行安全路由分发 |
+| **域名与端口暴露** | 各微服务使用独立内部端口（8082, 8083, 8084 等） | 统一收敛至标准 443 端口，通过 URL 路径（`/v1/hub/`）进行安全路由分发 |
 | **报文过滤与 WAF** | 内部 trusted 载荷，直接解析 | 需前置 WAF 拦截 SQL 注入、XSS、畸形 JSON 与超大恶意 Payload |
 | **审计真实 IP 溯源** | 内部服务 IP 即可满足链路追踪 | 必须依靠 Nginx 精准提取 CDN / 代理层后面的公网真实客户端 IP 并注入头信息 |
 
@@ -219,9 +219,9 @@ curl -s http://127.0.0.1:8082/metrics | head -n 30
 3. **统一公网域名收敛与 URL 路由分发 (API Gateway / Ingress)**：
    - 避免将内部微服务杂乱端口（8082, 8083, 8084, 5173）直接向公网开放导致的端口扫描与攻击面扩大；
    - 统一使用 `https://api.privshield.com` 泛域名收敛：
-     - `/api/hub/` ──▶ `service-hub:8082`（调度中枢）
-     - `/api/datasources/` ──▶ `datasource-mgr:8083`（数据源管理）
-     - `/api/audit/` ──▶ `audit-log:8084`（不可篡改审计存证）
+     - `/v1/hub/` ──▶ `service-hub:8082`（调度中枢）
+     - `/v1/datasources/` ──▶ `datasource-mgr:8083`（数据源管理）
+     - `/v1/audit/` ──▶ `audit-log:8084`（不可篡改审计存证）
      - `/` ──▶ `console-web:5173`（前端控制台）
 4. **Web 应用防火墙（WAF）与深度报文检测 (Payload Inspection)**：
    - 限制请求体最大尺寸（`client_max_body_size 10M`），防止超大 Payload 耗尽内存导致 OOM；
@@ -331,9 +331,9 @@ server {
     # real_ip_recursive on;
 
     # ──────────────────────────────────────────────────────────────────────────
-    # A. 调度中枢 HTTP REST API 反向代理 (/api/hub/)
+    # A. 调度中枢 HTTP REST API 反向代理 (/v1/hub/)
     # ──────────────────────────────────────────────────────────────────────────
-    location /api/hub/ {
+    location /v1/hub/ {
         # 应用速率限制：允许 20r/s，突发队列 buffer 为 30，不延迟处理
         limit_req zone=hub_rest_limit burst=30 nodelay;
 
@@ -361,10 +361,10 @@ server {
     }
 
     # ──────────────────────────────────────────────────────────────────────────
-    # B. 健康检查探针 (/api/health)
+    # B. 健康检查探针 (/health)
     # ──────────────────────────────────────────────────────────────────────────
-    location = /api/health {
-        proxy_pass http://service_hub_http/api/health;
+    location = /health {
+        proxy_pass http://service_hub_http/health;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
         proxy_set_header Host $host;
@@ -521,7 +521,7 @@ spec:
     - host: api.privshield.example.com
       http:
         paths:
-          - path: /api/hub
+          - path: /v1/hub
             pathType: Prefix
             backend:
               service:
@@ -563,7 +563,7 @@ spec:
 
 #### Q1: 客户端调用返回 `502 Bad Gateway`？
 - **排查步骤**：
-  1. 检查后端 `service-hub` 进程是否存活：`curl -I http://127.0.0.1:8082/api/health`；
+  1. 检查后端 `service-hub` 进程是否存活：`curl -I http://127.0.0.1:8082/health`；
   2. 检查 Nginx 错误日志：`sudo tail -n 50 /var/log/nginx/error.log`；
   3. 若日志出现 `connect() failed (111: Connection refused)`，确认 `upstream` 中配置的端口是否与 `SERVICE_HUB_PORT` 一致；
   4. 若在 SELinux 环境下（CentOS/RHEL），执行 `setsebool -P httpd_can_network_connect 1` 允许 Nginx 进行网络转发。
@@ -576,7 +576,7 @@ spec:
 
 #### Q3: 批量下发大体积脱敏任务时报 `413 Request Entity Too Large`？
 - **解决方案**：
-  - 在 Nginx `server` 或 `location /api/hub/` 块中调大 `client_max_body_size`（如 `client_max_body_size 50M;`）。
+  - 在 Nginx `server` 或 `location /v1/hub/` 块中调大 `client_max_body_size`（如 `client_max_body_size 50M;`）。
 
 #### Q4: audit-log 审计记录中的调用方 IP 变成了 `127.0.0.1` 或 Nginx 容器 IP？
 - **解决方案**：

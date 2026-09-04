@@ -77,7 +77,7 @@ flowchart TB
     end
 
     subgraph AuditLogService ["audit-log 审计存证中心 (:8084 / :50054)"]
-        GinRouter[Gin REST Router<br/>/api/audit/*]
+        GinRouter[Gin REST Router<br/>/v1/audit/*]
         GRPCSrv[gRPC Server<br/>AuditLogServiceServer]
         MW[中间件链: MaxBodySize / StructuredLogger / Auth / SecurityHeaders]
         
@@ -153,7 +153,7 @@ sequenceDiagram
     participant AuditSrv as audit-log 校验端点
     participant DB as SQLite / PG Store
 
-    User->>AuditSrv: POST /api/audit/chain/verify (携带 limit=1000)
+    User->>AuditSrv: POST /v1/audit/chain/verify (携带 limit=1000)
     AuditSrv->>DB: 调取指定范围内的存证记录
     AuditSrv->>AuditSrv: 逐行重算 BlockData 的国密 SM3 哈希并检查 PrevHash 咬合
     
@@ -263,7 +263,7 @@ func main() {
 
 ## 6. 合规报告与统计聚合引擎
 
-调用 `POST /api/audit/report` 可自动生成结构化合规审计报告：
+调用 `POST /v1/audit/report` 可自动生成结构化合规审计报告：
 
 ```json
 {
@@ -300,9 +300,9 @@ bash run.sh
 
 ### 7.2 核心 REST 接口演练
 
-#### 1. 写入一条脱敏存证记录 (`POST /api/audit/logs`)
+#### 1. 写入一条脱敏存证记录 (`POST /v1/audit/logs`)
 ```bash
-curl -s -X POST http://127.0.0.1:8084/api/audit/logs \
+curl -s -X POST http://127.0.0.1:8084/v1/audit/logs \
   -H "Content-Type: application/json" \
   -d '{
     "task_id": "task_demo_01",
@@ -323,19 +323,19 @@ curl -s -X POST http://127.0.0.1:8084/api/audit/logs \
 
 #### 2. 全链路国密 SM3 连续哈希链验真
 ```bash
-curl -s -X POST http://127.0.0.1:8084/api/audit/chain/verify \
+curl -s -X POST http://127.0.0.1:8084/v1/audit/chain/verify \
   -H "Content-Type: application/json" \
   -d '{"limit": 500}' | jq .
 ```
 
 #### 3. 获取实时审计聚合统计指标
 ```bash
-curl -s "http://127.0.0.1:8084/api/audit/stats?period=24h" | jq .
+curl -s "http://127.0.0.1:8084/v1/audit/stats?period=24h" | jq .
 ```
 
 #### 4. 生成合规审计报告
 ```bash
-curl -s -X POST http://127.0.0.1:8084/api/audit/report \
+curl -s -X POST http://127.0.0.1:8084/v1/audit/report \
   -H "Content-Type: application/json" \
   -d '{"period": "24h"}' | jq .
 ```

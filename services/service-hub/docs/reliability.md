@@ -254,7 +254,7 @@ HTTP `Dispatch` 与 gRPC `Dispatch` 都遵循相同的写入模型：请求入�
 | `classify` | `Update()`；`running/fetch → running/classify` | `status=running`、`stage=classify`、新的 `started_at` | 对隐私操作调用 Agent 一体化处理接口 `ProcessAgent`（`POST /v1/agent/process`，404 回退 `/v1/medical/process`），透传 `X-Idempotency-Key`。Agent 调用失败时转入失败终态写入。 |
 | `desensitize` | `Update()`；`running/classify → running/desensitize` | `status=running`、`stage=desensitize`、新的 `started_at` | 该阶段保留状态追踪；实际脱敏已在 `classify` 调用的医疗流水线中完成。 |
 | `return` | `Update()`；`running/desensitize → running/return` | `status=running`、`stage=return`、新的 `started_at` | 预留结果返回阶段。 |
-| `audit` | `Update()`；`running/return → running/audit` | `status=running`、`stage=audit`、新的 `started_at` | 审计阶段调用 `submitEvidence` 向 audit-log 提交出域存证（`POST /api/audit/logs`，P0-6 fail-closed），成功后立即执行成功终态写入；提交失败则转入失败终态。 |
+| `audit` | `Update()`；`running/return → running/audit` | `status=running`、`stage=audit`、新的 `started_at` | 审计阶段调用 `submitEvidence` 向 audit-log 提交出域存证（`POST /v1/audit/logs`，P0-6 fail-closed），成功后立即执行成功终态写入；提交失败则转入失败终态。 |
 | 正常完成 | `Update()`；`running/audit → completed/done` | `status=completed`、`stage=done`、`completed_at=当前时间`、`duration_ms=当前时间-created_at` | 成功终态写入。 |
 | 失败或取消 | `Update()`；当前 `running/<stage> → failed/<stage>` | `status=failed`、保留当前 `stage`、`error`、`completed_at`、`duration_ms` | 写入失败记录，可被后续重试协程拾取。 |
 

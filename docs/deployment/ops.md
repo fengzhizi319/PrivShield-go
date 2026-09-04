@@ -2465,20 +2465,20 @@ docker exec PrivShield ls -ld /data/budget /var/log/privacy
 
 ---
 
-### 15.8 容器探针与健康检查端点一致性（`/health` vs `/api/health`）
+### 15.8 容器探针与健康检查端点一致性（`/health` vs `/health`）
 
 **现象**：
 `privacy-console-backend-go` 容器状态长时间停留在 `(health: starting)`，最终因连续 3 次探测失败被标记为 `unhealthy`。
 
 **根因**：
 - Dockerfile / Compose 的 HEALTHCHECK 命令探测的是 `http://localhost:8081/health`；
-- 控制台代理后端路由原本仅挂载了带前缀的 `/api/health`，导致根路径 `/health` 返回 HTTP 404。
+- 控制台代理后端路由原本仅挂载了带前缀的 `/health`，导致根路径 `/health` 返回 HTTP 404。
 
 **排查命令**：
 ```bash
 # 测试两个不同路径的响应状态码
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8081/health
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8081/api/health
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8081/health
 ```
 
 **解决方案**：
@@ -2486,7 +2486,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8081/api/health
 ```go
 // Gin: console/bff-go/internal/handlers/handlers.go
 r.GET("/health", s.Health)
-r.GET("/api/health", s.Health)
+r.GET("/health", s.Health)
 ```
 
 ---
@@ -2871,6 +2871,6 @@ vm.swappiness = 10
 | **服务器 A CPU 利用率** | 持续 3 分钟 $> 80\%$ | 增加 Engine / Uvicorn worker 进程数或执行 HPA Pod 横向扩容 |
 | **服务器 A 内存使用率** | 持续 3 分钟 $> 85\%$ | 检查是否存在超大批次请求堆积，调小单批抓取步长（Batch Size） |
 | **Service Hub 排队任务数** | `service_hub_queued_tasks > 1,000` | 扩充 Worker 节点实例，加速任务租约领取与消费 |
-| **服务器 B 磁盘剩余空间** | 剩余空间 $< 20\%$ 或 $< 100 \text{ GB}$ | 触发 `/api/audit/report` 归档与历史冷存证转储（S3/MinIO），调小 `AUDIT_LOG_RETENTION_DAYS` |
+| **服务器 B 磁盘剩余空间** | 剩余空间 $< 20\%$ 或 $< 100 \text{ GB}$ | 触发 `/v1/audit/report` 归档与历史冷存证转储（S3/MinIO），调小 `AUDIT_LOG_RETENTION_DAYS` |
 | **服务器 B 国密 SM3 验真与写入延迟** | P99 写入延迟 $> 50 \text{ ms}$ | 检查 PostgreSQL 是否发生锁等待或磁盘 IOPS 达到瓶颈，排查 SM3 哈希计算与 SM4-GCM 加密吞吐，开启分区表维护 |
 

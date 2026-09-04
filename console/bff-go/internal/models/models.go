@@ -33,7 +33,7 @@ import (
 
 // EndpointSample 描述一个可测试的端点及其示例 payload。
 //
-// 前端在启动时通过 /api/samples 获取全部端点示例，
+// 前端在启动时通过 /v1/samples 获取全部端点示例，
 // 展示在侧边导航中，用户点击后即可填充请求编辑器。
 //
 // backend 字段用于前端过滤当前上游协议支持的端点：
@@ -61,9 +61,9 @@ type EndpointSample struct {
 	Backend string `json:"backend"`
 }
 
-// ProxyRequest 是前端发送到 POST /api/proxy 的 JSON 请求体。
+// ProxyRequest 是前端发送到 POST /v1/proxy 的 JSON 请求体。
 //
-// 前端将所有 gRPC 支持的操作统一通过 /api/proxy 转发，
+// 前端将所有 gRPC 支持的操作统一通过 /v1/proxy 转发，
 // 由 mapper 根据 Path 字段查找对应的 gRPC 方法并调用。
 type ProxyRequest struct {
 	// Method：原始 HTTP 方法（如 "POST"），实际由 mapper 根据 Path 决定 gRPC 语义
@@ -78,7 +78,7 @@ type ProxyRequest struct {
 	ContentType string `json:"content_type,omitempty"`
 }
 
-// ProxyResponse 是 /api/proxy 返回的统一 JSON 包装响应。
+// ProxyResponse 是 /v1/proxy 返回的统一 JSON 包装响应。
 //
 // 所有 gRPC 调用的结果都统一包装为该格式返回前端。
 type ProxyResponse struct {
@@ -94,7 +94,7 @@ type ProxyResponse struct {
 	Protocol string `json:"protocol"`
 }
 
-// ConsoleHealth 是 GET /api/health 返回的健康检查响应。
+// ConsoleHealth 是 GET /health 返回的健康检查响应。
 //
 // 前端通过该接口判断后端连接状态，并展示状态灯：
 //   - Backend="ok" 表示控制台后端自身正常
@@ -117,13 +117,13 @@ type ConsoleHealth struct {
 	Protocol string `json:"protocol"`
 }
 
-// SamplesResponse 包装端点示例列表，作为 GET /api/samples 的响应。
+// SamplesResponse 包装端点示例列表，作为 GET /v1/samples 的响应。
 type SamplesResponse struct {
 	// Samples：所有可测试端点的示例数据列表，前端据此渲染侧边导航
 	Samples []EndpointSample `json:"samples"`
 }
 
-// BatchRequest 是前端发送到 POST /api/batch 的 JSON 请求体。
+// BatchRequest 是前端发送到 POST /v1/batch 的 JSON 请求体。
 //
 // 前端“一键批量测试”提交一组请求，后端逐个转发并汇总结果。
 // 单个请求失败不会中断整个批次。
@@ -151,7 +151,7 @@ type BatchResultItem struct {
 	Error string `json:"error,omitempty"`
 }
 
-// BatchResponse 是 POST /api/batch 返回的批量测试汇总结果。
+// BatchResponse 是 POST /v1/batch 返回的批量测试汇总结果。
 //
 // 前端据此展示通过率（Passed/Total）与逐条结果详情。
 type BatchResponse struct {
@@ -169,7 +169,7 @@ type BatchResponse struct {
 	Protocol string `json:"protocol"`
 }
 
-// UploadData 是 /api/upload 包装在 ProxyResponse.Data 中的文件处理结果。
+// UploadData 是 /v1/upload 包装在 ProxyResponse.Data 中的文件处理结果。
 //
 // 与 Agent REST 响应格式保持一致：
 //   - operation 为操作类型（mask_dataframe / k_anonymize / classify_table）
@@ -199,7 +199,7 @@ type LbBackend struct {
 	URL string `json:"url"`
 }
 
-// LbTestRequest 是 POST /api/lb_test 的请求体。
+// LbTestRequest 是 POST /v1/lb_test 的请求体。
 //
 // 控制台后端按 Strategy 策略把 NumRequests 个探测请求分发到 Backends 中的各节点：
 //   - ProbePath：探测路径，默认 /health
@@ -242,7 +242,7 @@ type LbDistItem struct {
 	MaxLatencyMs float64 `json:"max_latency_ms"`
 }
 
-// LbTestResponse 是 POST /api/lb_test 返回的负载均衡测试汇总结果。
+// LbTestResponse 是 POST /v1/lb_test 返回的负载均衡测试汇总结果。
 //
 // Distribution 按 Backends 顺序给出各节点统计，
 // 恒有 Total == Success + Failed。
@@ -261,7 +261,7 @@ type LbTestResponse struct {
 	Distribution []LbDistItem `json:"distribution"`
 }
 
-// ConcurrencyTestRequest 是 POST /api/concurrency_test 的请求体。
+// ConcurrencyTestRequest 是 POST /v1/concurrency_test 的请求体。
 type ConcurrencyTestRequest struct {
 	Path          string          `json:"path"`
 	Method        string          `json:"method"`
@@ -270,7 +270,7 @@ type ConcurrencyTestRequest struct {
 	TotalRequests int             `json:"total_requests"`
 }
 
-// ConcurrencyTestResponse 是 POST /api/concurrency_test 的响应。
+// ConcurrencyTestResponse 是 POST /v1/concurrency_test 的响应。
 type ConcurrencyTestResponse struct {
 	Total        int     `json:"total"`
 	Success      int     `json:"success"`

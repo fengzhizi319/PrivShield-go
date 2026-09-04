@@ -75,7 +75,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-INVOKE_URL="${BFF_URL}/api/lz/data-api/invoke"
+INVOKE_URL="${BFF_URL}/v1/lz/data-api/invoke"
 LEAN_FLAG="$LEAN"
 
 # ── 前置检查 ──
@@ -97,7 +97,7 @@ echo "╚═══════════════════════�
 echo -e "${NC}"
 
 echo -e "${BOLD}── 环境检查 ──${NC}"
-check_service "${BFF_URL}/api/lz/topology" "App-LZ BFF" || exit 1
+check_service "${BFF_URL}/v1/lz/topology" "App-LZ BFF" || exit 1
 echo ""
 
 # ── 场景名称 ──

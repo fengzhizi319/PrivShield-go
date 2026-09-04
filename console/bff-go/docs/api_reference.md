@@ -11,18 +11,18 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/health` | 检查后端自身与下游 agent 的连通性 |
-| GET | `/api/samples` | 返回所有端点的示例数据（按功能分类） |
-| POST | `/api/proxy` | 通用代理：把请求通过 gRPC 转发到 agent |
-| POST | `/api/batch` | 批量代理：顺序转发一组请求并汇总结果 |
-| POST | `/api/upload` | 文件上传 + 隐私处理（masking / K-anonymity / classification） |
-| POST | `/api/lb_test` | 网关负载均衡策略测试 |
+| GET | `/health` | 检查后端自身与下游 agent 的连通性 |
+| GET | `/v1/samples` | 返回所有端点的示例数据（按功能分类） |
+| POST | `/v1/proxy` | 通用代理：把请求通过 gRPC 转发到 agent |
+| POST | `/v1/batch` | 批量代理：顺序转发一组请求并汇总结果 |
+| POST | `/v1/upload` | 文件上传 + 隐私处理（masking / K-anonymity / classification） |
+| POST | `/v1/lb_test` | 网关负载均衡策略测试 |
 | GET | `/assets/*` | 静态资源（前端构建产物） |
 | GET | `/{full_path}` | SPA 回退：未命中路径返回 `index.html` |
 
 ---
 
-## 2. GET /api/health
+## 2. GET /health
 
 检查后端自身与下游 agent 的连通性。
 
@@ -44,7 +44,7 @@
 **示例**：
 
 ```bash
-curl http://127.0.0.1:8081/api/health
+curl http://127.0.0.1:8081/health
 ```
 
 ```json
@@ -61,7 +61,7 @@ curl http://127.0.0.1:8081/api/health
 
 ---
 
-## 3. GET /api/samples
+## 3. GET /v1/samples
 
 返回所有可测试端点的示例数据。前端启动时调用该接口渲染侧边栏与总览。
 
@@ -83,7 +83,7 @@ curl http://127.0.0.1:8081/api/health
 
 ---
 
-## 4. POST /api/proxy
+## 4. POST /v1/proxy
 
 通用代理：把一个请求通过 **gRPC** 转发到 `PrivShield`。
 
@@ -108,7 +108,7 @@ curl http://127.0.0.1:8081/api/health
 **示例**：
 
 ```bash
-curl -X POST http://127.0.0.1:8081/api/proxy \
+curl -X POST http://127.0.0.1:8081/v1/proxy \
   -H 'Content-Type: application/json' \
   -H 'X-PrivShield-Protocol: gRPC' \
   -d '{
@@ -137,7 +137,7 @@ curl -X POST http://127.0.0.1:8081/api/proxy \
 
 ---
 
-## 5. POST /api/batch
+## 5. POST /v1/batch
 
 批量代理：顺序转发一组请求并汇总成功 / 失败统计。单个请求失败不中断整个批次。
 
@@ -178,7 +178,7 @@ curl -X POST http://127.0.0.1:8081/api/proxy \
 **示例**：
 
 ```bash
-curl -X POST http://127.0.0.1:8081/api/batch \
+curl -X POST http://127.0.0.1:8081/v1/batch \
   -H 'Content-Type: application/json' \
   -d '{
     "requests": [
@@ -190,7 +190,7 @@ curl -X POST http://127.0.0.1:8081/api/batch \
 
 ---
 
-## 6. POST /api/upload
+## 6. POST /v1/upload
 
 文件上传隐私处理：支持 CSV / Excel / JSON / 图片 / DICOM 等格式，自动识别字段并完成 masking / K-anonymity / classification。
 

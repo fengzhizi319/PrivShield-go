@@ -31,8 +31,8 @@ flowchart TD
     end
 
     subgraph BackendProxy [4. 双控制台代理后端]
-        R1 & R3 --> PyB[Python Backend: /api/pipeline/process & /api/medical_pipeline]
-        R1 & R3 --> GoB[Go Backend: /api/pipeline/process & /api/medical_pipeline]
+        R1 & R3 --> PyB[Python Backend: /v1/pipeline/process & /v1/medical_pipeline]
+        R1 & R3 --> GoB[Go Backend: /v1/pipeline/process & /v1/medical_pipeline]
     end
 
     subgraph WebUI [5. Web 前端控制台]
@@ -113,8 +113,8 @@ class PipelineResult(BaseModel):
 
 ### 4.1 Go BFF (`console/bff-go`)
 - 扩展 `console/bff-go/internal/handlers/handlers.go`:
-  - `POST /api/pipeline/process`
-  - `POST /api/medical_pipeline`
+  - `POST /v1/pipeline/process`
+  - `POST /v1/medical_pipeline`
 - 若请求体未提供 `records`，自动读取 `console/bff-go/internal/samples/kangyang.csv` 并在 HTTP 代理层透传到 Agent。
 
 ### 4.3 Web 前端 (`console/web`)
@@ -131,7 +131,7 @@ class PipelineResult(BaseModel):
 |---|---|---|
 | `tests/test_pipeline.py` | `PipelineService` 分类、脱敏、CSV 解析及 REST 端点 | `PYTHONPATH=. pytest tests/test_pipeline.py -v` |
 | `tests/test_medical_pipeline.py` | GB 11643-1999 校验、L4/L5 泄漏测试、双输出结构 | `PYTHONPATH=. pytest tests/test_medical_pipeline.py -v` |
-| Go BFF 测试 | `/api/pipeline/process` 与 `/api/medical_pipeline` | `go test -v ./...` (在 `console/bff-go` 下) |
+| Go BFF 测试 | `/v1/pipeline/process` 与 `/v1/medical_pipeline` | `go test -v ./...` (在 `console/bff-go` 下) |
 
 > **历史说明**：早期同时存在 Python REST BFF（`console/backend`）实现相同路由，该实现已移除。
 | 前端构建测试 | TypeScript 类型检查与 Vite 编译 | `corepack pnpm build` (在 `console/web` 下) |

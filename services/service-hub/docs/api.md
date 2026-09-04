@@ -19,24 +19,24 @@
   - [2.3 分布式全链路追踪规范 (Trace & Request ID)](#23-分布式全链路追踪规范-trace--request-id)
 - [3. HTTP RESTful API 详细规范](#3-http-restful-api-详细规范)
   - [3.1 探针与监控端点](#31-探针与监控端点)
-    - [3.1.1 存活健康检查 (GET /health & GET /api/health)](#311-存活健康检查-get-health--get-apihealth)
+    - [3.1.1 存活健康检查 (GET /health & GET /health)](#311-存活健康检查-get-health--get-apihealth)
     - [3.1.2 服务就绪探针 (GET /readyz)](#312-服务就绪探针-get-readyz)
-    - [3.1.3 调度中枢运行概况 (GET /api/hub/status)](#313-调度中枢运行概况-get-apihubstatus)
+    - [3.1.3 调度中枢运行概况 (GET /v1/hub/status)](#313-调度中枢运行概况-get-apihubstatus)
     - [3.1.4 Prometheus 监控指标 (GET /metrics)](#314-prometheus-监控指标-get-metrics)
   - [3.2 任务生命周期管理端点](#32-任务生命周期管理端点)
-    - [3.2.1 分页查询任务列表 (GET /api/hub/tasks)](#321-分页查询任务列表-get-apihubtasks)
-    - [3.2.2 查询单个任务详情 (GET /api/hub/tasks/:id)](#322-查询单个任务详情-get-apihubtasksid)
+    - [3.2.1 分页查询任务列表 (GET /v1/hub/tasks)](#321-分页查询任务列表-get-apihubtasks)
+    - [3.2.2 查询单个任务详情 (GET /v1/hub/tasks/:id)](#322-查询单个任务详情-get-apihubtasksid)
   - [3.3 任务分发与流水线调度端点](#33-任务分发与流水线调度端点)
-    - [3.3.1 手动分发任务 (POST /api/hub/dispatch)](#331-手动分发任务-post-apihubdispatch)
-    - [3.3.2 流水线监控遥测 (GET /api/hub/pipeline)](#332-流水线监控遥测-get-apihubpipeline)
-  - [3.4 按身份证号查询并脱敏端点 (POST /api/hub/fetch-and-desensitize)](#34-按身份证号查询并脱敏端点-post-apihubfetch-and-desensitize)
+    - [3.3.1 手动分发任务 (POST /v1/hub/dispatch)](#331-手动分发任务-post-apihubdispatch)
+    - [3.3.2 流水线监控遥测 (GET /v1/hub/pipeline)](#332-流水线监控遥测-get-apihubpipeline)
+  - [3.4 按身份证号查询并脱敏端点 (POST /v1/hub/fetch-and-desensitize)](#34-按身份证号查询并脱敏端点-post-apihubfetch-and-desensitize)
   - [3.5 跨服务完整调用链路：按身份证分级脱敏全链路 API 时序](#35-跨服务完整调用链路按身份证分级脱敏全链路-api-时序)
   - [3.6 外部系统统一编排代理端点 (External Orchestration Endpoints)](#36-外部系统统一编排代理端点-external-orchestration-endpoints)
-    - [3.6.1 集群拓扑健康探针 (GET /api/hub/topology)](#361-集群拓扑健康探针-get-apihubtopology)
-    - [3.6.2 数据源目录查询 (GET /api/hub/datasources)](#362-数据源目录查询-get-apihubdatasources)
-    - [3.6.3 审计存证查询 (GET /api/hub/audit/logs)](#363-审计存证查询-get-apihubauditlogs)
-    - [3.6.4 审计存证写入 (POST /api/hub/audit/logs)](#364-审计存证写入-post-apihubauditlogs)
-    - [3.6.5 Merkle 完整性防篡改验真 (POST /api/hub/audit/verify)](#365-merkle-完整性防篡改验真-post-apihubauditverify)
+    - [3.6.1 集群拓扑健康探针 (GET /v1/hub/topology)](#361-集群拓扑健康探针-get-apihubtopology)
+    - [3.6.2 数据源目录查询 (GET /v1/hub/datasources)](#362-数据源目录查询-get-apihubdatasources)
+    - [3.6.3 审计存证查询 (GET /v1/hub/audit/logs)](#363-审计存证查询-get-apihubauditlogs)
+    - [3.6.4 审计存证写入 (POST /v1/hub/audit/logs)](#364-审计存证写入-post-apihubauditlogs)
+    - [3.6.5 Merkle 完整性防篡改验真 (POST /v1/hub/audit/verify)](#365-merkle-完整性防篡改验真-post-apihubauditverify)
 - [4. gRPC API 规范与 Protobuf 定义](#4-grpc-api-规范与-protobuf-定义)
   - [4.1 Protobuf 契约文件 (servicehub.proto)](#41-protobuf-契约文件-servicehubproto)
   - [4.2 gRPC 服务接口与方法规约](#42-grpc-服务接口与方法规约)
@@ -153,7 +153,7 @@ flowchart LR
    - gRPC 服务端在 TLS 握手完成后，从对端 X.509 证书提取 Subject Common Name (CN)；
    - 仅放行在 `PRIVACY_AUTH_MTLS_WHITELIST_FILE` 白名单中的客户端 CN，不在白名单中的连接直接中断。
 
-> **健康探针免鉴权**：`/health`、`/readyz`、`/api/health` 三个探针端点不受鉴权中间件保护，确保 K8s 探针可无 Token 访问。
+> **健康探针免鉴权**：`/health`、`/readyz`、`/health` 三个探针端点不受鉴权中间件保护，确保 K8s 探针可无 Token 访问。
 
 ### 2.3 分布式全链路追踪规范 (Trace & Request ID)
 
@@ -173,11 +173,11 @@ flowchart LR
 
 ### 3.1 探针与监控端点
 
-#### 3.1.1 存活健康检查 (GET /health & GET /api/health)
+#### 3.1.1 存活健康检查 (GET /health & GET /health)
 
 - **功能说明**：K8s Liveness 探针或负载均衡器健康检查端点。服务进程启动并能响应 HTTP 即返回 200。
 - **请求方法**：`GET`
-- **请求路径**：`/health`（规范路径）或 `/api/health`（兼容别名）
+- **请求路径**：`/health`（规范路径）或 `/health`（兼容别名）
 - **鉴权要求**：无（免 Token 访问）
 - **请求参数**：无
 - **成功响应**：`HTTP 200 OK`
@@ -248,11 +248,11 @@ flowchart LR
 
 ---
 
-#### 3.1.3 调度中枢运行概况 (GET /api/hub/status)
+#### 3.1.3 调度中枢运行概况 (GET /v1/hub/status)
 
 - **功能说明**：查询调度中枢当前运行概况，包括 Uptime、任务队列深度与累计统计。
 - **请求方法**：`GET`
-- **请求路径**：`/api/hub/status`
+- **请求路径**：`/v1/hub/status`
 - **鉴权要求**：需要有效 Bearer Token
 - **成功响应**：`HTTP 200 OK`
   ```json
@@ -302,11 +302,11 @@ flowchart LR
 
 ### 3.2 任务生命周期管理端点
 
-#### 3.2.1 分页查询任务列表 (GET /api/hub/tasks)
+#### 3.2.1 分页查询任务列表 (GET /v1/hub/tasks)
 
 - **功能说明**：分页获取任务列表，支持按状态过滤。服务端强制执行分页安全边界。
 - **请求方法**：`GET`
-- **请求路径**：`/api/hub/tasks`
+- **请求路径**：`/v1/hub/tasks`
 - **鉴权要求**：需要有效 Bearer Token（`hub:read` 权限）
 - **Query 参数**：
 
@@ -380,11 +380,11 @@ flowchart LR
 
 ---
 
-#### 3.2.2 查询单个任务详情 (GET /api/hub/tasks/:id)
+#### 3.2.2 查询单个任务详情 (GET /v1/hub/tasks/:id)
 
 - **功能说明**：根据任务唯一 ID 查询单个任务的详细状态与执行结果。
 - **请求方法**：`GET`
-- **请求路径**：`/api/hub/tasks/:id`（例如：`/api/hub/tasks/task-1787554500-eabf3934`）
+- **请求路径**：`/v1/hub/tasks/:id`（例如：`/v1/hub/tasks/task-1787554500-eabf3934`）
 - **路径参数**：
   - `id` (string, 必填)：任务唯一标识符。
 - **鉴权要求**：需要有效 Bearer Token（`hub:read` 权限）
@@ -426,12 +426,12 @@ flowchart LR
 
 ### 3.3 任务分发与流水线调度端点
 
-#### 3.3.1 手动分发任务 (POST /api/hub/dispatch)
+#### 3.3.1 手动分发任务 (POST /v1/hub/dispatch)
 
 - **功能说明**：手动分发任务到 6 阶段数据安全流通流水线。调用方提交数据源标识、可选操作类型与原始载荷，调度中枢生成唯一 TaskID 并异步驱动流水线执行。
 - **请求方法**：`POST`
-- **请求路径**：`/api/hub/dispatch`
-- **兼容别名**：`POST /api/hub/classify`（向后兼容）
+- **请求路径**：`/v1/hub/dispatch`
+- **兼容别名**：`POST /v1/hub/classify`（向后兼容）
 - **鉴权要求**：需要有效 Bearer Token（`hub:dispatch` 权限）
 - **请求体**：
   ```json
@@ -484,11 +484,11 @@ flowchart LR
 
 ---
 
-#### 3.3.2 流水线监控遥测 (GET /api/hub/pipeline)
+#### 3.3.2 流水线监控遥测 (GET /v1/hub/pipeline)
 
 - **功能说明**：返回 6 个流水线阶段（`ingest` ➔ `fetch` ➔ `classify` ➔ `desensitize` ➔ `return` ➔ `audit`）的实时活跃任务统计与上游 Agent 连通性。
 - **请求方法**：`GET`
-- **请求路径**：`/api/hub/pipeline`
+- **请求路径**：`/v1/hub/pipeline`
 - **鉴权要求**：需要有效 Bearer Token
 - **成功响应**：`HTTP 200 OK`
   ```json
@@ -516,14 +516,14 @@ flowchart LR
 
 ---
 
-### 3.4 按身份证号查询并脱敏端点 (POST /api/hub/fetch-and-desensitize)
+### 3.4 按身份证号查询并脱敏端点 (POST /v1/hub/fetch-and-desensitize)
 
 - **功能说明**：端到端同步 API。调用方只需提供数据源标识与 18 位公民身份证号，调度中枢自动完成以下全链路：
   1. 向下游 `datasource-mgr` 按身份证号精确拉取单条记录；
   2. 调用上游 `engine-go` 隐私计算引擎执行 3-Layer 分类分级 + PII 掩码脱敏；
   3. 同步返回脱敏后数据、分类级别与分类报告。
 - **请求方法**：`POST`
-- **请求路径**：`/api/hub/fetch-and-desensitize`
+- **请求路径**：`/v1/hub/fetch-and-desensitize`
 - **鉴权要求**：需要有效 Bearer Token（`hub:dispatch` 权限）
 - **请求体**：
   ```json
@@ -593,7 +593,7 @@ flowchart LR
     -H "Authorization: Bearer <API_KEY>" \
     -H "Content-Type: application/json" \
     -d '{"datasource_id":"ds_yibao","id_card_no":"510101198503151234"}' \
-    http://127.0.0.1:8082/api/hub/fetch-and-desensitize | jq .
+    http://127.0.0.1:8082/v1/hub/fetch-and-desensitize | jq .
   ```
 
 ---
@@ -612,15 +612,15 @@ sequenceDiagram
     participant Engine as 隐私计算引擎<br/>engine-go :8079
     participant Audit as 审计存证<br/>audit-log :8084
 
-    Client->>+Hub: ① POST /api/hub/fetch-and-desensitize<br/>{datasource_id, id_card_no}
+    Client->>+Hub: ① POST /v1/hub/fetch-and-desensitize<br/>{datasource_id, id_card_no}
 
-    Hub->>+DS: ② GET /api/datasources/:id/record-by-id<br/>?id_card_no=xxx
+    Hub->>+DS: ② GET /v1/datasources/:id/record-by-id<br/>?id_card_no=xxx
     DS-->>-Hub: ② 返回原始记录 {found, record}
 
     Hub->>+Engine: ③ POST /v1/agent/process<br/>{records, datasource_id, api_code}
     Engine-->>-Hub: ③ 返回分类分级 + 脱敏结果<br/>{level, sanitized_data, classification_report, summary}
 
-    Hub->>+Audit: ④ POST /api/audit/logs<br/>{task_id, datasource, operation, input_hash, output_hash, security_level}
+    Hub->>+Audit: ④ POST /v1/audit/logs<br/>{task_id, datasource, operation, input_hash, output_hash, security_level}
     Audit-->>-Hub: ④ 返回存证标识 {id, snapshot_id, integrity_hash}
 
     Hub-->>-Client: ⑤ 返回脱敏结果<br/>{level, sanitized_data, classification_report, summary}
@@ -632,7 +632,7 @@ sequenceDiagram
 
 调用方通过调度中枢的同步端到端入口发起请求，只需提供数据源标识与身份证号，后续拉取、分级、脱敏、存证全部由调度中枢内部编排。
 
-- **端点**：`POST http://service-hub:8082/api/hub/fetch-and-desensitize`
+- **端点**：`POST http://service-hub:8082/v1/hub/fetch-and-desensitize`
 - **鉴权**：`Authorization: Bearer <SERVICE_HUB_API_KEY>`
 - **请求体**：
   ```json
@@ -664,7 +664,7 @@ sequenceDiagram
 
 调度中枢收到请求后，首先归一化 `datasource_id`（支持别名如 `yibao` → `ds_yibao`），然后向 `datasource-mgr` 发起按身份证号精确查询。
 
-- **端点**：`GET http://datasource-mgr:8083/api/datasources/{datasource_id}/record-by-id?id_card_no={id_card_no}`
+- **端点**：`GET http://datasource-mgr:8083/v1/datasources/{datasource_id}/record-by-id?id_card_no={id_card_no}`
 - **鉴权**：`Authorization: Bearer <DATASOURCE_MGR_API_KEY>`（内部 mTLS 环境下可省略）
 - **请求头**：`X-Request-ID: <trace-id>`（链路追踪透传）
 - **响应体**（`HTTP 200 OK`）：
@@ -756,7 +756,7 @@ sequenceDiagram
 
 脱敏完成后，调度中枢向独立审计存证节点提交一条出域存证记录，将本次数据流出与不可篡改哈希链绑定（P0-6 fail-closed：提交失败则整个请求失败）。
 
-- **端点**：`POST http://audit-log:8084/api/audit/logs`
+- **端点**：`POST http://audit-log:8084/v1/audit/logs`
 - **鉴权**：`Authorization: Bearer <AUDIT_LOG_API_KEY>`
 - **请求头**：
   - `X-Request-ID: <trace-id>`
@@ -850,7 +850,7 @@ curl -s -X POST \
   -H "Authorization: Bearer <SERVICE_HUB_API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{"datasource_id":"ds_yibao","id_card_no":"510101198503151234"}' \
-  http://127.0.0.1:8082/api/hub/fetch-and-desensitize | jq .
+  http://127.0.0.1:8082/v1/hub/fetch-and-desensitize | jq .
 ```
 
 > 一条 curl 即可触发完整的 5 步跨服务链路：① 接入 → ② 拉取原始数据 → ③ 分类分级+脱敏 → ④ 审计存证 → ⑤ 返回结果。
@@ -875,11 +875,11 @@ curl -s -X POST \
 > **核心架构原则**：`app-lz BFF` 作为模拟的外部业务程序，运行在受保护网络边界外，**除了访问 `service-hub` (:8082)，并没有直接访问内部微服务（`datasource-mgr` / `engine-go` / `audit-log`）的权限**。  
 > `service-hub` 承担唯一编排调度中枢职能，对外统一暴露以下代理编排端点。
 
-#### 3.6.1 集群拓扑健康探针 (GET /api/hub/topology)
+#### 3.6.1 集群拓扑健康探针 (GET /v1/hub/topology)
 
 由调度中枢统一探测自身及所有下游微服务节点（`engine`、`datasource-mgr`、`audit-log`）的健康状态与微秒级往返延迟，以固定顺序返回完整网格拓扑。
 
-- **端点**：`GET /api/hub/topology?protocol=rest|grpc`
+- **端点**：`GET /v1/hub/topology?protocol=rest|grpc`
 - **鉴权**：`hub:read`
 - **响应体**（`HTTP 200 OK`）：
   ```json
@@ -923,11 +923,11 @@ curl -s -X POST \
   }
   ```
 
-#### 3.6.2 数据源目录查询 (GET /api/hub/datasources)
+#### 3.6.2 数据源目录查询 (GET /v1/hub/datasources)
 
 代理查询内部 `datasource-mgr` 中已注册的数据源资产目录。
 
-- **端点**：`GET /api/hub/datasources`
+- **端点**：`GET /v1/hub/datasources`
 - **鉴权**：`hub:read`
 - **响应体**（`HTTP 200 OK`）：
   ```json
@@ -949,11 +949,11 @@ curl -s -X POST \
   }
   ```
 
-#### 3.6.3 审计存证查询 (GET /api/hub/audit/logs)
+#### 3.6.3 审计存证查询 (GET /v1/hub/audit/logs)
 
 代理向 `audit-log` 发起复合过滤查询审计存证记录。
 
-- **端点**：`GET /api/hub/audit/logs?limit=10&offset=0&datasource=ds_yibao&task_id=...&api_code=...`
+- **端点**：`GET /v1/hub/audit/logs?limit=10&offset=0&datasource=ds_yibao&task_id=...&api_code=...`
 - **鉴权**：`hub:read`
 - **响应体**（`HTTP 200 OK`）：
   ```json
@@ -972,11 +972,11 @@ curl -s -X POST \
   }
   ```
 
-#### 3.6.4 审计存证写入 (POST /api/hub/audit/logs)
+#### 3.6.4 审计存证写入 (POST /v1/hub/audit/logs)
 
 代理向 `audit-log` 提交并存储一条新的不可篡改出域存证。
 
-- **端点**：`POST /api/hub/audit/logs`
+- **端点**：`POST /v1/hub/audit/logs`
 - **鉴权**：`hub:dispatch`
 - **请求体**：
   ```json
@@ -998,11 +998,11 @@ curl -s -X POST \
   }
   ```
 
-#### 3.6.5 Merkle 完整性防篡改验真 (POST /api/hub/audit/verify)
+#### 3.6.5 Merkle 完整性防篡改验真 (POST /v1/hub/audit/verify)
 
 代理向 `audit-log` 发起 Merkle Tree 链式防篡改验真并返回重算结果。
 
-- **端点**：`POST /api/hub/audit/verify`
+- **端点**：`POST /v1/hub/audit/verify`
 - **鉴权**：`hub:dispatch`
 - **响应体**（`HTTP 200 OK`）：
   ```json
@@ -1323,8 +1323,8 @@ message FetchAndDesensitizeResponse {
 
 调度中枢作为隐私治理流水线的核心调度节点，应满足以下性能指标：
 
-1. **任务分发延迟**：`POST /api/hub/dispatch` 接口 **P95 延迟 < 10ms**（不含流水线执行时间）；
-2. **任务查询延迟**：`GET /api/hub/tasks/:id` **P95 延迟 < 5ms**；
+1. **任务分发延迟**：`POST /v1/hub/dispatch` 接口 **P95 延迟 < 10ms**（不含流水线执行时间）；
+2. **任务查询延迟**：`GET /v1/hub/tasks/:id` **P95 延迟 < 5ms**；
 3. **健康探针延迟**：`/health` **P99 延迟 < 1ms**；`/readyz` **P99 延迟 < 10s**（含上游探测）；
 4. **并发能力**：单实例支持最大 **10 个并发流水线任务**异步执行（信号量限流），HTTP 层支持 **1000** 个并发在途请求；
 5. **任务恢复**：SQLite/内存模式下，服务崩溃重启后 **500ms** 内自动恢复孤立 pending 任务。
@@ -1384,37 +1384,37 @@ curl -s http://127.0.0.1:8082/health | jq .
 curl -s http://127.0.0.1:8082/readyz | jq .
 
 # 3. 查询调度中枢运行概况
-curl -s -H "Authorization: Bearer <API_KEY>" http://127.0.0.1:8082/api/hub/status | jq .
+curl -s -H "Authorization: Bearer <API_KEY>" http://127.0.0.1:8082/v1/hub/status | jq .
 
 # 4. 分发任务到流水线
 curl -s -X POST \
   -H "Authorization: Bearer <API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{"datasource_id":"ds_yibao","operation":"mask","payload":{"name":"李明","id_card":"510101198503151234"}}' \
-  http://127.0.0.1:8082/api/hub/dispatch | jq .
+  http://127.0.0.1:8082/v1/hub/dispatch | jq .
 
 # 5. 查询任务列表（按状态过滤 + 分页）
-curl -s -H "Authorization: Bearer <API_KEY>" "http://127.0.0.1:8082/api/hub/tasks?status=completed&limit=10&offset=0" | jq .
+curl -s -H "Authorization: Bearer <API_KEY>" "http://127.0.0.1:8082/v1/hub/tasks?status=completed&limit=10&offset=0" | jq .
 
 # 6. 查询单个任务详情
-curl -s -H "Authorization: Bearer <API_KEY>" http://127.0.0.1:8082/api/hub/tasks/task-1787554500-eabf3934 | jq .
+curl -s -H "Authorization: Bearer <API_KEY>" http://127.0.0.1:8082/v1/hub/tasks/task-1787554500-eabf3934 | jq .
 
 # 7. 流水线各阶段实时监控
-curl -s -H "Authorization: Bearer <API_KEY>" http://127.0.0.1:8082/api/hub/pipeline | jq .
+curl -s -H "Authorization: Bearer <API_KEY>" http://127.0.0.1:8082/v1/hub/pipeline | jq .
 
 # 8. 按身份证号查询并脱敏（端到端同步 API）
 curl -s -X POST \
   -H "Authorization: Bearer <API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{"datasource_id":"ds_yibao","id_card_no":"510101198503151234"}' \
-  http://127.0.0.1:8082/api/hub/fetch-and-desensitize | jq .
+  http://127.0.0.1:8082/v1/hub/fetch-and-desensitize | jq .
 
 # 9. 异常测试：缺少数据源标识（应返回 400 及标准 5 字段信封）
 curl -s -i -X POST \
   -H "Authorization: Bearer <API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{"payload":{"name":"test"}}' \
-  http://127.0.0.1:8082/api/hub/dispatch
+  http://127.0.0.1:8082/v1/hub/dispatch
 ```
 
 #### 2. gRPC 接口自测命令 (使用 `grpcurl`)

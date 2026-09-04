@@ -88,7 +88,7 @@
 
 ---
 
-## 4. 全栈 E2E 测试套件执行结果 (`POST /api/lz/suites/run`)
+## 4. 全栈 E2E 测试套件执行结果 (`POST /v1/lz/suites/run`)
 
 控制台内置的 4 大端到端核心治理测试套件在 mTLS 全栈环境下全部**100% 通过（4/4 Passed, 0 Failed）**：
 

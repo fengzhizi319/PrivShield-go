@@ -19,12 +19,12 @@
 //
 // Route list / 路由清单：
 //
-//	GET  /api/health   → Health check (backend self + upstream agent)
-//	GET  /api/samples  → Return sample payloads for all endpoints
-//	POST /api/proxy    → Single request proxy forwarding (REST → gRPC)
-//	POST /api/batch    → Batch request forwarding
-//	POST /api/upload   → File upload + privacy processing (masking/K-anonymity/classification)
-//	POST /api/lb_test  → Load-balancing strategy test
+//	GET  /health   → Health check (backend self + upstream agent)
+//	GET  /v1/samples  → Return sample payloads for all endpoints
+//	POST /v1/proxy    → Single request proxy forwarding (REST → gRPC)
+//	POST /v1/batch    → Batch request forwarding
+//	POST /v1/upload   → File upload + privacy processing (masking/K-anonymity/classification)
+//	POST /v1/lb_test  → Load-balancing strategy test
 package handlers
 
 import (
@@ -165,24 +165,23 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 	r.Use(secHandler)
 
 	r.GET("/health", s.Health)
-	r.GET("/api/health", s.Health)
-	r.GET("/api/samples", s.Samples)
-	r.POST("/api/proxy", s.Proxy)
-	r.POST("/api/batch", s.Batch)
-	r.POST("/api/upload", s.Upload)
-	r.POST("/api/lb_test", s.LbTest)
-	r.POST("/api/concurrency_test", s.ConcurrencyTest)
-	r.POST("/api/medical_pipeline", s.MedicalPipeline)
-	r.POST("/api/yibao_pipeline", s.YibaoPipeline)
-	r.POST("/api/pipeline/process", s.PipelineProcess)
+	r.GET("/v1/samples", s.Samples)
+	r.POST("/v1/proxy", s.Proxy)
+	r.POST("/v1/batch", s.Batch)
+	r.POST("/v1/upload", s.Upload)
+	r.POST("/v1/lb_test", s.LbTest)
+	r.POST("/v1/concurrency_test", s.ConcurrencyTest)
+	r.POST("/v1/medical_pipeline", s.MedicalPipeline)
+	r.POST("/v1/yibao_pipeline", s.YibaoPipeline)
+	r.POST("/v1/pipeline/process", s.PipelineProcess)
 
 	// Direct Go microservice proxy routes (Phase 2)
 	// 主控制台 BFF 直连 service-hub / datasource-mgr / audit-log 的代理入口。
 	// P0-7（门禁 G-01）：不再是无限制透明代理，转发的每个方法 + 路径都要过
 	// isAllowedMicroserviceProxyPath 默认拒绝白名单，原始记录/样本端点禁止出域。
-	r.Any("/api/hub/*path", s.ProxyHub)
-	r.Any("/api/datasource/*path", s.ProxyDatasource)
-	r.Any("/api/audit/*path", s.ProxyAudit)
+	r.Any("/v1/hub/*path", s.ProxyHub)
+	r.Any("/v1/datasource/*path", s.ProxyDatasource)
+	r.Any("/v1/audit/*path", s.ProxyAudit)
 
 	r.GET("/metrics", s.mc.Handler())
 	s.registerStatic(r)
@@ -232,11 +231,11 @@ func (s *Server) registerStatic(r *gin.Engine) {
 
 	// 注册 NoRoute 处理器：当请求不匹配任何已注册路由时触发。
 	// 用于实现 SPA 的前端路由回退：
-	//   - /api/* 路径 → 返回 404 JSON 错误（API 路由未匹配说明请求无效）
+	//   - /v1/* 路径 → 返回 404 JSON 错误（API 路由未匹配说明请求无效）
 	//   - 其他路径 → 返回 index.html（让前端 React Router 处理路由）
 	r.NoRoute(func(c *gin.Context) {
-		// 判断请求路径是否以 /api/ 开头
-		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+		// 判断请求路径是否以 /v1/ 开头
+		if strings.HasPrefix(c.Request.URL.Path, "/v1/") {
 			// API 路由未匹配，返回标准 404 JSON 响应
 			middleware.AbortWithError(c, http.StatusNotFound, "NOT_FOUND", "Not Found", nil)
 			return
@@ -1177,11 +1176,11 @@ func containsAny(s string, subs []string) bool {
 
 // securityMiddleware 返回可选的 API Key 鉴权 + 限流中间件（默认关闭 / 宽松）。
 //
-//   - apiKey 非空时，/api/*（除 /api/health）需携带 Authorization: Bearer <key>；
+//   - apiKey 非空时，/v1/*（除 /health）需携带 Authorization: Bearer <key>；
 //   - rateLimit > 0 时，每分钟每客户端 IP 超过该阈值返回 429（进程内滑动窗口）。
 //
 // CORS 预检（OPTIONS）已由 corsMiddleware 提前返回 204，不会进入本中间件；
-// 静态资源等非 /api 路径与 /api/health 均子以豁免。
+// 静态资源等非 /v1 路径与 /health 均子以豁免。
 func securityMiddleware(apiKey string, rateLimit int) (gin.HandlerFunc, func()) {
 	// 限流状态：每个客户端 IP 的请求时间戳列表（60 秒滑动窗口）。
 	var mu sync.Mutex
@@ -1235,8 +1234,8 @@ func securityMiddleware(apiKey string, rateLimit int) (gin.HandlerFunc, func()) 
 
 	handler := func(c *gin.Context) {
 		path := c.Request.URL.Path
-		// 仅对 /api/* 生效；健康检查豁免。
-		if !strings.HasPrefix(path, "/api/") || path == "/api/health" {
+		// 仅对 /v1/* 生效；健康检查豁免。
+		if !strings.HasPrefix(path, "/v1/") {
 			c.Next()
 			return
 		}
@@ -1592,10 +1591,10 @@ func splitHosts(s string) []string {
 
 // ── P0-7 / 门禁 G-01：中台透明代理「方法 + 路径」白名单 ──────────────────────
 //
-// /api/hub、/api/datasource、/api/audit 三个透明代理历史上把**任意方法 + 任意
+// /v1/hub、/v1/datasource、/v1/audit 三个透明代理历史上把**任意方法 + 任意
 // 路径**原样转发给中台微服务，浏览器客户端可借此直达 datasource-mgr 的未脱敏
-// 记录端点（/api/datasources/:id/records、/sample）与原始领域 API
-// （/api/v1/yibao、/api/v1/kangyang、/api/v1/mock3、/api/v1/mock4），
+// 记录端点（/v1/datasources/:id/records、/sample）与原始领域 API
+// （/v1/yibao、/v1/kangyang、/v1/mock3、/v1/mock4），
 // 既不经 engine 脱敏漏斗、也不产生任何存证 —— 与「原始数据不出域」直接冲突。
 //
 // 下列白名单为**默认拒绝**：仅放行控制台确实需要的只读元数据 / 探查 / 统计与
@@ -1604,8 +1603,8 @@ func splitHosts(s string) []string {
 // proxyRule 白名单条目。
 //   - method：HTTP 方法，大小写不敏感；
 //   - pattern：上游路径模式，其中 "*" 作为独立路径段时匹配**恰好一个**非空段
-//     （如 /api/datasources/*/metadata）。因此不存在前缀放大效应：
-//     /api/datasources/* 永远不会匹配 /api/datasources/ds_yibao/records。
+//     （如 /v1/datasources/*/metadata）。因此不存在前缀放大效应：
+//     /v1/datasources/* 永远不会匹配 /v1/datasources/ds_yibao/records。
 type proxyRule struct {
 	method  string
 	pattern string
@@ -1615,7 +1614,6 @@ type proxyRule struct {
 var proxyHealthRules = []proxyRule{
 	{method: http.MethodGet, pattern: "/health"},
 	{method: http.MethodGet, pattern: "/readyz"},
-	{method: http.MethodGet, pattern: "/api/health"},
 }
 
 // microserviceProxyAllowlist 按代理目标（hub / datasource / audit）列出放行规则。
@@ -1623,39 +1621,39 @@ var proxyHealthRules = []proxyRule{
 var microserviceProxyAllowlist = map[string][]proxyRule{
 	// service-hub：流水线调度与任务遥测
 	"hub": append(append([]proxyRule{}, proxyHealthRules...),
-		proxyRule{method: http.MethodGet, pattern: "/api/hub/status"},
-		proxyRule{method: http.MethodGet, pattern: "/api/hub/tasks"},
-		proxyRule{method: http.MethodGet, pattern: "/api/hub/tasks/*"},
-		proxyRule{method: http.MethodGet, pattern: "/api/hub/pipeline"},
-		proxyRule{method: http.MethodPost, pattern: "/api/hub/dispatch"},
-		proxyRule{method: http.MethodPost, pattern: "/api/hub/classify"},
+		proxyRule{method: http.MethodGet, pattern: "/v1/hub/status"},
+		proxyRule{method: http.MethodGet, pattern: "/v1/hub/tasks"},
+		proxyRule{method: http.MethodGet, pattern: "/v1/hub/tasks/*"},
+		proxyRule{method: http.MethodGet, pattern: "/v1/hub/pipeline"},
+		proxyRule{method: http.MethodPost, pattern: "/v1/hub/dispatch"},
 	),
 	// datasource-mgr：仅数据源目录与 Schema 元数据；
-	// /records、/sample、/api/v1/* 原始领域 API 与 seed 写接口**禁止**经 BFF 出域。
+	// /records、/sample、/v1/* 原始领域 API 与 seed 写接口**禁止**经 BFF 出域。
 	"datasource": append(append([]proxyRule{}, proxyHealthRules...),
-		proxyRule{method: http.MethodGet, pattern: "/api/datasources"},
-		proxyRule{method: http.MethodGet, pattern: "/api/datasources/*"},
-		proxyRule{method: http.MethodGet, pattern: "/api/datasources/*/metadata"},
-		proxyRule{method: http.MethodGet, pattern: "/api/datasources/*/audit"},
-		proxyRule{method: http.MethodPost, pattern: "/api/datasources/*/test"},
+		proxyRule{method: http.MethodGet, pattern: "/v1/datasources"},
+		proxyRule{method: http.MethodGet, pattern: "/v1/datasources/*"},
+		proxyRule{method: http.MethodGet, pattern: "/v1/datasources/*/metadata"},
+		proxyRule{method: http.MethodGet, pattern: "/v1/datasources/*/audit"},
+		proxyRule{method: http.MethodPost, pattern: "/v1/datasources/*/test"},
 	),
 	// audit-log：存证查询、统计与哈希链验真（治理巡检必需）
 	"audit": append(append([]proxyRule{}, proxyHealthRules...),
-		proxyRule{method: http.MethodGet, pattern: "/api/audit/logs"},
-		proxyRule{method: http.MethodGet, pattern: "/api/audit/logs/*"},
-		proxyRule{method: http.MethodPost, pattern: "/api/audit/logs"},
-		proxyRule{method: http.MethodGet, pattern: "/api/audit/stats"},
-		proxyRule{method: http.MethodGet, pattern: "/api/audit/snapshots"},
-		proxyRule{method: http.MethodPost, pattern: "/api/audit/snapshots/verify"},
-		proxyRule{method: http.MethodGet, pattern: "/api/audit/chain/verify"},
-		proxyRule{method: http.MethodPost, pattern: "/api/audit/chain/verify"},
-		proxyRule{method: http.MethodPost, pattern: "/api/audit/report"},
+		proxyRule{method: http.MethodGet, pattern: "/v1/audit/logs"},
+		proxyRule{method: http.MethodGet, pattern: "/v1/audit/logs/*"},
+		proxyRule{method: http.MethodPost, pattern: "/v1/audit/logs"},
+		proxyRule{method: http.MethodGet, pattern: "/v1/audit/stats"},
+		proxyRule{method: http.MethodGet, pattern: "/v1/audit/snapshots"},
+		proxyRule{method: http.MethodPost, pattern: "/v1/audit/snapshots/verify"},
+		proxyRule{method: http.MethodGet, pattern: "/v1/audit/chain/verify"},
+		proxyRule{method: http.MethodPost, pattern: "/v1/audit/chain/verify"},
+		proxyRule{method: http.MethodPost, pattern: "/v1/audit/report"},
 	),
 }
 
-// proxyDenyPathPrefixes 黑名单前缀：/api/v1/* 是 datasource-mgr 的原始领域数据 API，
-// 即使后续白名单被放宽也必须拒绝。
-var proxyDenyPathPrefixes = []string{"/api/v1/", "/debug/", "/internal/", "/metrics"}
+// proxyDenyPathPrefixes 黑名单前缀：/v1/yibao、/v1/kangyang、/v1/mock3、/v1/mock4
+// 是 datasource-mgr 原始领域数据 API 的命名空间，即使后续白名单被放宽也必须拒绝。
+// 注意不得写成 "/v1/"：三个中台服务的合法上游路由全部位于 /v1/ 之下。
+var proxyDenyPathPrefixes = []string{"/v1/yibao", "/v1/kangyang", "/v1/mock3", "/v1/mock4", "/debug/", "/internal/", "/metrics"}
 
 // proxyDenyPathSegments 黑名单尾段：原始记录 / 样本导出端点的统一形态，
 // 作为白名单之外的第二道硬拦截（P0-7 验收口径显式点名）。
@@ -1730,7 +1728,7 @@ func matchProxyPathPattern(pattern, cleanedPath string) bool {
 
 // rewriteProxyRequestPath 由入站 URL 还原上游路径，并识别编码穿越。
 // 返回 ok=false 表示路径不可解析、含 %2e%2e 之类编码穿越，或试图用 ".."
-// 逃出自身前缀（如 /api/datasource/../audit/logs）——调用方必须拒绝。
+// 逃出自身前缀（如 /v1/datasource/../audit/logs）——调用方必须拒绝。
 func rewriteProxyRequestPath(u *url.URL, prefix string) (string, bool) {
 	if u == nil || !strings.HasPrefix(u.Path, "/") {
 		return "", false
@@ -1738,16 +1736,16 @@ func rewriteProxyRequestPath(u *url.URL, prefix string) (string, bool) {
 	if hasEncodedTraversal(u) {
 		return "", false
 	}
-	// 先 Clean 再校验前缀：保证 ".." 无法把请求抬到 /api/{service} 之外
+	// 先 Clean 再校验前缀：保证 ".." 无法把请求抬到 /v1/{service} 之外
 	cleaned := path.Clean(u.Path)
 	if cleaned != prefix && !strings.HasPrefix(cleaned, prefix+"/") {
-		// 覆盖两类越权：/api/datasource/../audit/...（抬出自身前缀）
-		// 与 /api/datasourceX/...（前缀命中但不是段边界）
+		// 覆盖两类越权：/v1/datasource/../audit/...（抬出自身前缀）
+		// 与 /v1/datasourceX/...（前缀命中但不是段边界）
 		return "", false
 	}
 	upstream := strings.TrimPrefix(cleaned, prefix)
 	if upstream == "" {
-		// /api/{service} 自身不是合法上游路径（Clean 已消除尾斜杠）
+		// /v1/{service} 自身不是合法上游路径（Clean 已消除尾斜杠）
 		return "", false
 	}
 	return path.Clean(upstream), true
@@ -1819,7 +1817,7 @@ func displayProxyPath(c *gin.Context, upstream string) string {
 }
 
 // ProxyHub transparently forwards requests to service-hub.
-// The /api/hub prefix is stripped so the upstream sees its own route (e.g. /api/hub/tasks → /tasks).
+// The /v1/hub prefix is stripped so the upstream sees its own route (e.g. /v1/hub/tasks → /tasks).
 // 转发前经过 isAllowedMicroserviceProxyPath 方法 + 路径白名单校验（P0-7）。
 func (s *Server) ProxyHub(c *gin.Context) {
 	s.proxyMicroservice(c, "hub")
@@ -1840,9 +1838,9 @@ func (s *Server) ProxyAudit(c *gin.Context) {
 // deny-by-default allowlist (P0-7 / G-01), logs every call (allowed or denied), then
 // forwards method/query/body using the shared microservices client.
 func (s *Server) proxyMicroservice(c *gin.Context, service string) {
-	// Strip the leading /api/{service} prefix to reconstruct the upstream path.
+	// Strip the leading /v1/{service} prefix to reconstruct the upstream path.
 	// 规范化 + 前缀剥离 + 编码穿越检测一次完成。
-	prefix := "/api/" + service
+	prefix := "/v1/" + service
 	upstream, ok := rewriteProxyRequestPath(c.Request.URL, prefix)
 
 	// P0-7 门禁 G-01：默认拒绝，仅放行白名单内的只读元数据/探查/统计与调度端点。

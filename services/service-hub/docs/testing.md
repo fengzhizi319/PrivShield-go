@@ -10,7 +10,7 @@
 | 测试套件 / 层次 | 测试文件 | 覆盖范围与关键断言 | 包覆盖率 |
 |---|---|---|:---:|
 | **Agent 客户端** | `internal/agent/client_test.go` | 上游健康检查、`ProcessAgent`/`ProcessMedical` 一体化处理、`Classify` 动态分类端点、熔断器与指数退避重试 | **16.0%** |
-| **出域存证客户端 (P0-6)** | `internal/audit/client_test.go` | audit-log 出域存证提交（`POST /api/audit/logs`）、SM3 输入/输出指纹、fail-closed 与网络重试 | **82.1%** |
+| **出域存证客户端 (P0-6)** | `internal/audit/client_test.go` | audit-log 出域存证提交（`POST /v1/audit/logs`）、SM3 输入/输出指纹、fail-closed 与网络重试 | **82.1%** |
 | **数据源客户端** | `internal/datasource/client_test.go` | `FetchRecordByIDCard` 按身份证号取数、`FetchRecords` 分页、`ListDataSources`/`GetDataSource`/`TestConnection`、探活、三态熔断器、HTTP/gRPC 双协议 | **48.6%** |
 | **共享领域模型** | `internal/models/models_test.go` | `LevelToOperation` 等级→算子映射（L4/L5 均为 `dp`）、算子强度只升不降语义、核心模型 JSON 序列化 | **35.3%** |
 | **配置加载器** | `internal/config/config_test.go` | 默认配置、多节点 `AgentBaseURLs` 轮询、audit-log 存证端点解析与回退链、mTLS/公钥固定、P0-4 严格存储 fail-closed 门禁 | **83.9%** |
@@ -49,16 +49,16 @@ PRIVSHIELD_E2E=1 go test -v -run TestRealE2E ./services/service-hub/internal/han
 
 | 测试函数 | 对应接口 / 场景 | 验证内容与防护重点 |
 |---|---|---|
-| `TestHealth` | `GET /health` / `GET /api/health` | 自身存活探测与模块标识返回 |
+| `TestHealth` | `GET /health` / `GET /health` | 自身存活探测与模块标识返回 |
 | `TestReadyzAgentUnreachable` | `GET /readyz` | 深度依赖探活：上游 Agent 不可达时返回 503 Not Ready（含 Datasource 连通性） |
-| `TestHubStatus` | `GET /api/hub/status` | 调度中枢运行状态、活跃/排队/完成/失败任务计数汇总 |
-| `TestGetTask_SuccessAndNotFound` | `GET /api/hub/tasks/:id` | 正常查询任务详情与不存在 ID 返回 404 Not Found |
-| `TestListTasksEmpty` | `GET /api/hub/tasks` | 无任务时返回 `total=0` 且任务列表为空切片 |
-| `TestListTasksWithFilter` | `GET /api/hub/tasks?status=...` | 按 `pending` / `running` / `completed` / `failed` 状态精准过滤 |
-| `TestListTasks_InvalidStatusFilter` | `GET /api/hub/tasks?status=invalid` | 非法状态参数返回 400 Bad Request 校验错误 |
-| `TestDispatchInvalidBody` | `POST /api/hub/dispatch` | 缺失必需字段（`source` 或 `operation`）时返回 400 Bad Request |
-| `TestDispatch_OversizedSource` | `POST /api/hub/dispatch` | `source` 字段超出 1024 字符防超大字符串攻击，返回 400 Bad Request |
-| `TestDispatchAccepted` | `POST /api/hub/dispatch` | 合法请求立即返回 202 Accepted + 任务 ID，后台异步调度流水线 |
+| `TestHubStatus` | `GET /v1/hub/status` | 调度中枢运行状态、活跃/排队/完成/失败任务计数汇总 |
+| `TestGetTask_SuccessAndNotFound` | `GET /v1/hub/tasks/:id` | 正常查询任务详情与不存在 ID 返回 404 Not Found |
+| `TestListTasksEmpty` | `GET /v1/hub/tasks` | 无任务时返回 `total=0` 且任务列表为空切片 |
+| `TestListTasksWithFilter` | `GET /v1/hub/tasks?status=...` | 按 `pending` / `running` / `completed` / `failed` 状态精准过滤 |
+| `TestListTasks_InvalidStatusFilter` | `GET /v1/hub/tasks?status=invalid` | 非法状态参数返回 400 Bad Request 校验错误 |
+| `TestDispatchInvalidBody` | `POST /v1/hub/dispatch` | 缺失必需字段（`source` 或 `operation`）时返回 400 Bad Request |
+| `TestDispatch_OversizedSource` | `POST /v1/hub/dispatch` | `source` 字段超出 1024 字符防超大字符串攻击，返回 400 Bad Request |
+| `TestDispatchAccepted` | `POST /v1/hub/dispatch` | 合法请求立即返回 202 Accepted + 任务 ID，后台异步调度流水线 |
 | `TestProcessTask_StopsWhenStatePersistenceFails` | `processTask` | 首次 `running/ingest` 状态更新失败时立即停止，不推进后续阶段 |
 | `TestAuthMiddleware_Protection` | `pkg/middleware.Auth` | 验证未携带 Token 返回 401 Unauthorized、合法 Bearer 放行及 `/health` 免认证 |
 | `TestScopeAuthMiddleware_AccessControl` | `Server.scopeAuthMiddleware` | Scope-based 鉴权：`hub:read` / `hub:dispatch` 细粒度权限校验、缺失/非法 Token 拒绝、健康端点豁免 |

@@ -106,12 +106,12 @@ curl -s http://127.0.0.1:8084/readyz | jq .
 ### 3.2 国密 SM3 哈希链与快照验真
 ```bash
 # 1. 验证最近存证的国密 SM3 连续哈希链 (Hash Chain)
-curl -s -X POST http://127.0.0.1:8084/api/audit/chain/verify \
+curl -s -X POST http://127.0.0.1:8084/v1/audit/chain/verify \
   -H "Content-Type: application/json" \
   -d '{"limit": 500}' | jq .
 
 # 2. 验证指定快照的国密 SM3 完整性
-curl -s -X POST http://127.0.0.1:8084/api/audit/snapshots/verify \
+curl -s -X POST http://127.0.0.1:8084/v1/audit/snapshots/verify \
   -H "Content-Type: application/json" \
   -d '{"snapshot_id": "snap-xxx"}' | jq .
 ```
@@ -142,6 +142,6 @@ curl -s http://127.0.0.1:8084/metrics
 | **gRPC Handshake Failed** | 客户端证书不匹配或 CA 未信任 | 检查 `AUDIT_LOG_TLS_CA_FILE` 是否包含签名 CA；验证证书有效期 |
 | **client certificate CN not allowed** | 客户端 CN 不在白名单中 | 检查客户端证书 Subject CN 是否在 `AUDIT_LOG_TLS_ALLOWED_CNS` 中 |
 | **PostgreSQL probe timeout** | PG 连接超时或网络不可达 | 系统已自动平滑降级至 SQLite WAL 模式；检查 PG 服务状态与防火墙 |
-| **Integrity Violation** | 审计数据遭受篡改或底层存储损坏 | 调用 `/api/audit/snapshots/verify` 定位异常 snapshot_id，排查记录篡改 |
-| **Hash Chain Broken** | 存在物理删行、调序或未授权中间修改 | 调用 `/api/audit/chain/verify` 获取 `broken_at_id`，定位断链根源 |
+| **Integrity Violation** | 审计数据遭受篡改或底层存储损坏 | 调用 `/v1/audit/snapshots/verify` 定位异常 snapshot_id，排查记录篡改 |
+| **Hash Chain Broken** | 存在物理删行、调序或未授权中间修改 | 调用 `/v1/audit/chain/verify` 获取 `broken_at_id`，定位断链根源 |
 | **Decryption Failed** | 信封加密密钥与原写入密钥不一致 | 检查 `AUDIT_LOG_ENCRYPTION_KEY` 配置；未配置密钥时系统降级为明文读取 |

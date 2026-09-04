@@ -48,7 +48,7 @@
    $$\text{IntegrityHash} = \text{SM3}(\text{BlockData})$$
 2. **快照样本信封加密 (SM4-GCM)**：
    快照中的 `input_sample` 与 `output_sample` 在落盘前经国密 SM4-GCM 应用层信封加密并带有 `enc:v1:` 前缀，防止日志库拖库泄露明文 PII。
-3. **全链连续性验真 (`VerifyChain` / `POST /api/audit/chain/verify`)**：
+3. **全链连续性验真 (`VerifyChain` / `POST /v1/audit/chain/verify`)**：
    支持指定深度对最近 $N$ 条历史记录进行连续性追溯对账，检测任何物理删行、调序或未授权篡改。
 
 ### 2.4 微批聚合刷盘与自适应存储底座
@@ -70,14 +70,14 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/health` / `/readyz` | 健康检查与上游探活 |
-| GET | `/api/audit/logs` | 审计日志列表（支持多维度复合过滤与分页） |
-| POST | `/api/audit/logs` | 创建审计记录（自动关联前序哈希并加密样本，异步微批刷盘） |
-| GET | `/api/audit/logs/:id` | 审计记录详情 |
-| GET | `/api/audit/stats` | 审计统计概览（SQL 原生聚合） |
-| GET | `/api/audit/snapshots` | 快照列表（向鉴权调用方透明解密样本） |
-| POST | `/api/audit/snapshots/verify` | 单点验证快照国密 SM3 完整性 |
-| POST | `/api/audit/chain/verify` | 全链路国密 SM3 区块链式防篡改连续哈希链验真 |
-| POST | `/api/audit/report` | 生成合规审计报告 |
+| GET | `/v1/audit/logs` | 审计日志列表（支持多维度复合过滤与分页） |
+| POST | `/v1/audit/logs` | 创建审计记录（自动关联前序哈希并加密样本，异步微批刷盘） |
+| GET | `/v1/audit/logs/:id` | 审计记录详情 |
+| GET | `/v1/audit/stats` | 审计统计概览（SQL 原生聚合） |
+| GET | `/v1/audit/snapshots` | 快照列表（向鉴权调用方透明解密样本） |
+| POST | `/v1/audit/snapshots/verify` | 单点验证快照国密 SM3 完整性 |
+| POST | `/v1/audit/chain/verify` | 全链路国密 SM3 区块链式防篡改连续哈希链验真 |
+| POST | `/v1/audit/report` | 生成合规审计报告 |
 | GET | `/metrics` | Prometheus 监控指标收集端点 |
 
 ### 3.2 gRPC 服务定义 (`auditlog.proto`)

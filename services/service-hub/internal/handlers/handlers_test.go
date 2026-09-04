@@ -257,14 +257,14 @@ func newTestRouter(s *Server) *gin.Engine {
 	return r
 }
 
-// TestHealth tests the /api/health liveness probe endpoint.
+// TestHealth tests the /health liveness probe endpoint.
 // TestHealth 验证存活探针端点：进程存活即返回 200。
 func TestHealth(t *testing.T) {
 	s := newSimpleTestServer(t)
 	router := newTestRouter(s)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/health", nil)
+	req, _ := http.NewRequest("GET", "/health", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -309,14 +309,14 @@ func TestReadyzAgentUnreachable(t *testing.T) {
 	}
 }
 
-// TestHubStatus tests the /api/hub/status telemetry overview endpoint.
+// TestHubStatus tests the /v1/hub/status telemetry overview endpoint.
 // TestHubStatus 测试调度中枢状态概览端点返回指标。
 func TestHubStatus(t *testing.T) {
 	s := newSimpleTestServer(t)
 	router := newTestRouter(s)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/hub/status", nil)
+	req, _ := http.NewRequest("GET", "/v1/hub/status", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -342,7 +342,7 @@ func TestListTasksEmpty(t *testing.T) {
 	router := newTestRouter(s)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/hub/tasks", nil)
+	req, _ := http.NewRequest("GET", "/v1/hub/tasks", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -363,7 +363,7 @@ func TestDispatchInvalidBody(t *testing.T) {
 	router := newTestRouter(s)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/hub/dispatch", bytes.NewReader([]byte("{}")))
+	req, _ := http.NewRequest("POST", "/v1/hub/dispatch", bytes.NewReader([]byte("{}")))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -386,7 +386,7 @@ func TestDispatchAccepted(t *testing.T) {
 	b, _ := json.Marshal(body)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/hub/dispatch", bytes.NewReader(b))
+	req, _ := http.NewRequest("POST", "/v1/hub/dispatch", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -408,7 +408,7 @@ func TestDispatchAccepted(t *testing.T) {
 
 	// 校验任务列表已包含该任务
 	w2 := httptest.NewRecorder()
-	req2, _ := http.NewRequest("GET", "/api/hub/tasks", nil)
+	req2, _ := http.NewRequest("GET", "/v1/hub/tasks", nil)
 	router.ServeHTTP(w2, req2)
 
 	var resp2 map[string]any
@@ -443,13 +443,13 @@ func TestProcessTask_StopsWhenStatePersistenceFails(t *testing.T) {
 }
 
 // TestPipeline tests the 6-stage pipeline telemetry status endpoint.
-// TestPipeline 测试 /api/hub/pipeline 端点能够准确返回 6 个流水线阶段的实时状态。
+// TestPipeline 测试 /v1/hub/pipeline 端点能够准确返回 6 个流水线阶段的实时状态。
 func TestPipeline(t *testing.T) {
 	s := newSimpleTestServer(t)
 	router := newTestRouter(s)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/hub/pipeline", nil)
+	req, _ := http.NewRequest("GET", "/v1/hub/pipeline", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -484,7 +484,7 @@ func TestListTasksWithFilter(t *testing.T) {
 
 	// 过滤已完成任务
 	w2 := httptest.NewRecorder()
-	req2, _ := http.NewRequest("GET", "/api/hub/tasks?status=completed", nil)
+	req2, _ := http.NewRequest("GET", "/v1/hub/tasks?status=completed", nil)
 	router.ServeHTTP(w2, req2)
 
 	var resp map[string]any
@@ -496,7 +496,7 @@ func TestListTasksWithFilter(t *testing.T) {
 
 	// 过滤排队中任务（完成后应为 0）
 	w3 := httptest.NewRecorder()
-	req3, _ := http.NewRequest("GET", "/api/hub/tasks?status=pending", nil)
+	req3, _ := http.NewRequest("GET", "/v1/hub/tasks?status=pending", nil)
 	router.ServeHTTP(w3, req3)
 
 	var resp3 map[string]any
@@ -511,7 +511,7 @@ func TestListTasksWithFilter(t *testing.T) {
 // ============================================================================
 
 // TestE2E_FullPipeline_DispatchMasking tests the complete data desensitization flow:
-//  1. Submit a masking task via POST /api/hub/dispatch (operation=mask)
+//  1. Submit a masking task via POST /v1/hub/dispatch (operation=mask)
 //  2. Pipeline processes 6 stages: ingest → fetch → classify → desensitize → return → audit
 //  3. Task completes successfully with masked result from mock agent
 //  4. Verify task status = completed, stage = done, duration > 0
@@ -543,7 +543,7 @@ func TestE2E_FullPipeline_DispatchMasking(t *testing.T) {
 	b, _ := json.Marshal(dispatchBody)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/hub/dispatch", bytes.NewReader(b))
+	req, _ := http.NewRequest("POST", "/v1/hub/dispatch", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -567,7 +567,7 @@ func TestE2E_FullPipeline_DispatchMasking(t *testing.T) {
 
 	// Step 3: 拿到脱敏数据 — 根据 TaskID 直接查询任务详情
 	w2 := httptest.NewRecorder()
-	req2, _ := http.NewRequest("GET", "/api/hub/tasks/"+taskID, nil)
+	req2, _ := http.NewRequest("GET", "/v1/hub/tasks/"+taskID, nil)
 	router.ServeHTTP(w2, req2)
 
 	if w2.Code != http.StatusOK {
@@ -602,7 +602,7 @@ func TestE2E_FullPipeline_DispatchMasking(t *testing.T) {
 
 	// Step 4: 校验调度中枢状态中的完成任务计数已增加
 	w3 := httptest.NewRecorder()
-	req3, _ := http.NewRequest("GET", "/api/hub/status", nil)
+	req3, _ := http.NewRequest("GET", "/v1/hub/status", nil)
 	router.ServeHTTP(w3, req3)
 
 	var hubStatus map[string]any
@@ -781,7 +781,7 @@ func TestE2E_FullPipeline_PipelineStagesWithAgent(t *testing.T) {
 	b, _ := json.Marshal(body)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/hub/dispatch", bytes.NewReader(b))
+	req, _ := http.NewRequest("POST", "/v1/hub/dispatch", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -792,7 +792,7 @@ func TestE2E_FullPipeline_PipelineStagesWithAgent(t *testing.T) {
 	// 检查处理中的流水线阶段遥测
 	time.Sleep(50 * time.Millisecond)
 	w2 := httptest.NewRecorder()
-	req2, _ := http.NewRequest("GET", "/api/hub/pipeline", nil)
+	req2, _ := http.NewRequest("GET", "/v1/hub/pipeline", nil)
 	router.ServeHTTP(w2, req2)
 
 	if w2.Code != http.StatusOK {
@@ -827,7 +827,7 @@ func TestGetTask_SuccessAndNotFound(t *testing.T) {
 
 	t.Run("Found", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/hub/tasks/task-abc-123", nil)
+		req, _ := http.NewRequest("GET", "/v1/hub/tasks/task-abc-123", nil)
 		router.ServeHTTP(w, req)
 
 		if w.Code != http.StatusOK {
@@ -843,7 +843,7 @@ func TestGetTask_SuccessAndNotFound(t *testing.T) {
 
 	t.Run("NotFound", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/hub/tasks/nonexistent", nil)
+		req, _ := http.NewRequest("GET", "/v1/hub/tasks/nonexistent", nil)
 		router.ServeHTTP(w, req)
 
 		if w.Code != http.StatusNotFound {
@@ -865,7 +865,7 @@ func TestDispatch_OversizedSource(t *testing.T) {
 	body, _ := json.Marshal(oversized)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/hub/dispatch", bytes.NewReader(body))
+	req, _ := http.NewRequest("POST", "/v1/hub/dispatch", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -881,7 +881,7 @@ func TestListTasks_InvalidStatusFilter(t *testing.T) {
 	router := newTestRouter(s)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/hub/tasks?status=illegal_status", nil)
+	req, _ := http.NewRequest("GET", "/v1/hub/tasks?status=illegal_status", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -909,7 +909,7 @@ func TestAuthMiddleware_Protection(t *testing.T) {
 
 	t.Run("Unauthorized_NoHeader", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/hub/status", nil)
+		req, _ := http.NewRequest("GET", "/v1/hub/status", nil)
 		r.ServeHTTP(w, req)
 
 		if w.Code != http.StatusUnauthorized {
@@ -919,7 +919,7 @@ func TestAuthMiddleware_Protection(t *testing.T) {
 
 	t.Run("Authorized_Bearer", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/hub/status", nil)
+		req, _ := http.NewRequest("GET", "/v1/hub/status", nil)
 		req.Header.Set("Authorization", "Bearer secret-token-123")
 		r.ServeHTTP(w, req)
 
@@ -968,14 +968,14 @@ func TestScopeAuthMiddleware_AccessControl(t *testing.T) {
 		method     string
 		wantStatus int
 	}{
-		{"reader can read tasks", "read-only-token", "/api/hub/tasks", "GET", http.StatusOK},
-		{"reader cannot dispatch", "read-only-token", "/api/hub/dispatch", "POST", http.StatusForbidden},
-		{"dispatcher can dispatch", "dispatch-token", "/api/hub/dispatch", "POST", http.StatusAccepted},
-		{"dispatcher cannot read", "dispatch-token", "/api/hub/tasks", "GET", http.StatusForbidden},
-		{"admin can do both", "full-access-token", "/api/hub/tasks", "GET", http.StatusOK},
-		{"admin can dispatch", "full-access-token", "/api/hub/dispatch", "POST", http.StatusAccepted},
-		{"invalid token rejected", "bad-token", "/api/hub/tasks", "GET", http.StatusUnauthorized},
-		{"missing token rejected", "", "/api/hub/tasks", "GET", http.StatusUnauthorized},
+		{"reader can read tasks", "read-only-token", "/v1/hub/tasks", "GET", http.StatusOK},
+		{"reader cannot dispatch", "read-only-token", "/v1/hub/dispatch", "POST", http.StatusForbidden},
+		{"dispatcher can dispatch", "dispatch-token", "/v1/hub/dispatch", "POST", http.StatusAccepted},
+		{"dispatcher cannot read", "dispatch-token", "/v1/hub/tasks", "GET", http.StatusForbidden},
+		{"admin can do both", "full-access-token", "/v1/hub/tasks", "GET", http.StatusOK},
+		{"admin can dispatch", "full-access-token", "/v1/hub/dispatch", "POST", http.StatusAccepted},
+		{"invalid token rejected", "bad-token", "/v1/hub/tasks", "GET", http.StatusUnauthorized},
+		{"missing token rejected", "", "/v1/hub/tasks", "GET", http.StatusUnauthorized},
 		{"health exempt", "", "/health", "GET", http.StatusOK},
 	}
 
@@ -1060,10 +1060,10 @@ func TestHubOrchestrationEndpoints(t *testing.T) {
 
 	router := newTestRouter(s)
 
-	// 1. GET /api/hub/topology
+	// 1. GET /v1/hub/topology
 	t.Run("HubTopology", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/hub/topology", nil)
+		req, _ := http.NewRequest("GET", "/v1/hub/topology", nil)
 		router.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
@@ -1079,10 +1079,10 @@ func TestHubOrchestrationEndpoints(t *testing.T) {
 		}
 	})
 
-	// 2. GET /api/hub/audit/logs
+	// 2. GET /v1/hub/audit/logs
 	t.Run("GetAuditLogs", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/hub/audit/logs?limit=10", nil)
+		req, _ := http.NewRequest("GET", "/v1/hub/audit/logs?limit=10", nil)
 		router.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
@@ -1094,10 +1094,10 @@ func TestHubOrchestrationEndpoints(t *testing.T) {
 		}
 	})
 
-	// 3. POST /api/hub/audit/verify
+	// 3. POST /v1/hub/audit/verify
 	t.Run("VerifyAudit", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("POST", "/api/hub/audit/verify", nil)
+		req, _ := http.NewRequest("POST", "/v1/hub/audit/verify", nil)
 		router.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
@@ -1109,11 +1109,11 @@ func TestHubOrchestrationEndpoints(t *testing.T) {
 		}
 	})
 
-	// 4. POST /api/hub/audit/logs
+	// 4. POST /v1/hub/audit/logs
 	t.Run("CreateAuditLog", func(t *testing.T) {
 		payload := []byte(`{"task_id":"task-test-1","datasource":"ds_yibao","api_code":"api1_yibao","operation":"mask","status":"success"}`)
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("POST", "/api/hub/audit/logs", bytes.NewReader(payload))
+		req, _ := http.NewRequest("POST", "/v1/hub/audit/logs", bytes.NewReader(payload))
 		router.ServeHTTP(w, req)
 		if w.Code != http.StatusCreated {
 			t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())

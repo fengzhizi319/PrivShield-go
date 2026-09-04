@@ -80,7 +80,7 @@ prevHash + id + task_id + api_code + datasource_id + timestamp + input_hash + ou
 ```
 
 - 每条审计记录附带前序 `prev_hash`，实现区块链式前后咬合；
-- 全链核验接口 `POST /api/audit/chain/verify` 毫秒级重算整链，杜绝物理删行或记录插入攻击。
+- 全链核验接口 `POST /v1/audit/chain/verify` 毫秒级重算整链，杜绝物理删行或记录插入攻击。
 
 ### 4.2 快照样本国密 SM4-GCM 信封加密
 

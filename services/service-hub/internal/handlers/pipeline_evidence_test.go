@@ -214,13 +214,13 @@ func TestPipelineAuditStageFailureMarksTaskFailed(t *testing.T) {
 	}
 }
 
-// dispatchTask submits a task through POST /api/hub/dispatch and returns its task_id.
-// dispatchTask 通过 POST /api/hub/dispatch 提交任务并返回 task_id。
+// dispatchTask submits a task through POST /v1/hub/dispatch and returns its task_id.
+// dispatchTask 通过 POST /v1/hub/dispatch 提交任务并返回 task_id。
 func dispatchTask(t *testing.T, router *gin.Engine, body map[string]any) string {
 	t.Helper()
 	raw, _ := json.Marshal(body)
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/hub/dispatch", bytes.NewReader(raw))
+	req, _ := http.NewRequest("POST", "/v1/hub/dispatch", bytes.NewReader(raw))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 

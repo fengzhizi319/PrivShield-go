@@ -33,12 +33,12 @@ func TestReaderRoleEndToEnd(t *testing.T) {
 	r := newRoleTestRouter(t, "write-key", "reader-key")
 
 	readable := []struct{ method, path string }{
-		{http.MethodGet, "/api/audit/logs"},
-		{http.MethodGet, "/api/audit/stats"},
-		{http.MethodGet, "/api/audit/snapshots"},
-		{http.MethodPost, "/api/audit/snapshots/verify"},
-		{http.MethodGet, "/api/audit/chain/verify"},
-		{http.MethodPost, "/api/audit/chain/verify"},
+		{http.MethodGet, "/v1/audit/logs"},
+		{http.MethodGet, "/v1/audit/stats"},
+		{http.MethodGet, "/v1/audit/snapshots"},
+		{http.MethodPost, "/v1/audit/snapshots/verify"},
+		{http.MethodGet, "/v1/audit/chain/verify"},
+		{http.MethodPost, "/v1/audit/chain/verify"},
 	}
 	for _, tc := range readable {
 		if code := statusWithKey(r, tc.method, tc.path, "reader-key"); code == http.StatusUnauthorized || code == http.StatusForbidden {
@@ -47,8 +47,8 @@ func TestReaderRoleEndToEnd(t *testing.T) {
 	}
 
 	denied := []struct{ method, path string }{
-		{http.MethodPost, "/api/audit/logs"},   // 写存证：核验员不得写入
-		{http.MethodPost, "/api/audit/report"}, // 报表导出：运维身份专属
+		{http.MethodPost, "/v1/audit/logs"},   // 写存证：核验员不得写入
+		{http.MethodPost, "/v1/audit/report"}, // 报表导出：运维身份专属
 	}
 	for _, tc := range denied {
 		if code := statusWithKey(r, tc.method, tc.path, "reader-key"); code != http.StatusForbidden {
@@ -57,8 +57,8 @@ func TestReaderRoleEndToEnd(t *testing.T) {
 	}
 
 	// 写入身份不受白名单约束（否则权责分离会反过来卡死业务链路）。
-	if code := statusWithKey(r, http.MethodPost, "/api/audit/report", "write-key"); code == http.StatusUnauthorized || code == http.StatusForbidden {
-		t.Errorf("writer POST /api/audit/report: status = %d, want access granted (not 401/403)", code)
+	if code := statusWithKey(r, http.MethodPost, "/v1/audit/report", "write-key"); code == http.StatusUnauthorized || code == http.StatusForbidden {
+		t.Errorf("writer POST /v1/audit/report: status = %d, want access granted (not 401/403)", code)
 	}
 }
 
@@ -66,10 +66,10 @@ func TestReaderRoleEndToEnd(t *testing.T) {
 func TestReaderRoleDisabledKeepsSingleKeySemantics(t *testing.T) {
 	r := newRoleTestRouter(t, "write-key", "")
 
-	if code := statusWithKey(r, http.MethodGet, "/api/audit/chain/verify", "reader-key"); code != http.StatusUnauthorized {
+	if code := statusWithKey(r, http.MethodGet, "/v1/audit/chain/verify", "reader-key"); code != http.StatusUnauthorized {
 		t.Errorf("foreign key with role disabled: status = %d, want 401", code)
 	}
-	if code := statusWithKey(r, http.MethodPost, "/api/audit/logs", "write-key"); code == http.StatusUnauthorized || code == http.StatusForbidden {
+	if code := statusWithKey(r, http.MethodPost, "/v1/audit/logs", "write-key"); code == http.StatusUnauthorized || code == http.StatusForbidden {
 		t.Errorf("write key with role disabled: status = %d, want access granted (not 401/403)", code)
 	}
 }
@@ -84,8 +84,8 @@ func TestReadOnlyWhitelistCoversEveryVerificationRoute(t *testing.T) {
 	}
 	// 写端点必须显式不在表内。
 	for _, ep := range auditReadOnlyEndpoints {
-		if ep.Path == "/api/audit/logs" && ep.Method == http.MethodPost {
-			t.Fatal("POST /api/audit/logs (evidence write) must never be readable by the reader role")
+		if ep.Path == "/v1/audit/logs" && ep.Method == http.MethodPost {
+			t.Fatal("POST /v1/audit/logs (evidence write) must never be readable by the reader role")
 		}
 	}
 }

@@ -58,8 +58,8 @@ import (
 
 const (
 	// RecordPath 是 audit-log 追加一条存证的 REST 端点，
-	// 对应 services/audit-log/internal/handlers/handlers.go 中的 r.POST("/api/audit/logs", s.CreateLog)。
-	RecordPath = "/api/audit/logs"
+	// 对应 services/audit-log/internal/handlers/handlers.go 中的 r.POST("/v1/audit/logs", s.CreateLog)。
+	RecordPath = "/v1/audit/logs"
 
 	// EvidenceUser 是本客户端提交存证时登记的调用方身份（中台服务账号，便于与业务侧存证区分）。
 	EvidenceUser = "service-hub"
@@ -195,7 +195,7 @@ func (c *Client) Endpoint() string {
 	return c.baseURLs[0]
 }
 
-// Health checks audit-log connectivity via HTTP GET /api/health.
+// Health checks audit-log connectivity via HTTP GET /health.
 func (c *Client) Health(ctx context.Context) (map[string]any, error) {
 	if c == nil || len(c.baseURLs) == 0 {
 		return nil, ErrNotConfigured
@@ -204,7 +204,7 @@ func (c *Client) Health(ctx context.Context) (map[string]any, error) {
 		return nil, c.initErr
 	}
 	endpoint := c.pickEndpoint()
-	u := strings.TrimRight(endpoint, "/") + "/api/health"
+	u := strings.TrimRight(endpoint, "/") + "/health"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -234,7 +234,7 @@ func (c *Client) GetLogs(ctx context.Context, limit, offset int, datasourceID, t
 		return nil, c.initErr
 	}
 	endpoint := c.pickEndpoint()
-	parsedURL, err := url.Parse(strings.TrimRight(endpoint, "/") + "/api/audit/logs")
+	parsedURL, err := url.Parse(strings.TrimRight(endpoint, "/") + "/v1/audit/logs")
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +290,7 @@ func (c *Client) CreateLog(ctx context.Context, body []byte) (map[string]any, er
 		return nil, c.initErr
 	}
 	endpoint := c.pickEndpoint()
-	u := strings.TrimRight(endpoint, "/") + "/api/audit/logs"
+	u := strings.TrimRight(endpoint, "/") + "/v1/audit/logs"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -327,7 +327,7 @@ func (c *Client) Verify(ctx context.Context) (map[string]any, error) {
 	endpoint := c.pickEndpoint()
 
 	// 1. Get latest snapshot
-	snapURL := strings.TrimRight(endpoint, "/") + "/api/audit/snapshots?limit=1"
+	snapURL := strings.TrimRight(endpoint, "/") + "/v1/audit/snapshots?limit=1"
 	snapReq, err := http.NewRequestWithContext(ctx, http.MethodGet, snapURL, nil)
 	if err != nil {
 		return nil, err
@@ -369,7 +369,7 @@ func (c *Client) Verify(ctx context.Context) (map[string]any, error) {
 	// 2. Verify snapshot integrity
 	snapshotID := snapResult.Snapshots[0].ID
 	verifyPayload, _ := json.Marshal(map[string]string{"snapshot_id": snapshotID})
-	verifyURL := strings.TrimRight(endpoint, "/") + "/api/audit/snapshots/verify"
+	verifyURL := strings.TrimRight(endpoint, "/") + "/v1/audit/snapshots/verify"
 	verifyReq, err := http.NewRequestWithContext(ctx, http.MethodPost, verifyURL, bytes.NewReader(verifyPayload))
 	if err != nil {
 		return nil, err
@@ -433,7 +433,7 @@ type Result struct {
 }
 
 // RecordOutbound writes one outbound-flow evidence row and returns its identifiers.
-// RecordOutbound 提交一条出域存证记录（POST /api/audit/logs）。
+// RecordOutbound 提交一条出域存证记录（POST /v1/audit/logs）。
 //
 // 返回错误即代表「该次出域未被证明留痕」，调用方 MUST 使任务失败：
 //   - c 为 nil 或未配置端点 → ErrNotConfigured；
@@ -612,7 +612,7 @@ func (c *Client) setHeaders(req *http.Request) {
 	}
 }
 
-// record 是 audit-log POST /api/audit/logs 的请求载荷。
+// record 是 audit-log POST /v1/audit/logs 的请求载荷。
 // 字段名与 services/audit-log/internal/handlers/handlers.go 中 CreateLog 的匿名请求结构逐一对应；
 // 注意：刻意不包含 prev_hash —— 链头只能由服务端存储层指派（否则 400 INVALID_ARGUMENT）。
 type record struct {

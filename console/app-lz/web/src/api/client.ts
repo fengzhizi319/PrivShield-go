@@ -4,7 +4,7 @@
  * 设计原则：
  *  1. 统一通过 fetchJSON<T> 泛型函数处理请求/响应，自动设置 Content-Type 和错误提取
  *  2. 所有方法返回 Promise，由调用方（App.tsx 中的 fetch 函数）决定如何处理错误
- *  3. BASE_URL 使用相对路径 '/api/lz'，由 Vite dev proxy 或 Nginx 反代到 Go BFF :8081
+ *  3. BASE_URL 使用相对路径 '/v1/lz'，由 Vite dev proxy 或 Nginx 反代到 Go BFF :8081
  *
  * API 分组（对应 BFF handlers.go 中的路由组）：
  *  1. 拓扑 & 网格健康   → GET /topology, POST /probe/all
@@ -35,7 +35,7 @@ import {
 } from '../types/api';
 
 /** BFF 统一 API 前缀（Vite proxy / Nginx 将此路径反代到 Go BFF :8081） */
-const BASE_URL = '/api/lz';
+const BASE_URL = '/v1/lz';
 
 /** localStorage 中存储 JWT 令牌的 key */
 const TOKEN_KEY = 'privshield_token';
@@ -170,7 +170,7 @@ export const api = {
 
   /**
    * 获取 Phase B 租约信息（哪些 Worker 持有哪些任务的租约）。
-   * BFF 内部基于 Service Hub 的 GET /api/hub/tasks?status=running 推导租约信息。
+   * BFF 内部基于 Service Hub 的 GET /v1/hub/tasks?status=running 推导租约信息。
    */
   async getLeases(): Promise<LeasedTasksResponse> {
     return fetchJSON<LeasedTasksResponse>(`${BASE_URL}/tasks/leases`);
@@ -222,7 +222,7 @@ export const api = {
 
   /**
    * 触发 Merkle 树完整性验证。
-   * BFF 内部转发到 Audit Log 服务的 POST /api/audit/snapshots/verify。
+   * BFF 内部转发到 Audit Log 服务的 POST /v1/audit/snapshots/verify。
    * 返回 merkle_valid=true 表示所有日志条目的哈希链未被篡改。
    */
   async verifyAudit(): Promise<AuditVerifyResponse> {
@@ -288,7 +288,7 @@ export const api = {
    * @param req 用户名、密码、显示名称、角色
    */
   async register(req: RegisterRequest): Promise<AuthResponse> {
-    return fetchJSON<AuthResponse>('/api/auth/register', {
+    return fetchJSON<AuthResponse>('/v1/auth/register', {
       method: 'POST',
       body: JSON.stringify(req),
     });
@@ -299,7 +299,7 @@ export const api = {
    * @param req 用户名、密码
    */
   async login(req: LoginRequest): Promise<AuthResponse> {
-    return fetchJSON<AuthResponse>('/api/auth/login', {
+    return fetchJSON<AuthResponse>('/v1/auth/login', {
       method: 'POST',
       body: JSON.stringify(req),
     });
@@ -309,6 +309,6 @@ export const api = {
    * 获取当前登录用户信息。
    */
   async getMe(): Promise<User> {
-    return fetchJSON<User>('/api/auth/me');
+    return fetchJSON<User>('/v1/auth/me');
   },
 };

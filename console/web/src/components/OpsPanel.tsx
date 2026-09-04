@@ -21,7 +21,7 @@
  *      Hardware acceleration: CUDA / GPU / nvidia-smi status.
  *
  * 数据来源 / Data Sources：
- *   - 链路诊断复用 App 传入的 health（/api/health）；
+ *   - 链路诊断复用 App 传入的 health（/health）；
  *   - 其余信息经 fetchDiagnostics() 转发到 Agent 的 GET /v1/ops/diagnostics。
  */
 

@@ -47,20 +47,20 @@ spec:
               value: "http://privshield:8079"
           startupProbe:
             httpGet:
-              path: /api/health
+              path: /health
               port: http
             periodSeconds: 5
             failureThreshold: 24
           livenessProbe:
             httpGet:
-              path: /api/health
+              path: /health
               port: http
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /api/health
+              path: /health
               port: http
             periodSeconds: 5
             timeoutSeconds: 3

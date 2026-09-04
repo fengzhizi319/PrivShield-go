@@ -29,7 +29,7 @@ graph TD
     end
 
     subgraph MockDatasourceMgr ["Mock Datasource Mgr 微服务 (:8083 / :50053)"]
-        HTTPRouter["Gin HTTPS/REST 路由层<br/>/api/datasources/* :8083<br/>(SM2 / TLS 1.3 mTLS + CN 白名单)"]
+        HTTPRouter["Gin HTTPS/REST 路由层<br/>/v1/datasources/* :8083<br/>(SM2 / TLS 1.3 mTLS + CN 白名单)"]
         GRPCRouter["gRPC Server :50053<br/>(SM2 / TLS 1.3 mTLS + CN 白名单)"]
         TLSConfig["统一安全引擎<br/>BuildServerTLSConfig (TLS 1.3 / ClientCA / CN Scope)"]
         MiddlewareStack[统一中间件链<br/>Trace / Logger / Recovery / SecurityHeaders / WAF / MaxBodySize / MaxConcurrent / RateLimit / CORS / ScopeAuth]
@@ -69,12 +69,12 @@ graph TD
 
 | 分级 | 能力 | REST 规范路径 | gRPC RPC 方法 | 外部数据局要求 | 说明 |
 |---|---|---|---|---|---|
-| **Class A** | **按身份证号查询单条记录** | `GET /api/datasources/:id/record-by-id?id_card_no=xxx` | `GetRecordByIDCard` | **强制实现 (P0)** | **核心数据抽取入口**，支持 `ds_yibao`（19 字段）/ `ds_kangyang`（27 字段） |
-| **Class A** | 健康探活探针 | `GET /health`、`GET /api/health` | `Health` | **强制实现 (P0)** | 服务基础存活探针 |
-| **Class A** | 连通性自测试 | `POST /api/datasources/:id/test` | `TestConnection` | **推荐实现 (P1)** | 探测数据源网络与数据库连通性及响应延迟 |
-| **Class B** | 数据源资产目录 | `GET /api/datasources` | `ListDataSources` | 可选扩展 (P2) | 列出全部已注册数据源元数据（若支持动态多源） |
-| **Class B** | 单数据源详情 | `GET /api/datasources/:id` | `GetDataSource` | 可选扩展 (P2) | 按 ID 查询单个数据源元数据 |
-| **Class B** | Schema 元数据探查 | `GET /api/datasources/:id/metadata` | — | 可选扩展 (P2) | 返回表结构与字段类型定义 |
+| **Class A** | **按身份证号查询单条记录** | `GET /v1/datasources/:id/record-by-id?id_card_no=xxx` | `GetRecordByIDCard` | **强制实现 (P0)** | **核心数据抽取入口**，支持 `ds_yibao`（19 字段）/ `ds_kangyang`（27 字段） |
+| **Class A** | 健康探活探针 | `GET /health`、`GET /health` | `Health` | **强制实现 (P0)** | 服务基础存活探针 |
+| **Class A** | 连通性自测试 | `POST /v1/datasources/:id/test` | `TestConnection` | **推荐实现 (P1)** | 探测数据源网络与数据库连通性及响应延迟 |
+| **Class B** | 数据源资产目录 | `GET /v1/datasources` | `ListDataSources` | 可选扩展 (P2) | 列出全部已注册数据源元数据（若支持动态多源） |
+| **Class B** | 单数据源详情 | `GET /v1/datasources/:id` | `GetDataSource` | 可选扩展 (P2) | 按 ID 查询单个数据源元数据 |
+| **Class B** | Schema 元数据探查 | `GET /v1/datasources/:id/metadata` | — | 可选扩展 (P2) | 返回表结构与字段类型定义 |
 | **Class C** | 容器就绪探针与监控指标 | `GET /readyz`、`GET /metrics` | — | **免对接实现** | K8s 集群就绪探针与 Prometheus 指标（局方专网自决） |
-| **Class D** | 模拟访问审计查询 | `GET /api/datasources/:id/audit` | — | **严禁开放 (测试专用)** | 本地单测桩记录，真实审计统一走 `audit-log` |
-| **Class D** | 模拟数据播种/重置 | `POST /api/datasources/seed` | — | **严禁开放 (测试专用)** | 本地一键恢复基准状态，生产环境已物理屏蔽 |
+| **Class D** | 模拟访问审计查询 | `GET /v1/datasources/:id/audit` | — | **严禁开放 (测试专用)** | 本地单测桩记录，真实审计统一走 `audit-log` |
+| **Class D** | 模拟数据播种/重置 | `POST /v1/datasources/seed` | — | **严禁开放 (测试专用)** | 本地一键恢复基准状态，生产环境已物理屏蔽 |

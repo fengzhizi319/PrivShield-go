@@ -13,13 +13,13 @@
 // 路由清单 (Route List)：
 //   GET  /health                         → 存活探针 (Liveness: always 200 if process is alive)
 //   GET  /readyz                         → 就绪探针 (Readiness: 503 if upstream unreachable)
-//   GET  /api/health                     → 标准健康检查探针
-//   GET  /api/hub/status                 → 调度中枢运行状态与队列深度概览
-//   GET  /api/hub/tasks                  → 分页查询任务列表 (支持 status 状态过滤)
-//   GET  /api/hub/tasks/:id              → 根据 TaskID 查询单个任务详情
-//   POST /api/hub/dispatch               → 直接分发指定算子的隐私处理任务 (API1/2/3/4 核心)
-//   POST /api/hub/fetch-and-desensitize  → 按身份证号拉取数据并同步执行分类分级+脱敏（端到端）
-//   GET  /api/hub/pipeline               → 6 阶段流水线监控遥测与 QPS 统计
+//   GET  /health                     → 标准健康检查探针
+//   GET  /v1/hub/status                 → 调度中枢运行状态与队列深度概览
+//   GET  /v1/hub/tasks                  → 分页查询任务列表 (支持 status 状态过滤)
+//   GET  /v1/hub/tasks/:id              → 根据 TaskID 查询单个任务详情
+//   POST /v1/hub/dispatch               → 直接分发指定算子的隐私处理任务 (API1/2/3/4 核心)
+//   POST /v1/hub/fetch-and-desensitize  → 按身份证号拉取数据并同步执行分类分级+脱敏（端到端）
+//   GET  /v1/hub/pipeline               → 6 阶段流水线监控遥测与 QPS 统计
 //   GET  /metrics                        → Prometheus 格式监控指标导出端点
 // ==============================================================================
 
@@ -226,31 +226,29 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 	r.Use(s.scopeAuthMiddleware())
 
 	// 基础健康检查与服务概览
-	r.GET("/health", s.Health)     // Liveness probe / 存活探针
-	r.GET("/readyz", s.Readyz)     // Readiness probe / 就绪探针
-	r.GET("/api/health", s.Health) // Alias for backward compat / 向后兼容别名
-	r.GET("/api/hub/status", s.HubStatus)
-	r.GET("/api/hub/topology", s.HubTopology)
+	r.GET("/health", s.Health) // Liveness probe / 存活探针
+	r.GET("/readyz", s.Readyz) // Readiness probe / 就绪探针
+	r.GET("/v1/hub/status", s.HubStatus)
+	r.GET("/v1/hub/topology", s.HubTopology)
 
 	// 任务生命周期管理
-	r.GET("/api/hub/tasks", s.ListTasks)
-	r.GET("/api/hub/tasks/:id", s.GetTask)
-	r.POST("/api/hub/dispatch", s.Dispatch)
-	r.POST("/api/hub/classify", s.Dispatch) // Backward compatible alias for classify dispatch
+	r.GET("/v1/hub/tasks", s.ListTasks)
+	r.GET("/v1/hub/tasks/:id", s.GetTask)
+	r.POST("/v1/hub/dispatch", s.Dispatch)
 
 	// 按身份证号端到端查询+脱敏（同步）
-	r.POST("/api/hub/fetch-and-desensitize", s.FetchAndDesensitize)
+	r.POST("/v1/hub/fetch-and-desensitize", s.FetchAndDesensitize)
 
 	// 流水线监控遥测
-	r.GET("/api/hub/pipeline", s.Pipeline)
+	r.GET("/v1/hub/pipeline", s.Pipeline)
 
 	// 审计存证代理与验真（app-lz 等外部程序唯一编排入口）
-	r.GET("/api/hub/audit/logs", s.GetAuditLogs)
-	r.POST("/api/hub/audit/logs", s.CreateAuditLog)
-	r.POST("/api/hub/audit/verify", s.VerifyAudit)
+	r.GET("/v1/hub/audit/logs", s.GetAuditLogs)
+	r.POST("/v1/hub/audit/logs", s.CreateAuditLog)
+	r.POST("/v1/hub/audit/verify", s.VerifyAudit)
 
 	// 数据源资产查询（app-lz 等外部程序唯一编排入口）
-	r.GET("/api/hub/datasources", s.ListDatasources)
+	r.GET("/v1/hub/datasources", s.ListDatasources)
 
 	// Prometheus 监控指标导出
 	r.GET("/metrics", s.mc.Handler())
@@ -282,7 +280,7 @@ func (s *Server) scopeAuthMiddleware() gin.HandlerFunc {
 	if len(scopeKeys) > 0 {
 		return func(c *gin.Context) {
 			path := c.Request.URL.Path
-			if path == "/health" || path == "/readyz" || path == "/api/health" {
+			if path == "/health" || path == "/readyz" {
 				c.Next()
 				return
 			}
@@ -836,7 +834,7 @@ type fetchAndDesensitizeRequest struct {
 // 执行步骤：
 // 1. 校验 datasource_id 与 id_card_no 必填参数；
 // 2. 归一化 datasource_id（支持别名如 yibao → ds_yibao）；
-// 3. 调用 datasource-mgr GET /api/datasources/:id/record-by-id?id_card_no=xxx 拉取单条记录；
+// 3. 调用 datasource-mgr GET /v1/datasources/:id/record-by-id?id_card_no=xxx 拉取单条记录；
 // 4. 调用 engine /v1/agent/process 完成分类分级 + 脱敏；
 // 5. 同步返回脱敏后数据、分类级别与分类报告。
 func (s *Server) FetchAndDesensitize(c *gin.Context) {

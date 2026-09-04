@@ -41,25 +41,40 @@ type RESTServerRunner struct {
 // 管道结构（两层防御过滤漏斗）：
 //
 //	┌────────────────────────────────────────────────────────────────────────┐
-//	│ 基础设施层 (全局注册)                                                   │
-//	│   [G-02] ConfigureTrustedProxies ── 校验可信代理 CIDR，防止伪造 XFF 来源   │
-//	│   ① IPAllowlist ── 网络层 CIDR 白名单准入闸门，非白名单 IP 立即 403 阻断    │
-//	│   ② gin.Recovery ── 捕获下游任何 panic 崩溃，记录堆栈并输出 500 标准信封    │
+//	│ 基础设施层 (全局注册)                                                     │
+//	│   [G-02] ConfigureTrustedProxies ── 校验可信代理 CIDR，防止伪造 XFF 来源    │
+//	│   ① IPAllowlist ── 网络层 CIDR 白名单准入闸门，非白名单 IP 立即 403 阻断      │
+//	│   ② gin.Recovery ── 捕获下游任何 panic 崩溃，记录堆栈并输出 500 标准信封      │
 //	│   ③ TraceMiddleware ── 生成/透传 X-Request-ID 与 X-Trace-ID 上下文追踪标识 │
-//	│   ④ RateLimit ── (可选) 全局粗粒度令牌桶限流，用于入口流量总削峰防雪崩     │
-//	│   ⑤ RequestLogger ── 结构化请求访问日志记录 (方法/路径/状态码/耗时/TraceID) │
-//	│   ⑥ PrometheusMiddleware ── 实时采集 HTTP QPS、耗时分位数与状态分布指标   │
+//	│   ④ RateLimit ── (可选) 全局粗粒度令牌桶限流，用于入口流量总削峰防雪崩          │
+//	│   ⑤ RequestLogger ── 结构化请求访问日志记录 (方法/路径/状态码/耗时/TraceID)   │
+//	│   ⑥ PrometheusMiddleware ── 实时采集 HTTP QPS、耗时分位数与状态分布指标      │
 //	├────────────────────────────────────────────────────────────────────────┤
-//	│ 安全防护层 (rest.RegisterRoutes 内部前置注册)                           │
-//	│   ⑦ SecurityHeadersMiddleware ── 注入 HSTS, CSP, X-Frame-Options 安全标头 │
-//	│   ⑧ MaxBodySize ── 限制请求报文体 ≤64MB，防止大报文内存耗尽 DoS 攻击       │
-//	│   ⑨ WAF ── 预编译正则引擎扫描，拦截 SQLi, XSS, 路径穿越与命令注入恶意载荷  │
+//	│ 安全防护层 (rest.RegisterRoutes 内部前置注册)                              │
+//	│   ⑦ SecurityHeadersMiddleware ── 注入 HSTS, CSP, X-Frame-Options 安全标头│
+//	│   ⑧ MaxBodySize ── 限制请求报文体 ≤64MB，防止大报文内存耗尽 DoS 攻击          │
+//	│   ⑨ WAF ── 预编译正则引擎扫描，拦截 SQLi, XSS, 路径穿越与命令注入恶意载荷       │
 //	│   ⑩ AuthMiddleware ── 双模式 API Key 认证（常量时间比较 subtle.ConstantTime）│
-//	│   ⑪ RateLimitMiddleware ── 32 分片高并发令牌桶细粒度限流 (按身份/IP/路径)  │
+//	│   ⑪ RateLimitMiddleware ── 32 分片高并发令牌桶细粒度限流 (按身份/IP/路径)    │
 //	├────────────────────────────────────────────────────────────────────────┤
-//	│ 业务处理层                                                             │
-//	│   ⑫ 业务 Handler ── 执行脱敏、差分隐私、K-匿名、动态分类分级等计算逻辑     │
+//	│ 业务处理层                                                               │
+//	│   ⑫ 业务 Handler ── 执行脱敏、差分隐私、K-匿名、动态分类分级等计算逻辑          │
 //	└────────────────────────────────────────────────────────────────────────┘
+//	每次 REST 请求匹配到路由时，Gin 按顺序执行这些中间件，然后执行具体 Handler。
+//	请求链大致是：
+//	请求
+//	→ IPAllowlist
+//	→ Recovery
+//	→ Trace
+//	→ RequestLogger
+//	→ Prometheus
+//	→ SecurityHeaders
+//	→ MaxBodySize
+//	→ WAF
+//	→ Auth
+//	→ RateLimit
+//	→ 具体 Handler
+//	→ 响应
 func newRESTServerRunner(
 	cfg Config,
 	svc *service.PrivacyService,
@@ -68,6 +83,14 @@ func newRESTServerRunner(
 	gin.SetMode(gin.ReleaseMode) // 生产模式：关闭调试日志与路由表打印，降低运行开销
 	router := gin.New()          // 空引擎：不内置默认 Logger/Recovery，确保链路顺序完全受控
 
+	// router.Use(...) 将返回的 gin.HandlerFunc 按调用顺序保存为全局中间件链；
+	// 注册阶段不会处理请求，只有请求到达时 Gin 才依次执行这些函数，再进入具体路由 Handler。
+	//	最终类似：
+	//	[]HandlerFunc{
+	//		traceMiddleware,
+	//		authMiddleware,
+	//		healthHandler,
+	//	}
 	// G-02：受信任代理配置。仅当对端 IP 属于可信 CIDR 时才信任 X-Forwarded-For 标头
 	middleware.ConfigureTrustedProxies(router, middleware.TrustedProxiesFromEnv("AGENT_TRUSTED_PROXIES"))
 
@@ -92,12 +115,18 @@ func newRESTServerRunner(
 	// ⑥ Prometheus RED 指标统计中间件
 	router.Use(engineMetrics.PrometheusMiddleware())
 
-	// 注册全部 REST API 路由（内部装配安全防护层中间件并注册各业务 Handler、K8s 探针）
+	// Gin 不会自动发现 Handler，REST API 必须显式注册；统一由 RegisterRoutes 集中装配，
+	// 内部同时注册安全中间件、业务 Handler 和 K8s 探针。gRPC 则只需注册一次
+	// PrivacyService，具体 RPC 由 protobuf 生成的 ServiceDesc 自动分发。
 	rest.RegisterRoutes(router, svc)
 
-	// Prometheus 抓取端点（免鉴权，供监控采集网络内网抓取）
+	// 注册 Prometheus 指标抓取端点：Handler() 在初始化阶段返回 Gin HandlerFunc，
+	// 不会立即执行；每次 GET /metrics 请求到达时，Gin 才调用该 Handler 输出当前指标。
+	// Demo: curl http://127.0.0.1:8079/metrics
 	router.GET("/metrics", engineMetrics.Handler())
 
+	// 读取 REST 监听地址；普通 HTTP/HTTPS 模式先创建 TCP Listener，
+	// 让端口在构造 Server 阶段就完成绑定并及时暴露监听失败。
 	restAddr := cfg.RESTAddress()
 	var lis net.Listener
 	if !tlsutil.IsTLCPEnabled("AGENT_TLS_NATIONAL_CIPHER") {
@@ -109,6 +138,9 @@ func newRESTServerRunner(
 		restAddr = lis.Addr().String()
 	}
 
+	// 创建 HTTP Server：Handler 是前面已完成路由和中间件注册的 Gin 引擎；
+	// 超时限制用于避免慢速请求长期占用连接和资源。此处只构造服务，不开始监听，
+	// 实际启动由 Start() 中的 Serve/ServeTLS 完成。
 	server := &http.Server{
 		Addr:         restAddr,
 		Handler:      router,
@@ -117,6 +149,7 @@ func newRESTServerRunner(
 		IdleTimeout:  120 * time.Second, // 空闲连接保活上限
 	}
 
+	// 返回包含 Server、Listener 和配置的运行实体，供调用方启动和优雅停机。
 	return &RESTServerRunner{
 		server:   server,
 		listener: lis,

@@ -15,8 +15,8 @@ echo "=== Audit Log Health Check ==="
 echo ""
 
 # 1. HTTP Health endpoint
-echo -n "REST Health (/api/health): "
-if resp=$(curl -sf --max-time 5 "${BASE_URL}/api/health" 2>/dev/null); then
+echo -n "REST Health (/health): "
+if resp=$(curl -sf --max-time 5 "${BASE_URL}/health" 2>/dev/null); then
     echo "OK"
     echo "  $resp" | python3 -m json.tool 2>/dev/null || echo "  $resp"
 else
@@ -40,8 +40,8 @@ fi
 echo ""
 
 # 3. Audit stats
-echo -n "Stats (/api/audit/stats): "
-if resp=$(curl -sf --max-time 5 "${BASE_URL}/api/audit/stats" 2>/dev/null); then
+echo -n "Stats (/v1/audit/stats): "
+if resp=$(curl -sf --max-time 5 "${BASE_URL}/v1/audit/stats" 2>/dev/null); then
     echo "OK"
     echo "  $resp" | python3 -m json.tool 2>/dev/null || echo "  $resp"
 else
@@ -51,8 +51,8 @@ fi
 echo ""
 
 # 4. Snapshot count
-echo -n "Snapshots (/api/audit/snapshots): "
-if resp=$(curl -sf --max-time 5 "${BASE_URL}/api/audit/snapshots?limit=1" 2>/dev/null); then
+echo -n "Snapshots (/v1/audit/snapshots): "
+if resp=$(curl -sf --max-time 5 "${BASE_URL}/v1/audit/snapshots?limit=1" 2>/dev/null); then
     echo "OK"
 else
     echo "FAILED"

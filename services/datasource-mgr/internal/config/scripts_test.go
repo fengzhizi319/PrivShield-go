@@ -231,7 +231,7 @@ func TestGenCertsScript_ExecutionAndCertificateVerification(t *testing.T) {
 // 1. 获取本地随机空闲 HTTP/gRPC 端口，避免端口冲突；
 // 2. 注入环境变量并通过子进程拉起 scripts/dev-run.sh；
 // 3. 注册 defer 钩子安全终止子进程；
-// 4. 轮询探测 HTTP /api/health 端点，验证服务在开发模式下能够正常对外响应 200 OK 与 JSON 元数据。
+// 4. 轮询探测 HTTP /health 端点，验证服务在开发模式下能够正常对外响应 200 OK 与 JSON 元数据。
 func TestDevRunScript_StartupAndHealth(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping subprocess script test in short mode")
@@ -275,7 +275,7 @@ func TestDevRunScript_StartupAndHealth(t *testing.T) {
 	}()
 
 	// 轮询探测 HTTP 健康端点（最多等待 20s，兼容高并发下 go build 耗时）
-	healthURL := fmt.Sprintf("http://127.0.0.1:%d/api/health", httpPort)
+	healthURL := fmt.Sprintf("http://127.0.0.1:%d/health", httpPort)
 	client := &http.Client{Timeout: 1 * time.Second}
 
 	var resp *http.Response
@@ -380,7 +380,7 @@ func TestProdRunScript_StartupAndMTLS(t *testing.T) {
 	}
 
 	// 2. 探测 HTTPS REST mTLS 端点（最多等待 20s，兼容高并发下 go build 耗时）
-	healthURL := fmt.Sprintf("https://127.0.0.1:%d/api/health", httpPort)
+	healthURL := fmt.Sprintf("https://127.0.0.1:%d/health", httpPort)
 	var resp *http.Response
 	var lastErr error
 	for i := 0; i < 100; i++ {

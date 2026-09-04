@@ -13,9 +13,9 @@
   - [2.2 身份鉴权 (Bearer Token / mTLS CN 白名单)](#22-身份鉴权-bearer-token--mtls-cn-白名单)
   - [2.3 审计追踪标头 (X-Request-ID / X-Trace-ID)](#23-审计追踪标头-x-request-id--x-trace-id)
 - [3. 核心业务接口详细规范](#3-核心业务接口详细规范)
-  - [3.1 核心取数：按身份证号查询单条个人记录 (GET /api/datasources/:id/record-by-id)](#31-核心取数按身份证号查询单条个人记录-get-apidatasourcesidrecord-by-id)
+  - [3.1 核心取数：按身份证号查询单条个人记录 (GET /v1/datasources/:id/record-by-id)](#31-核心取数按身份证号查询单条个人记录-get-apidatasourcesidrecord-by-id)
   - [3.2 基础探活：前置机健康检查 (GET /health)](#32-基础探活前置机健康检查-get-health)
-  - [3.3 连通探测：数据源连通性自测 (POST /api/datasources/:id/test)](#33-连通探测数据源连通性自测-post-apidatasourcesidtest)
+  - [3.3 连通探测：数据源连通性自测 (POST /v1/datasources/:id/test)](#33-连通探测数据源连通性自测-post-apidatasourcesidtest)
 - [4. 业务数据集标准与字段字典](#4-业务数据集标准与字段字典)
   - [4.1 数据集 1：医保就医与费用结算数据集 (ds_yibao · 19 字段)](#41-数据集-1医保就医与费用结算数据集-ds_yibao--19-字段)
   - [4.2 数据集 2：康养体检与慢病健康档案数据集 (ds_kangyang · 27 字段)](#42-数据集-2康养体检与慢病健康档案数据集-ds_kangyang--27-字段)
@@ -78,9 +78,9 @@ flowchart LR
 
 | 优先级 | 业务能力 | REST 路径 / 方法 | gRPC RPC 方法 | 数据局交付说明 |
 |---|---|---|---|---|
-| **P0 (强制必选)** | **按身份证号精确抽取单条记录** | `GET /api/datasources/:id/record-by-id?id_card_no=xxx` | `rpc GetRecordByIDCard` | **数据要素流通核心业务接口**。输入身份证号，返回该主体结构化原始数据。 |
+| **P0 (强制必选)** | **按身份证号精确抽取单条记录** | `GET /v1/datasources/:id/record-by-id?id_card_no=xxx` | `rpc GetRecordByIDCard` | **数据要素流通核心业务接口**。输入身份证号，返回该主体结构化原始数据。 |
 | **P0 (强制必选)** | **前置机基础存活探针** | `GET /health` | `rpc Health` | 服务基础存活检测，返回 HTTP 200 即证明前置机就绪。 |
-| **P1 (推荐必选)** | **数据源物理连通性自测** | `POST /api/datasources/:id/test` | `rpc TestConnection` | 探测底层数据库连接池与查询响应延迟。 |
+| **P1 (推荐必选)** | **数据源物理连通性自测** | `POST /v1/datasources/:id/test` | `rpc TestConnection` | 探测底层数据库连接池与查询响应延迟。 |
 
 ---
 
@@ -117,11 +117,11 @@ flowchart LR
 
 ## 3. 核心业务接口详细规范
 
-### 3.1 核心取数：按身份证号查询单条个人记录 (GET /api/datasources/:id/record-by-id)
+### 3.1 核心取数：按身份证号查询单条个人记录 (GET /v1/datasources/:id/record-by-id)
 
 - **功能说明**：根据公民身份证号，从柳州市对应数据源中精确检索并返回单条原始记录。
 - **请求方式**：`GET`
-- **请求路径**：`/api/datasources/:id/record-by-id`
+- **请求路径**：`/v1/datasources/:id/record-by-id`
 - **路径参数 (Path)**：
   - `id` (string, 必填)：数据源唯一规范标识：
     - `ds_yibao`：医保就医与费用结算数据集
@@ -194,7 +194,7 @@ flowchart LR
 
 - **功能说明**：供数盾调度中枢确认前置机网络与进程是否正常。
 - **请求方式**：`GET`
-- **请求路径**：`/health`（或兼容别名 `/api/health`）
+- **请求路径**：`/health`（或兼容别名 `/health`）
 - **认证要求**：默认允许免认证放行（内网白名单网络限制）。
 - **成功响应**：`HTTP 200 OK`
   ```json
@@ -207,11 +207,11 @@ flowchart LR
 
 ---
 
-### 3.3 连通探测：数据源连通性自测 (POST /api/datasources/:id/test)
+### 3.3 连通探测：数据源连通性自测 (POST /v1/datasources/:id/test)
 
 - **功能说明**：数盾中枢在启动批次数据调度任务前，主动触发此接口探测目标数据源底层数据库的连通性及网络时延。
 - **请求方式**：`POST`
-- **请求路径**：`/api/datasources/:id/test`
+- **请求路径**：`/v1/datasources/:id/test`
 - **路径参数**：`id` (例如 `ds_yibao` 或 `ds_kangyang`)
 - **成功响应**：`HTTP 200 OK`
   ```json
@@ -399,7 +399,7 @@ message SingleRecordResponse {
 - [ ] **TLS 传输层加固**：禁用 TLS 1.0/1.1，强制启用 TLS 1.3 / 国密 SM2，握手成功；
 - [ ] **鉴权测试**：无 Token 请求拦截返回 401，携带正确 Token 请求返回 200；
 - [ ] **探活接口**：`curl -H "Authorization: Bearer <KEY>" http://<HOST>:8083/health` 正常返回 `status: ok`；
-- [ ] **连通自测接口**：`curl -X POST -H "Authorization: Bearer <KEY>" http://<HOST>:8083/api/datasources/ds_yibao/test` 返回 `success: true`；
+- [ ] **连通自测接口**：`curl -X POST -H "Authorization: Bearer <KEY>" http://<HOST>:8083/v1/datasources/ds_yibao/test` 返回 `success: true`；
 - [ ] **医保取数测试**：传入测试身份证号 `110101196809171010`，能够完整输出 19 个医保字段，无字段缺失；
 - [ ] **康养取数测试**：传入测试身份证号 `110105198402151071`，能够完整输出 27 个康养字段，长文本无截断；
 - [ ] **查无人员测试**：传入不存在的身份证号（如 `000000000000000000`），返回 200 且 `found: false`、`record: null`；

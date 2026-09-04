@@ -61,7 +61,7 @@ export interface ServiceNode {
 
 /**
  * 拓扑响应 — 包含所有 4 个微服务的状态快照。
- * 对应 BFF GET /api/lz/topology 的响应体。
+ * 对应 BFF GET /v1/lz/topology 的响应体。
  */
 export interface TopologyResponse {
   /** 集群整体状态：'healthy' / 'degraded' / 'unhealthy' */
@@ -109,7 +109,7 @@ export interface PipelineStatusResponse {
 // 3. 任务派发
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-/** 任务派发请求（对应 BFF POST /api/lz/tasks/dispatch）。 */
+/** 任务派发请求（对应 BFF POST /v1/lz/tasks/dispatch）。 */
 export interface DispatchRequest {
   /** 数据来源标识，如 'ds_yibao' / 'ds_kangyang' */
   source: string;
@@ -249,7 +249,7 @@ export interface WorkerLeaseInfo {
 
 /**
  * 租约总览响应。
- * 对应 BFF GET /api/lz/tasks/leases（内部转发到 Service Hub）。
+ * 对应 BFF GET /v1/lz/tasks/leases（内部转发到 Service Hub）。
  */
 export interface LeasedTasksResponse {
   /** 租约存储后端：'postgres'（Phase B）或 'memory'/'sqlite'（开发模式） */
@@ -390,7 +390,7 @@ export interface AuditLogItem {
 
 /**
  * Merkle 树完整性验证响应。
- * 对应 BFF POST /api/lz/audit/verify（内部转发到 Audit Log 服务）。
+ * 对应 BFF POST /v1/lz/audit/verify（内部转发到 Audit Log 服务）。
  * merkle_valid=true 表示所有日志条目的哈希链未被篡改。
  */
 export interface AuditVerifyResponse {

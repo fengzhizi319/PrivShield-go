@@ -63,7 +63,7 @@ func TestHealth(t *testing.T) {
 	router := newTestRouter(s)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/health", nil)
+	req, _ := http.NewRequest("GET", "/health", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -85,7 +85,7 @@ func TestListLogsEmpty(t *testing.T) {
 	router := newTestRouter(s)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/audit/logs", nil)
+	req, _ := http.NewRequest("GET", "/v1/audit/logs", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -120,7 +120,7 @@ func TestCreateLog(t *testing.T) {
 	b, _ := json.Marshal(body)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/audit/logs", bytes.NewReader(b))
+	req, _ := http.NewRequest("POST", "/v1/audit/logs", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -136,7 +136,7 @@ func TestCreateLog(t *testing.T) {
 
 	// Verify it appears in list
 	w2 := httptest.NewRecorder()
-	req2, _ := http.NewRequest("GET", "/api/audit/logs", nil)
+	req2, _ := http.NewRequest("GET", "/v1/audit/logs", nil)
 	router.ServeHTTP(w2, req2)
 
 	var resp2 map[string]any
@@ -152,7 +152,7 @@ func TestCreateLogInvalidBody(t *testing.T) {
 
 	// Empty body should fail because operation and status are required
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/audit/logs", bytes.NewReader([]byte("{}")))
+	req, _ := http.NewRequest("POST", "/v1/audit/logs", bytes.NewReader([]byte("{}")))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -175,7 +175,7 @@ func TestCreateLogRejectsCallerSuppliedPrevHash(t *testing.T) {
 	})
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/audit/logs", bytes.NewReader(body))
+	req, _ := http.NewRequest("POST", "/v1/audit/logs", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -199,7 +199,7 @@ func TestCreateLogChainIsServerAssigned(t *testing.T) {
 			"status":      "success",
 		})
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("POST", "/api/audit/logs", bytes.NewReader(body))
+		req, _ := http.NewRequest("POST", "/v1/audit/logs", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		router.ServeHTTP(w, req)
 		if w.Code != http.StatusCreated {
@@ -221,7 +221,7 @@ func TestCreateLogChainIsServerAssigned(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/audit/chain/verify?limit=100", nil)
+	req, _ := http.NewRequest("GET", "/v1/audit/chain/verify?limit=100", nil)
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("verify endpoint returned %d: %s", w.Code, w.Body.String())
@@ -243,7 +243,7 @@ func TestGetLogNotFound(t *testing.T) {
 	router := newTestRouter(s)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/audit/logs/nonexistent", nil)
+	req, _ := http.NewRequest("GET", "/v1/audit/logs/nonexistent", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
@@ -271,7 +271,7 @@ func TestGetLog(t *testing.T) {
 	}
 	b, _ := json.Marshal(body)
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/audit/logs", bytes.NewReader(b))
+	req, _ := http.NewRequest("POST", "/v1/audit/logs", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -281,7 +281,7 @@ func TestGetLog(t *testing.T) {
 
 	// Get the log
 	w2 := httptest.NewRecorder()
-	req2, _ := http.NewRequest("GET", "/api/audit/logs/"+id, nil)
+	req2, _ := http.NewRequest("GET", "/v1/audit/logs/"+id, nil)
 	router.ServeHTTP(w2, req2)
 
 	if w2.Code != http.StatusOK {
@@ -315,14 +315,14 @@ func TestGetStats(t *testing.T) {
 		}
 		b, _ := json.Marshal(body)
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("POST", "/api/audit/logs", bytes.NewReader(b))
+		req, _ := http.NewRequest("POST", "/v1/audit/logs", bytes.NewReader(b))
 		req.Header.Set("Content-Type", "application/json")
 		router.ServeHTTP(w, req)
 	}
 
 	// Get stats
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/audit/stats", nil)
+	req, _ := http.NewRequest("GET", "/v1/audit/stats", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -355,13 +355,13 @@ func TestListSnapshots(t *testing.T) {
 	}
 	b, _ := json.Marshal(body)
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/audit/logs", bytes.NewReader(b))
+	req, _ := http.NewRequest("POST", "/v1/audit/logs", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
 	// List snapshots
 	w2 := httptest.NewRecorder()
-	req2, _ := http.NewRequest("GET", "/api/audit/snapshots", nil)
+	req2, _ := http.NewRequest("GET", "/v1/audit/snapshots", nil)
 	router.ServeHTTP(w2, req2)
 
 	if w2.Code != http.StatusOK {
@@ -390,7 +390,7 @@ func TestVerifyIntegrity(t *testing.T) {
 	}
 	b, _ := json.Marshal(body)
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/audit/logs", bytes.NewReader(b))
+	req, _ := http.NewRequest("POST", "/v1/audit/logs", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -400,7 +400,7 @@ func TestVerifyIntegrity(t *testing.T) {
 
 	// List snapshots to get the actual snapshot ID
 	w2 := httptest.NewRecorder()
-	req2, _ := http.NewRequest("GET", "/api/audit/snapshots", nil)
+	req2, _ := http.NewRequest("GET", "/v1/audit/snapshots", nil)
 	router.ServeHTTP(w2, req2)
 
 	var listResp map[string]any
@@ -415,7 +415,7 @@ func TestVerifyIntegrity(t *testing.T) {
 	verifyBody := map[string]any{"snapshot_id": snapID}
 	vb, _ := json.Marshal(verifyBody)
 	w3 := httptest.NewRecorder()
-	req3, _ := http.NewRequest("POST", "/api/audit/snapshots/verify", bytes.NewReader(vb))
+	req3, _ := http.NewRequest("POST", "/v1/audit/snapshots/verify", bytes.NewReader(vb))
 	req3.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w3, req3)
 
@@ -437,7 +437,7 @@ func TestVerifyIntegrityNotFound(t *testing.T) {
 	body := map[string]any{"snapshot_id": "nonexistent"}
 	b, _ := json.Marshal(body)
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/audit/snapshots/verify", bytes.NewReader(b))
+	req, _ := http.NewRequest("POST", "/v1/audit/snapshots/verify", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -463,7 +463,7 @@ func TestGenerateReport(t *testing.T) {
 		}
 		b, _ := json.Marshal(body)
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("POST", "/api/audit/logs", bytes.NewReader(b))
+		req, _ := http.NewRequest("POST", "/v1/audit/logs", bytes.NewReader(b))
 		req.Header.Set("Content-Type", "application/json")
 		router.ServeHTTP(w, req)
 	}
@@ -472,7 +472,7 @@ func TestGenerateReport(t *testing.T) {
 	reportBody := map[string]any{"period": "24h"}
 	rb, _ := json.Marshal(reportBody)
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/audit/report", bytes.NewReader(rb))
+	req, _ := http.NewRequest("POST", "/v1/audit/report", bytes.NewReader(rb))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -510,14 +510,14 @@ func TestListLogsWithFilter(t *testing.T) {
 		}
 		b, _ := json.Marshal(body)
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("POST", "/api/audit/logs", bytes.NewReader(b))
+		req, _ := http.NewRequest("POST", "/v1/audit/logs", bytes.NewReader(b))
 		req.Header.Set("Content-Type", "application/json")
 		router.ServeHTTP(w, req)
 	}
 
 	// Filter by operation
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/audit/logs?operation=mask", nil)
+	req, _ := http.NewRequest("GET", "/v1/audit/logs?operation=mask", nil)
 	router.ServeHTTP(w, req)
 
 	var resp map[string]any
@@ -551,7 +551,7 @@ func TestVerifyChainEndpoint(t *testing.T) {
 	// Create 2 logs via API
 	body1 := `{"operation":"mask","datasource":"ds_yibao","input_hash":"hash_in_1","output_hash":"hash_out_1","status":"success"}`
 	w1 := httptest.NewRecorder()
-	req1, _ := http.NewRequest("POST", "/api/audit/logs", bytes.NewBufferString(body1))
+	req1, _ := http.NewRequest("POST", "/v1/audit/logs", bytes.NewBufferString(body1))
 	req1.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w1, req1)
 	if w1.Code != http.StatusCreated {
@@ -560,7 +560,7 @@ func TestVerifyChainEndpoint(t *testing.T) {
 
 	body2 := `{"operation":"dp","datasource":"ds_yibao","input_hash":"hash_in_2","output_hash":"hash_out_2","status":"success"}`
 	w2 := httptest.NewRecorder()
-	req2, _ := http.NewRequest("POST", "/api/audit/logs", bytes.NewBufferString(body2))
+	req2, _ := http.NewRequest("POST", "/v1/audit/logs", bytes.NewBufferString(body2))
 	req2.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w2, req2)
 	if w2.Code != http.StatusCreated {
@@ -569,7 +569,7 @@ func TestVerifyChainEndpoint(t *testing.T) {
 
 	// Verify chain
 	wVerify := httptest.NewRecorder()
-	reqVerify, _ := http.NewRequest("POST", "/api/audit/chain/verify", bytes.NewBufferString(`{"limit":10}`))
+	reqVerify, _ := http.NewRequest("POST", "/v1/audit/chain/verify", bytes.NewBufferString(`{"limit":10}`))
 	reqVerify.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(wVerify, reqVerify)
 	if wVerify.Code != http.StatusOK {
@@ -601,7 +601,7 @@ func TestCreateLogParametersTooLarge(t *testing.T) {
 	}
 	b, _ := json.Marshal(body)
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/audit/logs", bytes.NewReader(b))
+	req, _ := http.NewRequest("POST", "/v1/audit/logs", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -626,7 +626,7 @@ func TestEnvelopeEncryptionOfSnapshots(t *testing.T) {
 	}
 	b, _ := json.Marshal(body)
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/audit/logs", bytes.NewReader(b))
+	req, _ := http.NewRequest("POST", "/v1/audit/logs", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusCreated {
@@ -644,7 +644,7 @@ func TestEnvelopeEncryptionOfSnapshots(t *testing.T) {
 
 	// Verify HTTP API decrypts transparently
 	wList := httptest.NewRecorder()
-	reqList, _ := http.NewRequest("GET", "/api/audit/snapshots", nil)
+	reqList, _ := http.NewRequest("GET", "/v1/audit/snapshots", nil)
 	router.ServeHTTP(wList, reqList)
 	if wList.Code != http.StatusOK {
 		t.Fatalf("list snapshots API failed: %d", wList.Code)
@@ -659,7 +659,7 @@ func TestEnvelopeEncryptionOfSnapshots(t *testing.T) {
 	}
 }
 
-// TestBufferedAuditStore_Handler_VerifyChain_E2E validates that multiple HTTP POST /api/audit/logs
+// TestBufferedAuditStore_Handler_VerifyChain_E2E validates that multiple HTTP POST /v1/audit/logs
 // requests passing through flusher.BufferedAuditStore produce an unbroken cryptographic hash chain.
 func TestBufferedAuditStore_Handler_VerifyChain_E2E(t *testing.T) {
 	cfg := &config.Config{
@@ -699,21 +699,21 @@ func TestBufferedAuditStore_Handler_VerifyChain_E2E(t *testing.T) {
 		}
 		b, _ := json.Marshal(body)
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("POST", "/api/audit/logs", bytes.NewReader(b))
+		req, _ := http.NewRequest("POST", "/v1/audit/logs", bytes.NewReader(b))
 		req.Header.Set("Content-Type", "application/json")
 		router.ServeHTTP(w, req)
 		if w.Code != http.StatusCreated {
-			t.Fatalf("POST /api/audit/logs failed at %d: %d", i, w.Code)
+			t.Fatalf("POST /v1/audit/logs failed at %d: %d", i, w.Code)
 		}
 	}
 
-	// Verify chain via HTTP endpoint GET /api/audit/chain/verify
+	// Verify chain via HTTP endpoint GET /v1/audit/chain/verify
 	wVerify := httptest.NewRecorder()
-	reqVerify, _ := http.NewRequest("GET", "/api/audit/chain/verify?limit=100", nil)
+	reqVerify, _ := http.NewRequest("GET", "/v1/audit/chain/verify?limit=100", nil)
 	router.ServeHTTP(wVerify, reqVerify)
 
 	if wVerify.Code != http.StatusOK {
-		t.Fatalf("GET /api/audit/chain/verify returned status %d", wVerify.Code)
+		t.Fatalf("GET /v1/audit/chain/verify returned status %d", wVerify.Code)
 	}
 
 	var resp map[string]any
@@ -753,11 +753,11 @@ func postAuditLog(t *testing.T, router *gin.Engine, body map[string]any) {
 	t.Helper()
 	b, _ := json.Marshal(body)
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/audit/logs", bytes.NewReader(b))
+	req, _ := http.NewRequest("POST", "/v1/audit/logs", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusCreated {
-		t.Fatalf("POST /api/audit/logs failed: %d %s", w.Code, w.Body.String())
+		t.Fatalf("POST /v1/audit/logs failed: %d %s", w.Code, w.Body.String())
 	}
 }
 
@@ -790,7 +790,7 @@ func numField(t *testing.T, resp map[string]any, key string) int {
 }
 
 // TestVerifyChainEndpoint_ExposesReasonAndLegacyHashed 覆盖 P2-4 缺口 (a)(b) 的 REST 侧：
-// `/api/audit/chain/verify` 响应必须携带机器可读 `reason` 与 `legacy_hashed`；
+// `/v1/audit/chain/verify` 响应必须携带机器可读 `reason` 与 `legacy_hashed`；
 // 注入存证密钥后，密钥化之前写入的历史存证必须报 `legacy_hashed`（`valid` 仍为 true），
 // 而不是被误报为篡改。
 func TestVerifyChainEndpoint_ExposesReasonAndLegacyHashed(t *testing.T) {
@@ -808,7 +808,7 @@ func TestVerifyChainEndpoint_ExposesReasonAndLegacyHashed(t *testing.T) {
 		})
 	}
 
-	res := doJSON(t, router, "/api/audit/chain/verify", map[string]any{"limit": 10})
+	res := doJSON(t, router, "/v1/audit/chain/verify", map[string]any{"limit": 10})
 	if res["valid"] != true {
 		t.Fatalf("clean chain must be valid: %+v", res)
 	}
@@ -822,7 +822,7 @@ func TestVerifyChainEndpoint_ExposesReasonAndLegacyHashed(t *testing.T) {
 	// 上线密钥化口径后回验：证据真实、仅待重签。
 	withAuditChainKey(t, p24TestChainKey)
 
-	res = doJSON(t, router, "/api/audit/chain/verify", map[string]any{"limit": 10})
+	res = doJSON(t, router, "/v1/audit/chain/verify", map[string]any{"limit": 10})
 	if res["valid"] != true {
 		t.Fatalf("legacy evidence must stay valid, got %+v", res)
 	}
@@ -841,7 +841,7 @@ func TestVerifyChainEndpoint_ExposesReasonAndLegacyHashed(t *testing.T) {
 		"output_hash": "hash_out_p24",
 		"status":      "success",
 	})
-	res = doJSON(t, router, "/api/audit/chain/verify", map[string]any{"limit": 10})
+	res = doJSON(t, router, "/v1/audit/chain/verify", map[string]any{"limit": 10})
 	if res["valid"] != true || res["reason"] != store.ChainReasonLegacyHashed {
 		t.Fatalf("mixed chain must stay valid and report legacy pending: %+v", res)
 	}
@@ -873,7 +873,7 @@ func TestVerifyIntegrityEndpoint_ExposesReasonAndLegacyHashed(t *testing.T) {
 	}
 	snapID := snaps[0].ID
 
-	res := doJSON(t, router, "/api/audit/snapshots/verify", map[string]any{"snapshot_id": snapID})
+	res := doJSON(t, router, "/v1/audit/snapshots/verify", map[string]any{"snapshot_id": snapID})
 	if res["valid"] != true || res["reason"] != store.ChainReasonOK {
 		t.Fatalf("un-keyed snapshot must verify as ok, got %+v", res)
 	}
@@ -883,7 +883,7 @@ func TestVerifyIntegrityEndpoint_ExposesReasonAndLegacyHashed(t *testing.T) {
 
 	withAuditChainKey(t, p24TestChainKey)
 
-	res = doJSON(t, router, "/api/audit/snapshots/verify", map[string]any{"snapshot_id": snapID})
+	res = doJSON(t, router, "/v1/audit/snapshots/verify", map[string]any{"snapshot_id": snapID})
 	if res["valid"] != true {
 		t.Fatalf("pre-keying snapshot evidence must stay valid, got %+v", res)
 	}
@@ -916,7 +916,7 @@ func TestVerifyIntegrityEndpoint_ReportsHashMismatchForBrokenSnapshot(t *testing
 		t.Fatalf("save corrupted snapshot: %v", err)
 	}
 
-	res := doJSON(t, router, "/api/audit/snapshots/verify", map[string]any{"snapshot_id": "p24-broken-snap"})
+	res := doJSON(t, router, "/v1/audit/snapshots/verify", map[string]any{"snapshot_id": "p24-broken-snap"})
 	if res["valid"] != false {
 		t.Fatalf("a broken snapshot must stay invalid, got %+v", res)
 	}

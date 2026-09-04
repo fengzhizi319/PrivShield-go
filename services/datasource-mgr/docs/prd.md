@@ -39,16 +39,16 @@
 |---|---|---|---|
 | 契约分级 | 协议方法 | 端点 / RPC 方法 | 协议 | 业务说明 |
 |---|---|---|---|---|
-| **Class A** | GET / rpc | `/api/datasources/:id/record-by-id?id_card_no=xxx` / `GetRecordByIDCard` | HTTP/gRPC | **核心数据抽取入口 (P0)**：按身份证号查询单条记录（`ds_yibao` 19 字段 / `ds_kangyang` 27 字段） |
-| **Class A** | GET / rpc | `/health`, `/api/health` / `Health` | HTTP/gRPC | 服务基础存活健康探针 (P0) |
-| **Class A** | POST / rpc | `/api/datasources/:id/test` / `TestConnection` | HTTP/gRPC | 数据源物理/逻辑连通性自测 (P1) |
-| **Class B** | GET / rpc | `/api/datasources` / `ListDataSources` | HTTP/gRPC | 数据源资产目录元数据列表（可选扩展 P2） |
-| **Class B** | GET / rpc | `/api/datasources/:id` / `GetDataSource` | HTTP/gRPC | 单个数据源详情元数据（可选扩展 P2） |
-| **Class B** | GET | `/api/datasources/:id/metadata` | HTTP | 数据源 Schema 表结构与字段类型探查（可选扩展 P2） |
+| **Class A** | GET / rpc | `/v1/datasources/:id/record-by-id?id_card_no=xxx` / `GetRecordByIDCard` | HTTP/gRPC | **核心数据抽取入口 (P0)**：按身份证号查询单条记录（`ds_yibao` 19 字段 / `ds_kangyang` 27 字段） |
+| **Class A** | GET / rpc | `/health`, `/health` / `Health` | HTTP/gRPC | 服务基础存活健康探针 (P0) |
+| **Class A** | POST / rpc | `/v1/datasources/:id/test` / `TestConnection` | HTTP/gRPC | 数据源物理/逻辑连通性自测 (P1) |
+| **Class B** | GET / rpc | `/v1/datasources` / `ListDataSources` | HTTP/gRPC | 数据源资产目录元数据列表（可选扩展 P2） |
+| **Class B** | GET / rpc | `/v1/datasources/:id` / `GetDataSource` | HTTP/gRPC | 单个数据源详情元数据（可选扩展 P2） |
+| **Class B** | GET | `/v1/datasources/:id/metadata` | HTTP | 数据源 Schema 表结构与字段类型探查（可选扩展 P2） |
 | **Class C** | GET | `/readyz` | HTTP | K8s 容器就绪探针（基础设施，外部免实现） |
 | **Class C** | GET | `/metrics` | HTTP | Prometheus 监控指标采集（基础设施，外部免实现） |
-| **Class D** | GET | `/api/datasources/:id/audit` | HTTP | 本地模拟访问审计记录查询（测试专用，生产屏蔽） |
-| **Class D** | POST | `/api/datasources/seed` | HTTP | 模拟数据源初始化/重置（测试专用，生产屏蔽） |
+| **Class D** | GET | `/v1/datasources/:id/audit` | HTTP | 本地模拟访问审计记录查询（测试专用，生产屏蔽） |
+| **Class D** | POST | `/v1/datasources/seed` | HTTP | 模拟数据源初始化/重置（测试专用，生产屏蔽） |
 
 ### 3.2 运行配置项
 

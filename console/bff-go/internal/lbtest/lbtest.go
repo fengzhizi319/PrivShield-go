@@ -1,11 +1,11 @@
 // Package lbtest implements load-balancing test strategy dispatch and statistics logic.
 // Package lbtest 实现负载均衡测试的策略分发与统计逻辑。
 //
-// The Go backend's /api/lb_test endpoint dispatches probe requests to multiple agent
+// The Go backend's /v1/lb_test endpoint dispatches probe requests to multiple agent
 // backend addresses configured by the user, using strategies (round_robin / random /
 // least_connections), and aggregates per-node hit counts, success/failure counts,
 // and latency distribution.
-// 控制台 Go 后端的 /api/lb_test 端点把探测请求按策略（round_robin / random /
+// 控制台 Go 后端的 /v1/lb_test 端点把探测请求按策略（round_robin / random /
 // least_connections）分发到用户配置的多个 agent 后端地址，并统计各节点的
 // 命中数、成功/失败数与延迟分布。
 // The *http.Client used for probing is injectable, allowing tests to point at

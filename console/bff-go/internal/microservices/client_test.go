@@ -13,16 +13,16 @@ func TestIsCleanProxyPath(t *testing.T) {
 		path string
 		want bool
 	}{
-		{"/api/datasources", true},
-		{"/api/datasources/ds_yibao/metadata", true},
+		{"/v1/datasources", true},
+		{"/v1/datasources/ds_yibao/metadata", true},
 		{"/health", true},
 		{"", false},
-		{"api/datasources", false},              // 非绝对路径
-		{"/api/datasources/", false},            // 尾斜杠未规范化
-		{"/api//datasources", false},            // 重复斜杠未规范化
-		{"/api/datasources/../v1/yibao", false}, // 含 ".."
-		{"/api/datasources/%2e%2e/x", false},    // 含编码混淆
-		{`/api/datasources\..\v1\yibao`, false},
+		{"api/datasources", false},             // 非绝对路径
+		{"/v1/datasources/", false},            // 尾斜杠未规范化
+		{"/v1//datasources", false},            // 重复斜杠未规范化
+		{"/v1/datasources/../v1/yibao", false}, // 含 ".."
+		{"/v1/datasources/%2e%2e/x", false},    // 含编码混淆
+		{`/v1/datasources\..\v1\yibao`, false},
 	}
 	for _, tc := range cases {
 		if got := isCleanProxyPath(tc.path); got != tc.want {
@@ -41,7 +41,7 @@ func TestClientPoolProxy_RejectsDirtyPath(t *testing.T) {
 	// 端口 1 上没有服务：若实现退化为真实拨号，用例会以拨网地址失败而非快速拒绝，
 	// 因此这里断言错误信息必须是路径非法，而不是上游请求失败。
 	_, _, err := pool.Proxy(context.Background(), "datasource", http.MethodGet,
-		"/api/datasources/../v1/yibao", nil, nil, "", "req-1")
+		"/v1/datasources/../v1/yibao", nil, nil, "", "req-1")
 	if err == nil {
 		t.Fatal("expected dirty proxy path to be rejected, got nil error")
 	}
