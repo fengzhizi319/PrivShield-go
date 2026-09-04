@@ -204,26 +204,36 @@ func (s *Server) persistTask(task *store.Task, transition string) error {
 // RegisterRoutes 在 Gin 路由引擎上挂载完整的中间件链与 REST API 端点。
 // 中间件装配顺序：
 // 1. RequestID: 自动注入链路追踪 X-Request-ID
-// 2. RequestLoggerWithModule: 输出包含延迟、状态码、IP 的结构化 JSON/Text 日志
-// 3. Recovery: 拦截 Handler Panic 并返回 500 JSON
-// 4. SecurityHeaders: 注入 CSP、HSTS、X-Content-Type-Options 等安全防护头
-// 5. MaxBodySize: 限制请求体最大 32 MiB，防御超大 Body 内存溢出
-// 6. MaxConcurrent: 限制在途请求并发上限（1000），超限返回 503
-// 7. CORS: 跨域来源校验与预检放行
-// 8. Auth: 基于 Authorization Bearer 的 API Key 鉴权校验
+// 2. HTTPMiddleware: 自动采集 http_requests_total 计数与延迟直方图（/metrics 自身豁免，防递归）
+// 3. RequestLoggerWithModule: 输出包含延迟、状态码、IP 的结构化 JSON/Text 日志
+// 4. Recovery: 拦截 Handler Panic 并返回 500 JSON
+// 5. SecurityHeaders: 注入 CSP、HSTS、X-Content-Type-Options 等安全防护头
+// 6. MaxBodySize: 限制请求体最大 32 MiB，防御超大 Body 内存溢出
+// 7. MaxConcurrent: 限制在途请求并发上限（1000），超限返回 503
+// 8. RateLimit: (默认启用) 每客户端 IP 令牌桶边缘限流，超限返回 429
+// 9. CORS: 跨域来源校验与预检放行
+// 10. Auth: 基于 Authorization Bearer 的 API Key 鉴权校验
+// 11. IdentityRateLimit: (默认启用) 身份级细粒度限流（key = 身份 + 归一化路径，匿名回退 IP），探针端点豁免
 func (s *Server) RegisterRoutes(r *gin.Engine) {
 	r.Use(middleware.TraceMiddleware())
+	r.Use(s.mc.HTTPMiddleware()) // docs 宣称的 http_requests_total 在此真正生效
 	r.Use(pkgobs.RequestLoggerWithModule("service-hub"))
 	r.Use(middleware.Recovery(s.logger, "service-hub"))
 	r.Use(middleware.WAF(s.logger)) // 三级等保 G-12：Web 攻击载荷检测
 	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.MaxBodySize(32 << 20)) // 32 MiB 请求体最大保护
 	r.Use(middleware.MaxConcurrent(1000))   // 并发在途请求上限，超限返回 503
-	if s.cfg.RateLimitRPS > 0 {
-		r.Use(middleware.RateLimit(s.cfg.RateLimitRPS, s.cfg.RateLimitBurst)) // 每客户端 IP 令牌桶限流
+	if s.cfg.RateLimitEnabled && s.cfg.RateLimitRPS > 0 {
+		// 每客户端 IP 令牌桶边缘限流；/health、/readyz、/metrics 探针端点豁免
+		r.Use(middleware.KeyedRateLimit(s.cfg.RateLimitRPS, s.cfg.RateLimitBurst, func(c *gin.Context) string {
+			return middleware.RealClientIP(c)
+		}, "/health", "/readyz", "/metrics"))
 	}
 	r.Use(middleware.CORS(s.cfg.CORSOrigins))
 	r.Use(s.scopeAuthMiddleware())
+	if s.cfg.RateLimitEnabled && s.cfg.RateLimitPerIdentityRPS > 0 {
+		r.Use(s.identityRateLimitMiddleware()) // 身份级细粒度限流（鉴权之后才能拿到身份）
+	}
 
 	// 基础健康检查与服务概览
 	r.GET("/health", s.Health) // Liveness probe / 存活探针
@@ -308,6 +318,30 @@ func (s *Server) scopeAuthMiddleware() gin.HandlerFunc {
 	}
 	// 向后兼容：单 APIKey 模式
 	return middleware.Auth(s.cfg.APIKey)
+}
+
+// identityRateLimitMiddleware 返回身份级细粒度限流中间件（32 分片令牌桶，复用 pkg/middleware）。
+//
+// 限流 key = 「身份 ServiceType:Name + 归一化路径」；未认证（匿名）调用者追加客户端 IP 作为分片因子，
+// 防止单 IP 洪泛。路径经 NormalizeRateLimitPath 归一化（动态数字/UUID 段替换为 :id），防止高基数路径
+// 导致限流桶爆炸。/health、/readyz、/metrics 探针端点完全豁免，保障 K8s 探针与 Prometheus 抓取畅通。
+// 该层挂载在鉴权中间件之后，确保已认证请求以 API 身份（而非共享 IP）为限流维度。
+func (s *Server) identityRateLimitMiddleware() gin.HandlerFunc {
+	return middleware.KeyedRateLimit(s.cfg.RateLimitPerIdentityRPS, s.cfg.RateLimitPerIdentityBurst, func(c *gin.Context) string {
+		path := c.Request.URL.Path
+		identity := pkgauth.GetIdentity(c)
+		serviceType, name := "external", "anonymous"
+		if identity != nil && identity.Name != "" {
+			serviceType, name = identity.ServiceType, identity.Name
+		}
+		key := serviceType + ":" + name + ":" + middleware.NormalizeRateLimitPath(path)
+		if identity == nil {
+			if clientIP := middleware.RealClientIP(c); clientIP != "" {
+				key += ":" + clientIP
+			}
+		}
+		return key
+	}, "/health", "/readyz", "/metrics")
 }
 
 // constantTimeLookupKeys 在排序后的 key 集合上执行常量时间 token 查找，防止时序攻击。

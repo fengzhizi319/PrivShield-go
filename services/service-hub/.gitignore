@@ -5,4 +5,4 @@ bin/
 *.dylib
 *.test
 *.out
-server
+/cmd/server/server

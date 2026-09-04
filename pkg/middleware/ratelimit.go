@@ -332,11 +332,31 @@ func RateLimitWithKeyFunc(rps int, burst int, keyFunc func(*gin.Context) string)
 // RateLimitWithEndpoints returns a Gin middleware that enforces both endpoint-specific
 // and default token bucket rate limiting using a caller-provided key function.
 func RateLimitWithEndpoints(defaultRPS int, defaultBurst int, perEndpoint map[string]*EndpointRateLimit, keyFunc func(*gin.Context) string) gin.HandlerFunc {
+	return keyedRateLimit(defaultRPS, defaultBurst, perEndpoint, keyFunc, "/health")
+}
+
+// KeyedRateLimit returns a Gin middleware that enforces token bucket rate limiting
+// using a caller-provided key function (e.g. authenticated identity + normalized path),
+// with configurable probe-endpoint exemptions. It shares the same 32-shard token-bucket
+// implementation as RateLimit; only the bucket key and exemption list differ.
+//
+// KeyedRateLimit 返回基于调用方自定义 key 函数的令牌桶限流中间件（如「身份 + 归一化路径」），
+// 支持自定义探针端点豁免列表。与 RateLimit 复用同一套 32 分片令牌桶实现，仅桶 key 与豁免范围不同。
+// exemptPaths 中的路径（如 /health、/readyz、/metrics）完全跳过限流，保障 K8s 探针与指标抓取畅通。
+func KeyedRateLimit(rps int, burst int, keyFunc func(*gin.Context) string, exemptPaths ...string) gin.HandlerFunc {
+	return keyedRateLimit(rps, burst, nil, keyFunc, exemptPaths...)
+}
+
+func keyedRateLimit(defaultRPS int, defaultBurst int, perEndpoint map[string]*EndpointRateLimit, keyFunc func(*gin.Context) string, exemptPaths ...string) gin.HandlerFunc {
 	limiter := NewIPRateLimiter(defaultRPS, defaultBurst)
+	exempts := make(map[string]struct{}, len(exemptPaths))
+	for _, p := range exemptPaths {
+		exempts[p] = struct{}{}
+	}
 
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
-		if path == "/health" {
+		if _, ok := exempts[path]; ok {
 			c.Next()
 			return
 		}

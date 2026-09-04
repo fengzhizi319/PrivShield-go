@@ -1198,4 +1198,3 @@ func TestDatasourceLevelABACAuthorization(t *testing.T) {
 		t.Fatalf("expected kangyang authorized caller not to get 403, got %d: %s", w3.Code, w3.Body.String())
 	}
 }
-

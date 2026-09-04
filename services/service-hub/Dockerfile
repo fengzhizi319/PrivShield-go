@@ -27,7 +27,7 @@ RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
 
 # 复制共享公共基础库与依赖模块源码
 COPY pkg/ ./pkg/
-COPY services/datasource-mgr/ ./services/datasource-mgr/
+COPY console/mock-datasource/ ./console/mock-datasource/
 COPY services/service-hub/ ./services/service-hub/
 
 WORKDIR /app/services/service-hub

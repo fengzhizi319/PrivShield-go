@@ -42,7 +42,6 @@ RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
 COPY --from=builder /app/server /app/server
 COPY data/ /app/data/
 COPY console/mock-datasource/samples/ /app/samples/
-COPY engine/medical_pipeline/samples/ /app/engine/medical_pipeline/samples/
 
 RUN mkdir -p /app/data && chown -R privacy:privacy /app
 

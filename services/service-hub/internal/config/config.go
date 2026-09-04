@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	pkgagent "github.com/fengzhizi319/PrivShield-go/pkg/agent"
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 	"github.com/tjfoc/gmsm/gmtls"
 )
@@ -106,9 +106,16 @@ type Config struct {
 	// Graceful shutdown / 优雅关闭
 	ShutdownTimeout int // HTTP 优雅关闭超时秒数（默认 5）
 
-	// Rate limiting / 每客户端 IP 令牌桶限流
-	RateLimitRPS   int // 每秒允许的请求数（默认 100，0 = 不限流）
-	RateLimitBurst int // 令牌桶突发容量（默认 200）
+	// Rate limiting / 南北向边缘限流（service-hub 为对外网唯一通道，默认全开）
+	// 显式关闭手段：SERVICE_HUB_RATE_LIMIT_ENABLED=false，或将对应 RPS 设为 <=0。
+	RateLimitEnabled bool // 边缘限流总开关（SERVICE_HUB_RATE_LIMIT_ENABLED，默认 true）
+	RateLimitRPS     int  // 每客户端 IP 令牌桶每秒请求数（默认 100；<=0 时关闭 IP 级限流）
+	RateLimitBurst   int  // IP 级令牌桶突发容量（默认 200）
+
+	// 身份级细粒度限流（挂载在鉴权之后）：key = 认证身份 + 归一化路径（未认证回退客户端 IP），
+	// 防止单个 API 身份 / 单 IP 对特定端点洪泛。/health、/readyz、/metrics 探针端点豁免。
+	RateLimitPerIdentityRPS   int // 每身份每路径每秒请求数（默认 50；<=0 时关闭身份级限流）
+	RateLimitPerIdentityBurst int // 身份级令牌桶突发容量（默认 100）
 
 	// ── Phase B: PostgreSQL 多副本 Hub 配置 ──
 	PGDSN     string // PostgreSQL 连接字符串（为空时回退 SQLite）
@@ -200,9 +207,12 @@ func Load() *Config {
 		// Graceful shutdown / 优雅关闭超时（默认 5 秒）
 		ShutdownTimeout: pkgconfig.EnvInt("SERVICE_HUB_SHUTDOWN_TIMEOUT", 5),
 
-		// Rate limiting / 每客户端 IP 令牌桶限流（默认 100 rps，突发 200）
-		RateLimitRPS:   pkgconfig.EnvInt("SERVICE_HUB_RATE_LIMIT_RPS", 100),
-		RateLimitBurst: pkgconfig.EnvInt("SERVICE_HUB_RATE_LIMIT_BURST", 200),
+		// Rate limiting / 南北向边缘限流（默认全开；SERVICE_HUB_RATE_LIMIT_ENABLED=false 或 RPS<=0 关闭）
+		RateLimitEnabled:          pkgconfig.EnvBool("SERVICE_HUB_RATE_LIMIT_ENABLED", true),
+		RateLimitRPS:              pkgconfig.EnvInt("SERVICE_HUB_RATE_LIMIT_RPS", 100),
+		RateLimitBurst:            pkgconfig.EnvInt("SERVICE_HUB_RATE_LIMIT_BURST", 200),
+		RateLimitPerIdentityRPS:   pkgconfig.EnvInt("SERVICE_HUB_RATE_LIMIT_PER_IDENTITY_RPS", 50),
+		RateLimitPerIdentityBurst: pkgconfig.EnvInt("SERVICE_HUB_RATE_LIMIT_PER_IDENTITY_BURST", 100),
 
 		// ── Phase B: PostgreSQL 多副本 Hub 配置 ──
 		PGDSN:     pkgconfig.EnvString("SERVICE_HUB_PG_DSN", ""),

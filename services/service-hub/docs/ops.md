@@ -96,8 +96,11 @@ SERVICE_HUB_RETENTION_DAYS=30 \
 | `SERVICE_HUB_API_KEYS_FILE` | `""` | string | Scope-based API Key 文件路径（支持 KeyStore 热轮转） |
 | `SERVICE_HUB_REQUIRE_TLS` | `false` | bool | 生产零信任（P0-1）：强制要求启用 TLS，否则拒绝启动 |
 | `SERVICE_HUB_STRICT_STORAGE` / `STRICT_STORAGE` | `true` | bool | 严格存储（P0-4）：配置 PG 但连接失败时拒绝启动，不静默降级 |
-| `SERVICE_HUB_RATE_LIMIT_RPS` | `100` | int | 每客户端 IP 令牌桶每秒请求数（0 = 不限流） |
-| `SERVICE_HUB_RATE_LIMIT_BURST` | `200` | int | 令牌桶突发容量 |
+| `SERVICE_HUB_RATE_LIMIT_ENABLED` | `true` | bool | 南北向边缘限流总开关（`false` 关闭全部限流；service-hub 为对外网唯一通道，默认全开） |
+| `SERVICE_HUB_RATE_LIMIT_RPS` | `100` | int | 每客户端 IP 令牌桶每秒请求数（`<=0` = 关闭 IP 级限流） |
+| `SERVICE_HUB_RATE_LIMIT_BURST` | `200` | int | IP 级令牌桶突发容量 |
+| `SERVICE_HUB_RATE_LIMIT_PER_IDENTITY_RPS` | `50` | int | 身份级限流（鉴权后生效，key = 身份 + 归一化路径，匿名回退客户端 IP）每身份每路径每秒请求数（`<=0` = 关闭） |
+| `SERVICE_HUB_RATE_LIMIT_PER_IDENTITY_BURST` | `100` | int | 身份级令牌桶突发容量；`/health`、`/readyz`、`/metrics` 探针端点豁免 |
 | `SERVICE_HUB_DATASOURCE_API_KEY` | `""` | string | 访问下游 datasource-mgr 的 API Key |
 | `PRIVACY_ALLOWED_CIDRS` | `""` | string | 允许访问的客户端 CIDR 白名单（逗号分隔） |
 | `SERVICE_HUB_AUDIT_LOG_URLS` | `""` | string | 出域存证 audit-log REST 地址列表（逗号分隔；未配置时回退 `SERVICE_HUB_AUDIT_HTTP` ➔ `http://audit-log:8084`） |

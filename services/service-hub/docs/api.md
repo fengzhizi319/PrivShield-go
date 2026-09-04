@@ -1271,7 +1271,7 @@ message FetchAndDesensitizeResponse {
 | `404 Not Found` | `NOT_FOUND` | 指定的 `task_id` 不存在于任务存储中 |
 | `409 Conflict` | `RESERVED_DATASOURCE` | 尝试访问已登记但未实现上线的预留数据源 |
 | `413 Payload Too Large`| `PAYLOAD_TOO_LARGE` | 请求体超过 32 MiB 单包保护限制 |
-| `429 Too Many Requests`| `RATE_LIMITED` | 客户端 IP 请求速率触发令牌桶限流阈值 |
+| `429 Too Many Requests`| `RATE_LIMITED` | 客户端 IP 请求速率触发 IP 级令牌桶限流阈值，或认证身份 + 路径维度触发身份级细粒度限流阈值（均返回 `Retry-After` 头） |
 | `500 Internal Error` | `INTERNAL_ERROR` | 调度中枢内部 TaskStore 读写异常、Agent 调用失败或未知崩溃 |
 | `503 Unavailable` | `UPSTREAM_UNAVAILABLE` | 上游 Agent 不可达、下游 datasource-mgr 连接失败或并发排队超限 |
 
@@ -1354,8 +1354,11 @@ message FetchAndDesensitizeResponse {
 | `SERVICE_HUB_STRICT_STORAGE` | `true` | 严格存储模式：PG 配置但连接失败时拒绝启动 |
 | `SERVICE_HUB_RETENTION_DAYS` | `30` | 终态任务自动清理保留天数 |
 | `SERVICE_HUB_SHUTDOWN_TIMEOUT` | `5` | HTTP 优雅关闭超时秒数 |
-| `SERVICE_HUB_RATE_LIMIT_RPS` | `100` | 每客户端 IP 令牌桶每秒请求数（0 = 不限流） |
-| `SERVICE_HUB_RATE_LIMIT_BURST` | `200` | 令牌桶突发容量 |
+| `SERVICE_HUB_RATE_LIMIT_ENABLED` | `true` | 南北向边缘限流总开关（`false` 关闭全部限流） |
+| `SERVICE_HUB_RATE_LIMIT_RPS` | `100` | 每客户端 IP 令牌桶每秒请求数（`<=0` = 关闭 IP 级限流） |
+| `SERVICE_HUB_RATE_LIMIT_BURST` | `200` | IP 级令牌桶突发容量 |
+| `SERVICE_HUB_RATE_LIMIT_PER_IDENTITY_RPS` | `50` | 身份级限流（鉴权后生效，key = 身份 + 归一化路径）每身份每路径每秒请求数（`<=0` = 关闭） |
+| `SERVICE_HUB_RATE_LIMIT_PER_IDENTITY_BURST` | `100` | 身份级令牌桶突发容量 |
 | `SERVICE_HUB_LOG_FORMAT` | `json` | 日志输出格式（`json` / `text`） |
 | `SERVICE_HUB_LOG_LEVEL` | `info` | 日志级别（`debug` / `info` / `warn` / `error`） |
 | `SERVICE_HUB_AUDIT_LOG_URLS` | `""` | audit-log REST 基础地址列表（逗号分隔多副本） |
