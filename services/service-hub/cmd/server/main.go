@@ -135,7 +135,7 @@ func main() {
 	naming.SetObserver(mc)
 
 	// =========================================================================
-	// 3.5 Crash Recovery / 崩溃恢复机制
+	// 5. Crash Recovery / 崩溃恢复机制
 	// =========================================================================
 	// 启动时自动扫描并恢复孤立任务：
 	// - pending 任务：直接保留在队列中（尚未执行，无需标记失败）；
@@ -145,7 +145,7 @@ func main() {
 	}
 
 	// =========================================================================
-	// 3.6 Automatic Task Retry / 失败任务自动重试
+	// 6. Automatic Task Retry / 失败任务自动重试
 	// =========================================================================
 	// 启动时自动重试因临时错误（网络超时、连接失败等）而失败的任务。
 	// 最多重试 3 次，使用结构化 RetryCount 字段（替代脆弱的字符串匹配）。
@@ -153,7 +153,7 @@ func main() {
 	retryFailedTasks(taskStore, mc, logger)
 
 	// =========================================================================
-	// 3.7 Periodic Background Retry / 周期性后台重试协程
+	// 7. Periodic Background Retry / 周期性后台重试协程
 	// =========================================================================
 	// 启动后台协程，每 60 秒扫描一次 failed 任务并自动重试。
 	// 解决“运行时失败的任务必须等到下次服务重启才能重试”的问题。
@@ -161,7 +161,7 @@ func main() {
 	go periodicRetryLoop(retryCtx, taskStore, mc, logger, 60*time.Second)
 
 	// =========================================================================
-	// 3.8 Periodic Data Retention Cleanup / 周期性数据保留清理协程
+	// 8. Periodic Data Retention Cleanup / 周期性数据保留清理协程
 	// =========================================================================
 	// 启动后台协程，每 6 小时扫描并清理超过保留期的终态任务，防止 SQLite 无限膨胀。
 	// RetentionDays=0 时禁用清理（适用于调试或短期部署）。
@@ -171,7 +171,7 @@ func main() {
 	}
 
 	// =========================================================================
-	// 5. Upstream & Downstream Clients Setup / 下游依赖客户端实例化
+	// 9. Upstream & Downstream Clients Setup / 下游依赖客户端实例化
 	// =========================================================================
 	// 1) AgentClient: 负责与 PrivShield Privacy Engine 引擎（:8079）通信，调用分类分级与脱敏算子；
 	// 2) DatasourceClient: 负责与 mock-datasource 模拟数据源服务（:8083/:50053）交互，采样抽取数据。
@@ -198,7 +198,7 @@ func main() {
 	mc.SetReady(false)
 
 	// =========================================================================
-	// 6. HTTP REST Server Runner / REST 服务运行实体装配
+	// 10. HTTP REST Server Runner / REST 服务运行实体装配
 	// =========================================================================
 	// 实例化 HTTP 处理器集合（任务分发调度、流水线查询、数据源代理等端点），
 	// 并构造 RESTServerRunner：Gin 引擎 + 中间件漏斗 + http.Server 超时 + TLS/mTLS 配置。
@@ -209,7 +209,7 @@ func main() {
 	}
 
 	// =========================================================================
-	// 7. gRPC Server Runner / gRPC 服务运行实体装配
+	// 11. gRPC Server Runner & Task Worker / gRPC 服务实体装配与任务消费 Worker
 	// =========================================================================
 	// 构造 GRPCServerRunner：64 MiB 消息上限、Keepalive 保活、API Key + Scope 鉴权拦截器
 	// 与可选 mTLS CN 白名单拦截器链、TLS credentials 分支、服务桩注册与 TCP 监听预绑定。
@@ -237,7 +237,7 @@ func main() {
 	}
 
 	// =========================================================================
-	// 7.5 Startup Config Summary / 启动配置摘要横幅
+	// 12. Startup Config Summary / 启动配置摘要横幅
 	// =========================================================================
 	// Log key configuration flags at startup so operators can verify the
 	// security posture and runtime parameters at a glance.
@@ -278,7 +278,7 @@ func main() {
 	}
 
 	// =========================================================================
-	// 8. Operating System Signal Registration / 系统中断信号监听
+	// 13. Operating System Signal Registration / 系统中断信号监听
 	// =========================================================================
 	// 使用 signal.NotifyContext（Go 1.16+）替代传统的 signal.Notify + channel 模式，
 	// 信号到达时自动取消 context，与下游协程的 ctx.Done() 无缝衔接。
@@ -286,7 +286,7 @@ func main() {
 	defer sigStop()
 
 	// =========================================================================
-	// 9. Dual-Protocol Concurrent Listeners / 双协议并发监听启动
+	// 14. Dual-Protocol Concurrent Listeners / 双协议并发监听启动
 	// =========================================================================
 	// 1) 启动 gRPC 服务事件循环（TCP 监听已在构造阶段完成预绑定）
 	go func() {
@@ -306,7 +306,7 @@ func main() {
 	mc.SetReady(true)
 
 	// =========================================================================
-	// 10. Graceful Shutdown Workflow / 优雅停机收敛流程
+	// 15. Graceful Shutdown Workflow / 优雅停机收敛流程
 	// =========================================================================
 	// 1) 阻塞等待退出信号（SIGINT / SIGTERM）
 	<-sigCtx.Done()

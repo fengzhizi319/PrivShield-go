@@ -79,7 +79,7 @@ func main() {
 	logger := slog.Default()
 
 	// =========================================================================
-	// 2.5 Strict storage / 严格存储模式（P0-4 禁静音降级）
+	// 3. Strict Storage Posture / 严格存储模式配置（P0-4 禁静音降级）
 	// =========================================================================
 	// 默认开启：样本/探查数据文件出现损坏行时直接上抛为请求失败，
 	// 而不是静默丢弃记录后照常返回 200（调用方无法感知数据集被缩小）。
@@ -87,7 +87,7 @@ func main() {
 	logger.Info("datasource-mgr storage posture", "strict_data_integrity", cfg.StrictStorage)
 
 	// =========================================================================
-	// 2.6 API Key 文件热轮转（K8s Secret 投影场景）
+	// 4. API Key Store Setup / API Key 文件热轮转初始化
 	// =========================================================================
 	var keyStore *pkgauth.KeyStore
 	if cfg.KeysFile != "" {
@@ -102,7 +102,7 @@ func main() {
 	}
 
 	// =========================================================================
-	// 3. HTTP REST Server Setup / HTTP REST 路由与服务器构建
+	// 5. HTTP REST Server Setup / HTTP REST 路由与服务器构建
 	// =========================================================================
 	// 1) 锁定 Gin 为生产发布模式（ReleaseMode），禁用控制台调试冗余输出与性能损耗；
 	// 2) 实例化 HTTP 处理器集合，封装数据源 CRUD、模拟数据集（yibao/kangyang）与健康探针；
@@ -149,7 +149,7 @@ func main() {
 	}
 
 	// =========================================================================
-	// 4. gRPC Server Setup (with optional mTLS) / gRPC 服务构建（支持可选 mTLS）
+	// 6. gRPC Server Setup (with optional mTLS) / gRPC 服务构建（支持可选 mTLS）
 	// =========================================================================
 	// 根据配置决定是否开启 mTLS 双向认证：
 	// - 开启 TLS (cfg.TLSEnabled = true):
@@ -228,7 +228,7 @@ func main() {
 	}
 
 	// =========================================================================
-	// 4.5 Startup Config Summary / 启动配置摘要横幅
+	// 7. Startup Config Summary / 启动配置摘要横幅
 	// =========================================================================
 	// Log key configuration flags at startup so operators can verify the
 	// security posture and runtime parameters at a glance.
@@ -261,7 +261,7 @@ func main() {
 	}
 
 	// =========================================================================
-	// 5. Operating System Signal Registration / 系统中断信号监听
+	// 8. Operating System Signal Registration / 系统中断信号监听
 	// =========================================================================
 	// 使用 signal.NotifyContext（Go 1.16+）替代传统的 signal.Notify + channel 模式，
 	// 信号到达时自动取消 context，与下游协程的 ctx.Done() 无缝衔接。
@@ -270,7 +270,7 @@ func main() {
 	defer sigStop()
 
 	// =========================================================================
-	// 6. Dual-Protocol Concurrent Listeners / 双协议并发监听启动
+	// 9. Dual-Protocol Concurrent Listeners / 双协议并发监听启动
 	// =========================================================================
 	// 1) 启动 gRPC TCP 监听端口（默认 :50053），失败时阻断进程启动
 	grpcLis, err := net.Listen("tcp", cfg.GRPCAddress())
@@ -360,7 +360,7 @@ func main() {
 	}()
 
 	// =========================================================================
-	// 7. Graceful Shutdown Workflow / 优雅停机收敛流程
+	// 10. Graceful Shutdown Workflow / 优雅停机收敛流程
 	// =========================================================================
 	// 1) 阻塞等待退出信号到达
 	<-sigCtx.Done()
