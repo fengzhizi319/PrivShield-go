@@ -36,12 +36,12 @@ Pop-Location
 Write-Host "启动 PrivShield Agent..."
 Push-Location $ProjectRoot
 if ($Mtls) {
-    $env:PRIVACY_TLS_ENABLED = "true"
-    $env:PRIVACY_TLS_CERT_FILE = "$CertDir\server.crt"
-    $env:PRIVACY_TLS_KEY_FILE = "$CertDir\server.key"
-    $env:PRIVACY_TLS_CA_FILE = "$CertDir\ca.crt"
-    $env:PRIVACY_AUTH_INTERNAL_MTLS_ENABLED = "true"
-    $env:PRIVACY_AUTH_MTLS_ALLOWED_CNS = '["privshield-client"]'
+    $env:AGENT_TLS_ENABLED = "true"
+    $env:AGENT_TLS_CERT_FILE = "$CertDir\server.crt"
+    $env:AGENT_TLS_KEY_FILE = "$CertDir\server.key"
+    $env:AGENT_TLS_CA_FILE = "$CertDir\ca.crt"
+    $env:AGENT_AUTH_INTERNAL_MTLS_ENABLED = "true"
+    $env:AGENT_AUTH_MTLS_ALLOWED_CNS = '["privshield-client"]'
 }
 $agentProcess = Start-Process -FilePath "go" -ArgumentList "run ./engine-go/cmd/privshield-agent" -NoNewWindow -PassThru
 Pop-Location

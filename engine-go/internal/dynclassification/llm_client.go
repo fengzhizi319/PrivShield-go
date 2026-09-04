@@ -50,11 +50,11 @@ type LLMClientConfig struct {
 // 仅用于受控内网 / 专线内的本地模型服务（如 compose 网络里的 vllm 服务名），
 // 取值须为 "true"。它只放宽传输层要求，**不会**恢复字段原值外送：
 // 形态指纹（ShapeOf）与出网前的原值包含性自检始终生效（见 ClassifyShape）。
-const envLLMPlaintextOptIn = "PRIVACY_LLM_ALLOW_INSECURE_HTTP_ENDPOINT"
+const envLLMPlaintextOptIn = "AGENT_LLM_ALLOW_INSECURE_HTTP_ENDPOINT"
 
 // DefaultLLMClientConfig 默认 LLM 客户端配置。
 // 默认端点为**空串**：Layer-3 默认关闭且不存在任何外送路径（P0-5）。
-// 启用 Layer-3 时必须显式配置 PRIVACY_LLM_ENDPOINT 为 https 端点（或受控内网明文端点 + 显式豁免）；
+// 启用 Layer-3 时必须显式配置 AGENT_LLM_ENDPOINT 为 https 端点（或受控内网明文端点 + 显式豁免）；
 // 空端点在 ValidateLLMTransport 中被拒绝，确保不会静默使用不安全的默认值。
 func DefaultLLMClientConfig() LLMClientConfig {
 	return LLMClientConfig{

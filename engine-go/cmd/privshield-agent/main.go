@@ -8,9 +8,9 @@
 //   - 无锁原子 CAS 隐私预算会计与医学 DICOM 二进制合规重构流水线。
 //
 // 进程支持 REST 与 gRPC 模块解耦与动态选择性启停（默认双协议并发，100% 向下兼容）：
-//  1. REST API 模块 (Gin 驱动，默认端口 :8079，由 PRIVACY_REST_ENABLED 控制)：
+//  1. REST API 模块 (Gin 驱动，默认端口 :8079，由 AGENT_REST_ENABLED 控制)：
 //     面向控制台 (BFF) 及外部 HTTP 业务调用方，提供 DataFrame 批处理、文件脱敏、合规探针、动态分类及诊断端点；
-//  2. gRPC Server 模块 (低延迟 RPC，默认端口 :50051，由 PRIVACY_GRPC_ENABLED 控制)：
+//  2. gRPC Server 模块 (低延迟 RPC，默认端口 :50051，由 AGENT_GRPC_ENABLED 控制)：
 //     面向微服务调度中枢 (service-hub) 与内部集群节点，基于 Protobuf 协议与 RawCodec 实现高吞吐零拷贝的数据交换。
 //
 // ─────────────────────────────────────────────────────────────────────────────
@@ -20,9 +20,9 @@
 //	       │
 //	[阶段 2: 核心引擎初始化] ── slog 日志 + PrivacyService 隐私编排器 + Prometheus 指标 + 命名观测器
 //	       │
-//	[阶段 3: REST 模块按需装配] ── 若 PRIVACY_REST_ENABLED=true，构造 RESTServerRunner 并协程启动
+//	[阶段 3: REST 模块按需装配] ── 若 AGENT_REST_ENABLED=true，构造 RESTServerRunner 并协程启动
 //	       │
-//	[阶段 4: gRPC 模块按需装配] ── 若 PRIVACY_GRPC_ENABLED=true，构造 GRPCServerRunner 并协程启动
+//	[阶段 4: gRPC 模块按需装配] ── 若 AGENT_GRPC_ENABLED=true，构造 GRPCServerRunner 并协程启动
 //	       │
 //	[阶段 5: 启动摘要与告警] ── 输出运行状态、监听地址与预算快照；对本地明文或单协议模式输出提示
 //	       │
@@ -31,22 +31,22 @@
 //	[阶段 7: 确定性优雅停机] ── 优雅关闭已开启的 REST Server 与 gRPC Server（带看门狗兜底）
 //
 // ─────────────────────────────────────────────────────────────────────────────
-// 【核心环境变量矩阵】
-//   - PRIVACY_REST_ENABLED: 是否启用 REST 服务（默认 true）
-//   - PRIVACY_GRPC_ENABLED: 是否启用 gRPC 服务（默认 true）
-//   - PRIVACY_REST_HOST / PRIVACY_REST_PORT: REST 监听地址与端口（默认 127.0.0.1:8079，生产编排注入 0.0.0.0）
-//   - PRIVACY_GRPC_HOST / PRIVACY_GRPC_PORT: gRPC 监听地址与端口（默认 127.0.0.1:50051）
-//   - PRIVACY_LOG_LEVEL: 日志级别（DEBUG/INFO/WARN/ERROR，默认 INFO）
-//   - PRIVACY_TLS_ENABLED: 是否启用 TLS 通信加密 (HTTPS 与 gRPC TLS)
-//   - PRIVACY_REQUIRE_TLS: 强制加密红线标志，若为 true 但 TLS 未成功开启则阻断启动
-//   - PRIVACY_TLCP_ENABLED: 是否启用 GM/T 0024 国密通信协议 (TLCP 双证书模式)
-//   - PRIVACY_TLS_CERT_FILE / PRIVACY_TLS_KEY_FILE / PRIVACY_TLS_CA_FILE: 标准 TLS 证书、私钥与根 CA 路径
-//   - PRIVACY_AUTH_ENABLED + PRIVACY_AUTH_INTERNAL_API_KEYS: 入站 API Key 鉴权开关与密钥列表 (逗号分隔)
-//   - PRIVACY_AUTH_INTERNAL_MTLS_ENABLED: 是否开启 gRPC 客户端双向证书认证 (mTLS)
-//   - PRIVACY_AUTH_MTLS_WHITELIST_FILE: 客户端证书 CN 白名单配置文件路径 (支持 5s 无依赖热重载)
-//   - PRIVACY_RATE_LIMIT_RPS / BURST: 入站全局令牌桶限流速率与突发容量
-//   - PRIVACY_SHUTDOWN_DRAIN_SECONDS: 收到停机信号后等待网络流量排空的等待秒数（默认 5s）
-//   - PRIVACY_GRPC_GRACEFUL_STOP_SECONDS: gRPC 优雅停机看门狗超时时间（默认 15s，超时则强制关闭）
+// 【核心环境变量矩阵】（agent 只读取 AGENT_* 前缀，见 engine-go/internal/config/config.go）
+//   - AGENT_REST_ENABLED: 是否启用 REST 服务（默认 true）
+//   - AGENT_GRPC_ENABLED: 是否启用 gRPC 服务（默认 true）
+//   - AGENT_REST_HOST / AGENT_REST_PORT: REST 监听地址与端口（默认 127.0.0.1:8079，生产编排注入 0.0.0.0）
+//   - AGENT_GRPC_HOST / AGENT_GRPC_PORT: gRPC 监听地址与端口（默认 127.0.0.1:50051）
+//   - AGENT_LOG_LEVEL: 日志级别（DEBUG/INFO/WARN/ERROR，默认 INFO）
+//   - AGENT_TLS_ENABLED: 是否启用 TLS 通信加密 (HTTPS 与 gRPC TLS)
+//   - AGENT_REQUIRE_TLS: 强制加密红线标志，若为 true 但 TLS 未成功开启则阻断启动
+//   - AGENT_TLS_NATIONAL_CIPHER: 是否启用 GM/T 0024 国密通信协议 (TLCP 双证书模式)
+//   - AGENT_TLS_CERT_FILE / AGENT_TLS_KEY_FILE / AGENT_TLS_CA_FILE: 标准 TLS 证书、私钥与根 CA 路径
+//   - AGENT_AUTH_ENABLED + AGENT_AUTH_INTERNAL_API_KEYS: 入站 API Key 鉴权开关与密钥列表 (逗号分隔)
+//   - AGENT_AUTH_INTERNAL_MTLS_ENABLED: 是否开启 gRPC 客户端双向证书认证 (mTLS)
+//   - AGENT_AUTH_MTLS_WHITELIST_FILE: 客户端证书 CN 白名单配置文件路径 (支持 5s 无依赖热重载)
+//   - AGENT_RATE_LIMIT_RPS / AGENT_RATE_LIMIT_BURST: 入站全局令牌桶限流速率与突发容量
+//   - AGENT_SHUTDOWN_DRAIN_SECONDS: 收到停机信号后等待网络流量排空的等待秒数（默认 5s）
+//   - AGENT_GRPC_GRACEFUL_STOP_SECONDS: gRPC 优雅停机看门狗超时时间（默认 15s，超时则强制关闭）
 package main
 
 import (
@@ -110,7 +110,7 @@ func main() {
 	// 3. 执行 cfg.Validate() 实施严格的 fail-closed 门禁校验：
 	//    - 至少启用 REST 或 gRPC 之一，禁止两协议全关；
 	//    - 非环回暴露面必须配置凭证；
-	//    - PRIVACY_REQUIRE_TLS=true 时若 TLS 未启用直接阻断；
+	//    - AGENT_REQUIRE_TLS=true 时若 TLS 未启用直接阻断；
 	//    - mTLS 启用但白名单文件不可达直接阻断。
 	cfg := loadConfig()
 
@@ -164,7 +164,7 @@ func main() {
 			}
 		}()
 	} else {
-		slog.Warn("REST server is DISABLED by configuration (PRIVACY_REST_ENABLED=false); " +
+		slog.Warn("REST server is DISABLED by configuration (AGENT_REST_ENABLED=false); " +
 			"HTTP endpoints (/readyz, /healthz, /metrics) will not be served over HTTP")
 	}
 
@@ -187,7 +187,7 @@ func main() {
 			}
 		}()
 	} else {
-		slog.Info("gRPC server is DISABLED by configuration (PRIVACY_GRPC_ENABLED=false)")
+		slog.Info("gRPC server is DISABLED by configuration (AGENT_GRPC_ENABLED=false)")
 	}
 
 	// =========================================================================
@@ -212,8 +212,8 @@ func main() {
 
 	if !cfg.AuthEffectivelyEnabled() && !cfg.TLSEnabled {
 		slog.Warn("Running with authentication and TLS DISABLED on a loopback bind; " +
-			"for any exposed deployment set PRIVACY_AUTH_ENABLED=true with PRIVACY_AUTH_INTERNAL_API_KEYS " +
-			"and PRIVACY_TLS_ENABLED=true (plus PRIVACY_AUTH_MTLS_WHITELIST_FILE)")
+			"for any exposed deployment set AGENT_AUTH_ENABLED=true with AGENT_AUTH_INTERNAL_API_KEYS " +
+			"and AGENT_TLS_ENABLED=true (plus AGENT_AUTH_MTLS_WHITELIST_FILE)")
 	}
 
 	// =========================================================================

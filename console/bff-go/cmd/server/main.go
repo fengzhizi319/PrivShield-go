@@ -50,10 +50,10 @@ import (
 func main() {
 	// ── 步骤 1：加载配置 ──────────────────────────────────────────────
 	// 从环境变量读取所有配置项，包括：
-	//   - PRIVACY_AGENT_HOST / PRIVACY_AGENT_PORT：上游 gRPC agent 地址
-	//   - PRIVACY_CONSOLE_HOST / PRIVACY_CONSOLE_PORT：本代理 HTTP 监听地址
-	//   - PRIVACY_AGENT_API_KEY：可选的认证 API Key
-	//   - PRIVACY_CONSOLE_STATIC_DIR：可选的前端静态文件目录
+	//   - BFF_AGENT_GRPC_HOST / BFF_AGENT_GRPC_PORT：上游 gRPC agent 地址
+	//   - BFF_HOST / BFF_PORT：本代理 HTTP 监听地址
+	//   - BFF_AGENT_API_KEY：可选的认证 API Key
+	//   - BFF_STATIC_DIR：可选的前端静态文件目录
 	cfg := config.Load()
 
 	// Validate configuration consistency (fail-fast with clear error messages).

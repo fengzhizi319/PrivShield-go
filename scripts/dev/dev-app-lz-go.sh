@@ -155,10 +155,10 @@ start_engine() {
     if [[ "$MTLS_MODE" == "true" ]]; then
         PRIVACY_REST_HOST=127.0.0.1 PRIVACY_REST_PORT="$port" \
         PRIVACY_GRPC_HOST=127.0.0.1 PRIVACY_GRPC_PORT=50051 \
-        PRIVACY_TLS_ENABLED=true \
-        PRIVACY_TLS_CERT_FILE="$CERT_DIR/server.crt" \
-        PRIVACY_TLS_KEY_FILE="$CERT_DIR/server.key" \
-        PRIVACY_TLS_CA_FILE="$CERT_DIR/ca.crt" \
+        AGENT_TLS_ENABLED=true \
+        AGENT_TLS_CERT_FILE="$CERT_DIR/server.crt" \
+        AGENT_TLS_KEY_FILE="$CERT_DIR/server.key" \
+        AGENT_TLS_CA_FILE="$CERT_DIR/ca.crt" \
         "$GO_BIN" run ./cmd/privshield-agent \
             > "${LOGS_DIR}/agent_app_lz_go.log" 2>&1 &
     else
@@ -192,11 +192,6 @@ start_service_hub() {
         SERVICE_HUB_AGENT_REST_HOST=127.0.0.1 SERVICE_HUB_AGENT_REST_PORT=8079 \
         SERVICE_HUB_AUDIT_LOG_URLS="http://127.0.0.1:8084" \
         SERVICE_HUB_DB_PATH="${DATA_DIR}/service-hub.db" \
-        PRIVACY_AGENT_TLS_ENABLED=true \
-        PRIVACY_AGENT_TLS_CA_FILE="$CERT_DIR/ca.crt" \
-        PRIVACY_AGENT_TLS_CERT_FILE="$CERT_DIR/client.crt" \
-        PRIVACY_AGENT_TLS_KEY_FILE="$CERT_DIR/client.key" \
-        PRIVACY_AGENT_TLS_SERVER_NAME="localhost" \
         ./bin/service-hub > "${LOGS_DIR}/service-hub_app_lz.log" 2>&1 &
     else
         SERVICE_HUB_HOST=127.0.0.1 SERVICE_HUB_PORT="$port" \
@@ -228,11 +223,6 @@ start_datasource_mgr() {
     if [[ "$MTLS_MODE" == "true" ]]; then
         DATASOURCE_MGR_HOST=127.0.0.1 DATASOURCE_MGR_PORT="$port" \
         DATASOURCE_MGR_AGENT_REST_HOST=127.0.0.1 DATASOURCE_MGR_AGENT_REST_PORT=8079 \
-        PRIVACY_AGENT_TLS_ENABLED=true \
-        PRIVACY_AGENT_TLS_CA_FILE="$CERT_DIR/ca.crt" \
-        PRIVACY_AGENT_TLS_CERT_FILE="$CERT_DIR/client.crt" \
-        PRIVACY_AGENT_TLS_KEY_FILE="$CERT_DIR/client.key" \
-        PRIVACY_AGENT_TLS_SERVER_NAME="localhost" \
         ./bin/datasource-mgr > "${LOGS_DIR}/datasource-mgr_app_lz.log" 2>&1 &
     else
         DATASOURCE_MGR_HOST=127.0.0.1 DATASOURCE_MGR_PORT="$port" \
@@ -263,11 +253,6 @@ start_audit_log() {
         AUDIT_LOG_HOST=127.0.0.1 AUDIT_LOG_PORT="$port" \
         AUDIT_LOG_AGENT_REST_HOST=127.0.0.1 AUDIT_LOG_AGENT_REST_PORT=8079 \
         AUDIT_LOG_DB_PATH="${DATA_DIR}/audit-log.db" \
-        PRIVACY_AGENT_TLS_ENABLED=true \
-        PRIVACY_AGENT_TLS_CA_FILE="$CERT_DIR/ca.crt" \
-        PRIVACY_AGENT_TLS_CERT_FILE="$CERT_DIR/client.crt" \
-        PRIVACY_AGENT_TLS_KEY_FILE="$CERT_DIR/client.key" \
-        PRIVACY_AGENT_TLS_SERVER_NAME="localhost" \
         ./bin/audit-log > "${LOGS_DIR}/audit-log_app_lz.log" 2>&1 &
     else
         AUDIT_LOG_HOST=127.0.0.1 AUDIT_LOG_PORT="$port" \
@@ -317,11 +302,6 @@ if [[ "$MTLS_MODE" == "true" ]]; then
     APP_LZ_PORT="$BFF_PORT" \
     APP_LZ_AGENT_URL="https://127.0.0.1:8079" \
     APP_LZ_AGENT_GRPC="127.0.0.1:50051" \
-    PRIVACY_AGENT_TLS_ENABLED=true \
-    PRIVACY_AGENT_TLS_CA_FILE="$CERT_DIR/ca.crt" \
-    PRIVACY_AGENT_TLS_CERT_FILE="$CERT_DIR/client.crt" \
-    PRIVACY_AGENT_TLS_KEY_FILE="$CERT_DIR/client.key" \
-    PRIVACY_AGENT_TLS_SERVER_NAME="localhost" \
     "$APP_LZ_DIR/bff-go/bin/server" > "$LOGS_DIR/app-lz-bff.log" 2>&1 &
 else
     APP_LZ_PORT="$BFF_PORT" "$APP_LZ_DIR/bff-go/bin/server" > "$LOGS_DIR/app-lz-bff.log" 2>&1 &

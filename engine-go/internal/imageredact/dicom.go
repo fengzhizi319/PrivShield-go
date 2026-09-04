@@ -52,7 +52,7 @@ const (
 
 // maxDICOMFileSize 返回可配置的 DICOM 文件大小上限（复用 pkg/config）。
 func maxDICOMFileSize() int64 {
-	return pkgconfig.EnvInt64("PRIVACY_DICOM_MAX_FILE_SIZE", defaultMaxDICOMFileSize)
+	return pkgconfig.EnvInt64("AGENT_DICOM_MAX_FILE_SIZE", defaultMaxDICOMFileSize)
 }
 
 // IsDICOM 检查字节流是否为合法的 DICOM 格式。

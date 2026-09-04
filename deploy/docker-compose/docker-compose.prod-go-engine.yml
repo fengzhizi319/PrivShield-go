@@ -36,32 +36,31 @@ services:
     security_opt:
       - no-new-privileges:true
     environment:
-      # Go 引擎基础配置
-      # PRIVACY_GRPC_HOST：config.go 读取点（默认 127.0.0.1），容器编排必须显式置 0.0.0.0 否则外部不可达。
-      PRIVACY_REST_HOST: "0.0.0.0"
-      PRIVACY_REST_PORT: "8079"
-      PRIVACY_GRPC_HOST: "0.0.0.0"
-      PRIVACY_GRPC_PORT: "50051"
-      PRIVACY_LOG_LEVEL: "${PRIVACY_LOG_LEVEL:-INFO}"
+      # Go 引擎基础配置（agent 只读 AGENT_* 变量名）
+      AGENT_REST_HOST: "0.0.0.0"
+      AGENT_REST_PORT: "8079"
+      AGENT_GRPC_HOST: "0.0.0.0"
+      AGENT_GRPC_PORT: "50051"
+      AGENT_LOG_LEVEL: "${PRIVACY_LOG_LEVEL:-INFO}"
       PRIVACY_SERVICE_NAME: "PrivShield-Go"
-      # 分类分级规则与 Profile 路径（Go 引擎读取的真实变量名）
+      # 分类分级规则与 Profile 路径（agent 仍在读取的 PRIVACY_* 路径变量）
       PRIVACY_CONFIG_FILE: "${PRIVACY_CONFIG_FILE:-/app/config/privacy.yaml}"
       PRIVACY_RULES_DIR: "${PRIVACY_RULES_DIR:-/app/rules/domains}"
       # ── 生产安全基线（与 docker-compose.prod.yml 一致，缺密钥/证书即拒绝启动）──
-      PRIVACY_TLS_ENABLED: "true"
-      PRIVACY_REQUIRE_TLS: "${PRIVACY_REQUIRE_TLS:-true}"
-      PRIVACY_TLS_CERT_FILE: "${PRIVACY_TLS_CERT_FILE:-/certs/agent/tls.crt}"
-      PRIVACY_TLS_KEY_FILE: "${PRIVACY_TLS_KEY_FILE:-/certs/agent/tls.key}"
-      PRIVACY_TLS_CA_FILE: "${PRIVACY_TLS_CA_FILE:-/certs/ca.crt}"
-      PRIVACY_AUTH_INTERNAL_MTLS_ENABLED: "${PRIVACY_AUTH_INTERNAL_MTLS_ENABLED:-true}"
-      PRIVACY_AUTH_MTLS_WHITELIST_FILE: "${PRIVACY_AUTH_MTLS_WHITELIST_FILE:?PRIVACY_AUTH_MTLS_WHITELIST_FILE is required in production (e.g. /etc/PrivShield/secrets/mtls-whitelist.yaml)}"
-      PRIVACY_AUTH_ENABLED: "true"
-      PRIVACY_AUTH_INTERNAL_API_KEYS: "${PRIVACY_AUTH_INTERNAL_API_KEYS:?PRIVACY_AUTH_INTERNAL_API_KEYS is required in production (format token:name:scopes;...)}"
-      PRIVACY_AUTH_EXTERNAL_API_KEYS: "${PRIVACY_AUTH_EXTERNAL_API_KEYS:?PRIVACY_AUTH_EXTERNAL_API_KEYS is required in production}"
-      PRIVACY_RATE_LIMIT_ENABLED: "true"
-      PRIVACY_RATE_LIMIT_DEFAULT_RPS: "${PRIVACY_RATE_LIMIT_DEFAULT_RPS:-50}"
-      PRIVACY_RATE_LIMIT_DEFAULT_BURST: "${PRIVACY_RATE_LIMIT_DEFAULT_BURST:-100}"
-      PRIVACY_RATE_LIMIT_REDIS_URL: "${PRIVACY_RATE_LIMIT_REDIS_URL:-redis://redis:6379/0}"
+      AGENT_TLS_ENABLED: "true"
+      AGENT_REQUIRE_TLS: "${AGENT_REQUIRE_TLS:-true}"
+      AGENT_TLS_CERT_FILE: "${AGENT_TLS_CERT_FILE:-/certs/agent/tls.crt}"
+      AGENT_TLS_KEY_FILE: "${AGENT_TLS_KEY_FILE:-/certs/agent/tls.key}"
+      AGENT_TLS_CA_FILE: "${AGENT_TLS_CA_FILE:-/certs/ca.crt}"
+      AGENT_AUTH_INTERNAL_MTLS_ENABLED: "${AGENT_AUTH_INTERNAL_MTLS_ENABLED:-true}"
+      AGENT_AUTH_MTLS_WHITELIST_FILE: "${AGENT_AUTH_MTLS_WHITELIST_FILE:?AGENT_AUTH_MTLS_WHITELIST_FILE is required in production (e.g. /etc/PrivShield/secrets/mtls-whitelist.yaml)}"
+      AGENT_AUTH_ENABLED: "true"
+      AGENT_AUTH_INTERNAL_API_KEYS: "${AGENT_AUTH_INTERNAL_API_KEYS:?AGENT_AUTH_INTERNAL_API_KEYS is required in production (format token:name:scopes;...)}"
+      AGENT_AUTH_EXTERNAL_API_KEYS: "${AGENT_AUTH_EXTERNAL_API_KEYS:?AGENT_AUTH_EXTERNAL_API_KEYS is required in production}"
+      AGENT_RATE_LIMIT_ENABLED: "true"
+      AGENT_RATE_LIMIT_DEFAULT_RPS: "${AGENT_RATE_LIMIT_DEFAULT_RPS:-50}"
+      AGENT_RATE_LIMIT_DEFAULT_BURST: "${AGENT_RATE_LIMIT_DEFAULT_BURST:-100}"
+      AGENT_RATE_LIMIT_REDIS_URL: "${AGENT_RATE_LIMIT_REDIS_URL:-redis://redis:6379/0}"
     # Go 引擎只需要证书 / 白名单挂载（Python 时代的 profile 与预算库挂载不再需要）
     volumes:
       - ./certs:/certs:ro

@@ -1,9 +1,18 @@
 package config
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 )
@@ -151,6 +160,143 @@ func TestAgentBaseURLs(t *testing.T) {
 			t.Errorf("expected 2 URLs, got %v", urls)
 		}
 	})
+}
+
+// TestAgentTLSClientConfigEnv verifies the agent outbound transport trust env combos
+// (PRIVACY_AGENT_TLS_CA_FILE / PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY):
+// no env -> nil; only skip-verify -> non-nil; valid CA file -> RootCAs loaded;
+// unreadable CA file -> error (fail-fast).
+func TestAgentTLSClientConfigEnv(t *testing.T) {
+	t.Run("NoEnvReturnsNil", func(t *testing.T) {
+		t.Setenv("PRIVACY_AGENT_TLS_CA_FILE", "")
+		t.Setenv("PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY", "")
+		cfg := Load()
+		tlsCfg, err := cfg.AgentTLSClientConfig()
+		if err != nil {
+			t.Fatalf("AgentTLSClientConfig: %v", err)
+		}
+		if tlsCfg != nil {
+			t.Errorf("expected nil TLS config without env, got %+v", tlsCfg)
+		}
+	})
+
+	t.Run("SkipVerifyOnly", func(t *testing.T) {
+		t.Setenv("PRIVACY_AGENT_TLS_CA_FILE", "")
+		t.Setenv("PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY", "true")
+		cfg := Load()
+		tlsCfg, err := cfg.AgentTLSClientConfig()
+		if err != nil {
+			t.Fatalf("AgentTLSClientConfig: %v", err)
+		}
+		if tlsCfg == nil || !tlsCfg.InsecureSkipVerify {
+			t.Errorf("expected InsecureSkipVerify TLS config, got %+v", tlsCfg)
+		}
+	})
+
+	t.Run("ValidCAFile", func(t *testing.T) {
+		caFile := writeTestCAPEM(t)
+		t.Setenv("PRIVACY_AGENT_TLS_CA_FILE", caFile)
+		t.Setenv("PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY", "")
+		cfg := Load()
+		tlsCfg, err := cfg.AgentTLSClientConfig()
+		if err != nil {
+			t.Fatalf("AgentTLSClientConfig: %v", err)
+		}
+		if tlsCfg == nil || tlsCfg.RootCAs == nil {
+			t.Errorf("expected TLS config with RootCAs, got %+v", tlsCfg)
+		}
+	})
+
+	t.Run("UnreadableCAFileFailsFast", func(t *testing.T) {
+		t.Setenv("PRIVACY_AGENT_TLS_CA_FILE", filepath.Join(t.TempDir(), "missing.crt"))
+		t.Setenv("PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY", "")
+		cfg := Load()
+		if _, err := cfg.AgentTLSClientConfig(); err == nil {
+			t.Fatal("expected error for unreadable CA file")
+		}
+	})
+}
+
+// TestAgentTLCPClientConfigEnv mirrors TestAgentTLSClientConfigEnv for the TLCP env combos
+// (PRIVACY_AGENT_TLCP_CA_FILE / PRIVACY_AGENT_TLCP_INSECURE_SKIP_VERIFY).
+func TestAgentTLCPClientConfigEnv(t *testing.T) {
+	t.Run("NoEnvReturnsNil", func(t *testing.T) {
+		t.Setenv("PRIVACY_AGENT_TLCP_CA_FILE", "")
+		t.Setenv("PRIVACY_AGENT_TLCP_INSECURE_SKIP_VERIFY", "")
+		cfg := Load()
+		tlcpCfg, err := cfg.AgentTLCPClientConfig()
+		if err != nil {
+			t.Fatalf("AgentTLCPClientConfig: %v", err)
+		}
+		if tlcpCfg != nil {
+			t.Errorf("expected nil TLCP config without env, got %+v", tlcpCfg)
+		}
+	})
+
+	t.Run("SkipVerifyOnly", func(t *testing.T) {
+		t.Setenv("PRIVACY_AGENT_TLCP_CA_FILE", "")
+		t.Setenv("PRIVACY_AGENT_TLCP_INSECURE_SKIP_VERIFY", "true")
+		cfg := Load()
+		tlcpCfg, err := cfg.AgentTLCPClientConfig()
+		if err != nil {
+			t.Fatalf("AgentTLCPClientConfig: %v", err)
+		}
+		if tlcpCfg == nil || !tlcpCfg.InsecureSkipVerify {
+			t.Errorf("expected InsecureSkipVerify TLCP config, got %+v", tlcpCfg)
+		}
+	})
+
+	t.Run("ValidCAFile", func(t *testing.T) {
+		caFile := writeTestCAPEM(t)
+		t.Setenv("PRIVACY_AGENT_TLCP_CA_FILE", caFile)
+		t.Setenv("PRIVACY_AGENT_TLCP_INSECURE_SKIP_VERIFY", "")
+		cfg := Load()
+		tlcpCfg, err := cfg.AgentTLCPClientConfig()
+		if err != nil {
+			t.Fatalf("AgentTLCPClientConfig: %v", err)
+		}
+		if tlcpCfg == nil || tlcpCfg.RootCAs == nil {
+			t.Errorf("expected TLCP config with RootCAs, got %+v", tlcpCfg)
+		}
+	})
+
+	t.Run("UnreadableCAFileFailsFast", func(t *testing.T) {
+		t.Setenv("PRIVACY_AGENT_TLCP_CA_FILE", filepath.Join(t.TempDir(), "missing.crt"))
+		t.Setenv("PRIVACY_AGENT_TLCP_INSECURE_SKIP_VERIFY", "")
+		cfg := Load()
+		if _, err := cfg.AgentTLCPClientConfig(); err == nil {
+			t.Fatal("expected error for unreadable CA file")
+		}
+	})
+}
+
+// writeTestCAPEM 生成一张自签 ECDSA 根 CA 证书并落盘，返回 PEM 文件路径，
+// 供 AgentTLSClientConfig / AgentTLCPClientConfig 的 CA 文件分支测试使用。
+func writeTestCAPEM(t *testing.T) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate CA key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "privshield-test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create CA certificate: %v", err)
+	}
+	caFile := filepath.Join(t.TempDir(), "ca.crt")
+	pemData := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	if err := os.WriteFile(caFile, pemData, 0o600); err != nil {
+		t.Fatalf("write CA pem: %v", err)
+	}
+	return caFile
 }
 
 // TestLoadAllEnvVariables tests that all service-hub environment variables are mapped accurately.

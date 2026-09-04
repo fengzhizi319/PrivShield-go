@@ -112,8 +112,8 @@ func TestAllowedCIDRsFromEnv(t *testing.T) {
 	}
 
 	// 3. 传入配置的专属变量时成功解析
-	t.Setenv("GATEWAY_ALLOWED_CIDRS", "172.16.0.0/16")
-	resGw := AllowedCIDRsFromEnv("GATEWAY_ALLOWED_CIDRS")
+	t.Setenv("ENGINE_GATEWAY_ALLOWED_CIDRS", "172.16.0.0/16")
+	resGw := AllowedCIDRsFromEnv("ENGINE_GATEWAY_ALLOWED_CIDRS")
 	if len(resGw) != 1 || resGw[0] != "172.16.0.0/16" {
 		t.Errorf("service-specific mismatch, got %v", resGw)
 	}

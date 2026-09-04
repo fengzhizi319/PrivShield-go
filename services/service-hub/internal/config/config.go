@@ -7,6 +7,7 @@
 package config
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"os"
@@ -15,7 +16,9 @@ import (
 	"time"
 
 	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
+	pkgagent "github.com/fengzhizi319/PrivShield-go/pkg/agent"
 	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
+	"github.com/tjfoc/gmsm/gmtls"
 )
 
 // ErrAuditEndpointRequired 表示中枢未配置任何 audit-log 存证端点，出域动作将无法留痕（P0-6）。
@@ -30,12 +33,18 @@ type Config struct {
 	Host string // HTTP 监听主机地址（默认 127.0.0.1）
 	Port int    // HTTP 监听端口（默认 8082）
 
-	// 上游 PrivShield Python Agent 核心引擎连接配置
+	// 上游 PrivShield Agent 核心引擎连接配置
 	AgentRESTHost   string // Agent REST 主机地址（默认 127.0.0.1）
 	AgentRESTPort   int    // Agent REST 端口（默认 8079）
 	AgentAPIKey     string // 访问上游 Agent 接口所需的 API Key 认证密钥
 	MaxQueueDepth   int    // 调度引擎最大任务等待队列深度（默认 1000）
 	ScheduleTimeout int    // 任务单步调度与执行超时时间（秒，默认 30）
+
+	// 上游 Agent 出站 REST 客户端传输信任配置（PRIVACY_AGENT_TLS_* / PRIVACY_AGENT_TLCP_*）。
+	AgentTLSCAFile              string // 校验 agent https 服务端证书的根 CA PEM 路径（为空用系统根 CA）
+	AgentTLSInsecureSkipVerify  bool   // 跳过 agent 服务端证书校验（仅开发/演练）
+	AgentTLCPCAFile             string // 校验 agent TLCP 服务端 SM2 证书链的根 CA PEM 路径
+	AgentTLCPInsecureSkipVerify bool   // TLCP 模式下跳过服务端证书校验（仅开发/演练）
 
 	// datasource-mgr 模拟数据源服务连接配置
 	DatasourceRESTHost string // 数据源服务 HTTP REST 主机地址（默认 127.0.0.1）
@@ -122,6 +131,15 @@ func Load() *Config {
 		AgentAPIKey:     pkgconfig.EnvString("PRIVACY_AGENT_API_KEY", ""),
 		MaxQueueDepth:   pkgconfig.EnvInt("SERVICE_HUB_MAX_QUEUE", 1000),
 		ScheduleTimeout: pkgconfig.EnvInt("SERVICE_HUB_SCHEDULE_TIMEOUT", 30),
+
+		// 上游 Agent 出站 REST 客户端传输信任配置（PRIVACY_AGENT_* 前缀，与 agent 服务端 AGENT_* 区分）：
+		//   PRIVACY_AGENT_URLS 基础地址为 https 时由 PRIVACY_AGENT_TLS_CA_FILE / PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY
+		//   构建标准 TLS 信任；为 tlcp:// 时由 PRIVACY_AGENT_TLCP_CA_FILE / PRIVACY_AGENT_TLCP_INSECURE_SKIP_VERIFY
+		//   构建国密 TLCP 客户端配置。均未配置时保持默认行为（http 明文或系统根 CA 校验）。
+		AgentTLSCAFile:              pkgconfig.EnvString("PRIVACY_AGENT_TLS_CA_FILE", ""),
+		AgentTLSInsecureSkipVerify:  pkgconfig.EnvBool("PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY", false),
+		AgentTLCPCAFile:             pkgconfig.EnvString("PRIVACY_AGENT_TLCP_CA_FILE", ""),
+		AgentTLCPInsecureSkipVerify: pkgconfig.EnvBool("PRIVACY_AGENT_TLCP_INSECURE_SKIP_VERIFY", false),
 
 		// Datasource Mgr 数据源服务连接参数
 		DatasourceRESTHost: pkgconfig.EnvString("DATASOURCE_MGR_HOST", "127.0.0.1"),
@@ -352,6 +370,18 @@ func (c *Config) AgentBaseURLs() []string {
 		return envURLs
 	}
 	return []string{c.AgentBaseURL()}
+}
+
+// AgentTLSClientConfig 由显式配置构建上游 agent 的标准 TLS 客户端信任配置。
+// 未配置 CA 且未开启 skip-verify 时返回 (nil, nil)，保持默认行为。
+func (c *Config) AgentTLSClientConfig() (*tls.Config, error) {
+	return pkgagent.NewTLSConfig(c.AgentTLSCAFile, c.AgentTLSInsecureSkipVerify)
+}
+
+// AgentTLCPClientConfig 由显式配置构建上游 agent 的国密 TLCP 客户端配置。
+// 未配置 CA 且未开启 skip-verify 时返回 (nil, nil)（未启用 TLCP 传输）。
+func (c *Config) AgentTLCPClientConfig() (*gmtls.Config, error) {
+	return pkgagent.NewTLCPConfig(c.AgentTLCPCAFile, c.AgentTLCPInsecureSkipVerify)
 }
 
 // DatasourceBaseURL returns the datasource manager HTTP base URL.

@@ -18,15 +18,14 @@ services:
     pull_policy: if_not_present
     container_name: PrivShield-Go
     environment:
-      PRIVACY_REST_HOST: "0.0.0.0"
-      PRIVACY_REST_PORT: "8079"
-      PRIVACY_GRPC_HOST: "0.0.0.0"
-      PRIVACY_GRPC_PORT: "50051"
-      PRIVACY_LOG_LEVEL: "${PRIVACY_LOG_LEVEL:-INFO}"
-      # Go 引擎无 PRIVACY_LOG_FORMAT 读取点：日志固定 JSON 输出，仅 PRIVACY_LOG_LEVEL 可调。
+      AGENT_REST_HOST: "0.0.0.0"
+      AGENT_REST_PORT: "8079"
+      AGENT_GRPC_HOST: "0.0.0.0"
+      AGENT_GRPC_PORT: "50051"
+      AGENT_LOG_LEVEL: "${PRIVACY_LOG_LEVEL:-INFO}"
       # P0-1：0.0.0.0 监听 ⇒ 必须配置入站 Key（与 app-lz.yml 里 hub / BFF 的出站值一致）
-      PRIVACY_AUTH_ENABLED: "true"
-      PRIVACY_AUTH_INTERNAL_API_KEYS: "${PRIVSHIELD_ENGINE_API_KEY:-dev-engine-key}:dev-app-lz:*"
+      AGENT_AUTH_ENABLED: "true"
+      AGENT_AUTH_INTERNAL_API_KEYS: "${PRIVSHIELD_ENGINE_API_KEY:-dev-engine-key}:dev-app-lz:*"
     volumes:
       - budget-db:/data/budget
     healthcheck:

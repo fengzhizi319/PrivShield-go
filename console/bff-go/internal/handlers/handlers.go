@@ -441,11 +441,11 @@ func (s *Server) agentRestBaseURL() string {
 	}
 
 	scheme := "http"
-	if s.cfg.AgentTLSEnabled || pkgconfig.EnvBool("PRIVACY_TLS_ENABLED", false) {
+	if s.cfg.AgentTLSEnabled || pkgconfig.EnvBool("BFF_AGENT_TLS_ENABLED", false) {
 		scheme = "https"
 	}
 
-	restHost := pkgconfig.EnvStringFirstSet("PRIVACY_AGENT_REST_HOST", "PRIVACY_REST_HOST")
+	restHost := pkgconfig.EnvString("BFF_AGENT_REST_HOST", "")
 	if restHost == "" {
 		restHost = s.cfg.AgentGRPCHost
 	}
@@ -453,7 +453,7 @@ func (s *Server) agentRestBaseURL() string {
 		restHost = "127.0.0.1"
 	}
 
-	restPort := pkgconfig.EnvString("PRIVACY_REST_PORT", "8079")
+	restPort := pkgconfig.EnvString("BFF_AGENT_REST_PORT", "8079")
 
 	return fmt.Sprintf("%s://%s:%s", scheme, restHost, restPort)
 }
@@ -1009,7 +1009,7 @@ func (s *Server) LbTest(c *gin.Context) {
 }
 
 // grpcCallTimeout 返回单次 gRPC 调用的超时时间。
-// 超时值在 config.Load() 时从 PRIVACY_GRPC_CALL_TIMEOUT 解析，默认 60s。
+// 超时值在 config.Load() 时从 BFF_GRPC_CALL_TIMEOUT 解析，默认 60s。
 func (s *Server) grpcCallTimeout() time.Duration {
 	if s.cfg.GRPCCallTimeout > 0 {
 		return s.cfg.GRPCCallTimeout

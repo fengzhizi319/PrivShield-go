@@ -3,13 +3,16 @@
 package config
 
 import (
+	"crypto/tls"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 
 	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
+	pkgagent "github.com/fengzhizi319/PrivShield-go/pkg/agent"
 	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
+	"github.com/tjfoc/gmsm/gmtls"
 )
 
 // minEvidenceRetentionDays 是存证物理删除允许的最短留存天数（三年），
@@ -24,6 +27,12 @@ type Config struct {
 	AgentRESTHost string // Upstream agent REST host / 上游 agent REST 地址
 	AgentRESTPort int    // Upstream agent REST port / 上游 agent REST 端口
 	AgentAPIKey   string // Optional auth key for upstream agent / 上游 agent 认证密钥
+
+	// 上游 Agent 出站 REST 客户端传输信任配置（PRIVACY_AGENT_TLS_* / PRIVACY_AGENT_TLCP_*）。
+	AgentTLSCAFile              string // 校验 agent https 服务端证书的根 CA PEM 路径（为空用系统根 CA）
+	AgentTLSInsecureSkipVerify  bool   // 跳过 agent 服务端证书校验（仅开发/演练）
+	AgentTLCPCAFile             string // 校验 agent TLCP 服务端 SM2 证书链的根 CA PEM 路径
+	AgentTLCPInsecureSkipVerify bool   // TLCP 模式下跳过服务端证书校验（仅开发/演练）
 
 	// gRPC server configuration / gRPC 服务器配置
 	GRPCHost string // gRPC listen host / gRPC 监听地址
@@ -117,6 +126,15 @@ func Load() *Config {
 		AgentRESTHost: pkgconfig.EnvString("PRIVACY_AGENT_REST_HOST", "127.0.0.1"),
 		AgentRESTPort: pkgconfig.EnvInt("PRIVACY_REST_PORT", 8079),
 		AgentAPIKey:   pkgconfig.EnvString("PRIVACY_AGENT_API_KEY", ""),
+
+		// 上游 Agent 出站 REST 客户端传输信任配置（PRIVACY_AGENT_* 前缀，与 agent 服务端 AGENT_* 区分）：
+		//   PRIVACY_AGENT_URLS 基础地址为 https 时由 PRIVACY_AGENT_TLS_CA_FILE / PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY
+		//   构建标准 TLS 信任；为 tlcp:// 时由 PRIVACY_AGENT_TLCP_CA_FILE / PRIVACY_AGENT_TLCP_INSECURE_SKIP_VERIFY
+		//   构建国密 TLCP 信任。CA 文件不可读在客户端构造期即报错（fail-fast）。
+		AgentTLSCAFile:              pkgconfig.EnvString("PRIVACY_AGENT_TLS_CA_FILE", ""),
+		AgentTLSInsecureSkipVerify:  pkgconfig.EnvBool("PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY", false),
+		AgentTLCPCAFile:             pkgconfig.EnvString("PRIVACY_AGENT_TLCP_CA_FILE", ""),
+		AgentTLCPInsecureSkipVerify: pkgconfig.EnvBool("PRIVACY_AGENT_TLCP_INSECURE_SKIP_VERIFY", false),
 
 		// gRPC / gRPC 配置
 		GRPCHost: pkgconfig.EnvString("AUDIT_LOG_GRPC_HOST", "127.0.0.1"),
@@ -262,6 +280,18 @@ func (c *Config) AgentBaseURLs() []string {
 		return envURLs
 	}
 	return []string{c.AgentBaseURL()}
+}
+
+// AgentTLSClientConfig 由显式配置构建上游 agent 的标准 TLS 客户端信任配置。
+// 未配置任何 PRIVACY_AGENT_TLS_* 变量时返回 nil（保持默认 HTTP 行为）。
+func (c *Config) AgentTLSClientConfig() (*tls.Config, error) {
+	return pkgagent.NewTLSConfig(c.AgentTLSCAFile, c.AgentTLSInsecureSkipVerify)
+}
+
+// AgentTLCPClientConfig 由显式配置构建上游 agent 的国密 TLCP 客户端配置。
+// 未配置任何 PRIVACY_AGENT_TLCP_* 变量时返回 nil（不启用 TLCP 传输）。
+func (c *Config) AgentTLCPClientConfig() (*gmtls.Config, error) {
+	return pkgagent.NewTLCPConfig(c.AgentTLCPCAFile, c.AgentTLCPInsecureSkipVerify)
 }
 
 // GRPCAddress returns the full gRPC listen address.

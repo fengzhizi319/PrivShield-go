@@ -29,19 +29,18 @@ services:
     pull_policy: if_not_present
     container_name: PrivShield-Go-dev
     environment:
-      # Go 引擎基础配置
-      PRIVACY_REST_HOST: "0.0.0.0"
-      PRIVACY_REST_PORT: "8079"
-      PRIVACY_GRPC_HOST: "0.0.0.0"
-      PRIVACY_GRPC_PORT: "50051"
-      PRIVACY_LOG_LEVEL: "${PRIVACY_LOG_LEVEL:-DEBUG}"
-      # Go 引擎无 PRIVACY_LOG_FORMAT 读取点：日志固定 JSON 输出，仅 PRIVACY_LOG_LEVEL 可调。
+      # Go 引擎基础配置（agent 只读 AGENT_* 变量名，见 engine-go/internal/config/config.go）
+      AGENT_REST_HOST: "0.0.0.0"
+      AGENT_REST_PORT: "8079"
+      AGENT_GRPC_HOST: "0.0.0.0"
+      AGENT_GRPC_PORT: "50051"
+      AGENT_LOG_LEVEL: "${PRIVACY_LOG_LEVEL:-DEBUG}"
       PRIVACY_SERVICE_NAME: "PrivShield-Go-Dev"
       # 开发模式：关闭 TLS；鉴权按 P0-1 不可关闭（0.0.0.0 监听且无入站 Key 会被启动门禁直接拒绝）
-      PRIVACY_TLS_ENABLED: "false"
-      PRIVACY_AUTH_ENABLED: "true"
-      PRIVACY_AUTH_INTERNAL_API_KEYS: "${PRIVSHIELD_ENGINE_API_KEY:-dev-engine-key}:dev-go-engine:*"
-      PRIVACY_RATE_LIMIT_ENABLED: "false"
+      AGENT_TLS_ENABLED: "false"
+      AGENT_AUTH_ENABLED: "true"
+      AGENT_AUTH_INTERNAL_API_KEYS: "${PRIVSHIELD_ENGINE_API_KEY:-dev-engine-key}:dev-go-engine:*"
+      AGENT_RATE_LIMIT_ENABLED: "false"
       # Layer-3 LLM：dev.yml 声明的是 Python 命名（PROVIDER/API_BASE/MODEL_NAME），Go 引擎不读取，
       # 故在此覆盖为 Go 侧真实读取点；默认 false，需要 LLM 时置 PRIVACY_LLM_ENABLE=true。
       PRIVACY_LLM_ENABLE: "${PRIVACY_LLM_ENABLE:-false}"

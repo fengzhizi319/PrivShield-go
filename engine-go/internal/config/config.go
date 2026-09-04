@@ -32,26 +32,26 @@ type Runtime struct {
 	// RESTHost / RESTPort：REST（或网关 HTTP 代理）监听地址。
 	RESTHost    string
 	RESTPort    int
-	RESTEnabled bool // 本进程是否开启 REST 监听（agent 默认为 true，可通过 PRIVACY_REST_ENABLED 调整）
+	RESTEnabled bool // 本进程是否开启 REST 监听（agent 默认为 true，可通过 AGENT_REST_ENABLED 调整）
 
 	// GRPCHost / GRPCPort：gRPC（或网关 gRPC 代理）监听地址。
 	GRPCHost    string
 	GRPCPort    int
-	GRPCEnabled bool // 本进程是否开启 gRPC 监听（agent 默认为 true，可通过 PRIVACY_GRPC_ENABLED 调整）
+	GRPCEnabled bool // 本进程是否开启 gRPC 监听（agent 默认为 true，可通过 AGENT_GRPC_ENABLED 调整）
 
 	// TLS 与 mTLS 服务端配置。
 	TLSEnabled        bool
 	TLSCertFile       string
 	TLSKeyFile        string
 	TLSCAFile         string
-	MTLSEnabled       bool   // PRIVACY_AUTH_INTERNAL_MTLS_ENABLED
+	MTLSEnabled       bool   // AGENT_AUTH_INTERNAL_MTLS_ENABLED
 	MTLSWhitelistFile string // 客户端证书 CN 白名单文件（唯一生效的 gRPC 身份鉴别来源）
 
-	// RequireTLS 由生产编排显式置真（PRIVACY_REQUIRE_TLS / GATEWAY_REQUIRE_TLS）：
+	// RequireTLS 由生产编排显式置真（AGENT_REQUIRE_TLS / ENGINE_GATEWAY_REQUIRE_TLS）：
 	// TLS 未启用即拒绝启动，防止「声明已加密、实际明文直传」。
 	RequireTLS bool
 
-	// AuthEnabled 是 API Key 鉴权开关（PRIVACY_AUTH_ENABLED）。
+	// AuthEnabled 是 API Key 鉴权开关（AGENT_AUTH_ENABLED）。
 	AuthEnabled bool
 	// AuthKeyConfigured 表示至少配置了一把可校验的入站 Key。
 	AuthKeyConfigured bool
@@ -180,21 +180,21 @@ func LoadAgent() *Runtime {
 // LoadGateway 读取 privshield-gateway 的运行环境变量。
 //
 // 网关是 L7 透明代理：自身**不终止 TLS、也不校验入站凭据**（鉴权由被代理的 Agent 端
-// `PRIVACY_AUTH_*` 强制），因此非环回监听同样受 fail-closed 门禁约束；若声明
-// GATEWAY_REQUIRE_TLS，门禁会直接拒绝启动并要求把 TLS 交由 mTLS 回源 / 入口网关实现。
+// `AGENT_AUTH_*` 强制），因此非环回监听同样受 fail-closed 门禁约束；若声明
+// ENGINE_GATEWAY_REQUIRE_TLS，门禁会直接拒绝启动并要求把 TLS 交由 mTLS 回源 / 入口网关实现。
 func LoadGateway() *Runtime {
 	return &Runtime{
 		ServiceName:       "privshield-gateway",
-		RESTHost:          pkgconfig.EnvString("GATEWAY_HOST", "127.0.0.1"),
-		RESTPort:          pkgconfig.EnvInt("GATEWAY_PORT", 8000),
+		RESTHost:          pkgconfig.EnvString("ENGINE_GATEWAY_HOST", "127.0.0.1"),
+		RESTPort:          pkgconfig.EnvInt("ENGINE_GATEWAY_PORT", 8000),
 		RESTEnabled:       true,
-		GRPCHost:          pkgconfig.EnvString("GATEWAY_GRPC_HOST", "127.0.0.1"),
-		GRPCPort:          pkgconfig.EnvInt("GATEWAY_GRPC_PORT", 50000),
+		GRPCHost:          pkgconfig.EnvString("ENGINE_GATEWAY_GRPC_HOST", "127.0.0.1"),
+		GRPCPort:          pkgconfig.EnvInt("ENGINE_GATEWAY_GRPC_PORT", 50000),
 		GRPCEnabled:       true,
 		TLSEnabled:        false, // 网关不终止入站 TLS
 		MTLSEnabled:       false,
-		RequireTLS:        pkgconfig.EnvBool("GATEWAY_REQUIRE_TLS", false),
-		AuthEnabled:       pkgconfig.EnvBool("PRIVACY_AUTH_ENABLED", false),
+		RequireTLS:        pkgconfig.EnvBool("ENGINE_GATEWAY_REQUIRE_TLS", false),
+		AuthEnabled:       pkgconfig.EnvBool("ENGINE_GATEWAY_AUTH_ENABLED", false),
 		AuthKeyConfigured: inboundKeyConfigured(),
 		SkipTLSForRemote:  true, // 网关不终止入站 TLS，由上游/后端处理
 	}
@@ -262,7 +262,12 @@ func (r *Runtime) Validate() error {
 		GRPCEnabled:      r.GRPCEnabled,
 		// 引擎始终监听 gRPC，故 TLS 开启时白名单文件为必填项。
 		MTLSWhitelistFile: r.MTLSWhitelistFile,
-		AllowedCIDRs:      pkgconfig.EnvStringSlice("PRIVACY_ALLOWED_CIDRS"),
+		AllowedCIDRs: func() []string {
+			if r.ServiceName == "privshield-gateway" {
+				return pkgconfig.EnvStringSlice("ENGINE_GATEWAY_ALLOWED_CIDRS")
+			}
+			return pkgconfig.EnvStringSlice("AGENT_ALLOWED_CIDRS")
+		}(),
 	}); err != nil {
 		return err
 	}
@@ -303,11 +308,8 @@ func inboundKeyConfigured() bool {
 	for _, key := range []string{
 		"AGENT_AUTH_INTERNAL_API_KEYS",
 		"AGENT_AUTH_API_KEY",
-		"PRIVACY_AUTH_INTERNAL_API_KEYS",
-		"PRIVACY_AUTH_EXTERNAL_API_KEYS",
-		"PRIVACY_AUTH_STATIC_API_KEYS",
-		"PRIVACY_AUTH_API_KEY",
-		"PRIVACY_API_KEY",
+		"AGENT_AUTH_EXTERNAL_API_KEYS",
+		"AGENT_AUTH_STATIC_API_KEYS",
 	} {
 		if strings.TrimSpace(os.Getenv(key)) != "" {
 			return true

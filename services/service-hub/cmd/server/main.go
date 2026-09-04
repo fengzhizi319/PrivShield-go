@@ -182,7 +182,10 @@ func main() {
 	// =========================================================================
 	// 1) AgentClient: 负责与 PrivShield Python Core Sidecar（:8079）通信，调用分类分级与脱敏算子；
 	// 2) DatasourceClient: 负责与 datasource-mgr 模拟数据源服务（:8083/:50053）交互，采样抽取数据。
-	agentClient := agent.New(cfg, mc)
+	agentClient, err := agent.New(cfg, mc)
+	if err != nil {
+		log.Fatalf("failed to create agent client: %v", err)
+	}
 	dsClient := datasource.New(cfg)
 
 	// 3) EvidenceClient（⑥ 审计存证出站）装配自检（P0-6 / Gate G-05）：

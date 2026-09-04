@@ -1,5 +1,35 @@
 // Package main 提供 PrivShield Go 核心隐私与动态分类分级引擎（Core Agent / Sidecar）的服务端入口。
 // 本文件实现高性能 gRPC 服务模块的构建、Keepalive 保活、mTLS 凭证加载、动态 CN 白名单拦截与看门狗优雅停机。
+//
+// gRPC 与 REST 的职责和启动流程对比：
+//
+//	| 对比项       | REST                                      | gRPC                                      |
+//	|--------------|-------------------------------------------|-------------------------------------------|
+//	| 服务构建     | 创建 Gin 引擎                              | 创建 grpc.Server                          |
+//	| 中间件/安全  | router.Use(...) 注册 HTTP 中间件           | Unary/Stream Interceptor 注册拦截器        |
+//	| 接口注册     | RegisterRoutes(...) 逐条注册方法和 URL      | 注册一次 PrivacyService，RPC 自动分发       |
+//	| 数据协议     | HTTP/JSON                                  | HTTP/2 + protobuf                         |
+//	| 默认监听     | 127.0.0.1:8079                             | 127.0.0.1:50051                            |
+//	| 启动调用     | Start() → Serve/ServeTLS                   | Start() → Serve                            |
+//	| 请求入口     | URL 路由匹配后执行 Handler                  | RPC 方法匹配后执行服务方法                  |
+//
+// 两者都在初始化阶段完成配置、TCP Listener、安全组件和指标装配，但此时尚未处理业务请求；
+// 只有 Start() 调用 Serve、ServeTLS 或 Serve 后，才开始接收连接。两个监听器、连接池、
+// 超时、认证拦截器和优雅停机流程彼此独立。
+//
+// gRPC 启动与请求处理的完整步骤：
+//  1. 主程序读取配置并调用 newGRPCServerRunner，先由 cfg.GRPCAddress() 计算 Host:Port，
+//     再通过 net.Listen("tcp", ...) 绑定端口；绑定失败立即返回，避免启动后才发现端口冲突。
+//  2. 构造 grpcOpts：先加入 Keepalive 参数，再按配置追加 TLS 凭证和 mTLS CN 白名单
+//     Unary/Stream 拦截器；安全组件初始化失败时关闭已创建的 Listener 并拒绝启动。
+//  3. 调用 grpcserver.NewServer(svc, grpcOpts...) 创建 gRPC 服务对象，并注入 Prometheus
+//     指标；此时只完成服务装配，尚未接收任何客户端连接或执行 RPC。
+//  4. 主程序调用 Start()，底层 g.server.Serve(g.listener) 开始阻塞监听；gRPC 接受 TCP
+//     连接并完成 HTTP/2、TLS/mTLS 握手后，依据 protobuf 的 ServiceDesc 找到对应 RPC。
+//  5. 每次 RPC 先经过认证、CN 白名单和指标等拦截器，再调用服务方法，服务方法通过 svc
+//     执行业务逻辑并返回 protobuf 响应；Unary 与 Stream 分别沿对应拦截器链处理。
+//  6. 收到停机信号后调用 Shutdown()：先 GracefulStop() 拒绝新 RPC 并等待在途请求完成；
+//     超过看门狗时间仍未结束时调用 Stop() 强制断开连接，避免进程无限等待。
 package main
 
 import (
@@ -93,17 +123,24 @@ func newGRPCServerRunner(
 	//  - 严格 fail-closed：白名单文件配置但初始化拦截器失败时拒绝启动；
 	//  - 覆盖全部 Unary 与 Stream 调用，校验客户端证书 Common Name；
 	//  - 内置 5 秒文件 mtime 检测热重载，修改白名单无需重启服务进程。
+	// 仅当配置了白名单文件时启用 CN 校验；空路径表示不挂载该拦截器。
 	whitelistPath := cfg.MTLSWhitelistFile
 	if whitelistPath != "" {
+		// 创建 Unary 和 Stream 两类拦截器。它们分别覆盖普通 RPC 和流式 RPC，
+		// 并在每次调用进入业务方法前读取客户端证书的 Common Name 进行校验。
 		unaryInter, streamInter, _, err := tlsutil.NewWhitelistInterceptor(whitelistPath)
 		if err != nil {
 			_ = grpcLis.Close()
 			return nil, fmt.Errorf("failed to init mTLS whitelist interceptor: %w", err)
 		}
+		// 白名单已声明但拦截器未成功创建时必须拒绝启动，避免服务在无客户端身份校验的
+		// 不安全状态下继续对外提供 gRPC。
 		if unaryInter == nil || streamInter == nil {
 			_ = grpcLis.Close()
 			return nil, fmt.Errorf("mTLS whitelist interceptor was not registered; refusing to serve gRPC without CN authorization (path=%s)", whitelistPath)
 		}
+		// Chain*Interceptor 将 CN 校验加入 gRPC ServerOption；真正创建 gRPC Server
+		// 时传入 grpcserver.NewServer，启动后的每个 Unary/Stream RPC 都会经过此校验。
 		grpcOpts = append(grpcOpts,
 			grpc.ChainUnaryInterceptor(unaryInter),
 			grpc.ChainStreamInterceptor(streamInter),
@@ -111,9 +148,11 @@ func newGRPCServerRunner(
 		slog.Info("mTLS CN whitelist interceptor enabled", "path", whitelistPath)
 	}
 
-	// 构造底层 gRPC 隐私服务（内置 64MB 报文限制、鉴权与 Prometheus 监控）
+	// 构造底层 gRPC 隐私服务：传入 TLS、Keepalive、mTLS 白名单等 ServerOption，
+	// 再注入 Prometheus 指标拦截器。此处只完成对象和配置装配，尚未开始接收 RPC。
 	grpcSrv := grpcserver.NewServer(svc, grpcOpts...).WithMetrics(engineMetrics)
 
+	// 返回运行实体；Start() 随后使用同一个 Listener 调用 Serve()，正式进入阻塞监听。
 	return &GRPCServerRunner{
 		server:   grpcSrv,
 		listener: grpcLis,
@@ -133,7 +172,7 @@ func (g *GRPCServerRunner) Start() error {
 
 // Shutdown 采用带看门狗超时的两阶段确定性优雅停机：
 //  1. 启动独立协程调用 GracefulStop()，拒绝新 RPC 并等待当前在途 RPC 处理完毕；
-//  2. 若超时（默认 PRIVACY_GRPC_GRACEFUL_STOP_SECONDS 15s）仍有悬挂连接未退，
+//  2. 若超时（默认 AGENT_GRPC_GRACEFUL_STOP_SECONDS 15s）仍有悬挂连接未退，
 //     强制降级调用 Stop() 斩断连接，杜绝僵死等待阻塞 Pod 销毁。
 func (g *GRPCServerRunner) Shutdown(timeout time.Duration) error {
 	slog.Info("Shutting down gRPC server...", "addr", g.addr, "watchdog_timeout", timeout)

@@ -6,16 +6,18 @@
 # 配置格式版本：1.0
 #
 # 使用方式：
-#   设置环境变量 PRIVACY_AUTH_MTLS_WHITELIST_FILE 指向本文件路径。
-#   例如：export PRIVACY_AUTH_MTLS_WHITELIST_FILE=/path/to/mtls-whitelist.yaml
+#   Go agent（privshield-agent）设置 AGENT_AUTH_MTLS_WHITELIST_FILE 指向本文件路径。
+#   例如：export AGENT_AUTH_MTLS_WHITELIST_FILE=/path/to/mtls-whitelist.yaml
+#   中台微服务群（service-hub / datasource-mgr / audit-log / bff-go）仍读取
+#   PRIVACY_AUTH_MTLS_WHITELIST_FILE，同一文件可分别通过两个变量名挂载。
 #
 # 热重载：
 #   修改本文件后无需重启服务，下次请求到达时自动检测并重新加载。
 #
 # 向后兼容：
-#   如果未设置 PRIVACY_AUTH_MTLS_WHITELIST_FILE，系统回退到
-#   PRIVACY_AUTH_MTLS_ALLOWED_CNS 环境变量（逗号分隔或 JSON 数组），
-#   所有 CN 默认获得 ["*"] 全权限。
+#   如果未设置白名单文件变量，系统回退到静态 CN 列表环境变量
+#   （agent：AGENT_AUTH_MTLS_ALLOWED_CNS；微服务群：PRIVACY_AUTH_MTLS_ALLOWED_CNS，
+#   逗号分隔或 JSON 数组），所有 CN 默认获得 ["*"] 全权限。
 
 version: "1.0"
 

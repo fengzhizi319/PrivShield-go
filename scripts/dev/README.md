@@ -47,6 +47,8 @@
   - [`start_monitoring.sh` / `stop_monitoring.sh` (启动/停止监控栈)](#start_monitoringsh--stop_monitoringsh)
   - [`verify_console_environment.sh` (开发与编译构建环境巡检)](#verify_console_environmentsh)
   - [`generate_all_test_certs.sh` (一键生成全量 mTLS 测试证书链)](#generate_all_test_certssh)
+  - [`tlcp-certgen` (生成 TLCP 国密 SM2 双证书开发证书链)](#tlcp-certgen)
+  - [`tlcp-probe` (TLCP 国密通道 HTTP 探活工具)](#tlcp-probe)
   - [`clean_privacy_budget_db.sh` (重置清理 SQLite 数据库)](#clean_privacy_budget_dbsh)
 
 ---
@@ -83,7 +85,8 @@ Windows PowerShell 启动：
   脚本自动打通 4 大核心服务（`service-hub` `:8082`、`datasource-mgr` `:8083`、`audit-log` `:8084`、`privshield-agent` `:8079`），提供 6 阶段流水线动态流转大屏、TS-01~TS-07 一键自动化测试套件、数据源切片探查与 Phase B PostgreSQL 原子租约争抢看板。
 - **参数选项**:
   - `--force`: 端口被占用时自动释放占用进程。
-  - `--mtls`: 启用 mTLS 双向认证模式。
+  - `--mtls`: 启用 mTLS 双向认证模式（REST 引擎 :8079 走标准 https，service-hub/audit-log 经 `PRIVACY_AGENT_URLS=https://...` + `PRIVACY_AGENT_TLS_CA_FILE` 信任服务端证书）。
+  - `--tlcp`: 启用 TLCP 国密双证书模式（REST 引擎 :8079 仅接受 GM/T 0024 国密握手，与 `--mtls` 互斥；service-hub/audit-log 经 `PRIVACY_AGENT_URLS=tlcp://...` + `PRIVACY_AGENT_TLCP_CA_FILE` 走 gmtls 国密通道）。gRPC `:50051` 不在 TLCP 覆盖范围，三模式下保持现状。
 
 标准开发模式（BFF `:8085` + Vite `:5174`）：
 ```bash
@@ -94,6 +97,37 @@ mTLS 安全模式：
 ```bash
 bash ./scripts/dev/dev-app-lz.sh --mtls --force
 ```
+
+TLCP 国密模式：
+```bash
+bash ./scripts/dev/dev-app-lz.sh --tlcp --force
+```
+
+三种模式通用验证方式：
+```bash
+# 拓扑：全部服务（含 engine）应为 ready
+curl -s http://127.0.0.1:8082/v1/hub/topology
+# 端到端：dispatch 一条任务并最终 completed
+curl -s -X POST http://127.0.0.1:8082/v1/hub/dispatch \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"ds_yibao","operation":"mask","payload":{"id_card":"110101199001011234"}}'
+```
+
+各模式专属验证：
+- **明文模式**: `curl http://127.0.0.1:8079/health` 返回 200。
+- **mTLS 模式**: `curl -k https://127.0.0.1:8079/health` 返回 200（service-hub/audit-log 已配 CA 后拓扑 engine=ready）。
+- **TLCP 模式**: curl 无法讲国密协议，必须用探活工具（普通 `curl -k https://...` 应当失败，以此证明端口只接受国密握手）：
+  ```bash
+  go run ./scripts/dev/tlcp-probe -url https://127.0.0.1:8079/health -ca config/certs/tlcp/ca.crt
+  ```
+  引擎日志出现 `REST TLCP (国密双证书) server starting` 即为 TLCP 监听成功。
+
+证书位置：
+- mTLS 开发证书（RSA）：`console/bff-go/certs/`（由 `console/bff-go/scripts/gen-certs.sh` 生成，脚本自动确保存在）。
+- TLCP 开发证书（SM2 双证书）：`config/certs/tlcp/`（由 `go run ./scripts/dev/tlcp-certgen` 生成，幂等，已存在则跳过）。
+
+> ⚠️ 已知问题：`go run` 启动的引擎会留下编译子进程，脚本 trap 只回收 PID 文件中的包装进程。
+> 若端口残留占用，用 `lsof -ti :8079 | xargs -r kill -9`（其余端口同理）清理，或始终以 `--force` 重启。
 
 ---
 
@@ -516,6 +550,29 @@ bash ./scripts/dev/verify_console_environment.sh
 执行证书生成命令：
 ```bash
 bash ./scripts/dev/generate_all_test_certs.sh
+```
+
+---
+
+### `tlcp-certgen`
+- **作用说明**: 生成 TLCP（GM/T 0024 国密双证书）开发测试证书链：SM2 根 CA + 服务端签名证书 + 服务端加密证书（加密证书含 `KeyAgreement|DataEncipherment` KeyUsage，满足 gmtls 握手强校验）。幂等，证书已存在时跳过（`-force` 强制重建）。仅供本地开发/演练。
+- **其他脚本一行说明**: 属于 `scripts/dev` Go 工具集（`scripts/dev/go.mod`，模块 `privshield-devtools`，已加入根 `go.work`）。
+
+执行证书生成命令：
+```bash
+go run ./scripts/dev/tlcp-certgen            # 默认输出 config/certs/tlcp/
+go run ./scripts/dev/tlcp-certgen -dir /path -force
+```
+
+---
+
+### `tlcp-probe`
+- **作用说明**: TLCP 国密通道 HTTP 探活工具。curl 无法讲 TLCP，本工具用 gmtls 客户端完成国密握手后发送 HTTP GET 并打印状态码（2xx 退出 0）。供 `dev-app-lz.sh --tlcp` 与手工验证使用。
+
+执行探活命令：
+```bash
+go run ./scripts/dev/tlcp-probe -url https://127.0.0.1:8079/health -ca config/certs/tlcp/ca.crt
+go run ./scripts/dev/tlcp-probe -url https://127.0.0.1:8079/health -insecure-skip-verify
 ```
 
 ---

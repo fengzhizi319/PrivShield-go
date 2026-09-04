@@ -45,7 +45,10 @@ func setupTestGRPCServer(t *testing.T, agentMux http.Handler) (pb.AuditLogServic
 	cfg := config.Load()
 	logger := pkgobs.NewLogger("text", "debug")
 	auditStore := memory.NewAuditStore()
-	agentClient := agent.New(cfg)
+	agentClient, err := agent.New(cfg)
+	if err != nil {
+		t.Fatalf("new agent client: %v", err)
+	}
 
 	srvImpl := New(agentClient, cfg, auditStore, logger)
 

@@ -251,7 +251,7 @@ check_port_available 8079 "PrivShield REST"
 check_port_available 50051 "PrivShield gRPC"
 check_port_available 8081 "Go BFF 服务"
 
-# 6. 启动 Python Agent 核心引擎
+# 6. 启动 Agent 核心引擎
 launch_agent() {
     local agent_log="$LOGS_DIR/agent.log"
     echo "启动 PrivShield (REST: $AGENT_URL, gRPC: $AGENT_GRPC_ADDR)，日志: $agent_log..."
@@ -261,12 +261,13 @@ launch_agent() {
         fi
         cd "$PROJECT_ROOT"
         if [[ "$MTLS_MODE" == "true" ]]; then
-            export PRIVACY_TLS_ENABLED=true
-            export PRIVACY_TLS_CERT_FILE="$CERT_DIR/server.crt"
-            export PRIVACY_TLS_KEY_FILE="$CERT_DIR/server.key"
-            export PRIVACY_TLS_CA_FILE="$CERT_DIR/ca.crt"
-            export PRIVACY_AUTH_INTERNAL_MTLS_ENABLED=true
-            export PRIVACY_AUTH_MTLS_ALLOWED_CNS='["privshield-client"]'
+            export AGENT_TLS_ENABLED=true
+            export AGENT_TLS_CERT_FILE="$CERT_DIR/server.crt"
+            export AGENT_TLS_KEY_FILE="$CERT_DIR/server.key"
+            export AGENT_TLS_CA_FILE="$CERT_DIR/ca.crt"
+            export AGENT_AUTH_INTERNAL_MTLS_ENABLED=true
+            export AGENT_AUTH_MTLS_ALLOWED_CNS='["privshield-client"]'
+        fi
         if [[ -f "$PROJECT_ROOT/bin/privshield-agent" ]]; then
             exec "$PROJECT_ROOT/bin/privshield-agent" >> "$agent_log" 2>&1
         else

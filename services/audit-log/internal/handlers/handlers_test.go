@@ -48,7 +48,11 @@ func newTestServer() *Server {
 		logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})),
 		mc:     metrics.NewCollector("audit-log-test"),
 	}
-	ag := agent.New(cfg)
+	ag, err := agent.New(cfg)
+	if err != nil {
+		// newTestServer 的 cfg 未配置任何 PRIVACY_AGENT_TLS_* 信任项，此处不应失败。
+		panic("newTestServer: agent.New: " + err.Error())
+	}
 	return New(ag, cfg, nil, d.audit, d.logger, d.mc)
 }
 
@@ -678,7 +682,10 @@ func TestBufferedAuditStore_Handler_VerifyChain_E2E(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	mc := metrics.NewCollector("audit-log-e2e-test")
-	ag := agent.New(cfg)
+	ag, err := agent.New(cfg)
+	if err != nil {
+		t.Fatalf("new agent client: %v", err)
+	}
 	server := New(ag, cfg, nil, bufStore, logger, mc)
 	router := newTestRouter(server)
 

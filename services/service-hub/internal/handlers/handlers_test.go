@@ -97,7 +97,10 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 		AuditLogBaseURLs: []string{startEvidenceStub(t).server.URL},
 	}
 	d := newTestDeps()
-	ag := agent.New(cfg, d.mc)
+	ag, err := agent.New(cfg, d.mc)
+	if err != nil {
+		t.Fatalf("new agent client: %v", err)
+	}
 	ds := datasource.New(cfg)
 	srv := New(ag, ds, cfg, nil, d.tasks, d.logger, d.mc)
 	return srv, mockAgent
@@ -118,7 +121,10 @@ func newSimpleTestServer(t *testing.T) *Server {
 		AuditLogBaseURLs: []string{startEvidenceStub(t).server.URL},
 	}
 	d := newTestDeps()
-	ag := agent.New(cfg, d.mc)
+	ag, err := agent.New(cfg, d.mc)
+	if err != nil {
+		t.Fatalf("new agent client: %v", err)
+	}
 	ds := datasource.New(cfg)
 	return New(ag, ds, cfg, nil, d.tasks, d.logger, d.mc)
 }
@@ -244,7 +250,10 @@ func newMockEngineServer(t *testing.T, level string, withEvidence bool) (*Server
 		cfg.AuditLogBaseURLs = []string{startEvidenceStub(t).server.URL}
 	}
 	d := newTestDeps()
-	ag := agent.New(cfg, d.mc)
+	ag, err := agent.New(cfg, d.mc)
+	if err != nil {
+		t.Fatalf("new agent client: %v", err)
+	}
 	ds := datasource.New(cfg)
 	srv := New(ag, ds, cfg, nil, d.tasks, d.logger, d.mc)
 	return srv, mockAgent
@@ -900,7 +909,10 @@ func TestAuthMiddleware_Protection(t *testing.T) {
 		APIKey:        "secret-token-123",
 	}
 	d := newTestDeps()
-	ag := agent.New(cfg, d.mc)
+	ag, err := agent.New(cfg, d.mc)
+	if err != nil {
+		t.Fatalf("new agent client: %v", err)
+	}
 	ds := datasource.New(cfg)
 	s := New(ag, ds, cfg, nil, d.tasks, d.logger, d.mc)
 
@@ -954,7 +966,10 @@ func TestScopeAuthMiddleware_AccessControl(t *testing.T) {
 		},
 	}
 	d := newTestDeps()
-	ag := agent.New(cfg, d.mc)
+	ag, err := agent.New(cfg, d.mc)
+	if err != nil {
+		t.Fatalf("new agent client: %v", err)
+	}
 	ds := datasource.New(cfg)
 	s := New(ag, ds, cfg, nil, d.tasks, d.logger, d.mc)
 

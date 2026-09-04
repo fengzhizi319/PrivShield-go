@@ -79,7 +79,7 @@ func IsImageInput(val string) bool {
 
 // allowedImageDirs 返回允许读取图片的目录白名单。
 func allowedImageDirs() []string {
-	env := os.Getenv("PRIVACY_IMAGE_ALLOWED_DIRS")
+	env := os.Getenv("AGENT_IMAGE_ALLOWED_DIRS")
 	if env != "" && strings.TrimSpace(env) != "" {
 		var roots []string
 		for _, p := range strings.Split(env, string(os.PathListSeparator)) {

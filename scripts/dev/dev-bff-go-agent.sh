@@ -162,12 +162,12 @@ launch_go_agent() {
         export PRIVACY_GRPC_PORT="50051"
         export PRIVACY_LOG_LEVEL="${PRIVACY_LOG_LEVEL:-DEBUG}"
         if [[ "$MTLS_MODE" == "true" ]]; then
-            export PRIVACY_TLS_ENABLED=true
-            export PRIVACY_TLS_CERT_FILE="$CERT_DIR/server.crt"
-            export PRIVACY_TLS_KEY_FILE="$CERT_DIR/server.key"
-            export PRIVACY_TLS_CA_FILE="$CERT_DIR/ca.crt"
-            export PRIVACY_AUTH_INTERNAL_MTLS_ENABLED=true
-            export PRIVACY_AUTH_MTLS_ALLOWED_CNS='["privshield-client"]'
+            export AGENT_TLS_ENABLED=true
+            export AGENT_TLS_CERT_FILE="$CERT_DIR/server.crt"
+            export AGENT_TLS_KEY_FILE="$CERT_DIR/server.key"
+            export AGENT_TLS_CA_FILE="$CERT_DIR/ca.crt"
+            export AGENT_AUTH_INTERNAL_MTLS_ENABLED=true
+            export AGENT_AUTH_MTLS_ALLOWED_CNS='["privshield-client"]'
         fi
         exec go run ./cmd/privshield-agent >> "$agent_log" 2>&1
     ) &

@@ -64,18 +64,13 @@ func ResetSettings() {
 func loadSettings() *Settings {
 	internalKeys := pkgauth.LoadAPIKeysFromEnv("AGENT_AUTH_INTERNAL_API_KEYS")
 	if internalKeys == nil {
-		internalKeys = pkgauth.LoadAPIKeysFromEnv("PRIVACY_AUTH_INTERNAL_API_KEYS")
-	}
-	if internalKeys == nil {
 		internalKeys = make(map[string]*KeyConfig)
 	}
-	for _, envK := range []string{"AGENT_AUTH_API_KEY", "PRIVACY_AUTH_API_KEY", "PRIVACY_API_KEY"} {
-		if k := os.Getenv(envK); k != "" {
-			internalKeys[k] = &KeyConfig{Name: "default-internal", Scopes: []string{"*"}}
-		}
+	if k := os.Getenv("AGENT_AUTH_API_KEY"); k != "" {
+		internalKeys[k] = &KeyConfig{Name: "default-internal", Scopes: []string{"*"}}
 	}
 
-	keysFile := pkgconfig.EnvStringFallback("AGENT_AUTH_KEYS_FILE", "PRIVACY_AUTH_KEYS_FILE", "")
+	keysFile := pkgconfig.EnvString("AGENT_AUTH_KEYS_FILE", "")
 	if keysFile != "" {
 		ks, err := pkgauth.NewKeyStore(keysFile)
 		if err != nil {
@@ -91,16 +86,9 @@ func loadSettings() *Settings {
 
 	externalKeys := pkgauth.LoadAPIKeysFromEnv("AGENT_AUTH_EXTERNAL_API_KEYS")
 	if externalKeys == nil {
-		externalKeys = pkgauth.LoadAPIKeysFromEnv("PRIVACY_AUTH_EXTERNAL_API_KEYS")
-	}
-	if externalKeys == nil {
 		externalKeys = make(map[string]*KeyConfig)
 	}
 	if ext := pkgauth.LoadAPIKeysFromEnv("AGENT_AUTH_STATIC_API_KEYS"); ext != nil {
-		for k, v := range ext {
-			externalKeys[k] = v
-		}
-	} else if ext := pkgauth.LoadAPIKeysFromEnv("PRIVACY_AUTH_STATIC_API_KEYS"); ext != nil {
 		for k, v := range ext {
 			externalKeys[k] = v
 		}
@@ -108,21 +96,21 @@ func loadSettings() *Settings {
 
 	s := &Settings{
 		Settings: pkgauth.Settings{
-			AuthEnabled:  pkgconfig.EnvBoolFallback("AGENT_AUTH_ENABLED", "PRIVACY_AUTH_ENABLED", false),
-			TLSEnabled:   pkgconfig.EnvBoolFallback("AGENT_TLS_ENABLED", "PRIVACY_TLS_ENABLED", false),
-			HealthNoAuth: pkgconfig.EnvBoolFallback("AGENT_HEALTH_NO_AUTH", "PRIVACY_HEALTH_NO_AUTH", true),
+			AuthEnabled:  pkgconfig.EnvBool("AGENT_AUTH_ENABLED", false),
+			TLSEnabled:   pkgconfig.EnvBool("AGENT_TLS_ENABLED", false),
+			HealthNoAuth: pkgconfig.EnvBool("AGENT_HEALTH_NO_AUTH", true),
 			InternalKeys: internalKeys,
 			ExternalKeys: externalKeys,
 		},
-		RateLimitEnabled:      pkgconfig.EnvBoolFallback("AGENT_RATE_LIMIT_ENABLED", "PRIVACY_RATE_LIMIT_ENABLED", false),
-		HealthNoRateLimit:     pkgconfig.EnvBoolFallback("AGENT_HEALTH_NO_RATE_LIMIT", "PRIVACY_HEALTH_NO_RATE_LIMIT", true),
-		MTLSEnabled:           pkgconfig.EnvBoolFallback("AGENT_AUTH_INTERNAL_MTLS_ENABLED", "PRIVACY_AUTH_INTERNAL_MTLS_ENABLED", false),
-		MTLSWhitelistFile:     pkgconfig.EnvStringFallback("AGENT_AUTH_MTLS_WHITELIST_FILE", "PRIVACY_AUTH_MTLS_WHITELIST_FILE", ""),
-		RateLimitDefaultRPS:   pkgconfig.EnvFloatFallback("AGENT_RATE_LIMIT_DEFAULT_RPS", "PRIVACY_RATE_LIMIT_DEFAULT_RPS", 100),
-		RateLimitDefaultBurst: pkgconfig.EnvIntFallback("AGENT_RATE_LIMIT_DEFAULT_BURST", "PRIVACY_RATE_LIMIT_DEFAULT_BURST", 200),
-		RateLimitPerEndpoint:  pkgmiddleware.ParseEndpointRateLimits(pkgconfig.EnvStringFallback("AGENT_RATE_LIMIT_PER_ENDPOINT", "PRIVACY_RATE_LIMIT_PER_ENDPOINT", "")),
-		RateLimitRedisURL:     pkgconfig.EnvStringFallback("AGENT_RATE_LIMIT_REDIS_URL", "PRIVACY_RATE_LIMIT_REDIS_URL", ""),
-		MTLSAllowedCNs:        parseStringList(pkgconfig.EnvStringFallback("AGENT_AUTH_MTLS_ALLOWED_CNS", "PRIVACY_AUTH_MTLS_ALLOWED_CNS", "")),
+		RateLimitEnabled:      pkgconfig.EnvBool("AGENT_RATE_LIMIT_ENABLED", false),
+		HealthNoRateLimit:     pkgconfig.EnvBool("AGENT_HEALTH_NO_RATE_LIMIT", true),
+		MTLSEnabled:           pkgconfig.EnvBool("AGENT_AUTH_INTERNAL_MTLS_ENABLED", false),
+		MTLSWhitelistFile:     pkgconfig.EnvString("AGENT_AUTH_MTLS_WHITELIST_FILE", ""),
+		RateLimitDefaultRPS:   pkgconfig.EnvFloat("AGENT_RATE_LIMIT_DEFAULT_RPS", 100),
+		RateLimitDefaultBurst: pkgconfig.EnvInt("AGENT_RATE_LIMIT_DEFAULT_BURST", 200),
+		RateLimitPerEndpoint:  pkgmiddleware.ParseEndpointRateLimits(pkgconfig.EnvString("AGENT_RATE_LIMIT_PER_ENDPOINT", "")),
+		RateLimitRedisURL:     pkgconfig.EnvString("AGENT_RATE_LIMIT_REDIS_URL", ""),
+		MTLSAllowedCNs:        parseStringList(pkgconfig.EnvString("AGENT_AUTH_MTLS_ALLOWED_CNS", "")),
 	}
 	return s
 }

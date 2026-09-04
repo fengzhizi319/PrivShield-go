@@ -231,7 +231,7 @@ func NewRuleEngine(rules []RuleDef) (*RuleEngine, error) {
 	ac.Build()
 
 	engine := &RuleEngine{checkInterval: defaultRulesReloadCheckInterval}
-	if v := os.Getenv("PRIVACY_RULES_RELOAD_CHECK_SECONDS"); v != "" {
+	if v := os.Getenv("AGENT_RULES_RELOAD_CHECK_SECONDS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			engine.checkInterval = time.Duration(n) * time.Second
 		}

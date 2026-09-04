@@ -19,8 +19,6 @@ import (
 func TestLoadConfigDefaults(t *testing.T) {
 	t.Setenv("AGENT_REST_ENABLED", "")
 	t.Setenv("AGENT_GRPC_ENABLED", "")
-	t.Setenv("PRIVACY_REST_ENABLED", "")
-	t.Setenv("PRIVACY_GRPC_ENABLED", "")
 
 	cfg := loadConfig()
 	if !cfg.RESTEnabled {

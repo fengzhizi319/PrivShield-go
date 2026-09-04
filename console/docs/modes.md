@@ -175,7 +175,7 @@ python -m engine.server
 
 ### agent
 
-- `PRIVACY_TLS_ENABLED` / `PRIVACY_AUTH_ENABLED` / `PRIVACY_RATE_LIMIT_ENABLED`：生产建议按需开启；
+- `AGENT_TLS_ENABLED` / `AGENT_AUTH_ENABLED` / `AGENT_RATE_LIMIT_ENABLED`：生产建议按需开启；
 - `PRIVACY_PROFILE`：业务参数配置；
 - `PRIVACY_BUDGET_DB`：多实例时建议使用持久化后端。
 

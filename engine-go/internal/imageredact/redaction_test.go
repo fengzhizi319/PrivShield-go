@@ -66,8 +66,8 @@ func TestSanitizeImage_DisallowedPath(t *testing.T) {
 
 func TestSanitizeImage_ValidImagePath(t *testing.T) {
 	dir := t.TempDir()
-	os.Setenv("PRIVACY_IMAGE_ALLOWED_DIRS", dir)
-	defer os.Unsetenv("PRIVACY_IMAGE_ALLOWED_DIRS")
+	os.Setenv("AGENT_IMAGE_ALLOWED_DIRS", dir)
+	defer os.Unsetenv("AGENT_IMAGE_ALLOWED_DIRS")
 
 	imgPath := filepath.Join(dir, "test.png")
 	createTestPNG(t, imgPath)
@@ -108,8 +108,8 @@ func TestSanitizeImage_Base64DataURI(t *testing.T) {
 
 func TestIsPathAllowed(t *testing.T) {
 	dir := t.TempDir()
-	os.Setenv("PRIVACY_IMAGE_ALLOWED_DIRS", dir)
-	defer os.Unsetenv("PRIVACY_IMAGE_ALLOWED_DIRS")
+	os.Setenv("AGENT_IMAGE_ALLOWED_DIRS", dir)
+	defer os.Unsetenv("AGENT_IMAGE_ALLOWED_DIRS")
 
 	allowed := filepath.Join(dir, "photo.jpg")
 	if !isPathAllowed(allowed) {

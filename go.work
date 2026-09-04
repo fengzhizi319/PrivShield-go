@@ -6,6 +6,7 @@ use (
 	./engine-go
 	./pkg
 	./privacy-go-sdk
+	./scripts/dev
 	./services/audit-log
 	./services/datasource-mgr
 	./services/service-hub

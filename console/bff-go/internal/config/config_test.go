@@ -56,12 +56,12 @@ func TestEnvBool(t *testing.T) {
 func TestLoadTLSDefaults(t *testing.T) {
 	// 清理可能影响断言的环境变量
 	for _, k := range []string{
-		"PRIVACY_AGENT_TLS_ENABLED",
-		"PRIVACY_AGENT_TLS_CERT_FILE",
-		"PRIVACY_AGENT_TLS_KEY_FILE",
-		"PRIVACY_AGENT_TLS_CA_FILE",
-		"PRIVACY_AGENT_TLS_SERVER_NAME",
-		"PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY",
+		"BFF_AGENT_TLS_ENABLED",
+		"BFF_AGENT_TLS_CERT_FILE",
+		"BFF_AGENT_TLS_KEY_FILE",
+		"BFF_AGENT_TLS_CA_FILE",
+		"BFF_AGENT_TLS_SERVER_NAME",
+		"BFF_AGENT_TLS_INSECURE_SKIP_VERIFY",
 	} {
 		t.Setenv(k, "")
 		if err := os.Unsetenv(k); err != nil {
@@ -86,12 +86,12 @@ func TestLoadTLSDefaults(t *testing.T) {
 
 // TestLoadTLSEnabled 验证通过环境变量启用 TLS 并填充各证书路径。
 func TestLoadTLSEnabled(t *testing.T) {
-	t.Setenv("PRIVACY_AGENT_TLS_ENABLED", "true")
-	t.Setenv("PRIVACY_AGENT_TLS_CERT_FILE", "/tmp/client.crt")
-	t.Setenv("PRIVACY_AGENT_TLS_KEY_FILE", "/tmp/client.key")
-	t.Setenv("PRIVACY_AGENT_TLS_CA_FILE", "/tmp/ca.crt")
-	t.Setenv("PRIVACY_AGENT_TLS_SERVER_NAME", "localhost")
-	t.Setenv("PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY", "1")
+	t.Setenv("BFF_AGENT_TLS_ENABLED", "true")
+	t.Setenv("BFF_AGENT_TLS_CERT_FILE", "/tmp/client.crt")
+	t.Setenv("BFF_AGENT_TLS_KEY_FILE", "/tmp/client.key")
+	t.Setenv("BFF_AGENT_TLS_CA_FILE", "/tmp/ca.crt")
+	t.Setenv("BFF_AGENT_TLS_SERVER_NAME", "localhost")
+	t.Setenv("BFF_AGENT_TLS_INSECURE_SKIP_VERIFY", "1")
 
 	cfg := Load()
 	if !cfg.AgentTLSEnabled {

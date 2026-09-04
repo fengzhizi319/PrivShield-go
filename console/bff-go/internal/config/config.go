@@ -13,18 +13,18 @@
 //
 //	| Variable                        | Default       | Description                       |
 //	|---------------------------------|---------------|-----------------------------------|
-//	| PRIVACY_AGENT_GRPC_HOST         | 127.0.0.1     | Upstream agent gRPC host           |
-//	| PRIVACY_AGENT_GRPC_PORT         | 50051         | Upstream agent gRPC port           |
-//	| PRIVACY_AGENT_API_KEY           | (empty)       | Optional Bearer Token auth key     |
-//	| PRIVACY_CONSOLE_HOST            | 127.0.0.1     | This proxy's HTTP listen address   |
-//	| PRIVACY_CONSOLE_PORT            | 8081          | This proxy's HTTP listen port      |
-//	| PRIVACY_CONSOLE_STATIC_DIR      | ../web/dist   | Frontend dist dir, empty=disable   |
-//	| PRIVACY_AGENT_TLS_ENABLED       | false         | Enable TLS/mTLS for upstream gRPC  |
-//	| PRIVACY_AGENT_TLS_CERT_FILE     | (empty)       | Client cert file (mTLS)            |
-//	| PRIVACY_AGENT_TLS_KEY_FILE      | (empty)       | Client key file (mTLS)             |
-//	| PRIVACY_AGENT_TLS_CA_FILE       | (empty)       | CA file to verify server cert      |
-//	| PRIVACY_AGENT_TLS_SERVER_NAME   | (empty)       | Server cert hostname override      |
-//	| PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY | false  | Skip server cert verify (test only)|
+//	| BFF_AGENT_GRPC_HOST             | 127.0.0.1     | Upstream agent gRPC host           |
+//	| BFF_AGENT_GRPC_PORT             | 50051         | Upstream agent gRPC port           |
+//	| BFF_AGENT_API_KEY               | (empty)       | Optional Bearer Token auth key     |
+//	| BFF_HOST                        | 127.0.0.1     | This proxy's HTTP listen address   |
+//	| BFF_PORT                        | 8081          | This proxy's HTTP listen port      |
+//	| BFF_STATIC_DIR                  | ../web/dist   | Frontend dist dir, empty=disable   |
+//	| BFF_AGENT_TLS_ENABLED           | false         | Enable TLS/mTLS for upstream gRPC  |
+//	| BFF_AGENT_TLS_CERT_FILE         | (empty)       | Client cert file (mTLS)            |
+//	| BFF_AGENT_TLS_KEY_FILE          | (empty)       | Client key file (mTLS)             |
+//	| BFF_AGENT_TLS_CA_FILE           | (empty)       | CA file to verify server cert      |
+//	| BFF_AGENT_TLS_SERVER_NAME       | (empty)       | Server cert hostname override      |
+//	| BFF_AGENT_TLS_INSECURE_SKIP_VERIFY | false      | Skip server cert verify (test only)|
 package config
 
 import (
@@ -43,125 +43,125 @@ import (
 // 通过 Load() 从环境变量一次性加载，运行期间只读不修改。
 type Config struct {
 	// AgentGRPCHost：上游 PrivShield gRPC 服务的主机名或 IP 地址。
-	// 对应环境变量 PRIVACY_AGENT_GRPC_HOST，默认 "127.0.0.1"。
+	// 对应环境变量 BFF_AGENT_GRPC_HOST，默认 "127.0.0.1"。
 	AgentGRPCHost string
 
 	// AgentGRPCPort：上游 agent gRPC 服务的监听端口。
-	// 对应环境变量 PRIVACY_AGENT_GRPC_PORT，默认 50051。
+	// 对应环境变量 BFF_AGENT_GRPC_PORT，默认 50051。
 	// 与 AgentGRPCHost 组合后形成完整的 gRPC 目标地址（如 "127.0.0.1:50051"）。
 	AgentGRPCPort int
 
 	// AgentAPIKey：可选的 Bearer Token，用于上游 agent 开启认证时的身份验证。
-	// 对应环境变量 PRIVACY_AGENT_API_KEY，默认为空（不认证）。
+	// 对应环境变量 BFF_AGENT_API_KEY，默认为空（不认证）。
 	// 非空时每次 gRPC 调用会自动附加 "authorization: Bearer <key>" 元数据。
 	AgentAPIKey string
 
 	// ConsoleHost：本 Go 代理 HTTP 服务器的绑定地址。
-	// 对应环境变量 PRIVACY_CONSOLE_HOST，默认 "127.0.0.1"。
+	// 对应环境变量 BFF_HOST，默认 "127.0.0.1"。
 	ConsoleHost string
 
 	// ConsolePort：本 Go 代理 HTTP 服务器的监听端口。
-	// 对应环境变量 PRIVACY_CONSOLE_PORT，默认 8081。
+	// 对应环境变量 BFF_PORT，默认 8081。
 	// 与 ConsoleHost 组合后形成完整的 HTTP 监听地址（如 "127.0.0.1:8081"）。
 	ConsolePort int
 
 	// StaticDistDir：前端 React 构建产物的目录路径。
-	// 对应环境变量 PRIVACY_CONSOLE_STATIC_DIR，默认 "../web/dist"。
+	// 对应环境变量 BFF_STATIC_DIR，默认 "../web/dist"。
 	// 当该目录存在时，Go 服务器同时托管 Console UI 静态文件；
 	// 设为空字符串则禁用静态托管，仅作为纯 API 代理。
 	StaticDistDir string
 
 	// AgentTLSEnabled：是否对上游 agent 的 gRPC 连接启用 TLS/mTLS。
-	// 对应环境变量 PRIVACY_AGENT_TLS_ENABLED，默认 false（使用非安全传输）。
+	// 对应环境变量 BFF_AGENT_TLS_ENABLED，默认 false（使用非安全传输）。
 	// 启用后必须提供 CA 证书（AgentTLSCAFile）以校验服务端身份。
 	AgentTLSEnabled bool
 
 	// AgentTLSCertFile：本代理作为 gRPC 客户端的证书文件路径（PEM）。
-	// 对应环境变量 PRIVACY_AGENT_TLS_CERT_FILE，默认空。
+	// 对应环境变量 BFF_AGENT_TLS_CERT_FILE，默认空。
 	// 与 AgentTLSKeyFile 配对使用，用于向服务端证明客户端身份（mTLS 双向认证）。
 	AgentTLSCertFile string
 
 	// AgentTLSKeyFile：本代理作为 gRPC 客户端的私钥文件路径（PEM）。
-	// 对应环境变量 PRIVACY_AGENT_TLS_KEY_FILE，默认空。
+	// 对应环境变量 BFF_AGENT_TLS_KEY_FILE，默认空。
 	// 必须与 AgentTLSCertFile 同时提供，否则无法完成客户端身份认证。
 	AgentTLSKeyFile string
 
 	// AgentTLSCAFile：用于校验上游 agent 服务端证书的 CA 证书文件路径（PEM）。
-	// 对应环境变量 PRIVACY_AGENT_TLS_CA_FILE，默认空。
+	// 对应环境变量 BFF_AGENT_TLS_CA_FILE，默认空。
 	// TLS 启用时必填：客户端用它验证服务端证书是否由受信任 CA 签发。
 	AgentTLSCAFile string
 
 	// AgentTLSServerName：TLS 握手时用于校验服务端证书的主机名覆盖值。
-	// 对应环境变量 PRIVACY_AGENT_TLS_SERVER_NAME，默认空（使用连接目标地址）。
+	// 对应环境变量 BFF_AGENT_TLS_SERVER_NAME，默认空（使用连接目标地址）。
 	// 典型场景：连接 127.0.0.1 但证书 SAN 仅含 localhost 时，设为 "localhost"。
 	AgentTLSServerName string
 
 	// AgentTLSInsecureSkipVerify：是否跳过服务端证书校验（仅限测试）。
-	// 对应环境变量 PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY，默认 false。
+	// 对应环境变量 BFF_AGENT_TLS_INSECURE_SKIP_VERIFY，默认 false。
 	// 设为 true 时不校验服务端证书链与主机名，存在中间人攻击风险，生产环境严禁启用。
 	AgentTLSInsecureSkipVerify bool
 
 	// ── 可选安全加固配置（默认关闭 / 宽松，本地开发零配置即可运行）──────────────
 
 	// ConsoleAPIKey：可选的控制台 API Key。
-	// 对应环境变量 CONSOLE_API_KEY，默认空（不鉴权）。
+	// 对应环境变量 BFF_API_KEY，默认空（不鉴权）。
 	// 非空时 /v1/*（除 /health）需携带 Authorization: Bearer <key>。
 	ConsoleAPIKey string
 
 	// ConsoleRateLimit：每分钟每客户端 IP 的最大请求数。
-	// 对应环境变量 CONSOLE_RATE_LIMIT，默认 600；设为 0 关闭限流。
+	// 对应环境变量 BFF_RATE_LIMIT，默认 600；设为 0 关闭限流。
 	ConsoleRateLimit int
 
 	// MaxUploadBytes：上传文件大小上限（字节）。
-	// 对应环境变量 CONSOLE_MAX_UPLOAD_BYTES，默认 10MB；超限返回 413。
+	// 对应环境变量 BFF_MAX_UPLOAD_BYTES，默认 10MB；超限返回 413。
 	MaxUploadBytes int64
 
 	// LBAllowedHosts：负载均衡探测目标 host 白名单（逗号分隔）。
-	// 对应环境变量 LB_ALLOWED_HOSTS，默认空（不限制，本地探测默认行为）。
+	// 对应环境变量 BFF_LB_ALLOWED_HOSTS，默认空（不限制，本地探测默认行为）。
 	LBAllowedHosts string
 
 	// ── gRPC 重试策略配置（#12）───────────────
 
 	// AgentRetryMaxAttempts：上游 agent gRPC 调用最大重试次数。
-	// 对应环境变量 PRIVACY_AGENT_RETRY_MAX_ATTEMPTS，默认 6。
+	// 对应环境变量 BFF_AGENT_RETRY_MAX_ATTEMPTS，默认 6。
 	AgentRetryMaxAttempts int
 
 	// AgentRetryInitialBackoff：重试初始退避时间（秒）。
-	// 对应环境变量 PRIVACY_AGENT_RETRY_INITIAL_BACKOFF，默认 1。
+	// 对应环境变量 BFF_AGENT_RETRY_INITIAL_BACKOFF，默认 1。
 	AgentRetryInitialBackoff int
 
 	// AgentRetryMaxBackoff：重试最大退避时间（秒）。
-	// 对应环境变量 PRIVACY_AGENT_RETRY_MAX_BACKOFF，默认 8。
+	// 对应环境变量 BFF_AGENT_RETRY_MAX_BACKOFF，默认 8。
 	AgentRetryMaxBackoff int
 
 	// ── BFF 入站 HTTP/HTTPS 服务端 TLS 与 mTLS 配置 ─────────────────────
 
 	// ConsoleTLSEnabled：是否为本 BFF HTTP/REST 服务开启 HTTPS (TLS/mTLS)。
-	// 对应环境变量 PRIVACY_CONSOLE_TLS_ENABLED，默认 false。
+	// 对应环境变量 BFF_TLS_ENABLED，默认 false。
 	ConsoleTLSEnabled bool
 
-	// ConsoleRequireTLS：部署方声明本 BFF 必须以加密面暴露（PRIVACY_CONSOLE_REQUIRE_TLS，默认 false）。
+	// ConsoleRequireTLS：部署方声明本 BFF 必须以加密面暴露（BFF_REQUIRE_TLS，默认 false）。
 	// 置真而 ConsoleTLSEnabled 为假时启动门禁直接拒绝，消除「以为已加密、实际明文直传」。
 	ConsoleRequireTLS bool
 
 	// ConsoleTLSCertFile：BFF 服务端 X.509 证书路径（PEM）。
-	// 对应环境变量 PRIVACY_CONSOLE_TLS_CERT_FILE。
+	// 对应环境变量 BFF_TLS_CERT_FILE。
 	ConsoleTLSCertFile string
 
 	// ConsoleTLSKeyFile：BFF 服务端私钥路径（PEM）。
-	// 对应环境变量 PRIVACY_CONSOLE_TLS_KEY_FILE。
+	// 对应环境变量 BFF_TLS_KEY_FILE。
 	ConsoleTLSKeyFile string
 
 	// ConsoleTLSCAFile：用于校验入站客户端证书的 CA 根证书路径（PEM，mTLS 双向认证）。
-	// 对应环境变量 PRIVACY_CONSOLE_TLS_CA_FILE。
+	// 对应环境变量 BFF_TLS_CA_FILE。
 	ConsoleTLSCAFile string
 
 	// ConsoleTLSClientAuth：客户端认证模式："require" | "verify" | "request" | ""。
-	// 对应环境变量 PRIVACY_CONSOLE_TLS_CLIENT_AUTH，默认 ""（单向 TLS）。
+	// 对应环境变量 BFF_TLS_CLIENT_AUTH，默认 ""（单向 TLS）。
 	ConsoleTLSClientAuth string
 
 	// ConsoleTLSPinnedPubKeyFile：可选的客户端公钥固定文件路径（PEM）。
-	// 对应环境变量 PRIVACY_CONSOLE_TLS_PINNED_PUBKEY_FILE。
+	// 对应环境变量 BFF_TLS_PINNED_PUBKEY_FILE。
 	ConsoleTLSPinnedPubKeyFile string
 
 	// ConsoleMTLSWhitelistFile：BFF 入站 gRPC 服务端 mTLS CN 白名单文件路径（YAML）。
@@ -171,15 +171,15 @@ type Config struct {
 	// ── BFF 入站 gRPC 服务端配置 ─────────────────────────────────────────
 
 	// ConsoleGRPCEnabled：是否同时启动 BFF 自身对外暴露的 gRPC 代理网关服务。
-	// 对应环境变量 PRIVACY_CONSOLE_GRPC_ENABLED，默认 false。
+	// 对应环境变量 BFF_GRPC_ENABLED，默认 false。
 	ConsoleGRPCEnabled bool
 
 	// ConsoleGRPCHost：BFF gRPC 服务的绑定主机地址。
-	// 对应环境变量 PRIVACY_CONSOLE_GRPC_HOST，默认 "127.0.0.1"。
+	// 对应环境变量 BFF_GRPC_HOST，默认 "127.0.0.1"。
 	ConsoleGRPCHost string
 
 	// ConsoleGRPCPort：BFF gRPC 服务的监听端口。
-	// 对应环境变量 PRIVACY_CONSOLE_GRPC_PORT，默认 50055。
+	// 对应环境变量 BFF_GRPC_PORT，默认 50055。
 	ConsoleGRPCPort int
 
 	// ── 直连 Go 微服务配置（Phase 2：console/bff-go 不再只代理 Python Agent）
@@ -209,11 +209,11 @@ type Config struct {
 	AuditAPIKey string
 
 	// AgentRESTURL：上游 agent REST 服务的完整基础 URL。
-	// 由 PRIVACY_AGENT_REST_URL / PRIVACY_AGENT_URL 或 host+port+TLS 组合自动构建。
+	// 由 BFF_AGENT_REST_URL / BFF_AGENT_URL 或 host+port+TLS 组合自动构建。
 	AgentRESTURL string
 
 	// GRPCCallTimeout：单次 gRPC 调用的超时时间。
-	// 对应环境变量 PRIVACY_GRPC_CALL_TIMEOUT，默认 60s。
+	// 对应环境变量 BFF_GRPC_CALL_TIMEOUT，默认 60s。
 	GRPCCallTimeout time.Duration
 }
 
@@ -234,54 +234,54 @@ type Config struct {
 func Load() *Config {
 	return &Config{
 		// 上游 agent gRPC 主机地址，默认 127.0.0.1（本地开发场景）
-		AgentGRPCHost: pkgconfig.EnvString("PRIVACY_AGENT_GRPC_HOST", "127.0.0.1"),
+		AgentGRPCHost: pkgconfig.EnvString("BFF_AGENT_GRPC_HOST", "127.0.0.1"),
 		// 上游 agent gRPC 端口，默认 50051（与 PrivShield 默认 gRPC 端口一致）
-		AgentGRPCPort: pkgconfig.EnvInt("PRIVACY_AGENT_GRPC_PORT", 50051),
+		AgentGRPCPort: pkgconfig.EnvInt("BFF_AGENT_GRPC_PORT", 50051),
 		// 认证 API Key，默认为空（不启用认证）
-		AgentAPIKey: pkgconfig.EnvString("PRIVACY_AGENT_API_KEY", ""),
+		AgentAPIKey: pkgconfig.EnvString("BFF_AGENT_API_KEY", ""),
 		// 本代理 HTTP 监听地址，默认 127.0.0.1
-		ConsoleHost: pkgconfig.EnvStringFallback("BFF_HOST", "PRIVACY_CONSOLE_HOST", "127.0.0.1"),
+		ConsoleHost: pkgconfig.EnvString("BFF_HOST", "127.0.0.1"),
 		// 本代理 HTTP 监听端口，默认 8081
-		ConsolePort: pkgconfig.EnvIntFallback("BFF_PORT", "PRIVACY_CONSOLE_PORT", 8081),
+		ConsolePort: pkgconfig.EnvInt("BFF_PORT", 8081),
 		// 前端静态文件目录，使用 EnvStringOptional 以支持"设为空即禁用"语义
-		StaticDistDir: pkgconfig.EnvStringOptional("BFF_STATIC_DIR", pkgconfig.EnvStringOptional("PRIVACY_CONSOLE_STATIC_DIR", "../web/dist")),
+		StaticDistDir: pkgconfig.EnvStringOptional("BFF_STATIC_DIR", "../web/dist"),
 		// 是否启用上游 gRPC 连接的 TLS/mTLS，默认关闭（非安全传输）
-		AgentTLSEnabled: pkgconfig.EnvBool("PRIVACY_AGENT_TLS_ENABLED", false) || pkgconfig.EnvBool("PRIVACY_AGENT_MTLS_ENABLED", false),
+		AgentTLSEnabled: pkgconfig.EnvBool("BFF_AGENT_TLS_ENABLED", false),
 		// 客户端证书文件（mTLS 双向认证），默认空
-		AgentTLSCertFile: pkgconfig.EnvStringFirstSet("PRIVACY_AGENT_TLS_CERT_FILE", "PRIVACY_AGENT_CLIENT_CERT"),
+		AgentTLSCertFile: pkgconfig.EnvString("BFF_AGENT_TLS_CERT_FILE", ""),
 		// 客户端私钥文件（mTLS 双向认证），默认空
-		AgentTLSKeyFile: pkgconfig.EnvStringFirstSet("PRIVACY_AGENT_TLS_KEY_FILE", "PRIVACY_AGENT_CLIENT_KEY"),
+		AgentTLSKeyFile: pkgconfig.EnvString("BFF_AGENT_TLS_KEY_FILE", ""),
 		// 校验服务端证书的 CA 文件，TLS 启用时必填
-		AgentTLSCAFile: pkgconfig.EnvStringFirstSet("PRIVACY_AGENT_TLS_CA_FILE", "PRIVACY_AGENT_CA_CERT"),
+		AgentTLSCAFile: pkgconfig.EnvString("BFF_AGENT_TLS_CA_FILE", ""),
 		// 服务端证书主机名覆盖值，默认空（使用连接目标地址）
-		AgentTLSServerName: pkgconfig.EnvStringFirstSet("PRIVACY_AGENT_TLS_SERVER_NAME", "PRIVACY_AGENT_SERVER_NAME"),
+		AgentTLSServerName: pkgconfig.EnvString("BFF_AGENT_TLS_SERVER_NAME", ""),
 		// 是否跳过服务端证书校验（仅测试用），默认关闭
-		AgentTLSInsecureSkipVerify: pkgconfig.EnvBool("PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY", false),
+		AgentTLSInsecureSkipVerify: pkgconfig.EnvBool("BFF_AGENT_TLS_INSECURE_SKIP_VERIFY", false),
 		// 可选控制台 API Key，默认空（不鉴权）
-		ConsoleAPIKey: pkgconfig.EnvStringFallback("BFF_API_KEY", "CONSOLE_API_KEY", ""),
+		ConsoleAPIKey: pkgconfig.EnvString("BFF_API_KEY", ""),
 		// 限流：每分钟每 IP 最大请求数，默认 600（0 关闭）
-		ConsoleRateLimit: pkgconfig.EnvIntFallback("BFF_RATE_LIMIT", "CONSOLE_RATE_LIMIT", 600),
+		ConsoleRateLimit: pkgconfig.EnvInt("BFF_RATE_LIMIT", 600),
 		// 上传文件大小上限，默认 10MB
-		MaxUploadBytes: int64(pkgconfig.EnvInt("CONSOLE_MAX_UPLOAD_BYTES", 10*1024*1024)),
+		MaxUploadBytes: int64(pkgconfig.EnvInt("BFF_MAX_UPLOAD_BYTES", 10*1024*1024)),
 		// 负载均衡探测 host 白名单，默认空（不限制）
-		LBAllowedHosts: pkgconfig.EnvString("LB_ALLOWED_HOSTS", ""),
+		LBAllowedHosts: pkgconfig.EnvString("BFF_LB_ALLOWED_HOSTS", ""),
 		// gRPC 重试策略（#12）：最大重试次数、初始/最大退避秒数
-		AgentRetryMaxAttempts:    pkgconfig.EnvInt("PRIVACY_AGENT_RETRY_MAX_ATTEMPTS", 6),
-		AgentRetryInitialBackoff: pkgconfig.EnvInt("PRIVACY_AGENT_RETRY_INITIAL_BACKOFF", 1),
-		AgentRetryMaxBackoff:     pkgconfig.EnvInt("PRIVACY_AGENT_RETRY_MAX_BACKOFF", 8),
+		AgentRetryMaxAttempts:    pkgconfig.EnvInt("BFF_AGENT_RETRY_MAX_ATTEMPTS", 6),
+		AgentRetryInitialBackoff: pkgconfig.EnvInt("BFF_AGENT_RETRY_INITIAL_BACKOFF", 1),
+		AgentRetryMaxBackoff:     pkgconfig.EnvInt("BFF_AGENT_RETRY_MAX_BACKOFF", 8),
 		// BFF 入站 HTTPS/TLS 配置
-		ConsoleTLSEnabled:          pkgconfig.EnvBoolFallback("BFF_TLS_ENABLED", "PRIVACY_CONSOLE_TLS_ENABLED", false),
-		ConsoleRequireTLS:          pkgconfig.EnvBoolFallback("BFF_REQUIRE_TLS", "PRIVACY_CONSOLE_REQUIRE_TLS", false),
-		ConsoleTLSCertFile:         pkgconfig.EnvStringFallback("BFF_TLS_CERT_FILE", "PRIVACY_CONSOLE_TLS_CERT_FILE", ""),
-		ConsoleTLSKeyFile:          pkgconfig.EnvStringFallback("BFF_TLS_KEY_FILE", "PRIVACY_CONSOLE_TLS_KEY_FILE", ""),
-		ConsoleTLSCAFile:           pkgconfig.EnvStringFallback("BFF_TLS_CA_FILE", "PRIVACY_CONSOLE_TLS_CA_FILE", ""),
-		ConsoleTLSClientAuth:       pkgconfig.EnvStringFallback("BFF_TLS_CLIENT_AUTH", "PRIVACY_CONSOLE_TLS_CLIENT_AUTH", ""),
-		ConsoleTLSPinnedPubKeyFile: pkgconfig.EnvStringFallback("BFF_TLS_PINNED_PUBKEY_FILE", "PRIVACY_CONSOLE_TLS_PINNED_PUBKEY_FILE", ""),
+		ConsoleTLSEnabled:          pkgconfig.EnvBool("BFF_TLS_ENABLED", false),
+		ConsoleRequireTLS:          pkgconfig.EnvBool("BFF_REQUIRE_TLS", false),
+		ConsoleTLSCertFile:         pkgconfig.EnvString("BFF_TLS_CERT_FILE", ""),
+		ConsoleTLSKeyFile:          pkgconfig.EnvString("BFF_TLS_KEY_FILE", ""),
+		ConsoleTLSCAFile:           pkgconfig.EnvString("BFF_TLS_CA_FILE", ""),
+		ConsoleTLSClientAuth:       pkgconfig.EnvString("BFF_TLS_CLIENT_AUTH", ""),
+		ConsoleTLSPinnedPubKeyFile: pkgconfig.EnvString("BFF_TLS_PINNED_PUBKEY_FILE", ""),
 		ConsoleMTLSWhitelistFile:   pkgconfig.EnvString("PRIVACY_AUTH_MTLS_WHITELIST_FILE", ""),
 		// BFF 入站 gRPC 服务端配置
-		ConsoleGRPCEnabled: pkgconfig.EnvBoolFallback("BFF_GRPC_ENABLED", "PRIVACY_CONSOLE_GRPC_ENABLED", false),
-		ConsoleGRPCHost:    pkgconfig.EnvStringFallback("BFF_GRPC_HOST", "PRIVACY_CONSOLE_GRPC_HOST", "127.0.0.1"),
-		ConsoleGRPCPort:    pkgconfig.EnvIntFallback("BFF_GRPC_PORT", "PRIVACY_CONSOLE_GRPC_PORT", 50055),
+		ConsoleGRPCEnabled: pkgconfig.EnvBool("BFF_GRPC_ENABLED", false),
+		ConsoleGRPCHost:    pkgconfig.EnvString("BFF_GRPC_HOST", "127.0.0.1"),
+		ConsoleGRPCPort:    pkgconfig.EnvInt("BFF_GRPC_PORT", 50055),
 
 		// 直连 Go 微服务配置
 		HubURL:           pkgconfig.EnvString("BFF_HUB_URL", "http://127.0.0.1:8082"),
@@ -300,34 +300,26 @@ func Load() *Config {
 }
 
 // buildAgentRESTURL 构建上游 agent REST 基础 URL。
-// 优先使用 PRIVACY_AGENT_REST_URL / PRIVACY_AGENT_URL 完整 URL；
-// 否则由 host + port + TLS 开关组合构建。
 func buildAgentRESTURL() string {
-	if u := pkgconfig.EnvStringFirstSet("PRIVACY_AGENT_REST_URL", "PRIVACY_AGENT_URL"); u != "" {
+	if u := pkgconfig.EnvStringFirstSet("BFF_AGENT_REST_URL", "BFF_AGENT_URL"); u != "" {
 		return strings.TrimRight(u, "/")
 	}
 
 	scheme := "http"
-	if pkgconfig.EnvBool("PRIVACY_AGENT_TLS_ENABLED", false) ||
-		pkgconfig.EnvBool("PRIVACY_AGENT_MTLS_ENABLED", false) ||
-		pkgconfig.EnvBool("PRIVACY_TLS_ENABLED", false) {
+	if pkgconfig.EnvBool("BFF_AGENT_TLS_ENABLED", false) {
 		scheme = "https"
 	}
 
-	restHost := pkgconfig.EnvStringFirstSet("PRIVACY_AGENT_REST_HOST", "PRIVACY_REST_HOST")
-	if restHost == "" {
-		restHost = pkgconfig.EnvString("PRIVACY_AGENT_GRPC_HOST", "127.0.0.1")
-	}
-
-	restPort := pkgconfig.EnvString("PRIVACY_REST_PORT", "8079")
+	restHost := pkgconfig.EnvString("BFF_AGENT_REST_HOST", "127.0.0.1")
+	restPort := pkgconfig.EnvString("BFF_AGENT_REST_PORT", "8079")
 
 	return fmt.Sprintf("%s://%s:%s", scheme, restHost, restPort)
 }
 
 // parseGRPCCallTimeout 解析单次 gRPC 调用超时时间。
-// 环境变量 PRIVACY_GRPC_CALL_TIMEOUT（Go duration 格式），默认 60s。
+// 环境变量 BFF_GRPC_CALL_TIMEOUT（Go duration 格式），默认 60s。
 func parseGRPCCallTimeout() time.Duration {
-	if v := pkgconfig.EnvString("PRIVACY_GRPC_CALL_TIMEOUT", ""); v != "" {
+	if v := pkgconfig.EnvString("BFF_GRPC_CALL_TIMEOUT", ""); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			return d
 		}
@@ -347,14 +339,14 @@ func (c *Config) ConsoleGRPCAddress() string {
 func (c *Config) Validate() error {
 	if c.AgentTLSEnabled {
 		if c.AgentTLSCAFile == "" {
-			return fmt.Errorf("TLS enabled but PRIVACY_AGENT_TLS_CA_FILE is not set")
+			return fmt.Errorf("TLS enabled but BFF_AGENT_TLS_CA_FILE is not set")
 		}
 		if _, err := os.Stat(c.AgentTLSCAFile); err != nil {
 			return fmt.Errorf("TLS CA file not accessible: %s: %w", c.AgentTLSCAFile, err)
 		}
 		// Client cert and key must be provided together (mTLS pair).
 		if (c.AgentTLSCertFile != "") != (c.AgentTLSKeyFile != "") {
-			return fmt.Errorf("mTLS client cert and key must be provided together: set both PRIVACY_AGENT_TLS_CERT_FILE and PRIVACY_AGENT_TLS_KEY_FILE")
+			return fmt.Errorf("mTLS client cert and key must be provided together: set both BFF_AGENT_TLS_CERT_FILE and BFF_AGENT_TLS_KEY_FILE")
 		}
 		if c.AgentTLSCertFile != "" {
 			if _, err := os.Stat(c.AgentTLSCertFile); err != nil {
@@ -369,7 +361,7 @@ func (c *Config) Validate() error {
 	// BFF Inbound TLS validation
 	if c.ConsoleTLSEnabled {
 		if c.ConsoleTLSCertFile == "" || c.ConsoleTLSKeyFile == "" {
-			return fmt.Errorf("PRIVACY_CONSOLE_TLS_CERT_FILE and PRIVACY_CONSOLE_TLS_KEY_FILE must be set when console TLS is enabled")
+			return fmt.Errorf("BFF_TLS_CERT_FILE and BFF_TLS_KEY_FILE must be set when console TLS is enabled")
 		}
 		if _, err := os.Stat(c.ConsoleTLSCertFile); err != nil {
 			return fmt.Errorf("Console TLS cert file not accessible: %s: %w", c.ConsoleTLSCertFile, err)
@@ -379,7 +371,7 @@ func (c *Config) Validate() error {
 		}
 		if strings.TrimSpace(c.ConsoleTLSClientAuth) != "" {
 			if c.ConsoleTLSCAFile == "" {
-				return fmt.Errorf("PRIVACY_CONSOLE_TLS_CA_FILE must be configured when client auth is enabled")
+				return fmt.Errorf("BFF_TLS_CA_FILE must be configured when client auth is enabled")
 			}
 			if _, err := os.Stat(c.ConsoleTLSCAFile); err != nil {
 				return fmt.Errorf("Console TLS CA file not accessible: %s: %w", c.ConsoleTLSCAFile, err)
@@ -393,17 +385,17 @@ func (c *Config) Validate() error {
 	}
 
 	if c.AgentRetryMaxAttempts < 1 {
-		return fmt.Errorf("PRIVACY_AGENT_RETRY_MAX_ATTEMPTS must be >= 1, got %d", c.AgentRetryMaxAttempts)
+		return fmt.Errorf("BFF_AGENT_RETRY_MAX_ATTEMPTS must be >= 1, got %d", c.AgentRetryMaxAttempts)
 	}
 	if c.AgentRetryInitialBackoff < 0 {
-		return fmt.Errorf("PRIVACY_AGENT_RETRY_INITIAL_BACKOFF must be >= 0, got %d", c.AgentRetryInitialBackoff)
+		return fmt.Errorf("BFF_AGENT_RETRY_INITIAL_BACKOFF must be >= 0, got %d", c.AgentRetryInitialBackoff)
 	}
 	if c.AgentRetryMaxBackoff < 0 {
-		return fmt.Errorf("PRIVACY_AGENT_RETRY_MAX_BACKOFF must be >= 0, got %d", c.AgentRetryMaxBackoff)
+		return fmt.Errorf("BFF_AGENT_RETRY_MAX_BACKOFF must be >= 0, got %d", c.AgentRetryMaxBackoff)
 	}
 
 	// P0-1 零信任默认态：鉴权中间件在 Key 为空时整体放行（pkg/middleware/auth.go），
-	// 而本 BFF 代理面可达原始样本记录（P0-7），故非环回监听必须配置 CONSOLE_API_KEY。
+	// 而本 BFF 代理面可达原始样本记录（P0-7），故非环回监听必须配置 BFF_API_KEY。
 	hosts := []string{c.ConsoleHost}
 	if c.ConsoleGRPCEnabled {
 		hosts = append(hosts, c.ConsoleGRPCHost)

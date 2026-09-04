@@ -521,8 +521,8 @@ func TestTrustedProxiesFromEnv(t *testing.T) {
 	}
 
 	// 3. 传入配置的专属变量时成功解析
-	t.Setenv("GATEWAY_TRUSTED_PROXIES", "172.16.0.1")
-	resGw := TrustedProxiesFromEnv("GATEWAY_TRUSTED_PROXIES")
+	t.Setenv("ENGINE_GATEWAY_TRUSTED_PROXIES", "172.16.0.1")
+	resGw := TrustedProxiesFromEnv("ENGINE_GATEWAY_TRUSTED_PROXIES")
 	if len(resGw) != 1 || resGw[0] != "172.16.0.1" {
 		t.Errorf("service-specific mismatch, got %v", resGw)
 	}

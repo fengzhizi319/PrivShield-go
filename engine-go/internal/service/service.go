@@ -91,15 +91,15 @@ type Config struct {
 
 // DefaultConfig 默认配置
 func DefaultConfig() Config {
-	enableLLM := os.Getenv("PRIVACY_LLM_ENABLE") == "true"
-	llmEndpoint := os.Getenv("PRIVACY_LLM_ENDPOINT")
+	enableLLM := os.Getenv("AGENT_LLM_ENABLE") == "true"
+	llmEndpoint := os.Getenv("AGENT_LLM_ENDPOINT")
 	if llmEndpoint == "" {
 		llmEndpoint = "http://localhost:8000/v1/chat/completions"
 	}
 
-	rulesDir := pkgconfig.EnvString("PRIVACY_RULES_DIR", "rules/domains")
-	standardsDir := pkgconfig.EnvString("PRIVACY_STANDARDS_DIR", "rules/standards")
-	privacyYAML := pkgconfig.EnvString("PRIVACY_CONFIG_FILE", "config/privacy.yaml")
+	rulesDir := pkgconfig.EnvString("AGENT_RULES_DIR", "rules/domains")
+	standardsDir := pkgconfig.EnvString("AGENT_STANDARDS_DIR", "rules/standards")
+	privacyYAML := pkgconfig.EnvString("AGENT_CONFIG_FILE", "config/privacy.yaml")
 
 	return Config{
 		TotalEpsilon:    10.0,
@@ -143,7 +143,7 @@ func NewPrivacyService(cfg Config) (*PrivacyService, error) {
 
 	ns := cfg.Namespace
 	if ns == "" {
-		ns = pkgconfig.EnvString("PRIVACY_NAMESPACE", "default")
+		ns = pkgconfig.EnvString("AGENT_NAMESPACE", "default")
 	}
 
 	// ── 3. 安全底线（含 P0-2 默认拒绝下限）──
@@ -156,12 +156,12 @@ func NewPrivacyService(cfg Config) (*PrivacyService, error) {
 
 	// ── 4. LLM 客户端（classification.llm_endpoint / llm_max_concurrency）──
 	llmEndpoint := cfg.LLMEndpoint
-	if policy != nil && os.Getenv("PRIVACY_LLM_ENDPOINT") == "" {
+	if policy != nil && os.Getenv("AGENT_LLM_ENDPOINT") == "" {
 		if fromFile := strings.TrimSpace(policy.Classification.LLMEndpoint); fromFile != "" {
 			llmEndpoint = fromFile
 		}
 	}
-	llmMaxConcurrency := pkgconfig.EnvInt("PRIVACY_LLM_MAX_CONCURRENCY", 4)
+	llmMaxConcurrency := pkgconfig.EnvInt("AGENT_LLM_MAX_CONCURRENCY", 4)
 	if policy != nil && policy.Classification.LLMMaxConcurrency != nil &&
 		*policy.Classification.LLMMaxConcurrency > 0 &&
 		*policy.Classification.LLMMaxConcurrency < llmMaxConcurrency {
@@ -173,11 +173,11 @@ func NewPrivacyService(cfg Config) (*PrivacyService, error) {
 	if cfg.EnableLLM || llmEndpoint != "" {
 		llmClient = dynclassification.NewLLMClient(dynclassification.LLMClientConfig{
 			Endpoint:       llmEndpoint,
-			ModelName:      pkgconfig.EnvString("PRIVACY_LLM_MODEL", "qwen3.5"),
+			ModelName:      pkgconfig.EnvString("AGENT_LLM_MODEL", "qwen3.5"),
 			MaxConcurrency: llmMaxConcurrency,
 			Timeout:        30 * time.Second,
 			MaxRetries:     2,
-			APIKey:         os.Getenv("PRIVACY_LLM_API_KEY"),
+			APIKey:         os.Getenv("AGENT_LLM_API_KEY"),
 		})
 	}
 
@@ -969,13 +969,13 @@ func (s *PrivacyService) Diagnostics(refresh bool) map[string]interface{} {
 		// P0-2 / P2-2：安全底线与字段级默认拒绝策略的生效快照（可审计）。
 		"safety_floor": s.safetyFloorDiagnostics(),
 		"service": map[string]interface{}{
-			"name":       pkgconfig.EnvString("PRIVACY_SERVICE_NAME", "PrivShield"),
+			"name":       pkgconfig.EnvString("AGENT_SERVICE_NAME", "PrivShield"),
 			"engine":     "go",
-			"namespace":  pkgconfig.EnvString("PRIVACY_NAMESPACE", "default"),
+			"namespace":  pkgconfig.EnvString("AGENT_NAMESPACE", "default"),
 			"version":    "1.0.0",
 			"go_version": runtime.Version(),
-			"rest_port":  pkgconfig.EnvInt("PRIVACY_REST_PORT", 8079),
-			"grpc_port":  pkgconfig.EnvInt("PRIVACY_GRPC_PORT", 50051),
+			"rest_port":  pkgconfig.EnvInt("AGENT_REST_PORT", 8079),
+			"grpc_port":  pkgconfig.EnvInt("AGENT_GRPC_PORT", 50051),
 		},
 		"engines": map[string]interface{}{
 			"ner": map[string]interface{}{
@@ -1264,7 +1264,7 @@ func (s *PrivacyService) RecommendParams(namespace string, values []float64, row
 }
 
 // ReloadDynamicProfiles 重新加载动态分类规则与隐私策略配置。
-// 路径从 Config 中读取（支持环境变量 PRIVACY_CONFIG_FILE / PRIVACY_RULES_DIR），不再硬编码。
+// 路径从 Config 中读取（支持环境变量 AGENT_CONFIG_FILE / AGENT_RULES_DIR），不再硬编码。
 func (s *PrivacyService) ReloadDynamicProfiles() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

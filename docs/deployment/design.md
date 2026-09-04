@@ -259,6 +259,12 @@ autoscaling:
 
 ### 4.3 Deployment 环境变量
 
+> **引擎类型分支**：`engineType=go`（Go 原生引擎）时，agent 运行面变量以 `AGENT_` 前缀下发
+>（`AGENT_REST_HOST` / `AGENT_REST_PORT` / `AGENT_GRPC_HOST` / `AGENT_GRPC_PORT` / `AGENT_LOG_LEVEL` /
+> `AGENT_TLS_ENABLED` / `AGENT_TLS_CERT_FILE` / `AGENT_TLS_KEY_FILE` / `AGENT_TLS_CA_FILE` /
+> `AGENT_AUTH_ENABLED` / `AGENT_AUTH_INTERNAL_MTLS_ENABLED` / `AGENT_AUTH_MTLS_WHITELIST_FILE`），
+> Python 引擎分支保持下表中的 `PRIVACY_*` 命名。
+
 | 环境变量 | 来源 | 说明 |
 |---|---|---|
 | `PRIVACY_PROFILE` | ConfigMap 挂载 | `/etc/engine/privacy-profile.yaml` |

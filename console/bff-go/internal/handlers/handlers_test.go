@@ -399,8 +399,8 @@ func TestBatchHandler_MixedAndRestFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse mock agent url failed: %v", err)
 	}
-	t.Setenv("PRIVACY_REST_HOST", u.Hostname())
-	t.Setenv("PRIVACY_REST_PORT", u.Port())
+	t.Setenv("BFF_AGENT_REST_HOST", u.Hostname())
+	t.Setenv("BFF_AGENT_REST_PORT", u.Port())
 
 	grpcSrv := &testPrivacyServer{
 		MaskFunc: func(_ context.Context, req *pb.MaskRequest) (*pb.MaskResponse, error) {
@@ -887,8 +887,8 @@ func TestProxyRestDynClassification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse mock agent url failed: %v", err)
 	}
-	t.Setenv("PRIVACY_REST_HOST", u.Hostname())
-	t.Setenv("PRIVACY_REST_PORT", u.Port())
+	t.Setenv("BFF_AGENT_REST_HOST", u.Hostname())
+	t.Setenv("BFF_AGENT_REST_PORT", u.Port())
 
 	grpcSrv := &testPrivacyServer{}
 	ts, _ := setupTestServer(t, grpcSrv)
@@ -952,8 +952,8 @@ func TestProxyRestErrorPassthrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse mock agent url failed: %v", err)
 	}
-	t.Setenv("PRIVACY_REST_HOST", u.Hostname())
-	t.Setenv("PRIVACY_REST_PORT", u.Port())
+	t.Setenv("BFF_AGENT_REST_HOST", u.Hostname())
+	t.Setenv("BFF_AGENT_REST_PORT", u.Port())
 
 	grpcSrv := &testPrivacyServer{}
 	ts, _ := setupTestServer(t, grpcSrv)
@@ -1183,8 +1183,8 @@ func TestDualProtocolSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse mock agent url: %v", err)
 	}
-	t.Setenv("PRIVACY_REST_HOST", u.Hostname())
-	t.Setenv("PRIVACY_REST_PORT", u.Port())
+	t.Setenv("BFF_AGENT_REST_HOST", u.Hostname())
+	t.Setenv("BFF_AGENT_REST_PORT", u.Port())
 
 	grpcSrv := &testPrivacyServer{
 		MaskFunc: func(ctx context.Context, req *pb.MaskRequest) (*pb.MaskResponse, error) {

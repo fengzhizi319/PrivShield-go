@@ -6,6 +6,8 @@
 package agent
 
 import (
+	"fmt"
+
 	pkgagent "github.com/fengzhizi319/PrivShield-go/pkg/agent"
 	"github.com/fengzhizi319/PrivShield-go/services/audit-log/internal/config"
 )
@@ -16,10 +18,23 @@ type Client struct {
 }
 
 // New creates a new agent client from the given config.
-func New(cfg *config.Config) *Client {
+// New 函数根据配置构造 Agent 客户端：
+// 由 PRIVACY_AGENT_TLS_* / PRIVACY_AGENT_TLCP_* 显式配置构建出站传输信任
+// （CA 文件不可读即报错，fail-fast），全部缺省时保持默认 HTTP 行为。
+func New(cfg *config.Config) (*Client, error) {
+	tlsCfg, err := cfg.AgentTLSClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("build agent TLS client config: %w", err)
+	}
+	tlcpCfg, err := cfg.AgentTLCPClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("build agent TLCP client config: %w", err)
+	}
 	shared := pkgagent.New(pkgagent.Config{
-		BaseURLs: cfg.AgentBaseURLs(),
-		APIKey:   cfg.AgentAPIKey,
+		BaseURLs:   cfg.AgentBaseURLs(),
+		APIKey:     cfg.AgentAPIKey,
+		TLSConfig:  tlsCfg,
+		TLCPConfig: tlcpCfg,
 	})
-	return &Client{Client: shared}
+	return &Client{Client: shared}, nil
 }

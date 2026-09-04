@@ -13,6 +13,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	pkgagent "github.com/fengzhizi319/PrivShield-go/pkg/agent"
@@ -31,13 +32,24 @@ type Client struct {
 // New 函数根据 service-hub 的运行配置构造并初始化 Agent 客户端实例。
 // 执行步骤：
 // 1. 从 Config 提取所有 Agent URL 列表（支持单节点与多节点配置）及 APIKey；
-// 2. 初始化底层 pkgagent.Client 实例并绑定熔断重试机制；
-// 3. 可选注册熔断器状态观测器，将节点熔断状态上报到 Prometheus；
-// 4. 返回封装后的 *Client 实例。
-func New(cfg *config.Config, mc *metrics.Collector) *Client {
+// 2. 由 PRIVACY_AGENT_TLS_* / PRIVACY_AGENT_TLCP_* 显式配置构建出站传输信任（CA 文件不可读即报错，fail-fast）；
+// 3. 初始化底层 pkgagent.Client 实例并绑定熔断重试机制；
+// 4. 可选注册熔断器状态观测器，将节点熔断状态上报到 Prometheus；
+// 5. 返回封装后的 *Client 实例。
+func New(cfg *config.Config, mc *metrics.Collector) (*Client, error) {
+	tlsCfg, err := cfg.AgentTLSClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("build agent TLS client config: %w", err)
+	}
+	tlcpCfg, err := cfg.AgentTLCPClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("build agent TLCP client config: %w", err)
+	}
 	pkgCfg := pkgagent.Config{
-		BaseURLs: cfg.AgentBaseURLs(),
-		APIKey:   cfg.AgentAPIKey,
+		BaseURLs:   cfg.AgentBaseURLs(),
+		APIKey:     cfg.AgentAPIKey,
+		TLSConfig:  tlsCfg,
+		TLCPConfig: tlcpCfg,
 	}
 	if mc != nil {
 		pkgCfg.StateObserver = func(node, state string) {
@@ -45,7 +57,7 @@ func New(cfg *config.Config, mc *metrics.Collector) *Client {
 		}
 	}
 	shared := pkgagent.New(pkgCfg)
-	return &Client{Client: shared}
+	return &Client{Client: shared}, nil
 }
 
 // ContextWithIdempotencyKey wraps pkgagent.ContextWithIdempotencyKey.

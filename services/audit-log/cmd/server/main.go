@@ -129,7 +129,11 @@ func main() {
 	naming.SetObserver(mc)
 
 	// ── Agent client / Agent 客户端 ────────────────────────────
-	agentClient := agent.New(cfg)
+	agentClient, err := agent.New(cfg)
+	if err != nil {
+		logger.Error("failed to create agent client", "error", err)
+		os.Exit(1)
+	}
 
 	// ── Data Retention Cleanup / 存证留存清理协程 ────────────────
 	// 每 6 小时执行一次「先归档后删除」：到期存证先写成加密且可独立验真的归档段，再删除。

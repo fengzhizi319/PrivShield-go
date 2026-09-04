@@ -479,7 +479,10 @@ func setupTestGRPCServer(t *testing.T, agentHandler http.HandlerFunc) (*GRPCServ
 	t.Setenv("SERVICE_HUB_AUDIT_LOG_URLS", auditMock.URL)
 	cfg := config.Load()
 	mc := metrics.NewCollector("service-hub-grpc-test")
-	ag := agent.New(cfg, mc)
+	ag, err := agent.New(cfg, mc)
+	if err != nil {
+		t.Fatalf("new agent client: %v", err)
+	}
 	ds := datasource.New(cfg)
 	taskStore := memory.NewTaskStore()
 	logger := slog.Default()
@@ -830,7 +833,10 @@ func TestGRPCServer_ProcessTask_FailureBranches(t *testing.T) {
 
 		t.Setenv("PRIVACY_AGENT_URLS", mockServer.URL)
 		cfg := config.Load()
-		ag := agent.New(cfg, metrics.NewCollector("service-hub-grpc-test"))
+		ag, err := agent.New(cfg, metrics.NewCollector("service-hub-grpc-test"))
+		if err != nil {
+			t.Fatalf("new agent client: %v", err)
+		}
 		ds := datasource.New(cfg)
 		taskStore := memory.NewTaskStore()
 		srv := New(ag, ds, cfg, taskStore, slog.Default())
@@ -869,7 +875,10 @@ func TestGRPCServer_ProcessTask_FailureBranches(t *testing.T) {
 
 		t.Setenv("PRIVACY_AGENT_URLS", mockServer.URL)
 		cfg := config.Load()
-		ag := agent.New(cfg, metrics.NewCollector("service-hub-grpc-test"))
+		ag, err := agent.New(cfg, metrics.NewCollector("service-hub-grpc-test"))
+		if err != nil {
+			t.Fatalf("new agent client: %v", err)
+		}
 		ds := datasource.New(cfg)
 		taskStore := memory.NewTaskStore()
 		srv := New(ag, ds, cfg, taskStore, slog.Default())

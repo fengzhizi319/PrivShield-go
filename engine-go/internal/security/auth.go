@@ -11,7 +11,7 @@ import (
 
 // AuthMiddleware 返回 Gin 中间件，执行 API Key 认证。
 // 认证未启用时透传并注入匿名身份。
-// 若配置了 KeyStore（PRIVACY_AUTH_KEYS_FILE），每请求读取最新 keys 实现热轮转。
+// 若配置了 KeyStore（AGENT_AUTH_KEYS_FILE），每请求读取最新 keys 实现热轮转。
 func AuthMiddleware() gin.HandlerFunc {
 	settings := GetSettings()
 	if keyStore != nil {

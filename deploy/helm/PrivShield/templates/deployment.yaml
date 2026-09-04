@@ -85,27 +85,42 @@ spec:
               protocol: TCP
           env:
             # ── 基础配置 ──
+            {{- if eq .Values.engineType "go" }}
+            # Go 引擎（privshield-agent）只读取 AGENT_* 变量名（engine-go/internal/config/config.go），
+            # 容器编排必须显式置 0.0.0.0，否则仅环回可达、外部容器无法调用。
+            - name: AGENT_REST_HOST
+              value: "0.0.0.0"
+            - name: AGENT_REST_PORT
+              value: "{{ .Values.service.restPort }}"
+            - name: AGENT_GRPC_HOST
+              value: "0.0.0.0"
+            - name: AGENT_GRPC_PORT
+              value: "{{ .Values.service.grpcPort }}"
+            - name: AGENT_LOG_LEVEL
+              value: {{ .Values.agent.logLevel | upper | quote }}
+            {{- else }}
             - name: PRIVACY_REST_HOST
               value: "0.0.0.0"
             - name: PRIVACY_REST_PORT
               value: "{{ .Values.service.restPort }}"
-            # PRIVACY_GRPC_HOST：Go 引擎 config.go 与 Python 引擎均读取，默认 127.0.0.1；
+            # PRIVACY_GRPC_HOST：Python 引擎读取，默认 127.0.0.1；
             # 容器编排必须显式置 0.0.0.0，否则 gRPC 仅环回可达、外部容器无法调用。
             - name: PRIVACY_GRPC_HOST
               value: "0.0.0.0"
             - name: PRIVACY_GRPC_PORT
               value: "{{ .Values.service.grpcPort }}"
+            - name: PRIVACY_LOG_LEVEL
+              value: {{ .Values.agent.logLevel | upper | quote }}
+            {{- end }}
             {{- if ne .Values.engineType "go" }}
             # env-scope: python-engine —— Python 引擎专属读取点：Go 引擎日志固定 JSON（仅
-            # PRIVACY_LOG_LEVEL 可调），参数面走 PRIVACY_CONFIG_FILE + PRIVACY_RULES_DIR。
+            # AGENT_LOG_LEVEL 可调），参数面走 PRIVACY_CONFIG_FILE + PRIVACY_RULES_DIR。
             - name: PRIVACY_PROFILE
               value: "/etc/PrivShield/privacy-profile.yaml"
             # env-scope: python-engine
             - name: PRIVACY_LOG_FORMAT
               value: {{ .Values.agent.logFormat | quote }}
             {{- end }}
-            - name: PRIVACY_LOG_LEVEL
-              value: {{ .Values.agent.logLevel | upper | quote }}
             - name: PRIVACY_SERVICE_NAME
               value: {{ include "PrivShield.fullname" . | quote }}
             # ── OpenTelemetry 可观测性（可选）──
@@ -128,26 +143,40 @@ spec:
             {{- if not .Values.security.auth.internalMtls.whitelistConfigMap }}
             {{- fail "security.tls.enabled=true 时必须提供 security.auth.internalMtls.whitelistConfigMap（含 mtls-whitelist.yaml 键）：Go 引擎在 TLS+gRPC 开启而无 CN 白名单文件时会被启动门禁拒绝" }}
             {{- end }}
+            {{- if eq .Values.engineType "go" }}
+            - name: AGENT_TLS_ENABLED
+              value: "true"
+            - name: AGENT_TLS_CERT_FILE
+              value: {{ .Values.security.tls.certFile | quote }}
+            - name: AGENT_TLS_KEY_FILE
+              value: {{ .Values.security.tls.keyFile | quote }}
+            {{- else }}
             - name: PRIVACY_TLS_ENABLED
               value: "true"
             - name: PRIVACY_TLS_CERT_FILE
               value: {{ .Values.security.tls.certFile | quote }}
             - name: PRIVACY_TLS_KEY_FILE
               value: {{ .Values.security.tls.keyFile | quote }}
+            {{- end }}
             {{- if ne .Values.engineType "go" }}
             # env-scope: python-engine —— Python 引擎（uvicorn/ssl）读取点。Go 引擎不读这个变量：
-            #   客户端证书认证 → PRIVACY_AUTH_INTERNAL_MTLS_ENABLED + PRIVACY_AUTH_MTLS_WHITELIST_FILE
+            #   客户端证书认证 → AGENT_AUTH_INTERNAL_MTLS_ENABLED + AGENT_AUTH_MTLS_WHITELIST_FILE
             #   加密私钥口令   → Go 的 crypto/tls 不支持带口令私钥，须预先解密后再放进 Secret
             - name: PRIVACY_TLS_CLIENT_AUTH
               value: {{ .Values.security.tls.clientAuth | default "none" | quote }}
             {{- end }}
             {{- if .Values.security.tls.caSecret }}
+            {{- if eq .Values.engineType "go" }}
+            - name: AGENT_TLS_CA_FILE
+              value: {{ .Values.security.tls.caFile | quote }}
+            {{- else }}
             - name: PRIVACY_TLS_CA_FILE
               value: {{ .Values.security.tls.caFile | quote }}
             {{- end }}
+            {{- end }}
             {{- if .Values.security.tls.keyPasswordSecret }}
             {{- if eq .Values.engineType "go" }}
-            {{- fail "engineType=go 时不支持 security.tls.keyPasswordSecret：Go 引擎无法解密带口令的私钥，请把 PRIVACY_TLS_KEY_FILE 指向未加密私钥" }}
+            {{- fail "engineType=go 时不支持 security.tls.keyPasswordSecret：Go 引擎无法解密带口令的私钥，请把 AGENT_TLS_KEY_FILE 指向未加密私钥" }}
             {{- end }}
             # env-scope: python-engine（engineType=go 时上方 fail 已阻断渲染，此变量永不下发到 Go 容器）
             - name: PRIVACY_TLS_KEY_PASSWORD
@@ -158,13 +187,32 @@ spec:
             {{- end }}
             {{- end }}
             # ── API Key 认证（P0-1 零信任默认态）──
-            # 注意：Go 引擎只读取 PRIVACY_AUTH_INTERNAL_API_KEYS / PRIVACY_AUTH_EXTERNAL_API_KEYS
+            # 注意：Go 引擎只读取 AGENT_AUTH_INTERNAL_API_KEYS / AGENT_AUTH_EXTERNAL_API_KEYS
             #（格式 token:name:scope1,scope2，多把以 ; 分隔）。历史模板里的
             # PRIVACY_AUTH_EXTERNAL_KEYS_JSON 在 Go 侧从不被读取，属配置漂移，已停用。
             {{- if .Values.security.auth.enabled }}
             {{- if and (not .Values.security.auth.apiKeysSecret) (not .Values.security.auth.apiKeys) }}
             {{- fail "security.auth.enabled=true 时必须提供 security.auth.apiKeys 或 apiKeysSecret：Go 引擎在非环回监听且无入站 Key 时会被启动门禁拒绝（CrashLoopBackOff）" }}
             {{- end }}
+            {{- if eq .Values.engineType "go" }}
+            - name: AGENT_AUTH_ENABLED
+              value: "true"
+            {{- if .Values.security.auth.apiKeysSecret }}
+            # 外部 Secret（用户自管，数据键 api-keys）
+            - name: AGENT_AUTH_INTERNAL_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.security.auth.apiKeysSecret | quote }}
+                  key: api-keys
+            {{- else }}
+            # Chart 自动生成的 Secret
+            - name: AGENT_AUTH_INTERNAL_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "PrivShield.fullname" . }}-secrets
+                  key: api-keys
+            {{- end }}
+            {{- else }}
             - name: PRIVACY_AUTH_ENABLED
               value: "true"
             {{- if .Values.security.auth.apiKeysSecret }}
@@ -183,8 +231,20 @@ spec:
                   key: api-keys
             {{- end }}
             {{- end }}
+            {{- end }}
             # ── 内部 mTLS 客户端证书认证（可选）──
             {{- if .Values.security.auth.internalMtls.enabled }}
+            {{- if eq .Values.engineType "go" }}
+            - name: AGENT_AUTH_INTERNAL_MTLS_ENABLED
+              value: "true"
+            {{- if .Values.security.auth.internalMtls.whitelistConfigMap }}
+            - name: AGENT_AUTH_MTLS_WHITELIST_FILE
+              value: "/etc/PrivShield/mtls-whitelist.yaml"
+            {{- else if .Values.security.auth.internalMtls.allowedCns }}
+            - name: AGENT_AUTH_MTLS_ALLOWED_CNS
+              value: {{ .Values.security.auth.internalMtls.allowedCns | quote }}
+            {{- end }}
+            {{- else }}
             - name: PRIVACY_AUTH_INTERNAL_MTLS_ENABLED
               value: "true"
             {{- if .Values.security.auth.internalMtls.whitelistConfigMap }}
@@ -193,6 +253,7 @@ spec:
             {{- else if .Values.security.auth.internalMtls.allowedCns }}
             - name: PRIVACY_AUTH_MTLS_ALLOWED_CNS
               value: {{ .Values.security.auth.internalMtls.allowedCns | quote }}
+            {{- end }}
             {{- end }}
             {{- end }}
             # ── 速率限制（可选）──

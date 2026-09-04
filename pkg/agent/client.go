@@ -27,6 +27,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,6 +46,7 @@ import (
 
 	"github.com/fengzhizi319/PrivShield-go/pkg/circuitbreaker"
 	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
+	"github.com/tjfoc/gmsm/gmtls"
 )
 
 // Client wraps HTTP calls to the upstream PrivShield agent REST API with multi-node load balancing.
@@ -68,6 +70,7 @@ type Client struct {
 	cbThreshold   int                                // 触发单节点熔断的连续失败阈值（默认 5 次）
 	cbCooldown    time.Duration                      // 熔断开启后的冷却等待时间（默认 30s，冷却后转为 Half-Open）
 	stateObserver func(node, state string)           // 熔断器状态发生流转时的外部回调钩子（用于上报 Prometheus 指标）
+	tlcpEnabled   bool                               // 出站是否走国密 TLCP 传输（tlcp:// 基础地址归一为 https:// 由 DialTLS 完成国密握手）
 }
 
 // idempotencyKeyType is the context key for propagating X-Idempotency-Key.
@@ -230,7 +233,7 @@ func isRetryableError(err error) bool {
 // Config holds agent client configuration.
 // Config 定义 Client 的构造参数配置项。
 type Config struct {
-	BaseURL        string                   // 上游 agent 单节点基础地址（如 "http://127.0.0.1:8079"）
+	BaseURL        string                   // 上游 agent 单节点基础地址（如 "http://127.0.0.1:8079"；国密模式用 "tlcp://host:port"）
 	BaseURLs       []string                 // 上游 agent 多节点集群地址列表（设置时优先于 BaseURL，开启客户端负载均衡）
 	APIKey         string                   // 可选的 Bearer Token 鉴权凭证
 	Timeout        time.Duration            // HTTP 请求全局超时时间（默认 30s）
@@ -240,6 +243,14 @@ type Config struct {
 	RetryBaseDelay time.Duration            // 指数退避重试的基础时间（默认 500ms）
 	Logger         *slog.Logger             // 结构化日志器（默认使用 slog.Default()）
 	StateObserver  func(node, state string) // 熔断器状态变更时的观察者回调函数（入参为 node 与 state 字符串）
+
+	// TLSConfig 是可选的标准 TLS 出站信任配置（https 基础地址生效）。
+	// 由调用方通过 agent.TLSConfigFromEnv(prefix) / agent.NewTLSConfig(caFile, insecure) 构建；nil 保持默认行为。
+	TLSConfig *tls.Config
+	// TLCPConfig 是可选的国密 TLCP 出站配置（基础地址 scheme 为 tlcp:// 时生效）。
+	// 由调用方通过 agent.TLCPConfigFromEnv(prefix) / agent.NewTLCPConfig(caFile, insecure) 构建；
+	// nil 时 tlcp:// 地址将以 "unsupported protocol scheme" 显式失败，不做静默兜底。
+	TLCPConfig *gmtls.Config
 }
 
 // New creates a new agent client from the given config.
@@ -283,6 +294,15 @@ func New(cfg Config) *Client {
 		IdleConnTimeout:     90 * time.Second,
 		DisableKeepAlives:   false,
 	}
+	// 出站传输安全装配：TLCP（国密）优先于标准 TLS；两者均为可选，nil 保持默认行为。
+	tlcpEnabled := false
+	switch {
+	case cfg.TLCPConfig != nil:
+		transport.DialTLSContext = tlcpDialer(cfg.TLCPConfig)
+		tlcpEnabled = true
+	case cfg.TLSConfig != nil:
+		transport.TLSClientConfig = cfg.TLSConfig
+	}
 
 	breakers := make(map[string]*circuitbreaker.Breaker, len(urls))
 	order := make([]string, 0, len(urls))
@@ -310,6 +330,7 @@ func New(cfg Config) *Client {
 		cbThreshold:    cfg.CBThreshold,
 		cbCooldown:     cfg.CBCooldown,
 		stateObserver:  cfg.StateObserver,
+		tlcpEnabled:    tlcpEnabled,
 	}
 }
 
@@ -439,7 +460,7 @@ func (c *Client) Get(ctx context.Context, path string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL(endpoint, path, c.tlcpEnabled), nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -485,7 +506,7 @@ func (c *Client) PostWithRequestID(ctx context.Context, path string, payload any
 		reqBodyBytes = b
 		body = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+path, body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL(endpoint, path, c.tlcpEnabled), body)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

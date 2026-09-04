@@ -26,18 +26,17 @@ services:
     pull_policy: if_not_present
     container_name: PrivShield-Go-test
     environment:
-      PRIVACY_REST_HOST: "0.0.0.0"
-      PRIVACY_REST_PORT: "8079"
-      PRIVACY_GRPC_HOST: "0.0.0.0"
-      PRIVACY_GRPC_PORT: "50051"
+      AGENT_REST_HOST: "0.0.0.0"
+      AGENT_REST_PORT: "8079"
+      AGENT_GRPC_HOST: "0.0.0.0"
+      AGENT_GRPC_PORT: "50051"
       PRIVACY_SERVICE_NAME: "PrivShield-Go-test"
-      PRIVACY_LOG_LEVEL: "INFO"
-      # Go 引擎无 PRIVACY_LOG_FORMAT 读取点：日志固定 JSON 输出，仅 PRIVACY_LOG_LEVEL 可调。
-      PRIVACY_TLS_ENABLED: "false"
+      AGENT_LOG_LEVEL: "INFO"
+      AGENT_TLS_ENABLED: "false"
       # P0-1：0.0.0.0 监听 ⇒ 必须配置入站 Key；沿用与 test.yml 相同的 test key 约定
-      PRIVACY_AUTH_ENABLED: "true"
-      PRIVACY_AUTH_INTERNAL_API_KEYS: "${PRIVACY_TEST_ENGINE_KEY:-test-engine-key}:ci-test-runner:*"
-      PRIVACY_RATE_LIMIT_ENABLED: "false"
+      AGENT_AUTH_ENABLED: "true"
+      AGENT_AUTH_INTERNAL_API_KEYS: "${PRIVACY_TEST_ENGINE_KEY:-test-engine-key}:ci-test-runner:*"
+      AGENT_RATE_LIMIT_ENABLED: "false"
     # Go 引擎不需要 Python 配置挂载
     volumes:
       - test-budget-db:/data/budget

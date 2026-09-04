@@ -1029,10 +1029,16 @@ func (s *Server) HubTopology(c *gin.Context) {
 	if agentHost == "0.0.0.0" || agentHost == "" {
 		agentHost = "127.0.0.1"
 	}
+	// 展示地址优先取 AgentBaseURLs()[0]（含 PRIVACY_AGENT_URLS 注入的 https/tlcp 真实探测地址），
+	// 避免 mTLS/TLCP 模式下对外仍显示 http:// 占位地址。
+	engineHTTPURL := s.cfg.AgentBaseURL()
+	if urls := s.cfg.AgentBaseURLs(); len(urls) > 0 {
+		engineHTTPURL = urls[0]
+	}
 	engineNode := models.ServiceNode{
 		ID:         "engine",
 		Name:       "隐私与分类引擎 (PrivShield Agent)",
-		HTTPURL:    s.cfg.AgentBaseURL(),
+		HTTPURL:    engineHTTPURL,
 		GRPCAddr:   fmt.Sprintf("%s:50051", agentHost),
 		Status:     "unreachable",
 		RESTStatus: "unreachable",

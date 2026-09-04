@@ -22,7 +22,10 @@ func TestClientHealth(t *testing.T) {
 
 	t.Setenv("PRIVACY_AGENT_URLS", srv.URL)
 	cfg := config.Load()
-	c := New(cfg)
+	c, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 
 	ctx := context.Background()
 	health, err := c.Health(ctx)

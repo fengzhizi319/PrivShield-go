@@ -606,8 +606,8 @@ docker run -p 8079:8079 -p 50051:50051 privshield:1.8.0
 | `PRIVACY_GRPC_PORT` | 50051 | Agent gRPC 端口 |
 | `PRIVACY_AGENT_URL` | http://127.0.0.1:8079 | Agent REST 监听地址 |
 | `PRIVACY_AGENT_GRPC_HOST` | 127.0.0.1 | Go 后端连 agent 的 gRPC 地址 |
-| `PRIVACY_TLS_ENABLED` | false | 是否启用 TLS |
-| `PRIVACY_AUTH_ENABLED` | false | 是否启用 API Key 认证 |
+| `AGENT_TLS_ENABLED` | false | 是否启用 TLS |
+| `AGENT_AUTH_ENABLED` | false | 是否启用 API Key 认证 |
 
 ---
 

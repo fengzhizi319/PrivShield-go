@@ -5,10 +5,12 @@
 #   (Engine :8079 + Hub :8082 + Datasource :8083 + Audit :8084 + BFF :8085 + Web :5174)
 #
 # 用法 / Usage:
-#   ./scripts/dev/dev-app-lz.sh [--force] [--skip-upstream]
+#   ./scripts/dev/dev-app-lz.sh [--force] [--skip-upstream] [--mtls|--tlcp]
 #
 # 选项:
 #   --force           端口被占用时自动终止占用进程（非交互模式）
+#   --mtls            启用 mTLS 双向认证（自动配置证书与双向鉴权环境）
+#   --tlcp            启用 TLCP 国密双证书模式（REST 引擎走 GM/T 0024 国密通道，与 --mtls 互斥）
 #   --skip-upstream   跳过上游服务启动（假设 4 个微服务已在运行）
 # ============================================================================
 
@@ -18,22 +20,30 @@ export CGO_ENABLED=0
 FORCE=false
 SKIP_UPSTREAM=false
 MTLS_MODE=false
+TLCP_MODE=false
 
 for arg in "$@"; do
     case "$arg" in
         --force) FORCE=true ;;
         --skip-upstream) SKIP_UPSTREAM=true ;;
         --mtls)  MTLS_MODE=true ;;
+        --tlcp)  TLCP_MODE=true ;;
         -h|--help)
             echo "用法: $0 [选项]"
             echo "  --force           端口被占用时自动终止占用进程（非交互模式）"
             echo "  --mtls            启用 mTLS 双向认证（自动配置证书与双向鉴权环境）"
+            echo "  --tlcp            启用 TLCP 国密双证书模式（REST :8079 仅接受国密握手，与 --mtls 互斥）"
             echo "  --skip-upstream   跳过上游服务启动（假设 4 个微服务已在运行）"
             echo "  -h, --help        显示此帮助信息"
             exit 0
             ;;
     esac
 done
+
+if [[ "$MTLS_MODE" == "true" && "$TLCP_MODE" == "true" ]]; then
+    echo "❌ --mtls 与 --tlcp 互斥，不能同时开启"
+    exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || (cd "$SCRIPT_DIR/../.." && pwd -P))"
@@ -43,6 +53,7 @@ LOGS_DIR="$PROJECT_ROOT/.logs"
 DATA_DIR="$PROJECT_ROOT/data"
 CERT_DIR="$PROJECT_ROOT/console/bff-go/certs"
 GEN_CERTS="$PROJECT_ROOT/console/bff-go/scripts/gen-certs.sh"
+TLCP_CERT_DIR="$PROJECT_ROOT/config/certs/tlcp"
 GO_BIN="${GO_BIN:-go}"
 
 # mTLS 模式下自动确保测试证书存在
@@ -51,6 +62,11 @@ if [[ "$MTLS_MODE" == "true" ]]; then
         echo "未检测到完整证书，正在自动生成开发用自签名证书..."
         bash "$GEN_CERTS" "$CERT_DIR"
     fi
+fi
+
+# TLCP 国密模式下自动确保 SM2 双证书存在（幂等，已存在则跳过）
+if [[ "$TLCP_MODE" == "true" ]]; then
+    "$GO_BIN" run "$PROJECT_ROOT/scripts/dev/tlcp-certgen" -dir "$TLCP_CERT_DIR"
 fi
 
 # Python 解释器自动探测
@@ -67,7 +83,26 @@ VITE_PORT=5174
 ENGINE_HEALTH_URL="http://127.0.0.1:8079/health"
 if [[ "$MTLS_MODE" == "true" ]]; then
     ENGINE_HEALTH_URL="https://127.0.0.1:8079/health"
+elif [[ "$TLCP_MODE" == "true" ]]; then
+    # curl 无法讲 TLCP；展示与探测地址采用 tlcp:// 语义，实际探活走 tlcp-probe（国密握手）。
+    ENGINE_HEALTH_URL="tlcp://127.0.0.1:8079/health"
 fi
+
+# probe_engine 探测 Go Engine REST 健康端点，按模式自适应：
+#   明文  -> curl http
+#   mTLS  -> curl -k https
+#   TLCP  -> go run tlcp-probe（gmtls 国密握手，curl 无法讲 TLCP）
+probe_engine() {
+    if [[ "$TLCP_MODE" == "true" ]]; then
+        "$GO_BIN" run "$PROJECT_ROOT/scripts/dev/tlcp-probe" \
+            -url "https://127.0.0.1:8079/health" \
+            -ca "$TLCP_CERT_DIR/ca.crt" >/dev/null 2>&1
+        return $?
+    fi
+    local curl_opts=("--noproxy" "*" "-sf" "-o" "/dev/null")
+    [[ "$MTLS_MODE" == "true" ]] && curl_opts+=("-k")
+    curl "${curl_opts[@]}" "$ENGINE_HEALTH_URL" 2>/dev/null
+}
 
 _is_port_in_use() {
     local port="$1"
@@ -140,13 +175,18 @@ _start_upstream_if_needed() {
         return
     fi
     # 非 force 模式下：若已健康可达则跳过
-    local curl_opts=("--noproxy" "*" "-sf" "-o" "/dev/null")
-    if [[ "$MTLS_MODE" == "true" ]]; then
-        curl_opts+=("-k")
-    fi
-    if curl "${curl_opts[@]}" "$health_url" 2>/dev/null; then
-        echo "✅ $name 已在运行 (port $port)"
-        return
+    if [[ "$name" == "Go Engine" ]]; then
+        # TLCP 模式下 curl 无法探测国密端口，走 tlcp-probe
+        if probe_engine; then
+            echo "✅ $name 已在运行 (port $port)"
+            return
+        fi
+    else
+        local curl_opts=("--noproxy" "*" "-sf" "-o" "/dev/null")
+        if curl "${curl_opts[@]}" "$health_url" 2>/dev/null; then
+            echo "✅ $name 已在运行 (port $port)"
+            return
+        fi
     fi
     if _is_port_in_use "$port"; then
         echo "❌ 端口 $port ($name) 被占用，使用 --force 自动清理并重启"
@@ -157,35 +197,52 @@ _start_upstream_if_needed() {
 start_engine() {
     local port=8079 pid_file="$PIDS_DIR/agent.pid"
     _start_upstream_if_needed "Go Engine" "$port" "$ENGINE_HEALTH_URL"
-    local curl_opts=("--noproxy" "*" "-sf" "-o" "/dev/null")
-    [[ "$MTLS_MODE" == "true" ]] && curl_opts+=("-k")
-    curl "${curl_opts[@]}" "$ENGINE_HEALTH_URL" 2>/dev/null && return
+    probe_engine && return
 
     echo "🔄 启动 PrivShield Go Engine (REST :$port / gRPC :50051)..."
     cd "$PROJECT_ROOT"
-    if [[ "$MTLS_MODE" == "true" ]]; then
+    if [[ "$TLCP_MODE" == "true" ]]; then
+        # REST 走 GM/T 0024 国密双证书通道；gRPC :50051 保持现状（不在 TLCP 覆盖范围）。
+        # 不设 AGENT_TLS_ENABLED：REST runner 按 AGENT_TLS_NATIONAL_CIPHER 分支走 TLCP 监听。
         PRIVACY_REST_HOST=127.0.0.1 PRIVACY_REST_PORT="$port" \
         PRIVACY_GRPC_HOST=127.0.0.1 PRIVACY_GRPC_PORT=50051 \
-        PRIVACY_TLS_ENABLED=true \
-        PRIVACY_TLS_CERT_FILE="$CERT_DIR/server.crt" \
-        PRIVACY_TLS_KEY_FILE="$CERT_DIR/server.key" \
-        PRIVACY_TLS_CA_FILE="$CERT_DIR/ca.crt" \
-        PRIVACY_AUTH_INTERNAL_MTLS_ENABLED=true \
-        PRIVACY_AUTH_MTLS_WHITELIST_FILE="$PROJECT_ROOT/config/mtls-whitelist.yaml" \
+        AGENT_TLS_NATIONAL_CIPHER=true \
+        AGENT_TLCP_SIGN_CERT_FILE="$TLCP_CERT_DIR/server-sign.crt" \
+        AGENT_TLCP_SIGN_KEY_FILE="$TLCP_CERT_DIR/server-sign.key" \
+        AGENT_TLCP_ENC_CERT_FILE="$TLCP_CERT_DIR/server-enc.crt" \
+        AGENT_TLCP_ENC_KEY_FILE="$TLCP_CERT_DIR/server-enc.key" \
+        "$GO_BIN" run ./engine-go/cmd/privshield-agent \
+            > "${LOGS_DIR}/agent_app_lz.log" 2>&1 &
+    elif [[ "$MTLS_MODE" == "true" ]]; then
+        PRIVACY_REST_HOST=127.0.0.1 PRIVACY_REST_PORT="$port" \
+        PRIVACY_GRPC_HOST=127.0.0.1 PRIVACY_GRPC_PORT=50051 \
+        AGENT_TLS_ENABLED=true \
+        AGENT_TLS_CERT_FILE="$CERT_DIR/server.crt" \
+        AGENT_TLS_KEY_FILE="$CERT_DIR/server.key" \
+        AGENT_TLS_CA_FILE="$CERT_DIR/ca.crt" \
+        AGENT_AUTH_INTERNAL_MTLS_ENABLED=true \
+        AGENT_AUTH_MTLS_WHITELIST_FILE="$PROJECT_ROOT/config/mtls-whitelist.yaml" \
         "$GO_BIN" run ./engine-go/cmd/privshield-agent \
             > "${LOGS_DIR}/agent_app_lz.log" 2>&1 &
     else
         PRIVACY_REST_HOST=127.0.0.1 PRIVACY_REST_PORT="$port" \
         PRIVACY_GRPC_HOST=127.0.0.1 PRIVACY_GRPC_PORT=50051 \
-        PRIVACY_TLS_ENABLED=false \
-        PRIVACY_AUTH_INTERNAL_MTLS_ENABLED=false \
+        AGENT_TLS_ENABLED=false \
+        AGENT_AUTH_INTERNAL_MTLS_ENABLED=false \
         "$GO_BIN" run ./engine-go/cmd/privshield-agent \
             > "${LOGS_DIR}/agent_app_lz.log" 2>&1 &
     fi
     echo $! > "$pid_file"
-    _wait_for_http "Go Engine" "$ENGINE_HEALTH_URL" 15 && \
-        echo "✅ Go Engine 已就绪 (PID $(cat "$pid_file"))" || \
-        echo "⚠️  Go Engine 启动超时，请检查 ${LOGS_DIR}/agent_app_lz.log"
+    # TLCP 模式下 curl 无法探测，逐秒走 tlcp-probe 等待引擎就绪
+    local i=0
+    while [ $i -lt 15 ]; do
+        if probe_engine; then
+            echo "✅ Go Engine 已就绪 (PID $(cat "$pid_file"))"
+            return
+        fi
+        sleep 1; i=$((i + 1))
+    done
+    echo "⚠️  Go Engine 启动超时，请检查 ${LOGS_DIR}/agent_app_lz.log"
 }
 
 start_service_hub() {
@@ -202,16 +259,25 @@ start_service_hub() {
     fi
 
     echo "🔄 启动 Service Hub (:$port)..."
-    if [[ "$MTLS_MODE" == "true" ]]; then
+    if [[ "$TLCP_MODE" == "true" ]]; then
+        # pkg/agent 真实读取点：PRIVACY_AGENT_URLS 为 tlcp:// 时由 PRIVACY_AGENT_TLCP_CA_FILE
+        # 提供 SM2 根 CA，经 gmtls 国密通道访问引擎（非死变量，勿删）。
         SERVICE_HUB_HOST=127.0.0.1 SERVICE_HUB_PORT="$port" \
         SERVICE_HUB_AGENT_REST_HOST=127.0.0.1 SERVICE_HUB_AGENT_REST_PORT=8079 \
+        PRIVACY_AGENT_URLS="tlcp://127.0.0.1:8079" \
+        PRIVACY_AGENT_TLCP_CA_FILE="$TLCP_CERT_DIR/ca.crt" \
         SERVICE_HUB_AUDIT_LOG_URLS="http://127.0.0.1:8084" \
         SERVICE_HUB_DB_PATH="${DATA_DIR}/service-hub.db" \
-        PRIVACY_AGENT_TLS_ENABLED=true \
+        ./bin/service-hub > "${LOGS_DIR}/service-hub_app_lz.log" 2>&1 &
+    elif [[ "$MTLS_MODE" == "true" ]]; then
+        # pkg/agent 真实读取点：REST 引擎走 https 时以 PRIVACY_AGENT_URLS 指向 https 地址，
+        # 并用 PRIVACY_AGENT_TLS_CA_FILE 提供根 CA 完成服务端证书校验（非死变量，勿删）。
+        SERVICE_HUB_HOST=127.0.0.1 SERVICE_HUB_PORT="$port" \
+        SERVICE_HUB_AGENT_REST_HOST=127.0.0.1 SERVICE_HUB_AGENT_REST_PORT=8079 \
+        PRIVACY_AGENT_URLS="https://127.0.0.1:8079" \
         PRIVACY_AGENT_TLS_CA_FILE="$CERT_DIR/ca.crt" \
-        PRIVACY_AGENT_TLS_CERT_FILE="$CERT_DIR/client.crt" \
-        PRIVACY_AGENT_TLS_KEY_FILE="$CERT_DIR/client.key" \
-        PRIVACY_AGENT_TLS_SERVER_NAME="localhost" \
+        SERVICE_HUB_AUDIT_LOG_URLS="http://127.0.0.1:8084" \
+        SERVICE_HUB_DB_PATH="${DATA_DIR}/service-hub.db" \
         ./bin/service-hub > "${LOGS_DIR}/service-hub_app_lz.log" 2>&1 &
     else
         SERVICE_HUB_HOST=127.0.0.1 SERVICE_HUB_PORT="$port" \
@@ -243,11 +309,6 @@ start_datasource_mgr() {
     if [[ "$MTLS_MODE" == "true" ]]; then
         DATASOURCE_MGR_HOST=127.0.0.1 DATASOURCE_MGR_PORT="$port" \
         DATASOURCE_MGR_AGENT_REST_HOST=127.0.0.1 DATASOURCE_MGR_AGENT_REST_PORT=8079 \
-        PRIVACY_AGENT_TLS_ENABLED=true \
-        PRIVACY_AGENT_TLS_CA_FILE="$CERT_DIR/ca.crt" \
-        PRIVACY_AGENT_TLS_CERT_FILE="$CERT_DIR/client.crt" \
-        PRIVACY_AGENT_TLS_KEY_FILE="$CERT_DIR/client.key" \
-        PRIVACY_AGENT_TLS_SERVER_NAME="localhost" \
         ./bin/datasource-mgr > "${LOGS_DIR}/datasource-mgr_app_lz.log" 2>&1 &
     else
         DATASOURCE_MGR_HOST=127.0.0.1 DATASOURCE_MGR_PORT="$port" \
@@ -274,15 +335,23 @@ start_audit_log() {
     fi
 
     echo "🔄 启动 Audit Log (:$port)..."
-    if [[ "$MTLS_MODE" == "true" ]]; then
+    if [[ "$TLCP_MODE" == "true" ]]; then
+        # pkg/agent 真实读取点：PRIVACY_AGENT_URLS 为 tlcp:// 时由 PRIVACY_AGENT_TLCP_CA_FILE
+        # 提供 SM2 根 CA，经 gmtls 国密通道访问引擎（非死变量，勿删）。
         AUDIT_LOG_HOST=127.0.0.1 AUDIT_LOG_PORT="$port" \
         AUDIT_LOG_AGENT_REST_HOST=127.0.0.1 AUDIT_LOG_AGENT_REST_PORT=8079 \
+        PRIVACY_AGENT_URLS="tlcp://127.0.0.1:8079" \
+        PRIVACY_AGENT_TLCP_CA_FILE="$TLCP_CERT_DIR/ca.crt" \
         AUDIT_LOG_DB_PATH="${DATA_DIR}/audit-log.db" \
-        PRIVACY_AGENT_TLS_ENABLED=true \
+        ./bin/audit-log > "${LOGS_DIR}/audit-log_app_lz.log" 2>&1 &
+    elif [[ "$MTLS_MODE" == "true" ]]; then
+        # pkg/agent 真实读取点：REST 引擎走 https 时以 PRIVACY_AGENT_URLS 指向 https 地址，
+        # 并用 PRIVACY_AGENT_TLS_CA_FILE 提供根 CA 完成服务端证书校验（非死变量，勿删）。
+        AUDIT_LOG_HOST=127.0.0.1 AUDIT_LOG_PORT="$port" \
+        AUDIT_LOG_AGENT_REST_HOST=127.0.0.1 AUDIT_LOG_AGENT_REST_PORT=8079 \
+        PRIVACY_AGENT_URLS="https://127.0.0.1:8079" \
         PRIVACY_AGENT_TLS_CA_FILE="$CERT_DIR/ca.crt" \
-        PRIVACY_AGENT_TLS_CERT_FILE="$CERT_DIR/client.crt" \
-        PRIVACY_AGENT_TLS_KEY_FILE="$CERT_DIR/client.key" \
-        PRIVACY_AGENT_TLS_SERVER_NAME="localhost" \
+        AUDIT_LOG_DB_PATH="${DATA_DIR}/audit-log.db" \
         ./bin/audit-log > "${LOGS_DIR}/audit-log_app_lz.log" 2>&1 &
     else
         AUDIT_LOG_HOST=127.0.0.1 AUDIT_LOG_PORT="$port" \
@@ -321,6 +390,9 @@ echo "  Web 前端:       http://localhost:$VITE_PORT"
 if [[ "$MTLS_MODE" == "true" ]]; then
     echo "  mTLS 安全模式:  已开启 (CA: $CERT_DIR/ca.crt)"
 fi
+if [[ "$TLCP_MODE" == "true" ]]; then
+    echo "  TLCP 国密模式:  已开启 (SM2 双证书: $TLCP_CERT_DIR, gRPC :50051 保持明文)"
+fi
 echo "=================================================================="
 
 # 1. 编译并启动 Go BFF
@@ -332,11 +404,6 @@ if [[ "$MTLS_MODE" == "true" ]]; then
     APP_LZ_HOST=127.0.0.1 APP_LZ_PORT="$BFF_PORT" \
     APP_LZ_AGENT_URL="https://127.0.0.1:8079" \
     APP_LZ_AGENT_GRPC="127.0.0.1:50051" \
-    PRIVACY_AGENT_TLS_ENABLED=true \
-    PRIVACY_AGENT_TLS_CA_FILE="$CERT_DIR/ca.crt" \
-    PRIVACY_AGENT_TLS_CERT_FILE="$CERT_DIR/client.crt" \
-    PRIVACY_AGENT_TLS_KEY_FILE="$CERT_DIR/client.key" \
-    PRIVACY_AGENT_TLS_SERVER_NAME="localhost" \
     "$APP_LZ_DIR/bff-go/bin/server" > "$LOGS_DIR/app-lz-bff.log" 2>&1 &
 else
     APP_LZ_HOST=127.0.0.1 APP_LZ_PORT="$BFF_PORT" "$APP_LZ_DIR/bff-go/bin/server" > "$LOGS_DIR/app-lz-bff.log" 2>&1 &

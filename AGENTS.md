@@ -128,26 +128,42 @@ go run ./engine-go/cmd/privshield-gateway
 bash ./scripts/dev/dev-bff-agent.sh
 ```
 
+### 一键启动调度之眼控制台 (App-LZ BFF + Vite 前端 + 4 上游微服务)
+
+```bash
+bash ./scripts/dev/dev-app-lz.sh --force          # 明文模式
+bash ./scripts/dev/dev-app-lz.sh --mtls --force   # mTLS 模式
+bash ./scripts/dev/dev-app-lz.sh --tlcp --force   # TLCP 国密双证书模式（与 --mtls 互斥）
+```
+
 ## 6. Key Configuration
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `PRIVACY_REST_HOST` | `0.0.0.0` | REST host |
-| `PRIVACY_REST_PORT` | `8079` | REST port |
-| `PRIVACY_GRPC_HOST` | `0.0.0.0` | gRPC host |
-| `PRIVACY_GRPC_PORT` | `50051` | gRPC port |
+| `AGENT_REST_HOST` | `0.0.0.0` | REST host |
+| `AGENT_REST_PORT` | `8079` | REST port |
+| `AGENT_GRPC_HOST` | `0.0.0.0` | gRPC host |
+| `AGENT_GRPC_PORT` | `50051` | gRPC port |
 | `PRIVACY_NAMESPACE` | `default` | 隐私预算租户隔离命名空间 |
-| `PRIVACY_TLS_ENABLED` | `false` | 启用 REST/gRPC TLS |
-| `PRIVACY_AUTH_ENABLED` | `false` | 启用 API Key 认证 |
-| `PRIVACY_AUTH_INTERNAL_MTLS_ENABLED` | `false` | 启用 gRPC mTLS 客户端证书认证 |
-| `PRIVACY_AUTH_MTLS_WHITELIST_FILE` | — | CN 白名单配置文件路径 (支持 5s 热重载) |
-| `PRIVACY_RATE_LIMIT_ENABLED` | `false` | 启用 32 分片高并发令牌桶限流 |
+| `AGENT_TLS_ENABLED` | `false` | 启用 REST/gRPC TLS |
+| `AGENT_TLS_NATIONAL_CIPHER` | `false` | REST 启用 TLCP 国密双证书模式（GM/T 0024，配合 `AGENT_TLCP_SIGN_CERT_FILE` 等） |
+| `AGENT_AUTH_ENABLED` | `false` | 启用 API Key 认证 |
+| `AGENT_AUTH_INTERNAL_MTLS_ENABLED` | `false` | 启用 gRPC mTLS 客户端证书认证 |
+| `AGENT_AUTH_MTLS_WHITELIST_FILE` | — | CN 白名单配置文件路径 (支持 5s 热重载；中台微服务群仍用 `PRIVACY_AUTH_MTLS_WHITELIST_FILE`) |
+| `AGENT_RATE_LIMIT_ENABLED` | `false` | 启用 32 分片高并发令牌桶限流 |
 | `PRIVACY_ENGINE_CACHE_MAX_SIZE` | `10000` | 动态分类分级 LRU 缓存容量（16 分片） |
 | `PRIVACY_IMAGE_ALLOWED_DIRS` | cwd + 系统临时目录 | 医学影像处理允许读取的文件目录白名单 |
 | `PRIVACY_RULES_RELOAD_CHECK_SECONDS` | `5` | 规则热重载 mtime 检测节流间隔秒数（0 = 禁用节流） |
 | `PRIVACY_PPROF_ENABLED` | `false` | 启用 pprof 性能分析端点（生产默认关闭，需 `ops:admin` 权限） |
 | `PRIVACY_RULES_DIR` | `rules/domains` | 领域分类分级规则目录 |
 | `PRIVACY_CONFIG_FILE` | `config/privacy.yaml` | 隐私策略配置文件路径 |
+
+### 微服务出站 Agent 传输信任（service-hub / audit-log 的 `pkg/agent` 客户端真实读取）
+
+`PRIVACY_AGENT_URLS` 指向 `https://` 时由 `PRIVACY_AGENT_TLS_CA_FILE` /
+`PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY` 构建标准 TLS 信任；指向 `tlcp://` 时由
+`PRIVACY_AGENT_TLCP_CA_FILE` / `PRIVACY_AGENT_TLCP_INSECURE_SKIP_VERIFY` 构建国密 TLCP 信任
+（CA 文件不可读在客户端构造期即报错，fail-fast）。全部缺省保持默认 HTTP 行为。
 
 ## 7. Go Coding Conventions
 

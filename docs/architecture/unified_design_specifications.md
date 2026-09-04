@@ -350,7 +350,7 @@ classDiagram
 - `PRIVACY_CONSOLE_*` / `CONSOLE_*`：BFF 控制台
 
 跨服务共享与安全中间件采用**「机制与策略分离」**设计模式（`pkg/middleware`、`pkg/crypto`）：
-- 公共中台包支持显式传入服务专属环境变量（如 `GATEWAY_ALLOWED_CIDRS`、`AGENT_ALLOWED_CIDRS`、`GATEWAY_TRUSTED_PROXIES`）；
+- 公共中台包支持显式传入服务专属环境变量（如 `ENGINE_GATEWAY_ALLOWED_CIDRS`、`AGENT_ALLOWED_CIDRS`、`ENGINE_GATEWAY_TRUSTED_PROXIES`）；
 - 未指定或未配置专属变量时，安全平滑回退至全局 `PRIVACY_*`，兼顾各服务网络安全隔离与老旧编排兼容性；
 - 全局共享配置示例：
   - `PRIVACY_AUTH_MTLS_WHITELIST_FILE`：所有 Go gRPC 服务端共享的 mTLS CN 白名单文件

@@ -251,15 +251,15 @@ launch_agent() {
     (
         cd "$PROJECT_ROOT"
         if [[ "$MTLS_MODE" == "true" ]]; then
-            export PRIVACY_TLS_ENABLED=true
-            export PRIVACY_TLS_CERT_FILE="$CERT_DIR/server.crt"
-            export PRIVACY_TLS_KEY_FILE="$CERT_DIR/server.key"
-            export PRIVACY_TLS_CA_FILE="$CERT_DIR/ca.crt"
-            export PRIVACY_AUTH_INTERNAL_MTLS_ENABLED=true
-            export PRIVACY_AUTH_MTLS_ALLOWED_CNS='["privshield-client"]'
+            export AGENT_TLS_ENABLED=true
+            export AGENT_TLS_CERT_FILE="$CERT_DIR/server.crt"
+            export AGENT_TLS_KEY_FILE="$CERT_DIR/server.key"
+            export AGENT_TLS_CA_FILE="$CERT_DIR/ca.crt"
+            export AGENT_AUTH_INTERNAL_MTLS_ENABLED=true
+            export AGENT_AUTH_MTLS_ALLOWED_CNS='["privshield-client"]'
         else
-            export PRIVACY_TLS_ENABLED=false
-            export PRIVACY_AUTH_INTERNAL_MTLS_ENABLED=false
+            export AGENT_TLS_ENABLED=false
+            export AGENT_AUTH_INTERNAL_MTLS_ENABLED=false
         fi
         if [[ -f "$PROJECT_ROOT/bin/privshield-agent" ]]; then
             exec "$PROJECT_ROOT/bin/privshield-agent" >> "$agent_log" 2>&1
@@ -334,7 +334,7 @@ echo "启动 Go gRPC 代理后端 (API: $CONSOLE_URL)..."
         export PRIVACY_AGENT_TLS_KEY_FILE="$CERT_DIR/client.key"
         export PRIVACY_AGENT_TLS_SERVER_NAME="localhost"
     else
-        # 避免 BFF 继承全局 PRIVACY_TLS_ENABLED=true 后错误地按 TLS 连接 Agent。
+        # 避免 BFF 继承全局 AGENT_TLS_ENABLED=true 后错误地按 TLS 连接 Agent。
         export PRIVACY_AGENT_TLS_ENABLED=false
     fi
     export CONSOLE_RATE_LIMIT="${CONSOLE_RATE_LIMIT:-0}"

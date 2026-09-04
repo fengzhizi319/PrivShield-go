@@ -58,40 +58,40 @@ spec:
             - name: grpc
               containerPort: 50051
           env:
-            - name: PRIVACY_REST_HOST
+            - name: AGENT_REST_HOST
               value: "0.0.0.0"
-            - name: PRIVACY_REST_PORT
+            - name: AGENT_REST_PORT
               value: "8079"
-            - name: PRIVACY_GRPC_HOST
+            - name: AGENT_GRPC_HOST
               value: "0.0.0.0"
-            - name: PRIVACY_GRPC_PORT
+            - name: AGENT_GRPC_PORT
               value: "50051"
-            - name: PRIVACY_LOG_LEVEL
+            - name: AGENT_LOG_LEVEL
               value: "INFO"
-            # Go 引擎日志固定 JSON 输出（无 PRIVACY_LOG_FORMAT 读取点），仅 PRIVACY_LOG_LEVEL 可调。
+            # Go 引擎日志固定 JSON 输出（无 PRIVACY_LOG_FORMAT 读取点），仅 AGENT_LOG_LEVEL 可调。
             # ── 认证：P0-1 零信任默认态，**必须开启** ──
             # 本容器绑定 0.0.0.0 属「非环回暴露」，Go 引擎启动门禁在无入站 Key 时直接拒绝启动
             #（不存在「漏配即静默无鉴权」的中间态），因此部署前必须先创建 Secret：
             #   kubectl create secret generic privshield-apikeys \
             #     --from-literal=api-keys='<随机token>:console:mask,dp,classify'
-            - name: PRIVACY_AUTH_ENABLED
+            - name: AGENT_AUTH_ENABLED
               value: "true"
-            - name: PRIVACY_AUTH_INTERNAL_API_KEYS
+            - name: AGENT_AUTH_INTERNAL_API_KEYS
               valueFrom:
                 secretKeyRef:
                   name: privshield-apikeys
                   key: api-keys
             # 如需启用 TLS，取消下面注释并确保证书 Secret 已创建。
             # ⚠️ P0-1 红线：TLS 开启且引擎监听 gRPC 时，还必须同时提供客户端证书 CN 白名单文件
-            #（PRIVACY_AUTH_MTLS_WHITELIST_FILE，指向含 mtls-whitelist.yaml 键的 ConfigMap），
+            #（AGENT_AUTH_MTLS_WHITELIST_FILE，指向含 mtls-whitelist.yaml 键的 ConfigMap），
             # 否则白名单拦截器根本不注册，启动门禁会拒绝启动。
-            # - name: PRIVACY_TLS_ENABLED
+            # - name: AGENT_TLS_ENABLED
             #   value: "true"
-            # - name: PRIVACY_TLS_CERT_FILE
+            # - name: AGENT_TLS_CERT_FILE
             #   value: "/certs/tls.crt"
-            # - name: PRIVACY_TLS_KEY_FILE
+            # - name: AGENT_TLS_KEY_FILE
             #   value: "/certs/tls.key"
-            # - name: PRIVACY_AUTH_MTLS_WHITELIST_FILE
+            # - name: AGENT_AUTH_MTLS_WHITELIST_FILE
             #   value: "/etc/PrivShield/mtls-whitelist.yaml"
             # 如需启用 Layer-3 LLM（Go 读取点，端点须为完整 chat/completions URL）：
             # - name: PRIVACY_LLM_ENABLE

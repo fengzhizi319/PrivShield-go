@@ -78,8 +78,8 @@ type Client struct {
 //
 // Transport credentials are determined by buildTransportCredentials:
 // 传输凭证由 buildTransportCredentials 根据配置决定：
-//   - PRIVACY_AGENT_TLS_ENABLED=false (default): insecure, for local dev
-//   - PRIVACY_AGENT_TLS_ENABLED=true: TLS/mTLS, verify server cert and present client cert
+//   - BFF_AGENT_TLS_ENABLED=false (default): insecure, for local dev
+//   - BFF_AGENT_TLS_ENABLED=true: TLS/mTLS, verify server cert and present client cert
 func New(cfg *config.Config) (*Client, error) {
 	// 获取上游 agent 的 gRPC 监听地址，格式如 "127.0.0.1:50051"
 	target := cfg.AgentAddress()
@@ -95,9 +95,9 @@ func New(cfg *config.Config) (*Client, error) {
 	// 而是在首次 RPC 调用时才真正连接（延迟连接策略）。
 	//
 	// 重试策略参数从配置读取（#12），支持通过环境变量动态调整：
-	// - PRIVACY_AGENT_RETRY_MAX_ATTEMPTS: 最大重试次数（默认 6）
-	// - PRIVACY_AGENT_RETRY_INITIAL_BACKOFF: 初始退避秒数（默认 1）
-	// - PRIVACY_AGENT_RETRY_MAX_BACKOFF: 最大退避秒数（默认 8）
+	// - BFF_AGENT_RETRY_MAX_ATTEMPTS: 最大重试次数（默认 6）
+	// - BFF_AGENT_RETRY_INITIAL_BACKOFF: 初始退避秒数（默认 1）
+	// - BFF_AGENT_RETRY_MAX_BACKOFF: 最大退避秒数（默认 8）
 	conn, err := grpc.NewClient(
 		target,
 		// 使用构造好的传输凭证：非安全或 TLS/mTLS
@@ -171,7 +171,7 @@ func buildTransportCredentials(cfg *config.Config) (credentials.TransportCredent
 
 	// 启用 TLS 时 CA 证书为必填：客户端必须能校验服务端身份
 	if cfg.AgentTLSCAFile == "" {
-		return nil, fmt.Errorf("PRIVACY_AGENT_TLS_CA_FILE is required when TLS is enabled")
+		return nil, fmt.Errorf("BFF_AGENT_TLS_CA_FILE is required when TLS is enabled")
 	}
 
 	// 读取 CA 证书 PEM 内容
@@ -216,7 +216,7 @@ func buildTransportCredentials(cfg *config.Config) (credentials.TransportCredent
 		tlsConfig.Certificates = []tls.Certificate{clientCert}
 	} else if cfg.AgentTLSCertFile != "" || cfg.AgentTLSKeyFile != "" {
 		// 只提供了证书或私钥之一属于配置错误，提前报错避免运行时握手失败难以排查
-		return nil, fmt.Errorf("PRIVACY_AGENT_TLS_CERT_FILE and PRIVACY_AGENT_TLS_KEY_FILE must be provided together")
+		return nil, fmt.Errorf("BFF_AGENT_TLS_CERT_FILE and BFF_AGENT_TLS_KEY_FILE must be provided together")
 	}
 
 	// 基于 TLS 配置构造 gRPC 传输凭证
@@ -295,9 +295,9 @@ func (c *Client) WithTraceFromContext(ctx context.Context) context.Context {
 // WithAuth returns a context with authentication metadata attached.
 // WithAuth 返回附带认证元数据的 context。
 //
-// When PRIVACY_AGENT_API_KEY is non-empty, appends "authorization: Bearer <key>"
+// When BFF_AGENT_API_KEY is non-empty, appends "authorization: Bearer <key>"
 // to the gRPC outgoing metadata for upstream agent authentication.
-// 当配置中 PRIVACY_AGENT_API_KEY 非空时，在 gRPC 调用的 outgoing metadata 中
+// 当配置中 BFF_AGENT_API_KEY 非空时，在 gRPC 调用的 outgoing metadata 中
 // 附加 "authorization: Bearer <key>" 头，用于上游 agent 的身份认证。
 //
 // Logic / 执行逻辑：

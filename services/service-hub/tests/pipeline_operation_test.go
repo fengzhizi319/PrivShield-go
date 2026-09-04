@@ -139,10 +139,18 @@ func TestPipelineOperationDerivationIsIdenticalAcrossRESTandGRPC(t *testing.T) {
 			restStore := memory.NewTaskStore()
 			grpcStore := memory.NewTaskStore()
 
-			restSrv := handlers.New(agent.New(cfg, metrics.NewCollector("hub-rest-contract")),
+			restAgent, err := agent.New(cfg, metrics.NewCollector("hub-rest-contract"))
+			if err != nil {
+				t.Fatalf("new agent client: %v", err)
+			}
+			restSrv := handlers.New(restAgent,
 				datasource.New(cfg), cfg, nil, restStore, logger, metrics.NewCollector("hub-rest-contract"))
 			defer restSrv.Shutdown()
-			grpcSrv := grpcserver.New(agent.New(cfg, metrics.NewCollector("hub-grpc-contract")),
+			grpcAgent, err := agent.New(cfg, metrics.NewCollector("hub-grpc-contract"))
+			if err != nil {
+				t.Fatalf("new agent client: %v", err)
+			}
+			grpcSrv := grpcserver.New(grpcAgent,
 				datasource.New(cfg), cfg, grpcStore, logger)
 			defer grpcSrv.Shutdown()
 
@@ -210,10 +218,18 @@ func TestPipelineFailsClosedWithoutClassificationOnBothPaths(t *testing.T) {
 
 	restStore := memory.NewTaskStore()
 	restMC := metrics.NewCollector("hub-rest-contract-failclosed")
-	restSrv := handlers.New(agent.New(cfg, restMC), datasource.New(cfg), cfg, nil, restStore, logger, restMC)
+	restAgent, err := agent.New(cfg, restMC)
+	if err != nil {
+		t.Fatalf("new agent client: %v", err)
+	}
+	restSrv := handlers.New(restAgent, datasource.New(cfg), cfg, nil, restStore, logger, restMC)
 	defer restSrv.Shutdown()
 	grpcStore := memory.NewTaskStore()
-	grpcSrv := grpcserver.New(agent.New(cfg, metrics.NewCollector("hub-grpc-contract-failclosed")), datasource.New(cfg), cfg, grpcStore, logger)
+	grpcAgent, err := agent.New(cfg, metrics.NewCollector("hub-grpc-contract-failclosed"))
+	if err != nil {
+		t.Fatalf("new agent client: %v", err)
+	}
+	grpcSrv := grpcserver.New(grpcAgent, datasource.New(cfg), cfg, grpcStore, logger)
 	defer grpcSrv.Shutdown()
 
 	router := gin.New()

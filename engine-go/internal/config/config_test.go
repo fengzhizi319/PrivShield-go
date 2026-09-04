@@ -14,20 +14,16 @@ import (
 
 // engineEnvKeys 是门禁读取的全部环境变量，逐用例清空以隔绝宿主 shell 污染。
 var engineEnvKeys = []string{
-	"DOTENV_DISABLED", "DOTENV_PATH", "AGENT_CONFIG_FILE", "PRIVACY_CONFIG_FILE",
+	"DOTENV_DISABLED", "DOTENV_PATH", "AGENT_CONFIG_FILE",
 	"AGENT_REST_HOST", "AGENT_REST_PORT", "AGENT_REST_ENABLED",
 	"AGENT_GRPC_HOST", "AGENT_GRPC_PORT", "AGENT_GRPC_ENABLED",
 	"AGENT_TLS_ENABLED", "AGENT_TLS_CERT_FILE", "AGENT_TLS_KEY_FILE", "AGENT_TLS_CA_FILE",
 	"AGENT_REQUIRE_TLS", "AGENT_AUTH_ENABLED", "AGENT_AUTH_INTERNAL_API_KEYS", "AGENT_AUTH_API_KEY",
+	"AGENT_AUTH_EXTERNAL_API_KEYS", "AGENT_AUTH_STATIC_API_KEYS",
 	"AGENT_AUTH_INTERNAL_MTLS_ENABLED", "AGENT_AUTH_MTLS_WHITELIST_FILE",
-	"PRIVACY_REST_HOST", "PRIVACY_REST_PORT", "PRIVACY_REST_ENABLED",
-	"PRIVACY_GRPC_HOST", "PRIVACY_GRPC_PORT", "PRIVACY_GRPC_ENABLED",
-	"PRIVACY_TLS_ENABLED", "PRIVACY_TLS_CERT_FILE", "PRIVACY_TLS_KEY_FILE", "PRIVACY_TLS_CA_FILE",
-	"PRIVACY_REQUIRE_TLS",
-	"PRIVACY_AUTH_ENABLED", "PRIVACY_AUTH_API_KEY", "PRIVACY_API_KEY",
-	"PRIVACY_AUTH_INTERNAL_API_KEYS", "PRIVACY_AUTH_EXTERNAL_API_KEYS", "PRIVACY_AUTH_STATIC_API_KEYS",
-	"PRIVACY_AUTH_INTERNAL_MTLS_ENABLED", "PRIVACY_AUTH_MTLS_WHITELIST_FILE",
-	"GATEWAY_HOST", "GATEWAY_PORT", "GATEWAY_GRPC_HOST", "GATEWAY_GRPC_PORT", "GATEWAY_REQUIRE_TLS",
+	"AGENT_ALLOWED_CIDRS",
+	"ENGINE_GATEWAY_HOST", "ENGINE_GATEWAY_PORT", "ENGINE_GATEWAY_GRPC_HOST", "ENGINE_GATEWAY_GRPC_PORT",
+	"ENGINE_GATEWAY_REQUIRE_TLS", "ENGINE_GATEWAY_AUTH_ENABLED", "ENGINE_GATEWAY_ALLOWED_CIDRS",
 }
 
 // clearEngineEnv 将上述变量置空（EnvString/EnvBool 视空串为未设置，回退到默认值）。
@@ -52,7 +48,7 @@ func TestAgentDefaultsAreLoopbackKeyless(t *testing.T) {
 		t.Fatalf("unexpected default addresses: rest=%s grpc=%s", cfg.RESTAddress(), cfg.GRPCAddress())
 	}
 	if cfg.RequireTLS {
-		t.Fatal("PRIVACY_REQUIRE_TLS must default to false")
+		t.Fatal("AGENT_REQUIRE_TLS must default to false")
 	}
 	if cfg.AuthEffectivelyEnabled() {
 		t.Fatal("auth must default to disabled")
@@ -343,21 +339,21 @@ func TestGatewayGate(t *testing.T) {
 		t.Fatalf("loopback gateway must validate without credentials, got %v", err)
 	}
 
-	t.Setenv("GATEWAY_HOST", "0.0.0.0")
+	t.Setenv("ENGINE_GATEWAY_HOST", "0.0.0.0")
 	if err := LoadGateway().Validate(); !errors.Is(err, pkgconfig.ErrAPIKeyRequired) {
 		t.Fatalf("remote gateway bind without credentials must return ErrAPIKeyRequired, got %v", err)
 	}
 
-	t.Setenv("GATEWAY_HOST", "127.0.0.1")
-	t.Setenv("PRIVACY_AUTH_ENABLED", "true")
-	t.Setenv("PRIVACY_AUTH_API_KEY", "tok")
+	t.Setenv("ENGINE_GATEWAY_HOST", "127.0.0.1")
+	t.Setenv("ENGINE_GATEWAY_AUTH_ENABLED", "true")
+	t.Setenv("AGENT_AUTH_API_KEY", "tok")
 	if err := LoadGateway().Validate(); err != nil {
 		t.Fatalf("remote gateway with credentials configured must validate, got %v", err)
 	}
 
-	t.Setenv("GATEWAY_REQUIRE_TLS", "true")
+	t.Setenv("ENGINE_GATEWAY_REQUIRE_TLS", "true")
 	if err := LoadGateway().Validate(); !errors.Is(err, pkgconfig.ErrTLSRequired) {
-		t.Fatalf("GATEWAY_REQUIRE_TLS without inbound TLS termination must return ErrTLSRequired, got %v", err)
+		t.Fatalf("ENGINE_GATEWAY_REQUIRE_TLS without inbound TLS termination must return ErrTLSRequired, got %v", err)
 	}
 }
 
