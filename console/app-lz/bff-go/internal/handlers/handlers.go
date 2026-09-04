@@ -518,12 +518,12 @@ func (h *Handler) InvokeDataApi(c *gin.Context) {
 	// ── 阶段 1：ingest ───────────────────────────────────────────
 	stages = append(stages, models.DataApiSessionStage{
 		Name:       "ingest",
-		Title:      "会话请求接入与校验",
+		Title:      "外部数据申请接入与校验",
 		Status:     "success",
 		Source:     "app-lz-bff",
 		DurationMs: 1,
 		ComputeMs:  1,
-		Detail:     fmt.Sprintf("API 标识 %s (%s) 校验通过，委托 service-hub 编排全链路", apiDef.APICode, apiDef.DatasourceID),
+		Detail:     fmt.Sprintf("外部数据申请方 API 标识 %s (%s) 校验通过，委托 service-hub 编排流通全链路", apiDef.APICode, apiDef.DatasourceID),
 	})
 
 	// ── 阶段 2：委托 service-hub 编排全链路 (fetch + classify + desensitize + audit) ──
@@ -532,7 +532,7 @@ func (h *Handler) InvokeDataApi(c *gin.Context) {
 	hubDuration := time.Since(hubStart).Milliseconds()
 
 	var sanitizedData []map[string]any
-	var rawRecords []map[string]any
+	rawRecords := make([]map[string]any, 0)
 	auditEntryID := ""
 
 	if hubErr != nil {
@@ -543,7 +543,7 @@ func (h *Handler) InvokeDataApi(c *gin.Context) {
 		})
 		overallStatus = "failed"
 	} else {
-		// 解析 service-hub 返回的脱敏结果
+		// 解析 service-hub 返回的脱敏结果（外部申请方仅接收治理脱敏后的合规数据）
 		if sd, ok := hubResult["sanitized_data"]; ok && sd != nil {
 			switch v := sd.(type) {
 			case map[string]any:
@@ -556,26 +556,32 @@ func (h *Handler) InvokeDataApi(c *gin.Context) {
 				}
 			}
 		}
+		// 严格遵循「原始数据切片不出域」原则：service-hub 仅在内部向 engine-go 发送原始数据，
+		// 不向外部发送 raw_record，app-lz 外部申请方也绝不存储/暴露原始明文记录。
 		if auditID, ok := hubResult["audit_task_id"].(string); ok {
 			auditEntryID = auditID
 		}
 		stages = append(stages, models.DataApiSessionStage{
 			Name: "hub_orchestrate", Title: "service-hub 全链路编排", Status: "success",
 			Source: "service-hub", DurationMs: hubDuration, NetworkMs: hubDuration,
-			Detail: fmt.Sprintf("service-hub 完成 ② 数据拉取 → ③ 分类分级+脱敏 → ④ 审计存证 全链路编排 (datasource=%s, id_card=%s)",
+			Detail: fmt.Sprintf("service-hub 完成 ② 数据拉取 → ③ 核心脱敏 (原始数据不出域) → ④ 审计存证 全链路编排 (datasource=%s, id_card=%s)",
 				apiDef.DatasourceID, req.IDCardNo),
 		})
+	}
+
+	if sanitizedData == nil {
+		sanitizedData = make([]map[string]any, 0)
 	}
 
 	// ── 阶段 3：结果装配 (return) ─────────────────────────────────
 	stages = append(stages, models.DataApiSessionStage{
 		Name:       "return",
-		Title:      "脱敏结果装配与交付",
+		Title:      "合规脱敏结果装配交付",
 		Status:     "success",
 		Source:     "app-lz-bff",
 		DurationMs: 1,
 		ComputeMs:  1,
-		Detail:     fmt.Sprintf("装配 %d 条脱敏记录准备返回", len(sanitizedData)),
+		Detail:     fmt.Sprintf("仅向外部申请方装配交付 %d 条合规脱敏记录（原始数据切片不出域）", len(sanitizedData)),
 	})
 
 	// 计算会话总耗时

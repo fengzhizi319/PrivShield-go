@@ -285,6 +285,12 @@ func TestInvokeDataApiContractAndFailClosed(t *testing.T) {
 	if resp.Status != "completed" {
 		t.Errorf("expected status completed, got %s", resp.Status)
 	}
+	if len(resp.RawRecords) != 0 {
+		t.Errorf("expected 0 raw_records (raw data does not exit domain), got %d", len(resp.RawRecords))
+	}
+	if len(resp.SanitizedData) != 1 {
+		t.Errorf("expected 1 sanitized_data, got %d", len(resp.SanitizedData))
+	}
 
 	// 2. 未知 api_code (shebao)
 	invUnknown, _ := json.Marshal(models.DataApiInvokeRequest{APICode: "api3_shebao"})

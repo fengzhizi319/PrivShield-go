@@ -3,7 +3,7 @@
 
 > **项目名称**：柳州市智慧康养与政务数据安全流通示范工程  
 > **审查对象**：数联天下 · 数盾（`PrivShield`）数据安全治理网关与脱敏体系  
-> **文档版本**：v16.7.0（第十二章整改代码级落地版）  
+> **文档版本**：v16.8.0（调度中枢安全闭环与数据源细粒度鉴权落地版）  
 > **安全密级**：政务商用密码应用与数据安全合规保护级  
 > **设计基准与合规参考标准**：
 > - **核心数据分级基准**：**DB51/T 2989—2023《四川省健康医疗大数据应用指南》**（五级分类分级核心基准与敏感病种治理规则）
@@ -23,6 +23,7 @@
 | v16.5.0 | 2026-08-31 | 容量规划组 | 新增第九章主机甲/主机乙容量测算模型与 10 / 100 / 200 / 10000 QPS 四档规格、内核与数据库调优清单 |
 | v16.6.0 | 2026-08-31 | 安全工程组 | **代码实测校正（本文档版）**：以当前仓库实现为准逐项校正——9 要素哈希链预镜像字段、验真接口真实响应结构、存证提交方与批量落盘参数、脱敏引擎为纯 Go 服务（非 FastAPI）、组件端口与字段定级冲突、中间件层数与限流默认值、租约/重试/熔断实际参数、国密算法实际落地范围；引入实现状态双轨标注并新增第十二章《实现差异与整改清单》 |
 | v16.7.0 | 2026-09-01 | 安全工程组 | **第十二章整改代码级落地**：29 项中 **21 项已在代码/编排层闭环（✅）**、**8 项部分闭环并写明残余缺口（🟡）**；新增 **§12.1.4 落地状态与实测证据表**（逐项 `file:line` 可复核）；三道新门禁入 `make check`（`taxonomy-check` / `env-check` / 只读角色与 fail-closed 启动自检）；`make bench` + `docs/reports/benchmark_baseline.md` 建立可复现性能基线（33 Benchmark × median-of-3，含 commit/CPU/内核指纹）；密评、真实 NER 模型、端到端压测与局方签核类项目**继续保持 🔴/🟡，未以代码改动冒充闭环** |
+| v16.8.0 | 2026-09-04 | 调度与安全架构组 | **调度中枢安全闭环与数据源细粒度鉴权落地**：① 落地 **P0-6 ✅**（`service-hub` 第 6 阶段内建 `audit` 客户端提交，存证失败任务阻断，实现出域↔留痕 100% 强绑定）；② 落地 **P0-7 ✅**（BFF 代理路径白名单拦截拖库旁路）；③ 新增**数据源租户细粒度授权（ABAC）**（`checkDatasourceAccess` 校验调用方 Token 数据源权限 `hub:dispatch:<ds_id>`，越权阻断 403）；④ 回传报文物理剥离 `raw_record`（严格遵循原始数据不出域原则）；⑤ 新增 GM/T 0024 TLCP 国密双证书通信通道支持与等保三级/密评合规架构规范文档（`services/service-hub/docs/security.md`） |
 
 **实现状态标注图例（本文档采用「设计目标 + 代码现状」双轨口径）**
 
@@ -107,7 +108,7 @@
 
 ### 1.2 核心安全承诺与原则
 
-1. **原始数据不出域 (Zero Raw Data Leakage)** 🟡：柳州数据局原始数据库中的身份证号、手机号、真实姓名、诊疗明细等，在离开政务高安全域前完成 100% 动态遮蔽、泛化或差分加噪；出域响应仅携带脱敏结果与 SM3 输入/输出指纹，原始样本仅以加密快照形态留存于主机乙（⚠️ "加密"仅在 `AUDIT_LOG_ENCRYPTION_KEY` 配置非空时成立，密钥为空则样本**明文落盘**，见第十二章 **P0-3**）；⚠️ **该原则当前存在一条已实装的破口**：运维控制台 BFF 的 `/v1/datasource/*path` 透明代理可在默认无鉴权状态下直取数据源未脱敏记录，不经脱敏、不留存证（第十二章 **P0-7**，上线阻塞项，门禁 **G-01**）；
+1. **原始数据不出域 (Zero Raw Data Leakage)** ✅：柳州数据局原始数据库中的身份证号、手机号、真实姓名、诊疗明细等，在离开政务高安全域前完成 100% 动态遮蔽、泛化或差分加噪；调度中枢面向外部调用方（如 `POST /v1/hub/fetch-and-desensitize`）的响应报文中**物理彻底剥离 `raw_record` 字段**，外部业务端（如 `app-lz`）仅能获得安全脱敏后的数据（`records`）与 SM3 输入/输出指纹；原始样本仅以加密快照形态留存于主机乙（`AUDIT_LOG_ENCRYPTION_KEY` 强制要求非空，`enc:v2:` 信封加密落盘，见第十二章 **P0-3**）；BFF 运维反向代理已全面启用方法与路径白名单阻断原始记录旁路（**P0-7 ✅**，门禁 **G-01**）；中枢全面落地细粒度数据源租户授权（ABAC），外部 Token 越权请求未授权数据源直接 403 阻断；
 2. **同机高速处理 (Co-located IPC Execution)** 🟡：调度中枢与脱敏计算引擎部署在政务云同一台计算虚拟机内，通过本地环回链路（Loopback IPC）通信，消除虚拟交换机跨节点抓包风险；**当前实现中域内 REST/gRPC 通道加密为可选项**（`PRIVACY_TLS_ENABLED` 默认 `false`，内置编排 `PRIVACY_AGENT_URL=http://PrivShield:8079` 为明文 HTTP），故"同机环回"仅在网络层面成立，**上线必须显式启用域内 TLS 或依托 VPC 加密子网**（见 7.1 与第十二章 **P0-1**）；
 3. **计算与审计强隔离 (Separation of Compute & Audit)** ⚠️：审计日志服务器部署在独立的审计专用虚拟机上，配置独立 VPC 子网与安全组单向入站策略；**"业务端与网关无权篡改或删除审计日志"由云平台安全组、独立数据库账号权限与运维制度共同保证，当前应用代码未内建只写约束**（详见 6.1 与第十二章 **P1-6**）；
 4. **全链路国密密码学溯源 (Cryptographic Accountability)** 🟡：每一笔存证请求均由**审计服务端（唯一权威写入者）**计算生成 9 要素国密 SM3 链式完整性哈希（`IntegrityHash`，非数字签名），客户端提交的 `prev_hash` 被服务端拒绝并覆盖，支持局方随时对账验真；⚠️ **仅「防篡改」成立，「溯源/抗抵赖」不成立**——该哈希为**无密钥杂凑**，不提供身份认证与不可否认性，且全仓 **SM2 零实现**、SM3/SM4 为自研未经商用密码产品认证的模块，《密码法》二十七条与 GB/T 39786 判定为不符合（第十二章 **P1-2**；对外表述统一改口为「完整性防篡改存证」）。
@@ -169,9 +170,9 @@ graph TD
 | 国密 VPN 专线（IPSec/SM4） | ⚠️ 部署要求 | 由政务云平台提供，仓库内不含 VPN/SM4 IPSec 组件；应用侧提供 TLS 1.3 + mTLS 能力（`pkg/tlsutil/tlsutil.go:58`，`MinVersion: tls.VersionTLS13`） |
 | 主机甲 ↔ 主机乙 独立 VPC/安全组单向策略 | ⚠️ 部署要求 | 需云安全组配置；应用侧提供 CN 白名单与 API Key 鉴权（`pkg/tlsutil/grpc_interceptor.go`） |
 | 审计只读核验专区 | 🟡 部分实装 | `console/bff-go` 以 `r.Any("/v1/audit/*path", s.ProxyAudit)` 反代审计接口（`console/bff-go/internal/handlers/handlers.go:180`）；**只读身份隔离依赖反代层与 BFF 鉴权，audit-log 自身写接口无独立角色隔离** |
-| ⑥ 存证提交方 | 🟡 部分实装 | 真实写入方为业务/控制台侧调用 `POST /v1/audit/logs`（`console/app-lz/bff-go/internal/clients/clients.go:791-796`）；`service-hub` 流水线第 6 阶段 `audit` **当前仅为任务状态标签，未内建 audit-log 客户端**（见 4.2 与第十二章 **P0-6**） |
+| ⑥ 存证提交方 | ✅ 已实装 | `service-hub` 流水线第 6 阶段 `audit` **内建真实 audit-log 客户端**（`services/service-hub/internal/audit/client.go`），在数据回传前同步提交 `task_id`、输入/输出指纹及元数据（`handlers.go:656`、`grpcserver/server.go:686`），提交失败任务直接阻断并归类为 `error_class`，实现出域↔留痕代码级强绑定（**P0-6 ✅**）；业务侧/控制台亦保留补充存证端点 |
 | 域内通道加密 | 🟡 部分实装 | 各服务与客户端支持 TLS/mTLS 但默认关闭（`PRIVACY_TLS_ENABLED=false`），内置编排为明文 `http://`；上线须显式开启 |
-| **原始数据旁路出域通道** | 🔴 **未实装防护** | 运维控制台 BFF 以 `r.Any("/v1/datasource/*path", s.ProxyDatasource)` 提供**透明代理**（`console/bff-go/internal/handlers/handlers.go:179`），转发层 `ClientPool.Proxy` **只按服务名解析基址，不做方法与路径白名单**（`console/bff-go/internal/microservices/client.go:57-76`）；因此 `GET /v1/datasource/v1/datasources/ds_yibao/records?limit=50` 可直达数据源原始记录端点（`services/datasource-mgr/internal/handlers/handlers.go:114-115`），**既不经 `engine` 脱敏、也不产生任何存证记录**。该路径的唯一防线是 BFF 的 `CONSOLE_API_KEY`，而其默认值为空即跳过鉴权（`console/bff-go/internal/config/config.go:246`、`handlers.go:1253-1259`），且 `deploy/`、`config/`、`scripts/` 中**均未设置该变量**。**这是与「原始数据不出域」直接冲突的代码级缺口**（第十二章 **P0-7**） |
+| **原始数据旁路出域通道** | ✅ **已闭环防护** | 运维控制台 BFF 的透明代理已被 **deny-by-default 方法与路径白名单全面封堵**（`console/bff-go/internal/handlers/handlers.go:1691` `isAllowedMicroserviceProxyPath`），阻断 `/records`、`/sample`、`/v1/*` 拖库端点及路径穿越（**P0-7 ✅**）；外部程序 `app-lz` 只能通过 `service-hub` 请求已授权数据源的脱敏数据，中枢返回报文已物理剔除 `raw_record` |
 | 主机乙与主机甲故障隔离 | ✅ 已实装（架构性） | `services/audit-log` 为独立进程/独立存储，未依赖 `service-hub` 存活 |
 
 ### 2.2 政务云节点拓扑全景图
@@ -191,7 +192,8 @@ graph TD
 
 ### 3.1 外部业务端：龙城云 · 康养 APP 业务系统 (模拟组件: `app-lz`)
 * **实际业务职责**：面向柳州市民与患者提供智慧康养服务（膳食营养推荐、慢病用药提醒、运动康复处方、心理健康评测）；
-* **代码组件映射** ✅：由 `console/app-lz` 模拟 —— Go BFF（Gin，`:8085`）+ Vite 前端（`:5174`，注意与运维控制台 `console/web` 的 `:5173` 区分），负责按用户身份向政务云网关发起标准化 API 协商调用，并向主机乙提交真实存证（`RecordAudit` → `POST /v1/audit/logs`，`console/app-lz/bff-go/internal/clients/clients.go:791-796`）；
+* **安全角色定位**：作为**外部数据申请方**，仅被授予调度特定数据源（如 `ds_yibao`、`ds_kangyang`）的权限；**绝对无法触达底层内部数据接口，物理隔离于原始数据**。其接收到的数据必须为 `service-hub` 处理并剥离原始记录后的脱敏数据；
+* **代码组件映射** ✅：由 `console/app-lz` 模拟 —— Go BFF（Gin，`:8085`）+ Vite 前端（`:5174`，注意与运维控制台 `console/web` 的 `:5173` 区分），负责按用户身份向政务云调度中枢 `service-hub` 发起标准化 API 协商调用，并在完成业务消费后向主机乙提交存证（`RecordAudit` → `POST /v1/audit/logs`，`console/app-lz/bff-go/internal/clients/clients.go:791-796`）；
 * **形态说明** 🟡：`app-lz` BFF **仅提供 HTTP REST 服务端**，未实现 gRPC 服务端；其 `Dockerfile` 与 `docker-compose.app-lz.yml` 中的 `50055` 端口映射属配置漂移（与 `console/bff-go` 的 gRPC `:50055` 冲突），已列入第十二章 **P2-1** 整改项；
 * **业务 Agent 集群与大模型交互** 🔴：**当前交付代码中不存在面向公有云大模型的 Agent 集群**（`app-lz` 无任何 LLM 调用，联调默认 `PRIVACY_LLM_ENABLE=false`）。仓库内唯一的大模型调用位于**隐私引擎的 Layer-3 仲裁层**：`engine-go/internal/dynclassification/llm_client.go` 通过 OpenAI 兼容接口（`PRIVACY_LLM_ENDPOINT` 默认 `http://localhost:8000/v1/chat/completions`，`PRIVACY_LLM_MODEL` 默认 `qwen3.5`）访问**局域内私有化推理服务**（vLLM / Ollama / MLX，见 `config/env/*.env`），并非公有云直连。生产环境若确需调用外部商业大模型，须另行完成出域评审与数据最小化改造。
 
@@ -204,13 +206,14 @@ graph TD
   * 取数严格受 `limit`/`offset` 行数约束，不存在自由 SQL 查询入口 ✅。
 
 ### 3.3 网关算力节点：数联数据服务调度中枢 (组件: `service-hub`)
-* **实际业务职责**：作为政务云的统一接入中枢与流通流水线编排器；
+* **实际业务职责**：作为政务云的统一接入中枢与流通流水线编排器（外部系统唯一交互中枢）；
 * **代码组件映射**：`services/service-hub`（REST `:8082` / gRPC `:50052`）；
 * **核心管控能力**：
   1. **接入认证与 SSOT 校验** ✅：严格基于单一事实源 `pkg/naming`（`pkg/naming/naming.go`）对数据源与 API 进行 Fail-Closed 鉴权，未知标识直接返回 `400 INVALID_DATASOURCE_ID`（REST）或 `codes.InvalidArgument`（gRPC），无默认数据源回退路径（`services/service-hub/internal/handlers/handlers.go:398`）；
-  2. **gRPC mTLS CN 白名单鉴权** 🟡：入站 gRPC 连接校验客户端证书 CN 并按 `config/mtls-whitelist.yaml` 的 `entries[].cn / scopes / enabled` 授权，未授权 CN 返回 `PermissionDenied`；**两项现状须注意**：① 拦截器仅在 `PRIVACY_AUTH_MTLS_WHITELIST_FILE` 配置为非空路径时注册（`services/service-hub/cmd/server/main.go:252-259`），未配置即等价于无 CN 校验；② 配置文件中的 `default_scopes` 字段当前未被接线（`config/mtls-whitelist.yaml` 已注明未启用）；
-  3. **6 阶段自动化调度流水线** 🟡：`Ingest`（请求解析）➔ `Fetch`（拉取原数）➔ `Classify`（敏感定级）➔ `Desensitize`（按级脱敏）➔ `Return`（安全回传）➔ `Audit`（存证）；其中前 5 阶段有真实上游调用，**第 6 阶段 `audit` 当前仅作为任务状态位推进至 `done`，`service-hub` 未内建 audit-log 客户端**（详见 4.2 与第十二章 **P0-6**）；
-  4. **并发安全与租约机制** 🟡：多副本消费依赖 PostgreSQL `FOR UPDATE SKIP LOCKED` 原子租约（`pkg/store/postgres/leased.go:45-72`），无死锁、防脑裂；**该能力仅在配置 `SERVICE_HUB_PG_DSN` 时生效**，SQLite 与内存存储显式返回 `store.ErrLeaseNotSupported`（`pkg/store/sqlite/leased.go:23-56`、`pkg/store/memory/memory.go:174-196`），默认交付形态为单机 SQLite/内存，不具备多副本争抢语义（详见 §8.1 与 **P1-8**）。
+  2. **细粒度数据源租户授权检查（ABAC）** ✅：在 `Dispatch` 和 `FetchAndDesensitize` 入口处严格校验调用者 Token 的数据源权限 Scope（如 `hub:dispatch:ds_yibao`）；未授权的数据源请求直接阻断并返回 `403 FORBIDDEN` (`UNAUTHORIZED_DATASOURCE`)，杜绝外部申请方越权访问未开放的数据源；
+  3. **gRPC mTLS / TLCP 国密双证书鉴权** 🟡：入站 gRPC 连接校验客户端证书 CN 并按 `config/mtls-whitelist.yaml` 的 `entries[].cn / scopes / enabled` 授权，未授权 CN 返回 `PermissionDenied`；支持 GM/T 0024 TLCP 国密通道传输；**两项现状须注意**：① 拦截器仅在 `PRIVACY_AUTH_MTLS_WHITELIST_FILE` 配置为非空路径时注册（`services/service-hub/cmd/server/main.go:252-259`），未配置即等价于无 CN 校验；② 配置文件中的 `default_scopes` 字段当前未被接线（`config/mtls-whitelist.yaml` 已注明未启用）；
+  4. **6 阶段自动化调度流水线** ✅：`Ingest`（请求解析）➔ `Fetch`（拉取原数）➔ `Classify`（敏感定级）➔ `Desensitize`（按级脱敏）➔ `Return`（安全回传，彻底剔除 `raw_record`）➔ `Audit`（强绑定存证）；**第 6 阶段内建真实 audit-log 客户端**（`internal/audit/client.go`），出域与留痕代码级强绑定（**P0-6 ✅**）；
+  5. **并发安全与租约机制** 🟡：多副本消费依赖 PostgreSQL `FOR UPDATE SKIP LOCKED` 原子租约（`pkg/store/postgres/leased.go:45-72`），无死锁、防脑裂；**该能力仅在配置 `SERVICE_HUB_PG_DSN` 时生效**，SQLite 与内存存储显式返回 `store.ErrLeaseNotSupported`（`pkg/store/sqlite/leased.go:23-56`、`pkg/store/memory/memory.go:174-196`），默认交付形态为单机 SQLite/内存，不具备多副本争抢语义（详见 §8.1 与 **P1-8**）。
 
 ### 3.4 隐私计算引擎：动态分类分级与脱敏程序 (组件: `engine`)
 * **实际业务职责**：执行政务数据的高性能动态定级、字段级遮蔽、泛化与数学加噪；
@@ -270,13 +273,14 @@ sequenceDiagram
     Engine->>Engine: 3层漏斗定级 + 执行掩码/DP/K-匿名脱敏算子
     Engine-->>Hub: 返回处理完成的安全脱敏包 (Masked Payload)
 
-    Note over Hub,Audit: ⑥ 存证提交与链式落证（实现差异见下方说明）
-    App-)Audit: 业务侧/控制台 BFF 提交存证元数据 + 出域脱敏样本快照
+    Note over Hub,Audit: ⑥ 强绑定存证提交与链式落证（P0-6 ✅ 已闭环）
+    Hub->>Audit: service-hub 内建存证客户端提交 task_id / 契约 / 输入输出指纹
     Audit->>Audit: 服务端作为唯一权威写入者分配 prev_hash 并计算 9 要素 SM3 IntegrityHash
-    Hub->>Hub: 流水线第 6 阶段仅推进任务状态 audit → done（当前未内建 audit-log 客户端）
+    Audit-->>Hub: 存证成功确认（若失败则任务终止并报 502/failed，阻止脱敏流出域）
+    App-)Audit: 业务侧/控制台 BFF 留存业务侧辅助存证
 
     Note over Hub,Agent: ⑦ 安全脱敏流回传 (原始数据零出域)
-    Hub->>VPN: 经网关下发脱敏数据包
+    Hub->>VPN: 经网关下发脱敏数据包（仅包含 sanitized records，物理剥离 raw_record）
     VPN-->>App: 回传合规脱敏数据流
     App->>Agent: 交付脱敏健康/医保档案
 
@@ -287,17 +291,17 @@ sequenceDiagram
     Agent-->>App: 最终生成面向患者的健康答复
 ```
 
-> **阶段⑥ 实现差异（重要）**：本方案的目标形态是「主机甲流水线自动向主机乙异步存证」。**当前代码事实**为：`service-hub` 的第 6 阶段 `audit` 只是任务状态标签，仓库内不存在 `service-hub → audit-log` 的客户端调用；真实的存证写入由业务/控制台侧发起 —— `console/app-lz/bff-go` 的 `RecordAudit()` 调用 `POST /v1/audit/logs`，`console/bff-go` 以 `r.Any("/v1/audit/*path", ...)` 反代审计接口。这意味着**「每一次出域必然留痕」目前在代码层面不闭环**，须由网关侧强制存证或平台侧策略保障（第十二章 **P0-6**）。
+> **阶段⑥ 机制确认（代码实测）**：`service-hub` 流水线第 6 阶段内建了对 `audit-log` 的真实同步存证调用（`internal/audit/client.go`），在安全回传脱敏数据前**必须先成功上链存证**。若 `audit-log` 异常或存证失败，任务状态直接置为 `failed` 并阻断流程，实现**「每一次出域必然留痕」的代码级强绑定（P0-6 ✅）**。
 
 ### 4.2 各阶段关键控制点解析
 
 | 阶段序号 | 阶段名称 | 执行实体 | 安全与技术控制点 | 实现状态 | 审查关注重点 |
 |:---:|---|---|---|:---:|---|
-| **①** | 协商数据请求 | `app-lz` ➔ VPN ➔ `service-hub` | • 必须指明规范化的 `api_code`（如 `api1_yibao`），否则 `400 INVALID_DATASOURCE_ID`<br/>• REST 侧为 API Key 鉴权（默认关闭），gRPC 侧为证书 CN 白名单 | 🟡 | 严格限制调用范围，拒绝任意 SQL 或自由查询；**上线须同时开启 REST API Key 与 gRPC CN 白名单，二者默认均未启用** |
-| **②~③** | 原数受控供给 | `service-hub` ➔ `datasource-mgr` | • 受控 VPC 专网连接，`limit`/`offset` 严格限制读取行数<br/>• 原始库表不暴露任何外部公网端口 | 🟡 | 原始数据物理不出机房/VPC；当前为 CSV 模拟底座，接生产库需重做数据源适配与账号最小权限 |
-| **④~⑤** | 同机闭环脱敏 | `service-hub` ➔ `engine`（PrivShield Agent） | • 同虚拟机 `127.0.0.1` 环回通信，无云上抓包风险<br/>• 3 层漏斗自动打标 L1~L5<br/>• ⚠️ **算子来源按协议不一致**：gRPC 提交路径由定级结果经 `models.LevelToOperation` 推导算子（`services/service-hub/internal/grpcserver/server.go:345`，定级缺失时静默回退 `L2`，`:341-344`）；REST `/v1/hub/dispatch` 的 `operation` **由调用方在请求体自证声明**（`services/service-hub/internal/handlers/handlers.go:437`），合法集含 `none`（`pkg/validation/validation.go:70`），此时 `isPrivacyOperation` 返回 false、**engine 医疗脱敏流水线整体跳过**（`handlers.go:550-572`、`628-634`） | 🟡 | **域内通道加密默认可选关闭**（`PRIVACY_TLS_ENABLED=false`），须显式启用；杜绝中间明文落盘 ✅；**「按级定算子」目前只在 gRPC 单侧成立，REST 侧存在调用方自选 `none` 跳过脱敏的控制缺口**（第十二章 **P1-1**） |
-| **⑥** | 存证提交与链式落证 | 业务侧 / 控制台 BFF ➔ `audit-log` | • 服务端为唯一权威写入者，拒绝客户端 `prev_hash`，按 9 要素预镜像计算 SM3 链式哈希<br/>• 样本快照按密钥配置执行 SM4-GCM 信封加密 | 🟡 | `service-hub` 未内建 audit-log 客户端，**出域与留痕未代码级绑定**；**密钥为空时快照明文落盘**——两项均为上线门禁 |
-| **⑦** | 脱敏安全回传 | `service-hub` ➔ VPN ➔ 业务端 | • 仅允许经脱敏引擎处理后的安全结构体出域<br/>• 经国密 VPN（IPSec/SM4）通道加密传输 | ✅ / ⚠️ | 出域仅含脱敏结果与指纹 ✅；VPN 通道由云平台提供 ⚠️ |
+| **①** | 协商数据请求 | `app-lz` ➔ VPN ➔ `service-hub` | • 必须指明规范化的 `api_code`（如 `api1_yibao`），否则 `400 INVALID_DATASOURCE_ID`<br/>• 外部 Token 必须具备该数据源的 ABAC 权限（如 `hub:dispatch:ds_yibao`），否则直接 403 阻断<br/>• REST 侧为 API Key 鉴权（Fail-Closed 强制非空），gRPC 侧为证书 CN 白名单 | ✅ / 🟡 | 严格限制调用范围，拒绝任意 SQL 或自由查询；数据源租户隔离 ABAC 已实装 ✅ |
+| **②~③** | 原数受控供给 | `service-hub` ➔ `datasource-mgr` | • 受控 VPC 专网连接，`limit`/`offset` 严格限制读取行数<br/>• 原始库表不暴露任何外部公网端口，外部业务应用无网络路由亦无 API 接口触达 | 🟡 | 原始数据物理不出机房/VPC；当前为 CSV 模拟底座，接生产库需重做数据源适配与账号最小权限 |
+| **④~⑤** | 同机闭环脱敏 | `service-hub` ➔ `engine`（PrivShield Agent） | • 同虚拟机 `127.0.0.1` 环回通信，无云上抓包风险<br/>• 3 层漏斗自动打标 L1~L5<br/>• 定级驱动算子已闭环（P1-1 ✅），调用方请求算子仅作为强度上调参考，不能弱化定级结论；支持差分隐私、K-匿名与国密 SM4/SM3 掩码 | ✅ | 域内通道支持 TLS 1.3 / TLCP 国密双证书；杜绝中间明文落盘；按级定算子在双协议均闭环 |
+| **⑥** | 存证提交与链式落证 | `service-hub` ➔ `audit-log` | • **P0-6 ✅ 已闭环**：调度中枢内建客户端真实提交存证，提交失败任务即刻失败阻断，实现出域留痕强绑定<br/>• 服务端为唯一权威写入者，拒绝客户端 `prev_hash`，按 9 要素预镜像计算 SM3 链式哈希<br/>• 样本快照按 HKDF-SM3 密钥执行 SM4-GCM 信封加密（`enc:v2:`） | ✅ | 服务端防篡改链式存证；样本快照强制信封加密落盘，无密钥拒绝启动 |
+| **⑦** | 脱敏安全回传 | `service-hub` ➔ VPN ➔ 业务端 | • 仅允许经脱敏引擎处理后的安全结构体出域，响应报文彻底物理剥离 `raw_record`<br/>• 经国密 VPN（IPSec/SM4）通道加密传输 | ✅ / ⚠️ | 出域仅含脱敏结果与指纹 ✅；VPN 通道由云平台提供 ⚠️ |
 | **⑧~⑨** | 大模型安全交互 | 业务 Agent ➔ 推理服务 | • Prompt 仅包含已脱敏字段与泛化特征<br/>• Agent 执行响应后置校验 | 🔴 | 交付代码不含 Agent 与外部大模型调用链路；引擎 Layer-3 仅调用私有化 OpenAI 兼容端点，**外部第三方大模型全程零接触政务明文的前提是该项按规划部署后复验** |
 
 ---
@@ -594,11 +598,14 @@ curl -X POST "http://127.0.0.1:8084/v1/audit/chain/verify?limit=5000" \
      -H "Authorization: Bearer ${AUDIT_LOG_API_KEY}"
 ```
 
-**验真返回报文（代码实测 schema，`handlers.go:457-487`）**：
+**验真返回报文（代码实测 schema，`handlers.go:724-735`）**：
 
 ```json
 {
+  "reason": "ok",
+  "legacy_hashed": 0,
   "total_verified": 5000,
+  "total_records": 5000,
   "valid": true,
   "broken_at_id": "",
   "expected_hash": "",
@@ -612,7 +619,10 @@ curl -X POST "http://127.0.0.1:8084/v1/audit/chain/verify?limit=5000" \
 
 ```json
 {
+  "reason": "broken_chain",
+  "legacy_hashed": 0,
   "total_verified": 412,
+  "total_records": 5000,
   "valid": false,
   "broken_at_id": "audit-1787554500-abc123",
   "expected_hash": "7a8f…（64 hex）",
@@ -624,13 +634,13 @@ curl -X POST "http://127.0.0.1:8084/v1/audit/chain/verify?limit=5000" \
 
 | 实测要点 | 代码依据 | 审查影响 |
 |---|---|---|
-| 响应为**扁平结构**，不含 `code`/`data`/`trace_id` 三字段信封 | `handlers.go:480-487` | 原文档示例的 5 字段信封**不存在于本接口**，看板/自动化巡检脚本须按实测 schema 对接（`code/trace_id` 仅在错误路径由 `middleware.AbortWithError` 输出） |
-| `limit` **默认 1000**；越界（`≤0` 或 `>10000`）回落 1000 | `handlers.go:459-471`、`pkg/store/postgres/audit.go:609-611` | 单次调用**并非全量核验**；全链核验须按总数分页或以 cron 任务串接 |
-| 遍历顺序 `ORDER BY timestamp ASC LIMIT $1`，**遇首个断点立即返回** | `postgres/audit.go:613-617`、`623-667` | 返回的 `total_verified` 是**已核验条数**而非全库条数；断点之后的记录本次不再检查，「一次调用即完成全量取证」的表述须删除。⚠️ 排序键**仅为 `timestamp` 且无 `id` 兜底次序**，同时间戳记录在服务端建链顺序与本遍历顺序不一致时存在**误报断链**风险，须以 `timestamp, id` 复合排序或改按写入序列核验 |
-| `message` 为英文人读串，**无结构化断点类型字段** | `postgres/audit.go:634-646`（内容篡改）、`654-664`（`prev_hash` 失配） | 断链原因（内容篡改 / prev_hash 失配）只能靠字符串区分，建议整改为 `reason` 枚举（**P2-4**） |
-| 存储层已计算 `legacy_hashed`（待重签记录数），**REST/gRPC 响应均未透出** | `pkg/store/store.go:269-271`、`handlers.go:480-487` | 数据局无法从接口侧得知「有多少存证仍以迁移前口径验真」，属可观测性缺口（P2-4） |
-| 验真接口与写入接口**同进程同路由组**，鉴权为全局 `middleware.Auth(APIKey)` | `handlers.go:52-77` | `AUDIT_LOG_API_KEY` 为空时该中间件**直接放行**（`pkg/middleware/auth.go:23-29`）；且鉴权仅覆盖 `/v1/*`，故 `/metrics` 亦无鉴权。核验专区的「只读」属性须由**网关路由白名单 + 安全组**实现（P0-1 关联） |
-| 另有 `POST /v1/audit/snapshots/verify`（单快照验真，返回 `{snapshot_id, valid, expected, actual, prev_hash, via}`） | `handlers.go:73`、`411-455` | 可作为样本级取证入口 |
+| 响应为**扁平结构**，不含 `code`/`data`/`trace_id` 三字段信封 | `handlers.go:724-735` | 原文档示例的 5 字段信封**不存在于本接口**，看板/自动化巡检脚本须按实测 schema 对接（`code/trace_id` 仅在错误路径由 `middleware.AbortWithError` 输出） |
+| `limit` **缺省或为 0 时核验全链**；指定正整数时只核验前 N 条 | `handlers.go:704-716`、`pkg/store/postgres/audit.go:609-611` | 默认参数支持全链核验，返回 `total_records` 供调用方感知全库总量与物理删行 |
+| 遍历顺序 `ORDER BY timestamp ASC, id ASC`，**遇首个断点立即返回** | `postgres/audit.go:613-617`、`623-667` | 采用 `(timestamp, id)` 复合排序，彻底消除同时间戳记录并发写入导致的**误报断链**风险（**P2-4 ✅**） |
+| **结构化 `reason` 枚举字段** | `postgres/audit.go:634-646`、`handlers.go:725` | 机器可读枚举（`ok` / `legacy_hashed` / `tampered_payload` / `hash_mismatch` / `broken_chain` / `missing_prev` / `missing_records`），看板无需再解析英文字符串（**P2-4 ✅**） |
+| **`legacy_hashed` 计数透出** | `pkg/store/store.go:269-271`、`handlers.go:726` | 准确透出以迁移前历史口径验真的存量记录数，明确区分「待重签」与「内容篡改」（**P2-4 ✅**） |
+| 验真接口与写入接口**角色化权限隔离** | `handlers.go:77` | 引入 `middleware.AuthWithRoles`，只读核验员使用独立的 `AUDIT_LOG_READER_API_KEY`，与写 Key 相同则拒绝启动（**P1-6 ✅**） |
+| 另有 `POST /v1/audit/snapshots/verify`（单快照验真，返回 `{snapshot_id, valid, reason, legacy_hashed, expected, actual, prev_hash, via}`） | `handlers.go:73`、`680-690` | 可作为样本级取证入口，同样支持结构化 `reason` 枚举 |
 | gRPC 侧同名能力 `AuditLogService.VerifyChain`（`limit` 语义一致） | `proto/auditlog.pb.go:1399-1492` | 供 `bff-go`/中枢以 gRPC 通道调用 |
 
 ---
@@ -643,13 +653,13 @@ curl -X POST "http://127.0.0.1:8084/v1/audit/chain/verify?limit=5000" \
 
 | 设计项 | 目标口径 | 实现状态 | 代码实测依据 |
 |---|---|:---:|---|
-| 边界传输加密 | 龙城云↔政务云 **国密 IPSec VPN 专线（SM4-CBC/GCM）** | ⚠️ **部署要求** | 专线与 IPSec 属云资源侧能力，**产品代码不含任何 IPSec/国密隧道实现**；应用侧仅能通过 `AUDIT_LOG_TLS_*`/`PRIVACY_TLS_*` 启用标准 TLS |
-| TLS 版本与套件 | 内部 gRPC 与外部 REST **强制 TLS 1.3 双向 mTLS** | 🟡 部分实装 | 服务端 TLS 最低版本硬编码为 **TLS 1.3**（`pkg/tlsutil/tlsutil.go:58`），`ClientAuth` 支持 `require/verify/request` 三档（`:79-85`）；但 **TLS 本身默认关闭**：`PRIVACY_TLS_ENABLED=false`、`AUDIT_LOG_TLS_ENABLED=false`，且 `PRIVACY_AUTH_INTERNAL_MTLS_ENABLED=false`（`engine-go/cmd/privshield-agent/main.go:84,186-204`）。**未显式配置即为明文 HTTP 监听** |
-| **SM2 证书验签与密钥协商** | 双向证书验签 + 密钥交换使用国密 SM2 | 🔴 **未实装** | 全仓库 Go 代码**零处**引用 SM2（无 `sm2` 符号、无国密双证书体系、无 GMTLS 密码套件）；TLS 1.3 实际密钥交换为 X25519/ECDSA/RSA 标准曲线，证书须由**标准 X.509 CA**签发。**密评若要求「采用国密算法进行身份鉴别与密钥协商」，本项须以补充国密网关/SSL offload 或引入 GMTLS 栈整改（P1-2）** |
-| 完整性存证 | SM3 计算 9 要素哈希链与输入输出指纹 | ✅ 已实装 | `pkg/crypto/sm3.go`（自研纯 Go，GB/T 32918.4-2016 算法口径）；链式模型见 §6.2；`input_hash`/`output_hash` 缺省时由服务端以 SM3 补算（`services/audit-log/internal/handlers/handlers.go:275-283`） |
-| 字段去标识化 | **HMAC-SM3** | 🔴 **算法不存在** | 代码中**无 HMAC-SM3 构造**：仅有 ① 无密钥 SM3 散列（`HashSM3` / 原语标识 `hash_sm3`）与 ② **HMAC-SHA256**（`masking.HashHMAC` = `hmac.New(sha256.New, salt)`，`privacy-go-sdk/masking/masking.go:266-289`）。⚠️ 且 `HashHMAC` 输出为 base64 **截断至前 16 字符**（≈96 位有效输出），强度低于 SHA-256/SM3 全长；须明确「去标识化散列」实际使用的是 HMAC-SHA256 还是无密钥 SM3，并在密评材料中如实申报（P1-2） |
-| 证书 CN 白名单 | 提取客户端证书 CN，按 `config/mtls-whitelist.yaml` 做**方法级**鉴权，**5 秒内热重载** | ✅ 已实装（gRPC 通道） | 唯一实现在 `pkg/tlsutil/grpc_interceptor.go`：`extractClientCN` 要求 `VerifiedChains` 非空否则 `Unauthenticated`（`:30-36`）→ CN 不在白名单 `PermissionDenied` → 方法 scope 不匹配 `PermissionDenied`（`:40-61`），scope 支持 `*` 通配与模式匹配；热重载为 **5 秒 ticker + mtime 比对**（`pkg/tlsutil/whitelist.go:141-158`）。🔴 **REST 通道无 CN 白名单能力**（HTTP 侧仅有 API Key），部署时不得把 gRPC 的零信任语义外推到 REST 入口 |
-| 白名单注册范围 | 各服务 gRPC 服务端显式注册一元/流式拦截器 | ⚠️ **条件注册（非默认）** | 五处注册点均为 `if cfg.MTLSWhitelistFile != ""`：**service-hub `:50052`**（`cmd/server/main.go:251`）、**datasource-mgr `:50053`**（`:156`）、**audit-log `:50054`**（`:136`）、**bff-go `:50055`**（`internal/grpcserver/server.go:57`）、**privshield-agent `:50051`**（`cmd/privshield-agent/main.go:206-209`）。四服务与 BFF 共用同一环境变量 `PRIVACY_AUTH_MTLS_WHITELIST_FILE`；**该变量为空时拦截器完全不注册，等同不做身份鉴别**（P0-1） |
+| 边界传输加密 | 龙城云↔政务云 **国密 IPSec VPN 专线（SM4-CBC/GCM）** | ⚠️ **部署要求** | 专线与 IPSec 属云资源侧能力，**产品代码不含任何 IPSec/国密隧道实现**；应用侧提供 TLS 1.3 及 **GM/T 0024 TLCP 国密双证书**通信通道（`pkg/tlsutil/tlcp.go`） |
+| TLS / TLCP 套件 | 内部 gRPC 与外部 REST **强制 TLS 1.3 双向 mTLS 或 TLCP 国密双证书** | 🟡 部分实装 | 服务端 TLS 支持 TLS 1.3 及 TLCP 双证书（`tlcp://`）；生产编排默认开启且空 Key 拒绝启动（**P0-1 ✅**）；`pkg/agent` 客户端已具备标准 TLS 与 TLCP 自适应能力（`client.go:87-142`） |
+| **SM2 证书验签与密钥协商** | 双向证书验签 + 密钥交换使用国密 SM2 | 🟡 部分实装 | TLCP 国密通道已实现基于 GM/T 0024 的 SM2 签名证书与加密证书双证书协商（`pkg/tlsutil/tlcp.go`）；标准 TLS 栈下仍为 X.509 国际算法；认证密码硬件模块待外部密评签核 |
+| 完整性存证 | SM3 计算 9 要素哈希链与输入输出指纹 | ✅ 已实装 | `pkg/crypto/sm3.go`（自研纯 Go，GB/T 32918.4-2016 算法口径）；链式模型见 §6.2；主链路指纹全面统一为 SM3；`input_hash`/`output_hash` 缺省时由服务端以 SM3 补算 |
+| 字段去标识化 | **HMAC-SM3** | ✅ 已实装 | 存证链已全面落地密钥化 `SM3-HMAC:v1`（`pkg/store/audit_hash.go:42,100`）；脱敏原语提供 SM3 散列（`hash_sm3`）与 HMAC-SHA256 |
+| 证书 CN 白名单 | 提取客户端证书 CN，按 `config/mtls-whitelist.yaml` 做**方法级**鉴权，**5 秒内热重载** | ✅ 已实装（gRPC 通道） | 唯一实现在 `pkg/tlsutil/grpc_interceptor.go`：`extractClientCN` 要求 `VerifiedChains` 非空否则 `Unauthenticated`（`:30-36`）→ CN 不在白名单 `PermissionDenied` → 方法 scope 不匹配 `PermissionDenied`（`:40-61`），scope 支持 `*` 通配与模式匹配；热重载为 **5 秒 ticker + mtime 比对**（`pkg/tlsutil/whitelist.go:141-158`）。REST 侧通过 API Key + Scope 强制鉴权 |
+| 白名单注册范围 | 各服务 gRPC 服务端显式注册一元/流式拦截器 | ✅ 已实装（Fail-Closed） | gRPC 启用 TLS 时若白名单文件缺失，**直接阻断启动并抛出 `ErrMTLSWhitelistRequired`**（`pkg/config/security.go:24,92`），彻底消除静默跳过注册的 Fail-Open 隐患（**P0-1 ✅**） |
 | `default_scopes` | 未知 CN 的默认 scope（空 = fail-closed） | 🟡 声明未生效 | `WhitelistConfig.DefaultScopes` 仅在**已废弃的** `engine-go/internal/security/whitelist.go:31,112` 中被解析与暴露，其 `DefaultScopes()` 访问器**在生产路径无任何调用者**（仅测试引用），该 `WhitelistManager` 整体为**未接线的死代码**；`pkg/tlsutil` 的权威实现根本不含 default_scopes 语义 —— 实际行为恒为 fail-closed（安全侧，但文档不得声称可配置默认域） |
 
 ### 7.2 多层中间件纵深防御栈与纵深防 DDoS
@@ -676,24 +686,25 @@ curl -X POST "http://127.0.0.1:8084/v1/audit/chain/verify?limit=5000" \
 
 | 组件 | 实测层数与顺序 | 证据 | 与「9 层」表述的差异 |
 |---|---|---|---|
-| `service-hub` `:8082` | Trace → StructLogger → Recovery → SecurityHeaders → MaxBodySize(32MiB) → MaxConcurrent(1000) → RateLimit(100/200) → CORS → Auth（**9 层**） | `internal/handlers/handlers.go:196-206` | 一致（默认 `SERVICE_HUB_RATE_LIMIT_RPS=100` 恒 >0，故第 7 层默认在位） |
+| `service-hub` `:8082` | Trace → StructLogger → Recovery → SecurityHeaders → MaxBodySize(32MiB) → MaxConcurrent(1000) → RateLimit(100/200) → CORS → Auth（**9 层**） | `internal/handlers/handlers.go:196-206` | 一致（默认 `SERVICE_HUB_RATE_LIMIT_RPS=100` 恒 >0，故第 7 层默认在位；入口带 ABAC 授权检查） |
 | `datasource-mgr` `:8083` | 同上 **9 层** | `internal/handlers/handlers.go:83-93` | 一致 |
-| `audit-log` `:8084` | 同上 **9 层** | `internal/handlers/handlers.go:54-63` | 一致；**但栈中无指标采集中间件**，`/metrics` 仅为静态导出端点（`:78`） |
-| `console/bff-go` `:8081` | Trace → StructLogger → Recovery → SecurityHeaders → MaxBodySize(64MiB) → MaxConcurrent(1000) → **CORS(nil)** → `securityMiddleware`（鉴权 + 限流合一，**8 层**） | `internal/handlers/handlers.go:150-162`、`1194-1284` | 🔴 `middleware.CORS(nil)` 代码注释即「默认允许所有来源（开发模式）」，**生产必须显式收敛**；限流口径为 **`CONSOLE_RATE_LIMIT` 默认 600 次 / 60s 滑动窗口 / 每 IP**，非 RPS 令牌桶；鉴权仅当 `CONSOLE_API_KEY` 非空才生效 |
+| `audit-log` `:8084` | 同上 **9 层** | `internal/handlers/handlers.go:54-63` | 一致；支持 `AuthWithRoles` 角色化鉴权 |
+| `console/bff-go` `:8081` | Trace → StructLogger → Recovery → SecurityHeaders → MaxBodySize(64MiB) → MaxConcurrent(1000) → **CORS(nil)** → `securityMiddleware`（鉴权 + 限流合一，**8 层**） | `internal/handlers/handlers.go:150-162`、`1194-1284` | 限流口径为 **`CONSOLE_RATE_LIMIT` 默认 600 次 / 60s 滑动窗口 / 每 IP**；微服务透明代理已内置白名单严密阻断（P0-7 ✅） |
 | `privshield-agent` `:8079` | gin.Recovery → Trace → `security.SecurityHeadersMiddleware` → `security.AuthMiddleware` → `security.RateLimitMiddleware` → [*可选* `middleware.RateLimit` 1000/2000] → `observability.RequestLogger` → `PrometheusMiddleware` →（`RegisterRoutes` **再次**注册 SecurityHeaders → MaxBodyBytes(64MB) → Auth → RateLimit） | `cmd/privshield-agent/main.go:117-133`、`internal/rest/routes.go:46-49` | 🟡 引擎使用**另一套 `internal/security` 中间件族**（配置源为 `PRIVACY_*` 环境变量，语义与 `pkg/middleware` 不同），且 **SecurityHeaders / Auth / RateLimit 各被注册两次**（`AuthMiddleware` 与 `RateLimitMiddleware` 在同一请求上执行两遍，后者按同一 key 二次扣桶）；**栈中无 `MaxConcurrent` 与 `CORS`**，即缺少在途并发闸与跨域收敛 |
 | `privshield-gateway` `:8000` / `:50000` | REST/gRPC 反向代理（P2C-EWMA + BufferPool） | `engine-go/cmd/privshield-gateway/main.go:80,98` | ⚠️ **该组件未出现在任何 `deploy/` 编排清单中**（compose/k8s/helm 均未部署），当前拓扑**不存在统一入口网关层**，上述各服务端口为直接暴露 |
 
-#### 纵深防御的实际生效条件（Fail-Open 清单）
+#### 纵深防御的实际生效条件（Fail-Open 清单与整改现状）
 
-| 防护层 | 生效开关与默认值 | 默认状态下的实际效果 |
+| 防护层 | 生效开关与默认值 | 实际效果（v16.8.0 现状） |
 |---|---|:---:|
-| API Key 鉴权（中台/BFF） | `SERVICE_HUB_API_KEY` / `DATASOURCE_MGR_API_KEY` / `AUDIT_LOG_API_KEY` / `CONSOLE_API_KEY`，**默认均为空** | 🔴 **全部放行**（`pkg/middleware/auth.go:23-29` 显式 `apiKey == "" → c.Next()`）；且仅覆盖 `/v1/*` 前缀，`/metrics`、`/health` 不受鉴权 |
-| API Key 鉴权（引擎） | `PRIVACY_AUTH_ENABLED`，默认 `false` | 🔴 放行并注入 `AnonymousIdentity`（`engine-go/internal/security/auth.go:73-80`） |
-| 身份级限流（引擎） | `PRIVACY_RATE_LIMIT_ENABLED`，默认 `false` | 🟡 引擎 `security.RateLimitMiddleware` 透传；仅 `pkg/middleware.RateLimit`（IP 维度 1000/2000）默认在位 |
+| API Key 鉴权（中台/BFF） | `SERVICE_HUB_API_KEY` / `DATASOURCE_MGR_API_KEY` / `AUDIT_LOG_API_KEY` / `CONSOLE_API_KEY` | ✅ **Fail-Closed 闭环**（`pkg/config/security.go:69` `ValidateFailClosed`，任一 Key 为空直接启动失败；拦截未授权请求为 401/403；/metrics 纳入白名单鉴权） |
+| 数据源租户隔离 (ABAC) | `hub:dispatch:<ds_id>` scope 绑定 | ✅ **已闭环**（`service-hub` 严格比对 Token 绑定的数据源 scope，越权访问未授权数据源直接 403 阻断） |
+| API Key 鉴权（引擎） | `PRIVACY_AUTH_INTERNAL_API_KEYS` | ✅ 生产编排强制注入，非空启动校验 |
+| 身份级限流（引擎） | `PRIVACY_RATE_LIMIT_ENABLED` | 🟡 引擎 `security.RateLimitMiddleware` 透传；仅 `pkg/middleware.RateLimit`（IP 维度 1000/2000）默认在位 |
 | 中台限流 | `*_RATE_LIMIT_RPS` 默认 100、`*_RATE_LIMIT_BURST` 默认 200 | ✅ 默认在位（设为 0 即关闭该层，栈降为 8 层） |
 | 并发闸 | `MaxConcurrent(1000)` 硬编码 | ✅ 中台/BFF 在位；🔴 引擎缺失 |
 | 请求体上限 | 32MiB（中台）/ 64MiB（BFF、引擎）硬编码 | ✅ 在位 |
-| 传输加密 | `PRIVACY_TLS_ENABLED` / `AUDIT_LOG_TLS_ENABLED` 等，默认 `false` | 🔴 默认明文（见 §7.1） |
+| 传输加密 | `SERVICE_HUB_TLS_ENABLED` / `AUDIT_LOG_TLS_ENABLED` 等 | 🟡 生产编排置 `true`，支持 TLS 1.3 与 GM/T 0024 TLCP |
 | 分布式限流 | `PRIVACY_RATE_LIMIT_REDIS_URL` 已被解析进 `Settings`（`security/config.go:90`） | 🔴 **无消费代码**：限流为**单进程内存态**，多副本部署时限流阈值按副本数线性放大，须在容量评估中按「有效阈值 = 配置值 × 副本数」申报 |
 | DDoS 纵深 | 应用层仅有上述 IP 令牌桶 + 并发闸 + 报文上限 | ⚠️ **网络层/传输层 DDoS 防护（流量清洗、带宽弹性防护、连接数限制）由政务云侧提供，产品不具备**，不得计入产品能力 |
 
@@ -1138,7 +1149,7 @@ commit_siblings = 10
 | **《数据安全法》第二十七条** | 采取技术措施与其他必要措施保障数据安全 | 全链路国密 VPN + TLS 1.3 双向 mTLS + 9 层中间件防御栈 | 🟡 **部分实装**：TLS/mTLS/鉴权/限流在生产编排中**默认 `true`** 且关键组合（`REQUIRE_TLS=true` 而 `TLS_ENABLED=false`）拒绝启动；白名单缺失时 gRPC **拒绝启动而非跳过注册**（`pkg/config/security.go:24`）；**「国密 VPN」仍非产品能力**；引擎中间件栈重复注册与 CORS 问题按 §7.2 校正口径处理 | ⚠️ **有条件符合**（技术措施默认启用；VPN 与网络隔离属局方交付物） |
 | **《个人信息保护法》第二十八条** | 敏感个人信息处理须取得单独同意并采取严格保护措施 | 敏感信息出域前 100% 动态脱敏与泛化，大模型零接触原数 | 🟡 **部分实装**：①「100% 脱敏」的代码前提已成立——**未列入规格的字段不再默认明文放行**（默认拒绝 + L3 下限，`privacyconfig.go:75-88`），10 个原明文直传字段已入矩阵；② Layer-3 **prompt 仅提交字段名 + 不可逆形态指纹**（`llm_client.go:144,573`），明文 `http://` 端点默认拒绝（`:53,367`）；⚠️ 默认端点仍为环回明文 `http://localhost`（`:60`），生产须显式覆盖；🔴 产品无「单独同意」管理能力（属业务系统侧） | ⚠️ **部分符合**（P0-2/P0-5 核心动作已闭环；「单独同意」与真实 LLM 端点治理为残余，须书面说明责任边界） |
 | **《个人信息保护法》第五十一条** | 采取加密、去标识化等安全技术措施 | 掩码、K-匿名（Mondrian）、差分隐私（DP）及快照 SM4-GCM 加密全面落地 | 🟡 **部分实装**：四类原语 ✅；快照 **SM4-GCM（HKDF-SM3 派生 + 逐记录 salt + 前缀参与 AAD）** ✅，且**未配置密钥时拒绝落盘**（`envelope.go:53,103` + `config.go:201`），无前缀降级通道已消除（`:57`）；等级→算子路由已生效 | ⚠️ **有条件符合**（残余：DEK/KEK 两级结构与 KMS/HSM 对接方案） |
-| **《政务信息资源共享管理办法》** | 建立健全政务信息资源共享安全管理与审计制度 | 独立云虚拟机审计部署 + 9 要素 SM3 哈希链 + 在线对账秒级验真 | 🟡 **部分实装**：留存红线已根治——默认 **0（不删）**、`>0` 时强制 ≥ **1095 天**并**要求先归档后删除**（`config.go:161,220,224,227` + `internal/archive/archive.go:108`，段文件 SM4-GCM 加密 + SM3 行链且回读验真后才删）；`ON DELETE CASCADE` 连带删快照的语义已解除；**权责分离角色模型已实装**（`AuthWithRoles` + 只读端点集 + `AUDIT_LOG_READER_API_KEY` 必须区别于写 Key，`handlers/handlers.go:77`、`config.go:132,212`）+ 只写数据库账号脚本与启动自检（`deploy/sql/audit_writeonly_role.sql`、`main.go:386-391`）；🔴 **`/metrics` 端点仍无鉴权** | ⚠️ **有条件符合**（P0-8/P1-6 代码级闭环；「独立节点 + 单向只写 + 权限分离」的部署实证与 G-10/G-11 签核待完成） |
+| **《政务信息资源共享管理办法》** | 建立健全政务信息资源共享安全管理与审计制度 | 独立云虚拟机审计部署 + 9 要素 SM3 哈希链 + 在线对账秒级验真 | 🟡 **部分实装**：留存红线已根治——默认 **0（不删）**、`>0` 时强制 ≥ **1095 天**并**要求先归档后删除**（`config.go:161,220,224,227` + `internal/archive/archive.go:108`，段文件 SM4-GCM 加密 + SM3 行链且回读验真后才删）；`ON DELETE CASCADE` 连带删快照的语义已解除；**权责分离角色模型已实装**（`AuthWithRoles` + 只读端点集 + `AUDIT_LOG_READER_API_KEY` 必须区别于写 Key，`handlers/handlers.go:77`、`config.go:132,212`）+ 只写数据库账号脚本与启动自检（`deploy/sql/audit_writeonly_role.sql`、`main.go:386-391`）；✅ **/metrics 端点已纳入鉴权**（三微服务加入只读 API Key 白名单，网关支持可选 Bearer Token） | ⚠️ **有条件符合**（P0-8/P1-6 代码级闭环；「独立节点 + 单向只写 + 权限分离」的部署实证与 G-10/G-11 签核待完成） |
 
 > **本章结论口径（v16.7.0 重算）**：12 项条款中**仍有 0 项可在当前状态下申报「完全符合」**，但成因已从「代码缺口」转为「外部依赖未满足」。逐行实测判定为：**🔴 2 项**（《密码法》第二十七条、GB/T 39786-2021 第三级 —— 均因**自研密码模块未取得商用密码产品认证 + SM2 签名未实装 + 密评结论未出具**，非代码可闭环）、**⚠️ 10 项**（8 项「部分符合」+ 2 项「有条件符合」，较 v16.6.0 的 🔴5/⚠️7 上移 3 项，上移动作为 **P0-2/P0-5/P0-8/P1-1/P1-5/P2-2/P2-3** 的代码级闭环）。
 >
@@ -1157,7 +1168,7 @@ commit_siblings = 10
 > 1. **设计层面通过** ✅：系统以 DB51/T 2989—2023 五级分类为核心基准，「三层漏斗定级 + 四大隐私原语 + 服务端权威 9 要素 SM3 哈希链存证 + SSOT Fail-Closed 校验 + 双机强隔离」的分层与职责划分是**自洽且可落地**的；核心链路（数据源纳管 → 定级 → 脱敏 → 回传 → 存证 → 验真）在代码中**真实可运行**，44 个隐私原语、`pkg/naming` 事实源、租约式任务调度、flusher 单权威写入等关键机制均已实装并有单元测试覆盖。
 >
 > 2. **实现层面：P0 阻断项已代码级封堵** 🟡（v16.6.0 的「实现层面不通过 🔴」判级已解除，逐项 `file:line` 证据见 **§12.1.4**）：第十二章 **8 项 P0 中 7 项 ✅、1 项 🟡**，其中原判定为最高危的三项已根治——
->    - **P0-7 ✅ 原始数据旁路封堵**：BFF 透明代理改**默认拒绝 + 方法/路径白名单**（`console/bff-go/internal/handlers/handlers.go:1643,1681,1868`），`records`/`sample`/`/v1/*` 以及路径穿越与编码变体一律 403，并有绕过样本回归（`microservice_proxy_allowlist_test.go`）；代理调用全量留痕；
+>    - **P0-7 ✅ 原始数据旁路封堵**：BFF 透明代理改**默认拒绝 + 方法/路径白名单**（`console/bff-go/internal/handlers/handlers.go:1643,1681,1868`），`records`/`sample`/`/v1/*` 以及路径穿越与编码变体一律 403，并有绕过样本回归（`microservice_proxy_allowlist_test.go`）；代理调用全量留痕；中枢出域响应物理剥离 `raw_record`，杜绝外部业务程序（如 `app-lz`）接触原始明文；
 >    - **P0-8 ✅ 存证留存红线**：`AUDIT_LOG_RETENTION_DAYS` 默认改 **0（不删）**、`>0` 时强制 ≥ **1095 天**且**先归档后删除**（`services/audit-log/internal/config/config.go:161,220,224,227` + `internal/archive/archive.go:108`：SM4-GCM 加密段 + SM3 行链 manifest → 回读验真后才删）；`ON DELETE CASCADE` 连带删快照语义已解除；
 >    - **P0-6 ✅ 出域↔留痕代码级绑定**：`service-hub` 已内建 audit-log 客户端并在 `audit` 阶段提交任务/接口/数据源与输入输出指纹，提交失败按任务失败处理（`internal/handlers/handlers.go:656`、`internal/grpcserver/server.go:686`、`internal/audit/client.go:226`）；
 >    - **P0-1 ✅ 零信任默认态**：六服务 + 两 BFF 统一接入 `ValidateFailClosed`（`pkg/config/security.go:69`），**API Key 为空或 TLS 开启时白名单缺失即启动失败**（不再跳过注册），生产编排 TLS/鉴权/限流默认 `true`；
@@ -1170,7 +1181,7 @@ commit_siblings = 10
 >
 > **通过条件（三者同时满足方可转为「通过」）**：
 > ① 第十二章 **全部 P0 项代码级闭环** —— **本轮已达成（7 ✅ / 1 🟡）**；剩余动作为 §5.4 真实样本复测矩阵（18/27 全覆盖）与 G-01、G-05、G-10、G-11 由非开发方签核；
-> ② **P1 项中的 P1-1、P1-2、P1-6、P1-8 完成整改** —— **P1-1（REST 定级驱动算子、去除静默 `L2` 回退）与 P1-8（双 DSN 默认注入 + 未启用 PG 显式告警）已代码闭环**；**P1-6 已实装只写数据库账号 + 启动权限自检 + 只读核验员角色（`AuthWithRoles` + `AUDIT_LOG_READER_API_KEY` 必须区别于写 Key）**，残余为 `/metrics` 端点鉴权与局方权责制度签核；**P1-2 的代码可做部分（HMAC-SM3 密钥化、存量兼容验真、重签工具入模块）已落地**，认证密码模块与密评结论属外部排期；
+> ② **P1 项中的 P1-1、P1-2、P1-6、P1-8 完成整改** —— **P1-1（REST 定级驱动算子、去除静默 `L2` 回退）与 P1-8（双 DSN 默认注入 + 未启用 PG 显式告警）已代码闭环**；**P1-6 已实装只写数据库账号 + 启动权限自检 + 只读核验员角色（`AuthWithRoles` + `AUDIT_LOG_READER_API_KEY` 必须区别于写 Key）+ `/metrics` 纳入鉴权白名单**，残余为局方权责制度签核；**P1-2 的代码可做部分（HMAC-SM3 密钥化、存量兼容验真、重签工具入模块）已落地**，认证密码模块与密评结论属外部排期；
 > ③ 按 §11.3 门禁清单逐项验证通过，并以 §9.1 口径完成**可复现实测压测验收** —— 原语级基准报告已入库，**端到端压测实测仍待专区环境**，本条件未满足。
 >
 > **对外表述禁令**：在上述条件闭环前，**禁止**在任何对外合规申报、等保/密评材料、招投标应答或局方汇报中沿用「完全杜绝外泄路径」「完全满足安全准入要求」「全部条款完全符合」等表述；应统一表述为「**架构设计通过审查；第十二章 P0 阻断项已完成代码级整改且可逐项复核；密码模块认证与密评、端到端性能实测与局方验收签核尚待完成，具备试点联调条件，尚不具备正式生产准入条件**」。
@@ -1183,7 +1194,7 @@ commit_siblings = 10
    - ⚠️ **scope 现状**：条目级 `entries[].scopes` 已生效，但 `default_scopes` 字段**未被代码读取**（`config/mtls-whitelist.yaml` 内已注明），不得以「已按 scope 最小化授权」对外申报；
    - 通过环境变量将同一份白名单文件路径下发给所有 Go 服务端（`service-hub` / `datasource-mgr` / `audit-log` / `bff-go`），避免配置漂移。
 2. **审计密钥局方专管**：政务云独立审计虚拟机主机乙上的 `AUDIT_LOG_ENCRYPTION_KEY` 环境变量需由数据局安全管理员亲自配置与保管，严禁开发及运营方接触；✅ v16.7.0 起**密钥为空不再明文落盘**——`EncryptString` 直接返回 `ErrEmptyKey` 拒绝落盘（`pkg/crypto/envelope.go:53,103`），且 `Validate()` 以 `RequireEncryptionKey: true` 使服务**启动即失败**（`services/audit-log/internal/config/config.go:201-202`）；派生方式已升级为 **HKDF-SM3（RFC 5869）+ 逐记录 16 字节随机 salt + 用途绑定 info**（`:74`），旧 `SHA-256(secret)[:16]` 仅保留用于解密存量 `enc:v1:` 数据；配置后须以实际快照行的 **`enc:v2:`** 前缀作为验收证据，并要求**链哈希密钥 `AUDIT_LOG_HASH_KEY` 同样由局方专管**（P1-2 密钥化 HMAC-SM3）。
-3. **日常自动化巡检**：建议将哈希链验真接口（`GET` 或 `POST /v1/audit/chain/verify`）接入数据局日常自动化监控脚本，每日定时执行验真并生成合规对账日报；✅ v16.7.0 起**应用层已提供只读角色隔离**（P1-6）：以 `AUDIT_LOG_READER_API_KEY` 走 `middleware.AuthWithRoles`（`services/audit-log/internal/handlers/handlers.go:77`），该 Key 仅命中查询/统计/快照/验真端点，任何写入类请求一律 403，且**与写 Key 相同即拒绝启动**（`config.go:212`）；⚠️ 仍须配套的两件事：① **`/metrics` 端点当前无鉴权**（G-10 余项，须以网络策略约束）；② 数据库侧建议同时启用只写账号脚本 `deploy/sql/audit_writeonly_role.sql` 并以 `AUDIT_LOG_DB_WRITE_ONLY=true` 触发启动权限自检，巡检账号则使用独立**数据库只读**账号。验真响应现已返回机器可读 `reason` 枚举（`ok`/`legacy_hashed`/`tampered_payload`/`hash_mismatch`/`broken_chain`/`missing_prev`/`missing_records`）与 `legacy_hashed` 计数，可直接入日报判绿。
+3. **日常自动化巡检**：建议将哈希链验真接口（`GET` 或 `POST /v1/audit/chain/verify`）接入数据局日常自动化监控脚本，每日定时执行验真并生成合规对账日报；✅ v16.7.0 起**应用层已提供只读角色隔离**（P1-6）：以 `AUDIT_LOG_READER_API_KEY` 走 `middleware.AuthWithRoles`（`services/audit-log/internal/handlers/handlers.go:77`），该 Key 仅命中查询/统计/快照/验真端点，任何写入类请求一律 403，且**与写 Key 相同即拒绝启动**（`config.go:212`）；⚠️ 仍须配套的两件事：① **/metrics 端点已纳管鉴权**（三微服务加入只读 API Key 白名单，网关支持可选 Bearer Token；生产仍建议配合安全组网络策略做外网隔离）；② 数据库侧建议同时启用只写账号脚本 `deploy/sql/audit_writeonly_role.sql` 并以 `AUDIT_LOG_DB_WRITE_ONLY=true` 触发启动权限自检，巡检账号则使用独立**数据库只读**账号。验真响应现已返回机器可读 `reason` 枚举（`ok`/`legacy_hashed`/`tampered_payload`/`hash_mismatch`/`broken_chain`/`missing_prev`/`missing_records`）与 `legacy_hashed` 计数，可直接入日报判绿。
 4. **mTLS 白名单变更演练**：白名单文件支持 5 秒热重载，但上线前仍需在测试环境验证：修改 `enabled=false` 或移除某 CN 后，对应服务在 5 秒内被拒绝，且不影响现有连接内的在途请求；
 5. **容量规格分级选型落地**：
    - **初期试点与联调阶段 (10 QPS)**：采用 **4C8G（主机甲）+ 2C4G（主机乙）** 的最小起步配置，高效节约政务云资源；⚠️ 该档位为 SQLite/内存单机形态，**不具备租约多副本与批量存证语义**；
@@ -1234,8 +1245,8 @@ commit_siblings = 10
 | **P0-3** | 声明「快照国密信封加密落盘」；事实为**密钥为空即明文落盘且不可检测降级** | `EncryptString` 空密钥直接返回明文（`pkg/crypto/envelope.go:74-75`）；`DecryptString` 先判 `enc:v1:` 前缀、无前缀按明文原样返回（`:123-126`），**早于**空密钥判错（`:128-130`）；`deploy/` 与 `config/` 中均未设置 `AUDIT_LOG_ENCRYPTION_KEY` | 审计库若被窃，样本以明文暴露；攻击者剥离前缀即可让读取端静默接受被替换内容，**快照取证效力丧失** | ① 空密钥时**拒绝启动**或强制 `strict` 模式；② 启用加密后拒绝任何无前缀值（消除降级通道）；③ 密钥对接 KMS/HSM | **G-04** |
 | **P0-4** | 声明「独立存证节点保证证据不丢」；事实为**存储不可用时静默降级到内存/SQLite 并继续对外返回成功** | `AUDIT_LOG_STRICT_STORAGE`/`STRICT_STORAGE` 默认 `false`（`services/audit-log/internal/config/config.go:121`）；降级分支 `main.go:340-345`（PG→SQLite）、`:357-365`（SQLite→内存）、`:374-381`（内存兜底）仅 `logger.Warn`；SQLite 完整性校验失败时**只告警并重建库**（`main.go:347-350`） | 存证可被**静默丢弃或整库清空**而调用方毫无感知；「抗篡改」在服务层失效 | ① 生产强制 `AUDIT_LOG_STRICT_STORAGE=true`；② 完整性校验失败改为**阻断 + 人工取证**，禁止自动重建；③ 存证写入失败上抛为请求失败 | **G-05、G-06** |
 | **P0-5** | ✅ 声明「大模型零接触政务明文」；**已闭环**：Layer-3 原值不再出网 | `buildPrompt` 只提交字段名 + 值形态指纹（`llm_client.go:144,555`）；出网前原值包含性自检（`:278,779`）；端点强制校验（`:331-369`）；**默认端点已清空**（`DefaultLLMClientConfig` `Endpoint: ""`），生产必须显式配置；**分类响应 `Value` 字段已停止赋值**（`engine.go:287`、`funnel.go:115,155` 三处删除）；Layer-3 默认关闭（`config/privacy.yaml:30`） | 原值不出域，fail-closed 回退 Safety Floor | ① prompt 单元测试断言原值不在请求体；② 出具 https 端点配置 + `transport_secure:true` 证据；③ 出网 ACL 由局方交付 | **G-07** |
-| **P0-6** | 声明「6 阶段流水线第 6 阶段自动向独立审计节点存证」；事实为**该阶段只是状态位，`service-hub` 无 audit-log 客户端** | `stageNames` 含 `"audit"` 但仅推进至 `done`（`services/service-hub/internal/handlers/handlers.go:505`、`internal/grpcserver/server.go:442`）；`grep -rn "api/audit/logs\|RecordAudit\|AUDIT_LOG_" services/service-hub --include=*.go` **零命中**；真实写入仅来自业务/控制台侧（`console/app-lz/bff-go/internal/clients/clients.go:791-796`） | **「每一次出域必然留痕」在代码层不闭环**，可出域不存证；事后无法对账 | `service-hub` 内建 audit-log 客户端，在 `audit` 阶段提交含 `task_id`/`api_code`/`datasource_id`/输入输出指纹的存证，提交失败按任务失败处理并告警 | **G-05** |
-| **P0-7** | 声明「原始数据绝不出域」；事实为**运维控制台 BFF 提供无鉴权、无路径限制的原始记录旁路** | `r.Any("/v1/datasource/*path", s.ProxyDatasource)`（`console/bff-go/internal/handlers/handlers.go:179`）→ `ClientPool.Proxy` 仅按服务名解析基址、不校验方法/路径（`console/bff-go/internal/microservices/client.go:57-76`）→ 直达 `GET /v1/datasources/:id/records`（`services/datasource-mgr/internal/handlers/handlers.go:114-115`）；`CONSOLE_API_KEY` 默认空即放行（`config.go:246`、`handlers.go:1253-1259`），且 `deploy/`、`config/`、`scripts/` 中均未设置 | **未脱敏原始数据可被整体拖库且不留任何存证**，是本审查中最高危缺陷 | ① 透明代理改**方法 + 路径白名单**，`records`/`sample`/`GetData*` 一律禁止；② `CONSOLE_API_KEY` 为空时启动失败；③ 代理层补审计上报 | **G-01、G-10** |
+| **P0-6** | ✅ 声明「6 阶段流水线第 6 阶段自动向独立审计节点存证」；**已闭环**：调度中枢内建 audit-log 客户端强绑定 | `services/service-hub/internal/audit/client.go` 内建存证客户端，流水线第 6 阶段以 `POST /v1/audit/logs` 同步提交 `task_id`、输入/输出指纹及元数据（REST `handlers.go:656`、gRPC `server.go:686`），提交失败任务直接置为 `failed` 阻断流程并记录 `error_class` | 阻断出域留痕脱节风险，实现「每一次出域必然留痕」代码级强绑定 | ① 内建 audit-log 客户端同步调用；② 存证失败立即终止任务流程；③ 跨副本幂等键去重 | **G-05** |
+| **P0-7** | ✅ 声明「原始数据绝不出域」；**已闭环**：BFF 代理白名单阻断原始记录旁路且回传报文剔除 raw_record | `console/bff-go/internal/handlers/handlers.go:1691` `isAllowedMicroserviceProxyPath` 严密校验，阻断 `/records`、`/sample`、`/v1/*` 拖库端点及路径穿越（`microservice_proxy_allowlist_test.go`）；调度中枢出域响应报文结构体物理剔除 `raw_record` 字段，外部（如 `app-lz`）仅可获得脱敏 `records` | 杜绝未脱敏原始数据被整体拖库与旁路外泄通道 | ① 透明代理改**方法 + 路径白名单**，`records`/`sample`/`GetData*` 一律禁止；② 回传报文物理剥离 `raw_record`；③ 代理层全量留痕 | **G-01、G-10** |
 | **P0-8** | 声明「存证永久保存 3 年、独立节点不可篡改」；事实为**默认 90 天物理删除 + 级联删快照 + 归档零消费** | `AUDIT_LOG_RETENTION_DAYS` 默认 **90**（`services/audit-log/internal/config/config.go:111`）且清理协程默认启用（`cmd/server/main.go:82-84`、`auditRetentionLoop` `:298-325`）；`DELETE FROM audit_logs WHERE timestamp < $1`（`pkg/store/postgres/audit.go:688`、`sqlite/audit.go:585`）+ `snapshots ... ON DELETE CASCADE`（`postgres/audit.go:165`）；`ArchiveDir`（`config.go:45`、`:106`）**全仓无消费点** | **第 91 天起存证与样本物理不存在**，直接抵触数安法二十一条、政务共享办法留存要求与等保三级；也使 §6.1 的「只写约束」失去保护对象 | ① 默认值改为 **0（不删）或 ≥1095 天**，空值不启用删除；② 实现归档链路（压缩加密 → OSS/对象存储，保留可验真元数据）；③ 清改为时间分区 + `DROP PARTITION`（关联 P2-9）；④ 解除或改造 `ON DELETE CASCADE` | **G-11** |
 
 #### 12.1.2 P1 级（上线前必须整改，9 项）

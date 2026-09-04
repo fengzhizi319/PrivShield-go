@@ -67,6 +67,7 @@ export const DataApiPanel: React.FC<DataApiPanelProps> = ({
     try {
       const res = await onInvoke(apiId, trimmedId);
       setSession(res);
+      setExpandedRows(new Set([0]));
     } catch (err: any) {
       alert(`API 调用失败: ${err.message}`);
     } finally {
@@ -153,8 +154,10 @@ export const DataApiPanel: React.FC<DataApiPanelProps> = ({
               s.name === step.key ||
               (step.key === 'classify_desensitize' && (s.name === 'classify_desensitize' || s.name === 'classify' || s.name === 'desensitize' || s.name === 'process'))
             );
-            const isActive = stageData?.status === 'success';
-            const isError = stageData?.status === 'error';
+            const hubStage = session?.stages.find(s => s.name === 'hub_orchestrate');
+            const effectiveStage = stageData || ((step.key === 'fetch' || step.key === 'classify_desensitize' || step.key === 'audit') ? hubStage : undefined);
+            const isActive = effectiveStage?.status === 'success';
+            const isError = effectiveStage?.status === 'error';
             return (
               <div key={step.key} className="flex items-center gap-1.5">
                 <div className={`flex-1 p-3 rounded-xl border text-center transition-all ${
@@ -168,11 +171,11 @@ export const DataApiPanel: React.FC<DataApiPanelProps> = ({
                   <div className="text-[10px] font-semibold text-slate-300 whitespace-pre-line leading-tight">
                     {step.label}
                   </div>
-                  {stageData && (
+                  {effectiveStage && (
                     <div className={`text-[9px] font-mono mt-1 ${
                       isError ? 'text-rose-400' : isActive ? 'text-emerald-400' : 'text-slate-500'
                     }`}>
-                      {stageData.duration_ms}ms
+                      {effectiveStage.duration_ms}ms
                     </div>
                   )}
                 </div>
@@ -343,10 +346,10 @@ export const DataApiPanel: React.FC<DataApiPanelProps> = ({
           </div>
 
           {/* Data Diff View — Accordion Style */}
-          {(session.raw_records?.length ?? 0) > 0 && (
+          {((session.raw_records?.length ?? 0) > 0 || (session.sanitized_data?.length ?? 0) > 0) && (
             <DataAccordionView
-              rawRecords={session.raw_records}
-              sanitizedData={session.sanitized_data}
+              rawRecords={session.raw_records || []}
+              sanitizedData={session.sanitized_data || []}
               showRaw={showRaw}
               onToggleRaw={() => setShowRaw(!showRaw)}
               expandedRows={expandedRows}
@@ -378,14 +381,13 @@ export const DataApiPanel: React.FC<DataApiPanelProps> = ({
 };
 
 /**
- * DataAccordionView — 手风琴式数据对比视图。
+ * DataAccordionView — 外部数据申请方合规交付视图（手风琴展开）。
  *
- * 功能：
- *  1. 逐行展示脱敏前后的数据对比（每条记录可展开/收起）
- *  2. 展开后按字段对比原始值 vs 脱敏值，被脱敏的字段高亮显示
- *  3. 支持“全部展开/全部收起”快捷按钮
- *  4. 支持切换“原始 JSON”模式（直接显示完整 JSON 文本）
- *  5. 自动统计每条记录中被脱敏的字段数
+ * 核心设计原则（零信任架构 · 原始数据不出域）：
+ *  1. app-lz 作为模拟的外部数据申请方，仅能获取并展示治理脱敏后的合规数据（sanitizedData）；
+ *  2. 原始明文数据（rawRecords）在调度中枢 service-hub 与脱敏引擎 engine-go 内部流转，严禁出域；
+ *  3. 对每条交付记录提供关键 ID 摘要、脱敏字段数量统计、字段级防护状态展示；
+ *  4. 支持一键展开/折叠，以及查看外部申请方实际接收到的完整 JSON 交付报文。
  */
 interface DataAccordionViewProps {
   rawRecords: Record<string, any>[];
@@ -406,32 +408,52 @@ const DataAccordionView: React.FC<DataAccordionViewProps> = ({
   setExpandedRows,
   t,
 }) => {
-  /** 合并原始数据和脱敏数据中的所有字段名（去重） */
+  const hasRaw = rawRecords.length > 0;
+
+  /** 合并所有字段名（优先脱敏交付字段） */
   const allFields = useMemo(() => {
     const keys = new Set<string>();
-    rawRecords.forEach((r) => Object.keys(r).forEach((k) => keys.add(k)));
     sanitizedData.forEach((r) => Object.keys(r).forEach((k) => keys.add(k)));
+    rawRecords.forEach((r) => Object.keys(r).forEach((k) => keys.add(k)));
     return Array.from(keys);
   }, [rawRecords, sanitizedData]);
 
-  /** 获取记录的摘要标签（优先使用 ID 字段，否则取第一个字段） */
+  /** 判断字段是否被脱敏处理 */
+  const isFieldMasked = (field: string, rawVal: string, sanitizedVal: string): boolean => {
+    if (hasRaw) {
+      return rawVal !== sanitizedVal;
+    }
+    // 外部申请方视角：若值中包含掩码符号 '*'，即为已脱敏保护字段
+    return sanitizedVal.includes('*');
+  };
+
+  /** 获取记录的摘要标签（优先使用关键 ID 或名称字段） */
   const getRecordSummary = (raw: Record<string, any>, sanitized: Record<string, any>): string => {
-    // Try common ID fields first
-    const idFields = ['record_id', 'elder_id', 'id', 'patient_name', 'name'];
+    const idFields = ['record_id', 'elder_id', 'id', 'patient_name', 'name', 'id_card', 'id_card_no', 'insurance_settlement_id', 'person_id'];
     for (const f of idFields) {
+      if (sanitized[f] !== undefined) return `${f}: ${sanitized[f]}`;
       if (raw[f] !== undefined) return `${f}: ${raw[f]}`;
     }
-    // Fallback: first field value
-    const firstKey = Object.keys(raw)[0];
-    if (firstKey) return `${firstKey}: ${raw[firstKey]}`;
+    const firstKey = Object.keys(sanitized)[0] || Object.keys(raw)[0];
+    if (firstKey) return `${firstKey}: ${sanitized[firstKey] ?? raw[firstKey]}`;
     return '(empty record)';
   };
 
-  /** 统计记录中被脱敏的字段数（原始值 !== 脱敏值） */
+  const formatValue = (v: any): string => {
+    if (v === null || v === undefined) return '-';
+    if (typeof v === 'object') return JSON.stringify(v);
+    return String(v);
+  };
+
+  /** 统计记录中被脱敏的字段数 */
   const countMasked = (raw: Record<string, any>, sanitized: Record<string, any>): number => {
     let count = 0;
-    for (const key of Object.keys(raw)) {
-      if (String(raw[key]) !== String(sanitized[key] ?? raw[key])) count++;
+    for (const key of Object.keys(sanitized)) {
+      const rawVal = formatValue(raw[key]);
+      const sanitizedVal = formatValue(sanitized[key]);
+      if (isFieldMasked(key, rawVal, sanitizedVal)) {
+        count++;
+      }
     }
     return count;
   };
@@ -456,21 +478,31 @@ const DataAccordionView: React.FC<DataAccordionViewProps> = ({
     setExpandedRows(new Set());
   };
 
-  const formatValue = (v: any): string => {
-    if (v === null || v === undefined) return '-';
-    if (typeof v === 'object') return JSON.stringify(v);
-    return String(v);
-  };
-
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+      {/* 零信任安全隔离声明横幅 */}
+      <div className="mb-4 p-3.5 rounded-xl bg-cyan-950/20 border border-cyan-500/30 flex items-start gap-3">
+        <IconShieldCheck className="w-5 h-5 text-cyan-400 shrink-0 mt-0.5" />
+        <div className="text-xs">
+          <div className="font-semibold text-cyan-300 flex items-center gap-2">
+            <span>{t('dataApi.rawIsolated')}</span>
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-900/40 text-cyan-300 border border-cyan-700/50">
+              零信任数据安全隔离
+            </span>
+          </div>
+          <div className="text-slate-400 text-[11px] mt-1 leading-relaxed">
+            {t('dataApi.rawIsolatedDesc')}
+          </div>
+        </div>
+      </div>
+
       {/* Header */}
       <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
         <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
           <IconLock className="w-4 h-4 text-emerald-400" />
           {t('dataApi.dataDiff')}
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
-            {sanitizedData.length} {t('dataApi.rawRecords').replace(/\(.*\)/, '').trim()}
+          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-950/40 text-emerald-300 border border-emerald-700/40">
+            {sanitizedData.length} {t('dataApi.sanitizedRecords')}
           </span>
         </h3>
         <div className="flex items-center gap-2">
@@ -488,25 +520,37 @@ const DataAccordionView: React.FC<DataAccordionViewProps> = ({
           </button>
           <button
             onClick={onToggleRaw}
-            className="text-xs px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
+            className="text-xs px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition flex items-center gap-1.5"
           >
             {showRaw ? t('dataApi.hideRaw') : t('dataApi.showRaw')}
           </button>
         </div>
       </div>
 
-      {/* Raw JSON mode */}
+      {/* Raw / Sanitized JSON Mode */}
       {showRaw ? (
-        <div className="grid grid-cols-1 gap-4">
-          <div>
-            <div className="text-xs font-semibold text-rose-400 mb-1 flex items-center gap-1">
-              <span className="w-2 h-2 rounded-full bg-rose-400" />
-              {t('dataApi.rawRecords')} ({rawRecords.length})
+        <div className="space-y-4">
+          <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-400 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-400" />
+              <span className="font-semibold text-slate-200">外部申请方交付端点接收到的脱敏报文</span>
+              <span className="text-[10px] text-slate-500">({sanitizedData.length} 条记录)</span>
             </div>
-            <pre className="p-3 bg-slate-950 border border-rose-500/20 rounded-xl text-xs font-mono text-rose-200/90 overflow-x-auto max-h-80">
-              {JSON.stringify(rawRecords, null, 2)}
-            </pre>
+            <span className="text-[10px] font-mono text-cyan-400/90 bg-cyan-950/40 px-2 py-0.5 rounded border border-cyan-800/40">
+              原始明文在 Service-Hub 边界剥离·不出域
+            </span>
           </div>
+          {hasRaw && (
+            <div>
+              <div className="text-xs font-semibold text-rose-400 mb-1 flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-rose-400" />
+                {t('dataApi.rawRecords')} ({rawRecords.length})
+              </div>
+              <pre className="p-3 bg-slate-950 border border-rose-500/20 rounded-xl text-xs font-mono text-rose-200/90 overflow-x-auto max-h-80">
+                {JSON.stringify(rawRecords, null, 2)}
+              </pre>
+            </div>
+          )}
           <div>
             <div className="text-xs font-semibold text-emerald-400 mb-1 flex items-center gap-1">
               <span className="w-2 h-2 rounded-full bg-emerald-400" />
@@ -518,7 +562,7 @@ const DataAccordionView: React.FC<DataAccordionViewProps> = ({
           </div>
         </div>
       ) : (
-        /* Accordion mode — one card per record */
+        /* Accordion Mode — 外部交付记录手风琴 */
         <div className="space-y-2">
           {sanitizedData.map((sanitized, i) => {
             const raw = rawRecords[i] || {};
@@ -547,16 +591,18 @@ const DataAccordionView: React.FC<DataAccordionViewProps> = ({
                     <span className="text-sm font-mono text-slate-200 truncate">
                       {summary}
                     </span>
-                    {maskedCount > 0 && (
+                    {maskedCount > 0 ? (
                       <span className="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                        {maskedCount} 字段已脱敏
+                        {maskedCount} 处字段已脱敏保护
                       </span>
-                    )}
-                    {maskedCount === 0 && (
+                    ) : (
                       <span className="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                        无敏感字段
+                        安全合规交付
                       </span>
                     )}
+                    <span className="shrink-0 text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800/80 text-slate-400 border border-slate-700/60">
+                      原始明文不出域
+                    </span>
                   </div>
                   <svg
                     className={`w-4 h-4 text-slate-500 shrink-0 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
@@ -576,33 +622,61 @@ const DataAccordionView: React.FC<DataAccordionViewProps> = ({
                       {allFields.map((field) => {
                         const rawVal = formatValue(raw[field]);
                         const sanitizedVal = formatValue(sanitized[field]);
-                        const isMasked = rawVal !== sanitizedVal;
+                        const isMasked = isFieldMasked(field, rawVal, sanitizedVal);
                         const fieldExists = raw[field] !== undefined || sanitized[field] !== undefined;
                         if (!fieldExists) return null;
 
                         return (
                           <div
                             key={field}
-                            className={`grid grid-cols-[140px_1fr_1fr] gap-3 items-center px-3 py-2 rounded-lg text-xs font-mono ${
+                            className={`grid grid-cols-[160px_1fr_1fr] gap-3 items-center px-3.5 py-2.5 rounded-lg text-xs font-mono transition-all ${
                               isMasked
-                                ? 'bg-amber-500/5 border border-amber-500/10'
+                                ? 'bg-amber-500/5 border border-amber-500/20 shadow-sm'
                                 : 'bg-slate-900/60 border border-slate-800/60'
                             }`}
                           >
-                            <span className="text-slate-400 font-semibold truncate" title={field}>
-                              {field}
-                            </span>
-                            <div className="min-w-0">
-                              <div className="text-[9px] text-slate-600 uppercase mb-0.5">原始值</div>
-                              <div className={`truncate ${isMasked ? 'text-rose-300' : 'text-slate-300'}`} title={rawVal}>
-                                {rawVal}
-                              </div>
+                            {/* 字段名 */}
+                            <div className="flex items-center gap-1.5 min-w-0" title={field}>
+                              <span className="text-slate-300 font-semibold truncate">{field}</span>
                             </div>
+
+                            {/* 交付脱敏值 (外部申请方可见) */}
                             <div className="min-w-0">
-                              <div className="text-[9px] text-slate-600 uppercase mb-0.5">脱敏值</div>
-                              <div className={`truncate ${isMasked ? 'text-amber-300 font-semibold' : 'text-slate-300'}`} title={sanitizedVal}>
+                              <div className="text-[9px] text-slate-500 uppercase mb-0.5 font-sans">
+                                交付脱敏值 (外部申请方)
+                              </div>
+                              <div
+                                className={`truncate font-medium ${isMasked ? 'text-amber-300 font-bold' : 'text-slate-200'}`}
+                                title={sanitizedVal}
+                              >
                                 {sanitizedVal}
                               </div>
+                            </div>
+
+                            {/* 原始明文状态 (不出域保护 / 对比) */}
+                            <div className="min-w-0">
+                              <div className="text-[9px] text-slate-500 uppercase mb-0.5 font-sans">
+                                {hasRaw ? '原始明文 (内部验证)' : '安全保护状态'}
+                              </div>
+                              {hasRaw ? (
+                                <div className={`truncate ${isMasked ? 'text-rose-300' : 'text-slate-400'}`} title={rawVal}>
+                                  {rawVal}
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-1 text-[11px] text-slate-400">
+                                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isMasked ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                                  <span className="text-slate-500">原始明文不出域</span>
+                                  {isMasked ? (
+                                    <span className="ml-1 text-[9px] font-sans px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                      已掩码脱敏
+                                    </span>
+                                  ) : (
+                                    <span className="ml-1 text-[9px] font-sans px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                      合规明文
+                                    </span>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           </div>
                         );

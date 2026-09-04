@@ -588,3 +588,188 @@ spec:
   - 调大 Nginx 的超时阈值：`proxy_read_timeout 120s;` 与 `grpc_read_timeout 120s;`；
   - 同时调大 `service-hub` 的调度超时配置 `SERVICE_HUB_SCHEDULE_TIMEOUT=120`。
 
+---
+
+## 5. 生产安全运维与等保三级/密评实操指南
+
+本节提供符合 **GB/T 22239-2019 等保三级** 与 **GB/T 39786-2021 密评三级** 要求的生产实操指南。安全架构设计与理论满足性详见 [security.md](./security.md)。
+
+### 5.1 网络拓扑隔离与安全组配置规范
+
+在政务云或生产 VPC 环境下，严格执行**内外网隔离与边界收敛**：
+
+```
+[外部业务区 / 外部数据申请方: app-lz]
+                │
+                │ 仅允许访问中枢调度端口
+                ▼
+      [安全组规则 SG-EDGE]
+      放行: TCP 8082 (REST), TCP 50052 (gRPC)
+      目标: service-hub 主机 / Pod
+                │
+                │ 内部可信计算专网 (VPC Core)
+                ▼
+      [安全组规则 SG-INTERNAL]
+      放行: 仅接受来自 service-hub IP/子网的入站连接
+      - engine-go:8079 / :50051
+      - datasource-mgr:8083 / :50053
+      - audit-log:8084
+      拒绝: 外部业务区及公网的一切直接访问
+```
+
+**生产配置基线**：
+1. **禁止内部端口公网映射**：生产 `docker-compose.prod.yml` 或 K8s 清单中，`engine-go`、`datasource-mgr`、`audit-log` 的 `ports:` 不得映射到公网主机（K8s 服务类型设为 `ClusterIP`）；
+2. **零信任启动门禁**：在生产部署中设置 `SERVICE_HUB_REQUIRE_TLS=true`，若未配置有效 TLS 证书，服务将立即 fail-closed 终止启动，防止明文启动。
+
+---
+
+### 5.2 mTLS 与 TLCP 国密双证书运维实操
+
+#### 5.2.1 启用 mTLS 双向认证与 CN 白名单
+
+```bash
+# 1. 准备证书文件
+export SERVICE_HUB_TLS_ENABLED=true
+export SERVICE_HUB_TLS_CERT_FILE=/etc/privshield/certs/service-hub.crt
+export SERVICE_HUB_TLS_KEY_FILE=/etc/privshield/certs/service-hub.key
+export SERVICE_HUB_TLS_CA_FILE=/etc/privshield/certs/ca.crt
+export SERVICE_HUB_TLS_CLIENT_AUTH=require
+
+# 2. 配置 gRPC 客户端 CN 白名单（支持 5 秒热重载，无需重启服务）
+export PRIVACY_AUTH_MTLS_WHITELIST_FILE=/etc/privshield/mtls-whitelist.yaml
+```
+
+白名单文件 `/etc/privshield/mtls-whitelist.yaml` 格式：
+```yaml
+allowed_cns:
+  - "service-hub"
+  - "privshield-gateway"
+  - "privshield-ops"
+```
+
+#### 5.2.2 启用 TLCP 国密双证书模式（GM/T 0024）
+
+在满足密评三级的政务云节点，启动 TLCP 纯国密握手模式：
+```bash
+# 启动国密双证书通道
+SERVICE_HUB_TLS_ENABLED=true \
+AGENT_TLS_NATIONAL_CIPHER=true \
+AGENT_TLCP_SIGN_CERT_FILE=/etc/privshield/certs/tlcp/server-sign.crt \
+AGENT_TLCP_SIGN_KEY_FILE=/etc/privshield/certs/tlcp/server-sign.key \
+AGENT_TLCP_ENC_CERT_FILE=/etc/privshield/certs/tlcp/server-enc.crt \
+AGENT_TLCP_ENC_KEY_FILE=/etc/privshield/certs/tlcp/server-enc.key \
+PRIVACY_AGENT_URLS="tlcp://127.0.0.1:8079" \
+PRIVACY_AGENT_TLCP_CA_FILE=/etc/privshield/certs/tlcp/ca.crt \
+./bin/service-hub
+```
+
+---
+
+### 5.3 外部申请方（如 app-lz）API Key 与细粒度数据源租户授权
+
+为防止外部申请方横向越权探测未授权数据源（如医保申请方探测社保、税务数据），必须为每个外部调用方配置带数据源限制的 Scope。
+
+#### 5.3.1 配置方式（环境变量或 KeyStore 文件）
+
+方式 1：环境变量注入多 Key：
+```bash
+# 格式: token:client_name:scope1,scope2[:expiry]
+# 示例: app-lz 仅允许访问 yibao 和 kangyang 两个数据源
+SERVICE_HUB_API_KEYS='{
+  "token-app-lz-prod-001": {
+    "name": "app-lz-consumer",
+    "scopes": ["hub:dispatch", "hub:dispatch:ds_yibao", "hub:dispatch:ds_kangyang"]
+  },
+  "token-ops-admin-key": {
+    "name": "ops-admin",
+    "scopes": ["*"]
+  }
+}'
+```
+
+方式 2：使用热轮转文件 `SERVICE_HUB_API_KEYS_FILE=/etc/privshield/keys.json`：
+```json
+{
+  "keys": {
+    "token-app-lz-secure-8899": {
+      "name": "app-lz",
+      "scopes": ["hub:dispatch", "hub:dispatch:ds_yibao", "hub:dispatch:ds_kangyang"],
+      "expires_at": "2027-12-31T23:59:59Z"
+    }
+  }
+}
+```
+
+#### 5.3.2 越权拦截验证
+
+```bash
+# ① 访问授权数据源 ds_yibao -> 正常返回脱敏结果 (HTTP 200)
+curl -s -X POST http://127.0.0.1:8082/v1/hub/fetch-and-desensitize \
+  -H "Authorization: Bearer token-app-lz-prod-001" \
+  -H "Content-Type: application/json" \
+  -d '{"datasource_id": "ds_yibao", "id_card_no": "110101196809171010"}' | jq .found
+
+# ② 越权访问未授权数据源 ds_shebao -> 立即被中枢阻断 (HTTP 403 Forbidden)
+curl -s -X POST http://127.0.0.1:8082/v1/hub/fetch-and-desensitize \
+  -H "Authorization: Bearer token-app-lz-prod-001" \
+  -H "Content-Type: application/json" \
+  -d '{"datasource_id": "ds_shebao", "id_card_no": "110101196809171010"}' | jq .
+# 预期返回: {"code":"UNAUTHORIZED_DATASOURCE","message":"caller \"app-lz-consumer\" is not authorized to access datasource \"ds_shebao\""}
+```
+
+---
+
+### 5.4 出域防篡改审计存证日巡检
+
+等保三级要求对安全审计记录进行定期完整性校验，防范恶意删除与单点篡改。
+
+#### 5.4.1 执行链式存证验真检查
+
+调度中枢内置 `/v1/hub/audit/verify` 接口，可配置在 CronJob 或 Prometheus Blackbox 监控中每日执行：
+
+```bash
+# 执行全量 9 要素 SM3 哈希链验真
+curl -s -X POST http://127.0.0.1:8082/v1/hub/audit/verify \
+  -H "Authorization: Bearer <ADMIN_TOKEN>" | jq .
+```
+
+预期正常响应：
+```json
+{
+  "merkle_valid": true,
+  "chain_valid": true,
+  "verified_records": 128450,
+  "tampered_records": 0,
+  "status": "passed",
+  "via": "service-hub"
+}
+```
+
+#### 5.4.2 告警联动配置
+
+在 Prometheus 告警规则中添加存证断链告警：
+```yaml
+- alert: AuditLogChainBroken
+  expr: privshield_audit_verify_status{status="failed"} > 0
+  for: 1m
+  labels:
+    severity: critical
+  annotations:
+    summary: "PrivShield 审计存证哈希链检测到篡改或断链！"
+    description: "存证节点 {{ $labels.instance }} 完整性验真失败，请立即启动安全应急响应排查非法修改。"
+```
+
+---
+
+### 5.5 等保三级与密评迎检现场核验 Checklist
+
+| 核验项目 | 检查命令 / 操作证据 | 预期结果 |
+|---|---|---|
+| **1. 端口最小化暴露** | `nmap -sS -p 1-65535 <HUB_HOST>` | 仅 `:8082`、`:50052` 开放，底层 `:8079`、`:8083` 被过滤 |
+| **2. 传输层加密强制性** | `curl -v -k http://<HUB_HOST>:8082/health` | 生产模式返回 301 重定向或仅 HTTPS 监听 |
+| **3. 外部身份鉴别** | `curl -X POST http://127.0.0.1:8082/v1/hub/fetch-and-desensitize` (无 Token) | 返回 `401 UNAUTHENTICATED` |
+| **4. 越权阻断 (ABAC)** | 外部 Token 请求未分配的数据源 | 返回 `403 UNAUTHORIZED_DATASOURCE` |
+| **5. 原始数据不出域** | 检查脱敏响应 JSON 字段 | 仅含 `sanitized_data`，无 `raw_record` 或明文敏感字段 |
+| **6. 存证链防篡改** | `curl -X POST http://127.0.0.1:8082/v1/hub/audit/verify` | 返回 `chain_valid: true, tampered_records: 0` |
+| **7. 接口时序抗攻击** | 压测工具高频探测随机非法 Token | 响应时延标准差 $\sigma < 0.2\text{ms}$，满足常量时间安全 |
+

@@ -97,12 +97,15 @@ describe('DataApiPanel Component', () => {
       </I18nProvider>
     );
 
+    const input = screen.getByPlaceholderText('点击选择或输入身份证号');
+    fireEvent.change(input, { target: { value: '450201198501011234' } });
+
     const invokeButtons = screen.getAllByText('申请数据 (触发全链路)');
     expect(invokeButtons.length).toBeGreaterThan(0);
     fireEvent.click(invokeButtons[0]);
 
     await waitFor(() => {
-      expect(onInvoke).toHaveBeenCalledWith(1, 5);
+      expect(onInvoke).toHaveBeenCalledWith(1, '450201198501011234');
     });
 
     await waitFor(() => {

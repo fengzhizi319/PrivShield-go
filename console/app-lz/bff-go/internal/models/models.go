@@ -404,7 +404,8 @@ type DataApiSessionStage struct {
 }
 
 // DataApiSessionResponse 是预设数据 API 调用的完整会话结果。
-// 包含原始数据、脱敏后数据、每个阶段的执行状态和总耗时。
+// app-lz 作为模拟的外部数据申请方，依据「原始数据切片不出域」安全原则，仅能获取脱敏后的合规数据（SanitizedData），
+// 原始明文数据（RawRecords）严禁出域交付给外部，故保持为空数组。
 type DataApiSessionResponse struct {
 	SessionID     string                `json:"session_id"`
 	APICode       string                `json:"api_code"`      // canonical 业务 API
@@ -412,8 +413,8 @@ type DataApiSessionResponse struct {
 	ApiID         int                   `json:"api_id"`        // DEPRECATED: 等于 seq
 	ApiName       string                `json:"api_name"`
 	Status        string                `json:"status"`                   // 整体状态："completed" | "partial" | "failed"
-	RawRecords    []map[string]any      `json:"raw_records"`              // 从数据源获取的原始记录（始终返回数组）
-	SanitizedData []map[string]any      `json:"sanitized_data"`           // 脱敏后的记录（始终返回数组）
+	RawRecords    []map[string]any      `json:"raw_records"`              // 原始记录（外部申请方无权获取，严禁出域，固定为空数组）
+	SanitizedData []map[string]any      `json:"sanitized_data"`           // 脱敏后的记录（交付给外部申请方的合规数据）
 	Stages        []DataApiSessionStage `json:"stages"`                   // 各阶段执行详情
 	AuditEntryID  string                `json:"audit_entry_id,omitempty"` // 写入审计日志的条目 ID
 	TotalDuration int64                 `json:"total_duration_ms"`        // 会话总耗时（毫秒）

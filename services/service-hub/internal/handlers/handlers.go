@@ -337,6 +337,62 @@ func constantTimeLookupKeys(keys map[string]*pkgauth.KeyConfig, token string) *p
 	return &pkgauth.Identity{ServiceType: "external", Name: matched.Name, Scopes: matched.Scopes}
 }
 
+// callerName 返回当前请求调用者标识名称，未认证时返回 "anonymous"。
+func (s *Server) callerName(c *gin.Context) string {
+	identity := pkgauth.GetIdentity(c)
+	if identity != nil && identity.Name != "" {
+		return identity.Name
+	}
+	return "anonymous"
+}
+
+// checkDatasourceAccess 执行细粒度数据源级授权检查（ABAC / 租户数据源隔离）。
+//
+// 鉴权判定顺序（Fail-closed 最小权限）：
+//  1. 若当前未获取到调用者身份（如未配置鉴权的开发/免密模式），放行；
+//  2. 若身份拥有超级管理权限（"*" 或 "admin"），放行；
+//  3. 检查是否存在针对该数据源的显式授权：
+//     - "hub:dispatch:<normID>" / "hub:dispatch:<rawID>"
+//     - "data:apply:<normID>" / "data:apply:<rawID>"
+//     若匹配则直接放行；
+//  4. 检查调用者 scopes 中是否声明了任何细粒度数据源限定（包含 "hub:dispatch:ds_" 或 "data:apply:" 前缀）；
+//     若存在细粒度限定但未命中当前请求的数据源，判定为越权访问，拒绝（返回 false）；
+//  5. 若未声明任何细粒度限定，但拥有通用调度权限（"hub:dispatch" 或 "hub:dispatch:*"），放行。
+func (s *Server) checkDatasourceAccess(c *gin.Context, normID, rawID string) bool {
+	identity := pkgauth.GetIdentity(c)
+	if identity == nil {
+		return true
+	}
+	if identity.HasPermission("*") || identity.HasPermission("admin") {
+		return true
+	}
+
+	dsPerms := []string{
+		"hub:dispatch:" + normID,
+		"hub:dispatch:" + rawID,
+		"data:apply:" + normID,
+		"data:apply:" + rawID,
+	}
+	for _, p := range dsPerms {
+		if identity.HasPermission(p) {
+			return true
+		}
+	}
+
+	hasSpecificDSRestriction := false
+	for _, sc := range identity.Scopes {
+		if strings.HasPrefix(sc, "hub:dispatch:ds_") || strings.HasPrefix(sc, "data:apply:") {
+			hasSpecificDSRestriction = true
+			break
+		}
+	}
+	if hasSpecificDSRestriction {
+		return false
+	}
+
+	return identity.HasPermission("hub:dispatch") || identity.HasPermission("hub:dispatch:*")
+}
+
 // Health is a liveness probe — returns 200 if the process is alive.
 // Use /readyz for deep upstream dependency checks.
 // Health 存活探针 — 进程存活即返回 200。
@@ -520,6 +576,13 @@ func (s *Server) Dispatch(c *gin.Context) {
 	req.DatasourceID = normID
 	req.APICode = normAPICode
 	req.Source = normID
+
+	// 细粒度数据源租户授权检查（ABAC）：确保调用方对该数据源具有显式权限
+	if !s.checkDatasourceAccess(c, normID, rawSource) {
+		middleware.AbortWithError(c, http.StatusForbidden, "UNAUTHORIZED_DATASOURCE",
+			fmt.Sprintf("caller %q is not authorized to access datasource %q", s.callerName(c), normID), nil)
+		return
+	}
 
 	// operation 为可选的「强度请求」：缺省即完全交由服务端定级推导（P1-1）。
 	req.Operation = strings.TrimSpace(req.Operation)
@@ -857,6 +920,13 @@ func (s *Server) FetchAndDesensitize(c *gin.Context) {
 			return
 		}
 		middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_DATASOURCE_ID", fmt.Sprintf("invalid data source %q: %v", req.DatasourceID, err), nil)
+		return
+	}
+
+	// 细粒度数据源租户授权检查（ABAC）：外部申请方必须持有该数据源的访问权限
+	if !s.checkDatasourceAccess(c, normID, req.DatasourceID) {
+		middleware.AbortWithError(c, http.StatusForbidden, "UNAUTHORIZED_DATASOURCE",
+			fmt.Sprintf("caller %q is not authorized to access datasource %q", s.callerName(c), normID), nil)
 		return
 	}
 

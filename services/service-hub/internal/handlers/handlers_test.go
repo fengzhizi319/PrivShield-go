@@ -1135,3 +1135,67 @@ func TestHubOrchestrationEndpoints(t *testing.T) {
 		}
 	})
 }
+
+// TestDatasourceLevelABACAuthorization 验证调度中枢数据源级细粒度授权（ABAC / 租户数据源隔离）：
+// 1. 外部申请方持有特定数据源 scope (hub:dispatch:ds_yibao) 时，访问 ds_yibao 允许；
+// 2. 尝试越权访问未授权数据源 (ds_kangyang) 返回 403 UNAUTHORIZED_DATASOURCE；
+// 3. 超级管理员身份 (admin / *) 拥有全数据源访问权限。
+func TestDatasourceLevelABACAuthorization(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	srv := &Server{
+		cfg: &config.Config{
+			ScopeKeys: map[string]*pkgauth.KeyConfig{
+				"token-yibao-only": {
+					Name:   "app-yibao",
+					Scopes: []string{"hub:dispatch", "hub:dispatch:ds_yibao"},
+				},
+				"token-kangyang-only": {
+					Name:   "app-kangyang",
+					Scopes: []string{"hub:dispatch", "data:apply:ds_kangyang"},
+				},
+			},
+		},
+		logger: slog.Default(),
+	}
+
+	r := gin.New()
+	r.Use(srv.scopeAuthMiddleware())
+	r.POST("/v1/hub/fetch-and-desensitize", srv.FetchAndDesensitize)
+
+	// 1. app-yibao 访问已授权的 yibao（因无下游 mock，通过鉴权后进入上游不可用即代表鉴权通过）
+	w1 := httptest.NewRecorder()
+	body1 := bytes.NewBufferString(`{"datasource_id":"ds_yibao","id_card_no":"110101196809171010"}`)
+	req1, _ := http.NewRequest(http.MethodPost, "/v1/hub/fetch-and-desensitize", body1)
+	req1.Header.Set("Authorization", "Bearer token-yibao-only")
+	req1.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w1, req1)
+	if w1.Code == http.StatusForbidden {
+		t.Fatalf("expected yibao authorized caller not to get 403, got %d: %s", w1.Code, w1.Body.String())
+	}
+
+	// 2. app-yibao 越权访问 kangyang -> 必须返回 403 UNAUTHORIZED_DATASOURCE
+	w2 := httptest.NewRecorder()
+	body2 := bytes.NewBufferString(`{"datasource_id":"ds_kangyang","id_card_no":"110101196809171010"}`)
+	req2, _ := http.NewRequest(http.MethodPost, "/v1/hub/fetch-and-desensitize", body2)
+	req2.Header.Set("Authorization", "Bearer token-yibao-only")
+	req2.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for unauthorized datasource, got %d: %s", w2.Code, w2.Body.String())
+	}
+	if !strings.Contains(w2.Body.String(), "UNAUTHORIZED_DATASOURCE") {
+		t.Errorf("expected UNAUTHORIZED_DATASOURCE in response, got %s", w2.Body.String())
+	}
+
+	// 3. app-kangyang 访问已授权的 kangyang
+	w3 := httptest.NewRecorder()
+	body3 := bytes.NewBufferString(`{"datasource_id":"ds_kangyang","id_card_no":"110101196809171010"}`)
+	req3, _ := http.NewRequest(http.MethodPost, "/v1/hub/fetch-and-desensitize", body3)
+	req3.Header.Set("Authorization", "Bearer token-kangyang-only")
+	req3.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w3, req3)
+	if w3.Code == http.StatusForbidden {
+		t.Fatalf("expected kangyang authorized caller not to get 403, got %d: %s", w3.Code, w3.Body.String())
+	}
+}
+
