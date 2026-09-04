@@ -34,7 +34,7 @@
 - [四、端到端数据流转机制与高可用调度](#四端到端数据流转机制与高可用调度)
   - [4.1 端到端 9 阶段全流程流转时序](#41-端到端-9-阶段全流程流转时序)
   - [4.2 各阶段安全关键控制点](#42-各阶段安全关键控制点)
-  - [4.3 Go Client-Side 多节点负载均衡与熔断](#43-go-client-side-多节点负载均衡与熔断)
+  - [4.3 Go Client-Side 多节点负载均衡与熔断 (Service Hub 出站矩阵)](#43-go-client-side-多节点负载均衡与熔断-service-hub-出站矩阵)
   - [4.4 网关 P2C 动态负载调度](#44-网关-p2c-动态负载调度)
   - [4.5 PostgreSQL 原子租约并发与自愈](#45-postgresql-原子租约并发与自愈)
   - [4.6 云原生多维自动扩缩容](#46-云原生多维自动扩缩容)
@@ -325,6 +325,10 @@ graph TB
 
 ### 3.1 数据服务调度中枢 (Service Hub :8082 / :50052)
 * **流水线 6 阶段调度**：`Ingest` (请求接入) ➔ `Fetch` (拉取原数) ➔ `Classify` (分类定级) ➔ `Desensitize` (按级脱敏) ➔ `Return` (脱敏回传) ➔ `Audit` (异步存证)；
+* **统一出站多节点负载均衡与故障转移**：
+  - **连接多个 `privacy-engine` 算力节点**：`agentClient` 通过 `PRIVACY_AGENT_URLS` 读取多引擎集群地址列表，无锁原子 Round-Robin 轮询调度，支持按节点独立三态熔断与重试故障转移（Failover）；
+  - **连接多个 `mock-datasource` 数据源节点**：`dsClient` 通过 `DATASOURCE_MGR_URLS` / `DATASOURCE_URLS` 读取多数据源实例，统一采用节点级独立熔断与透明故障转移；
+  - **连接多个 `audit-log` 存证审计节点**：`evidenceClient` 通过 `SERVICE_HUB_AUDIT_LOG_URLS` 读取多存证节点，保证出域合规存证的高可用与零中断；
 * **任务状态机与原子租约并发**：集成 `LeasedTaskStore`，在 PostgreSQL 上基于 `FOR UPDATE SKIP LOCKED` 实现多副本无阻塞竞争领取（`ClaimNext`）、带令牌租约续期（`RenewLease`）与完成确认；
 * **崩溃恢复与自动重试**：启动时自动回收孤立任务（running 标记失败、pending 保留队列），周期性后台重试失败任务（指数退避 + RetryCount 结构化字段）；
 * **完整性校验与备份**：启动时执行 `PRAGMA integrity_check` 阻断损坏数据库，统一备份脚本支持全量/增量/验证模式；
@@ -433,15 +437,28 @@ sequenceDiagram
 
 ---
 
-### 4.3 Go Client-Side 多节点负载均衡与熔断
+### 4.3 Go Client-Side 多节点负载均衡与熔断 (Service Hub 出站矩阵)
 
-* `pkg/agent/client.go` 原生支持配置 `PRIVACY_AGENT_URLS` 集群列表；
-* 内置无锁 Round-Robin 轮询调度（`atomic.Int32` fetch-and-add），按节点维度独立三态熔断器（Closed → Open → Half-Open），遇到单点宕机自动透明切换至存活节点；
-* **4xx 智能防误熔断**：4xx 客户端业务错误直接透传，不计入服务端故障计数，防止恶意或格式错误请求击穿熔断器；
-* **智能重试与故障转移**：对网络超时与 5xx 错误执行带随机抖动的指数退避重试（Exponential Backoff with Jitter），并在重试轮次切换到其他健康节点；
-* **防 OOM 内存保护**：`io.LimitReader` 限制响应体上限 64 MiB；
-* **全链路追踪与幂等**：自动从 Context 注入 `X-Request-ID`、`X-Trace-ID` 与 `X-Idempotency-Key`；
-* 实时暴露 `circuit_breaker_state{node="..."}` 状态指标。
+`service-hub` 调度中枢出站调用下游三大微服务（隐私计算引擎 `privacy-engine`、模拟数据源 `mock-datasource`、审计日志 `audit-log`）统一采用 **去中心化客户端负载均衡（Client-Side Load Balancing）** 架构：
+
+#### 1. 连接多个 `privacy-engine` 算力引擎
+* **多实例水平扩展**：通过配置环境变量 `PRIVACY_AGENT_URLS`（如 `http://engine-1:8079,http://engine-2:8079,http://engine-3:8079`）直接接入多个计算节点；未显式配置时安全回退至单节点模式；
+* **无锁轮询调度**：底层复用 `pkg/agent/client.go`，采用 `atomic.Uint64` 原子递增实现零锁开销 Round-Robin 均衡调度；
+* **节点级独立熔断（Per-Node Circuit Breaker）**：为每个后端节点建立独立的三态熔断器状态机（Closed → Open → Half-Open）。当单个节点因崩溃或硬件故障触发阈值（连续失败 5 次）进入 Open 状态时，**仅熔断发往该故障节点的流量**，剩余健康节点继续平稳承接流水线脱敏请求，彻底阻断级联雪崩；30s 冷却后放行半开探测流量验证自愈；
+* **重试智能故障转移（Failover with Exponential Backoff）**：遭遇网络超时或 5xx 错误时，客户端触发带随机抖动的指数退避（Exponential Backoff with Jitter），并在重试轮次**透明切换至集群中的下一个健康节点**，无需调用方感知；
+* **4xx 防误熔断保护**：客户端业务或参数校验错误（4xx）直接透传业务侧，不计入节点故障计数，防御恶意请求或异常数据探针打穿熔断器；
+* **内存与链路防护**：`io.LimitReader` 强制限制单响应体最大 64 MiB 防范 OOM；自动注入分布式追踪头（`X-Request-ID` / `X-Trace-ID`）与幂等键（`X-Idempotency-Key`）；
+* **指标监控透出**：暴露 `circuit_breaker_state{node="..."}` 状态指标，实时向 Prometheus / Grafana 反映每个引擎节点的存活与熔断快照。
+
+#### 2. 统一出站三剑客模式对齐
+`service-hub` 出站三链路均已统一收敛至多实例容灾模型：
+* **算力链路 (`agentClient`)**：对接多个 `privacy-engine`，承载大吞吐数据分类与动态脱敏算子；
+* **数据链路 (`dsClient`)**：对接多个 `mock-datasource`（通过 `DATASOURCE_MGR_URLS`），支持多源高可用探测与样本切片抓取；
+* **存证链路 (`evidenceClient`)**：对接多个 `audit-log`（通过 `SERVICE_HUB_AUDIT_LOG_URLS`），确保出域存证链路零丢失、高可靠。
+
+#### 3. 与 `privacy-engine` 自身 Gateway 的定位差异
+* **`service-hub` 客户端负载均衡**：属于**内部服务间（East-West）去中心化直连**。`service-hub` 作为调度中枢直接感知多个计算节点，消除了集中式反向代理的额外网络跳转开销（网络 Hop），结合按节点熔断实现亚毫秒级的故障隔离；
+* **`privshield-gateway`（服务端网关）**：属于**南北向/统一集群入口代理**。采用 P2C-EWMA 延迟感知动态加权与 32KB 零分配 BufferPool，面向外部调用方暴露统一虚拟地址（`:8000` / `:50000`），适用于没有 K8s 内部服务发现或外部系统直连场景。
 
 ### 4.4 网关 P2C-EWMA 动态负载调度
 
