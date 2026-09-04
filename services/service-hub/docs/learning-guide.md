@@ -458,7 +458,7 @@ stateDiagram-v2
 ## 7. 零信任安全防护体系
 
 1. **Slowloris 攻击防御**：在 `http.Server` 中显式设置 `ReadHeaderTimeout: 5s`，避免慢连接挂死服务连接池。
-2. **传输层双向加密**：gRPC 原生支持 TLS 1.3 mTLS 双向认证。
+2. **传输层双向加密**：HTTP REST 与 gRPC 原生均支持 TLS 1.3 mTLS 双向认证及 GM/T 0024 TLCP 国密双证书通信。
 3. **公钥固定 (SPKI Pinning)**：防止中间人攻击、未授权 CA 签发伪造证书。
 4. **资源隔离与限流**：Goroutine 信号量限制并发执行数，防止大批量高密计算引起 OOM。
 5. **Panic 恢复与结构化告警**：Gin Recovery 中间件捕获异常，防止单任务崩溃导致整个进程下线。

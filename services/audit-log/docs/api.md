@@ -1,6 +1,6 @@
 # 脱敏审计日志与存证 (audit-log) — API 规范
 
-`audit-log` 采用 **REST (HTTP/JSON :8084) + gRPC (mTLS :50054)** 双协议架构，为 PrivShield 平台提供全量脱敏合规审计、国密 SM3 区块链式防篡改存证、国密 SM4-GCM 快照加密对账、微批聚合刷盘（3k~5k QPS）与统计合规报告服务。
+`audit-log` 采用 **REST (HTTP/HTTPS :8084，支持 mTLS / TLCP 国密) + gRPC (mTLS/Plain :50054)** 双协议架构，为 PrivShield 平台提供全量脱敏合规审计、国密 SM3 区块链式防篡改存证、国密 SM4-GCM 快照加密对账、微批聚合刷盘（3k~5k QPS）与统计合规报告服务。
 
 ---
 
@@ -8,7 +8,7 @@
 
 | 协议 | 默认地址 | 认证方式 | 说明 |
 |---|---|---|---|
-| **HTTP REST** | `http://127.0.0.1:8084` | Bearer Token / API Key | 供 React 前端与 BFF 交互，支持微批聚合写入与链式验真 |
+| **HTTP(S) REST** | `http(s)://127.0.0.1:8084` | Bearer Token / API Key / TLS 1.3 mTLS / TLCP 国密双证书 | 供 React 前端与 BFF 交互，支持微批聚合写入与链式验真 |
 | **gRPC (mTLS)** | `127.0.0.1:50054` | 国密 SM2 / TLS 1.3 双向 mTLS + CN 白名单 | 供调度流水线与服务集群高性能审计入库与存证 |
 | **Prometheus** | `http://127.0.0.1:8084/metrics` | API Key 鉴权 / 内网隔离 | 收集 15+ 核心审计、微批刷盘与存储监控指标 |
 

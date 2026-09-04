@@ -1,10 +1,15 @@
 // Command server is the entry point for the audit-log module.
-// Command server 是脱敏审计日志与存证模块的程序入口。
+// Command server 是脱敏审计日志与不可篡改存证模块的程序入口。
 //
-// Architecture / 架构：
+// Architecture & Traffic Flow / 系统架构与流量拓扑：
 //
-//	React 前端  ──HTTP/JSON──▶  audit-log(Go)  ──HTTP──▶  PrivShield Agent
-//	                          └─gRPC(mTLS)───▶  调度中枢/外部客户端
+//	React 前端 / BFF-Go / 调度中枢 ──HTTP(S) REST (明文 / TLS 1.3 mTLS / TLCP 国密) (:8084)──┐
+//	                                                                                  │
+//	                                                                                  ▼
+//	调度中枢 service-hub / 上游微服务 ──gRPC (明文 / TLS 1.3 mTLS 双向认证) (:50054)─────────▶  audit-log 审计存证服务 (:8084 REST / :50054 gRPC)
+//	                                                                                  │
+//	                                                                                  ▼ (出站脱敏与分类查询: HTTP/HTTPS/TLCP)
+//	                                                                           PrivShield Engine 隐私计算引擎 (:8079 / :50051)
 package main
 
 import (

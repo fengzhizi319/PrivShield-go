@@ -10,10 +10,10 @@
 //  7. 监听 SIGINT/SIGTERM 信号，执行优雅停机（5 秒超时）
 //
 // 上游微服务拓扑：
-//   - Service Hub    (:8082) — 流水线调度中枢
-//   - Agent Engine   (:8079) — 隐私脱敏引擎（REST）
-//   - Datasource Mgr (:8083) — 数据源资产管理
-//   - Audit Log      (:8084) — 审计存证服务
+//   - Service Hub     (:8082 / :50052) — 流水线调度中枢（唯一业务编排入口，支持 HTTP(S) mTLS / TLCP 及 gRPC mTLS）
+//   - Privacy Engine  (:8079 / :50051) — 核心隐私计算引擎（REST / gRPC）
+//   - Mock Datasource (:8083 / :50053) — 模拟多源异构数据源服务（REST / gRPC）
+//   - Audit Log       (:8084 / :50054) — 审计存证服务（REST / gRPC）
 package main
 
 import (

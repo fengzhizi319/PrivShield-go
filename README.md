@@ -116,8 +116,8 @@ graph TD
 
     WebConsole -->|HTTP/JSON| BFF
     BFF -->|HTTP/gRPC| ServiceHubNode
-    ExtClient -->|gRPC mTLS :50052| HubGRPC
-    ExtClient -->|HTTP REST :8082| HubHTTP
+    ExtClient -->|gRPC (mTLS) :50052| HubGRPC
+    ExtClient -->|HTTP(S) REST (mTLS/TLCP) :8082| HubHTTP
 
     HubHTTP --> PipelineEngine
     HubGRPC --> PipelineEngine

@@ -15,8 +15,8 @@
 //
 // 整体架构 / Overall architecture:
 //
-//	React 前端  ──HTTP/JSON──▶  本程序(Go)  ──gRPC──▶  PrivShield Agent
-//	React frontend  ──HTTP/JSON──▶  This program(Go)  ──gRPC──▶  PrivShield Agent
+//	React 前端  ──HTTP(S)/JSON──▶  BFF-Go (:8081)  ──gRPC (支持 TLS/mTLS/TLCP)──▶  PrivShield Agent (:50051)
+//	React frontend  ──HTTP(S)/JSON──▶  BFF-Go (:8081)  ──gRPC (supports TLS/mTLS/TLCP)──▶  PrivShield Agent (:50051)
 package main
 
 import (
