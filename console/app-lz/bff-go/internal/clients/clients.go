@@ -1214,8 +1214,8 @@ func (c *ClientPool) ProcessMedicalRecords(ctx context.Context, records []map[st
 func (c *ClientPool) ProcessAgentRecords(ctx context.Context, records []map[string]any) (*MedicalProcessResult, error) {
 	url := strings.TrimRight(c.cfg.HubURL, "/") + "/v1/hub/dispatch"
 	data, _ := json.Marshal(map[string]any{
-		"datasource_id": "ds_yibao",
-		"api_code":      "api1_yibao",
+		"datasource_id": naming.DSYibao,
+		"api_code":      naming.API1Yibao,
 		"operation":     "mask",
 		"payload":       records,
 	})
@@ -1255,8 +1255,8 @@ func (c *ClientPool) ProcessAgentRecords(ctx context.Context, records []map[stri
 func (c *ClientPool) MaskRecordViaEngine(ctx context.Context, record map[string]any) (map[string]any, error) {
 	url := strings.TrimRight(c.cfg.HubURL, "/") + "/v1/hub/dispatch"
 	data, _ := json.Marshal(map[string]any{
-		"datasource_id": "ds_yibao",
-		"api_code":      "api1_yibao",
+		"datasource_id": naming.DSYibao,
+		"api_code":      naming.API1Yibao,
 		"operation":     "mask",
 		"payload":       record,
 	})
