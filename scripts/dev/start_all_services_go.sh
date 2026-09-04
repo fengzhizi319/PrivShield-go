@@ -1,1 +1,0 @@
-start_all_services.sh

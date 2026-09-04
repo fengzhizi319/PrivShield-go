@@ -631,7 +631,7 @@ console/web/dist/
 在这个项目里：
 
 - Go BFF 后端会挂载 `console/web/dist/` 作为静态资源；
-- `scripts/dev/dev-bff-agent.sh` 等脚本会自动帮你处理这部分流程。
+- `scripts/dev/dev-engine-console.sh` 等脚本会自动帮你处理这部分流程。
 
 > **历史说明**：早期 Python REST BFF（`console/bff-py`）也曾托管 `dist/`，该实现已移除。
 

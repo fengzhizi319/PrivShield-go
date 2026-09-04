@@ -102,7 +102,7 @@ bash ./scripts/dev/e2e-start-all-services.sh
 go test -race -count=1 ./services/service-hub/... ./services/datasource-mgr/... ./services/audit-log/...
 
 # 3. 运行端到端 E2E 集成测试
-bash ./scripts/dev/integration-test-new-modules.sh
+bash ./scripts/dev/integration-test-services.sh
 
 # 4. 触发审计哈希链在线验真
 curl -X POST http://127.0.0.1:8084/v1/audit/chain/verify

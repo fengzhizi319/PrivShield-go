@@ -84,7 +84,7 @@ corepack pnpm dev       # 打开 http://localhost:5173
 
 ```bash
 # 一键启动 agent + Go 后端（自动补依赖、构建前端、预编译 Go 二进制）
-./scripts/dev/dev-bff-agent.sh
+./scripts/dev/dev-engine-console.sh
 
 # 访问 http://127.0.0.1:8081 即可打开控制台
 # 按 Ctrl+C 停止所有服务；或在另一终端执行 ./scripts/dev/dev-stop.sh
@@ -114,8 +114,8 @@ go build -o bin/backend-go ./cmd/server
 页面顶部 Backend Selector 仅在 REST 与 gRPC 两种上游协议间切换，二者统一由 Go BFF（`console/bff-go`）承接：
 
 ```bash
-./scripts/dev/dev-bff-agent.sh    # 启动 agent + Go BFF(8081) + Web 前端(5173)
-./scripts/dev/dev-stop.sh         # 停止
+./scripts/dev/dev-engine-console.sh    # 启动 agent + Go BFF(8081) + Web 前端(5173)
+./scripts/dev/dev-stop.sh               # 停止
 ```
 
 打开 `http://127.0.0.1:8081` 后，通过 `?protocol=rest` 或 `?protocol=grpc` 切换上游协议。
@@ -261,7 +261,7 @@ server {
 ./scripts/dev/gen-certs.sh
 
 # 2. 一键以 mTLS 模式启动 agent + Go 代理（证书缺失时会自动生成）
-./scripts/dev/dev-bff-agent.sh --mtls
+./scripts/dev/dev-engine-console.sh --mtls
 
 # 3. 停止
 ./scripts/dev/dev-stop.sh
@@ -337,13 +337,13 @@ sequenceDiagram
 
 | 脚本 | 作用 |
 |---|---|
-| `./scripts/dev/dev-bff-agent.sh` | 启动 agent + Go BFF + Vite 前端（自动补依赖、构建前端、预编译二进制），Ctrl+C 停止 |
-| `./scripts/dev/dev-bff-agent.sh --mtls` | 以 **mTLS 双向认证模式** 启动 agent + Go BFF + Vite 前端 |
+| `./scripts/dev/dev-engine-console.sh` | 启动 agent + Go BFF + Vite 前端（自动补依赖、构建前端、预编译二进制），Ctrl+C 停止 |
+| `./scripts/dev/dev-engine-console.sh --mtls` | 以 **mTLS 双向认证模式** 启动 agent + Go BFF + Vite 前端 |
 | `./scripts/dev/dev-stop.sh` | 安全停止本地所有开发进程（含 Agent、BFF、Vite） |
 | `./scripts/prod/prod-bff-agent.sh` | 生产模式启动 agent + Go BFF（托管静态前端 dist 页面） |
 | `./scripts/prod/prod-stop.sh` | 停止生产进程 |
 
-启动脚本每次运行都会自动补齐依赖并构建前端（Go 二进制每次均重新编译）；如需强制重建前端，删除 `console/web/dist` 后重新运行 `./scripts/dev/dev-bff-agent.sh` 即可。
+启动脚本每次运行都会自动补齐依赖并构建前端（Go 二进制每次均重新编译）；如需强制重建前端，删除 `console/web/dist` 后重新运行 `./scripts/dev/dev-engine-console.sh` 即可。
 
 ### 6.2 手动启停
 

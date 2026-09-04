@@ -53,7 +53,7 @@ echo "========================================================"
 # ── 1. 检查目标服务健康状态 ──────────────────────────────────────────────────
 if ! curl -s -f "$HUB_URL/health" > /dev/null; then
   echo "❌ 错误: Service Hub 未在 $HUB_URL 运行，请先启动服务！"
-  echo "💡 提示: bash ./scripts/dev/dev-start-new-modules.sh 或 cd services/service-hub && bash run.sh"
+  echo "💡 提示: bash ./scripts/dev/dev-start-services.sh 或 cd services/service-hub && bash run.sh"
   exit 1
 fi
 

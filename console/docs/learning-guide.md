@@ -583,9 +583,9 @@ cd console/web && corepack pnpm dev
 
 ```bash
 # 从仓库根目录执行
-./scripts/dev/dev-bff-agent.sh          # 启动 Agent + Go BFF + Vite 前端 (HMR)
-./scripts/dev/dev-bff-agent.sh --mtls   # 以 mTLS 双向认证模式启动
-./scripts/dev/dev-stop.sh              # 停止所有开发服务
+./scripts/dev/dev-engine-console.sh          # 启动 Agent + Go BFF + Vite 前端 (HMR)
+./scripts/dev/dev-engine-console.sh --mtls   # 以 mTLS 双向认证模式启动
+./scripts/dev/dev-stop.sh                   # 停止所有开发服务
 ```
 
 ### 7.3 Docker 部署

@@ -531,10 +531,10 @@ App-LZ 的脚本与现有脚本体系**并行共存、互不干扰**：
 
 | 场景 | 现有脚本 | App-LZ 脚本 | 说明 |
 |---|---|---|---|
-| 开发模式启动 | `scripts/dev/dev-bff-agent.sh` | `scripts/dev/dev-app-lz.sh` | 独立启动，不替代现有脚本 |
+| 开发模式启动 | `scripts/dev/dev-engine-console.sh` | `scripts/dev/dev-app-lz.sh` | 独立启动，不替代现有脚本 |
 | 全服务 E2E | `scripts/dev/e2e-start-all-services.sh` | — | 现有脚本已拉起 3 个 Go 服务 + Agent，App-LZ 直接连接 |
 | 停止开发服务 | `scripts/dev/dev-stop.sh` | `scripts/dev/stop-app-lz.sh` | 独立停止 |
-| 集成测试 | `scripts/dev/integration-test-new-modules.sh` | — | App-LZ 的 E2E 测试执行器替代 curl 脚本 |
+| 集成测试 | `scripts/dev/integration-test-services.sh` | — | App-LZ 的 E2E 测试执行器替代 curl 脚本 |
 
 **开发模式启动流程** (`dev-app-lz.sh`)：
 

@@ -85,7 +85,7 @@ corepack pnpm build
 
 #### 开发模式
 - 默认采用内存存储模式（`PRIVACY_HUB_DB=""` 等），轻量快速，无需预先创建数据库文件；
-- 一键启动本地脚本：`bash ./scripts/dev/dev-start-new-modules.sh`。
+- 一键启动本地脚本：`bash ./scripts/dev/dev-start-services.sh`。
 
 #### 商业化产品模式
 - 启用 SQLite WAL 持久化（如 `PRIVACY_HUB_DB="/var/data/service_hub.db"`），读写并发不阻塞，掉电不丢数据；

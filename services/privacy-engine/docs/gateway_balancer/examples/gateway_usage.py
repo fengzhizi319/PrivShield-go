@@ -4,8 +4,8 @@
 涵盖网关健康检查、后端节点拓扑查询、数据脱敏代理转发及 Prometheus 指标采集。
 
 前置条件：
-    1. 启动 Go Agent:   go run ./engine-go/cmd/privshield-agent
-    2. 启动 Go Gateway: bash ./scripts/dev/go-gateway-start.sh
+    1. 启动 Go Agent:   go run ./services/privacy-engine/cmd/privshield-agent
+    2. 启动 Go Gateway: bash ./scripts/dev/start-privacy-gateway.sh
 
 运行方式：
     python docs/gateway_balancer/examples/gateway_usage.py
@@ -27,7 +27,7 @@ def main() -> None:
         assert resp.json().get("status") == "ok"
     except Exception as e:
         print(f"⚠️ 无法连接到网关 (http://127.0.0.1:8000): {e}")
-        print("请确认网关已启动: bash ./scripts/dev/go-gateway-start.sh")
+        print("请确认网关已启动: bash ./scripts/dev/start-privacy-gateway.sh")
         sys.exit(1)
 
     print("\n=== 2. 查询后端节点拓扑与 EWMA 状态 (GET /gateway/backends) ===")

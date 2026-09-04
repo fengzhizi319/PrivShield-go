@@ -12,8 +12,8 @@ import (
 // 网关 REST API 快速调用示例 (Go Client)
 //
 // 前置条件：
-// 启动 Go Agent: go run ./engine-go/cmd/privshield-agent
-// 启动 Go Gateway: bash ./scripts/dev/go-gateway-start.sh
+// 启动 Go Agent: go run ./services/privacy-engine/cmd/privshield-agent
+// 启动 Go Gateway: bash ./scripts/dev/start-privacy-gateway.sh
 func main() {
 	gatewayBaseURL := "http://127.0.0.1:8000"
 	client := &http.Client{Timeout: 5 * time.Second}

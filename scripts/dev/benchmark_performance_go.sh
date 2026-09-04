@@ -1,1 +1,0 @@
-benchmark_performance.sh

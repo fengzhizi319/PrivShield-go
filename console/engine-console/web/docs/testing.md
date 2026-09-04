@@ -81,7 +81,7 @@ npm run lint         # eslint . --ext ts,tsx --max-warnings 0
 
 ```bash
 # 1. 启动 agent + Go BFF + 前端
-./scripts/dev/dev-bff-agent.sh
+./scripts/dev/dev-engine-console.sh
 
 # 2. 构建前端（若未构建）
 cd console/web && npm run build

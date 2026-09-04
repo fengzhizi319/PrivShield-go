@@ -108,7 +108,7 @@ ok  	github.com/fengzhizi319/PrivShield-go/engine-go/internal/gateway	4.821s
 
 ```bash
 # 启动所有后台微服务并执行自动化集成套件
-bash ./scripts/dev/integration-test-new-modules.sh
+bash ./scripts/dev/integration-test-services.sh
 ```
 
 ---

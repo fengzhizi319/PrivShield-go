@@ -3,7 +3,7 @@
 # Launch PrivShield Agent + Go BFF + Vite Dev UI in DEV mode (Windows PowerShell)
 #
 # 用法 / Usage:
-#   .\scripts\dev\dev-bff-agent.ps1 [-Mtls] [-Force]
+#   .\scripts\dev\dev-engine-console.ps1 [-Mtls] [-Force]
 # ============================================================================
 
 param (

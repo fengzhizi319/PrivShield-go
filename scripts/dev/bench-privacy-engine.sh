@@ -2,7 +2,7 @@
 # PrivShield Go 引擎全栈基准测试脚本
 #
 # 用法：
-#   bash scripts/dev/go-engine-bench.sh [--bench-time=1s] [--output=results.txt]
+#   bash scripts/dev/bench-privacy-engine.sh [--bench-time=1s] [--output=results.txt]
 #
 # 前提：Go 1.25+ 已安装，services/privacy-engine 模块编译通过。
 set -euo pipefail

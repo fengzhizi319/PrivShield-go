@@ -100,13 +100,13 @@ BFF 网关层提供了面向不同业务场景的聚合路由定义：
 ## 4. 运行指南
 
 ```bash
-# 1. 启动全功能控制台（Go Agent + Go BFF + Vite HMR 前端）
-bash ./scripts/dev/dev-bff-agent.sh
+# 1. 启动全功能控制台（Privacy Engine + Go BFF + Vite HMR 前端）
+bash ./scripts/dev/dev-engine-console.sh
 ```
 
 ```bash
 # 2. 启用 mTLS 双向认证模式启动
-bash ./scripts/dev/dev-bff-agent.sh --mtls
+bash ./scripts/dev/dev-engine-console.sh --mtls
 ```
 
 ```bash

@@ -264,7 +264,7 @@ PYTHONPATH=. pytest tests/security/test_security_whitelist.py -v
 go test -race -count=1 ./pkg/tlsutil/... ./pkg/middleware/... ./pkg/crypto/... ./services/audit-log/...
 
 # 4. 执行端到端安全与 DDoS 综合集成测试
-bash ./scripts/dev/integration-test-new-modules.sh
+bash ./scripts/dev/integration-test-services.sh
 ```
 
 ---

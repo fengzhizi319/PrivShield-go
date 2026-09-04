@@ -73,8 +73,8 @@ corepack pnpm build
 ### 2.5 在启动脚本中的使用 / Usage in Startup Scripts
 
 ```bash
-# scripts/dev/dev-bff-agent.sh 中的前端构建逻辑
-# Frontend build logic in scripts/dev/dev-bff-agent.sh
+# scripts/dev/dev-engine-console.sh 中的前端构建逻辑
+# Frontend build logic in scripts/dev/dev-engine-console.sh
 if command -v pnpm >/dev/null 2>&1; then
     pnpm install && pnpm build  # 优先 pnpm / prefer pnpm
 elif command -v npm >/dev/null 2>&1; then

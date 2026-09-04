@@ -1,1 +1,0 @@
-run_console_e2e_tests.sh

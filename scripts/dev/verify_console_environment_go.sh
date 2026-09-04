@@ -1,1 +1,0 @@
-verify_console_environment.sh

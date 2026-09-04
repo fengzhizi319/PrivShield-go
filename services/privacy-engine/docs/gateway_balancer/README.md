@@ -37,7 +37,7 @@ make build
 
 ```bash
 # 方式 A：使用开发启动脚本（自动配置默认环境变量）
-bash ./scripts/dev/go-gateway-start.sh
+bash ./scripts/dev/start-privacy-gateway.sh
 
 # 方式 B：通过 go run 启动
 export GATEWAY_HOST=0.0.0.0
@@ -45,7 +45,7 @@ export GATEWAY_PORT=8000
 export GATEWAY_GRPC_PORT=50000
 export GATEWAY_BACKENDS="127.0.0.1:8079"
 export GATEWAY_STRATEGY="p2c"
-go run ./engine-go/cmd/privshield-gateway
+go run ./services/privacy-engine/cmd/privshield-gateway
 ```
 
 ### 3. 验证网关运行状态

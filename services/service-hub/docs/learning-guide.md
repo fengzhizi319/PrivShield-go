@@ -477,7 +477,7 @@ cd services/service-hub
 bash run.sh
 
 # 方式 2: 使用根目录一键脚本启动微服务集群
-bash scripts/dev/dev-start-new-modules.sh
+bash scripts/dev/dev-start-services.sh
 ```
 
 ### 8.2 核心 REST 接口演练

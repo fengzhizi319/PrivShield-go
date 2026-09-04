@@ -48,8 +48,6 @@ console/
 ```bash
 # 一键启动 privacy-engine + engine-console BFF + Vite 前端 (http://localhost:5173)
 bash ./scripts/dev/dev-engine-console.sh
-# 或
-bash ./scripts/dev/dev-bff-agent.sh
 ```
 
 ### 3.2 启动 App-LZ 调度之眼控制台 (专测 service-hub 调度全链路)

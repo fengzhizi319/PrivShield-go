@@ -84,7 +84,7 @@ make build
 ./bin/privshield-gateway
 
 # 3. 使用开发脚本一键启动
-bash ./scripts/dev/go-gateway-start.sh
+bash ./scripts/dev/start-privacy-gateway.sh
 ```
 # =============================================================================
 # PrivShield 网关与负载均衡配置

@@ -280,14 +280,14 @@ design.md 架构组件              →  Console 模块
 ### 一键运行
 
 ```bash
-# 开发模式：一键启动三个模块
-bash scripts/dev/dev-start-new-modules.sh
+# 开发模式：一键启动微服务群
+bash scripts/dev/dev-start-services.sh
 
 # 集成测试（需先启动 Agent）
-bash scripts/dev/integration-test-new-modules.sh
+bash scripts/dev/integration-test-services.sh
 
 # 停止
-bash scripts/dev/dev-stop-new-modules.sh
+bash scripts/dev/dev-stop-services.sh
 
 # Docker Compose 部署（含三个新模块）
 cd deploy/docker-compose

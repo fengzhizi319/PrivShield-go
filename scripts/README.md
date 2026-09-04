@@ -29,7 +29,7 @@ scripts/
 
 | 子目录 | 核心定位与场景 | 常用代表脚本 | 详细文档导航 |
 |---|---|---|---|
-| [`scripts/dev/`](./dev/README.md) | **本地开发与测试**：一键启动 Go Agent + BFF + 前端 HMR、中台微服务联动、E2E 自动化测试 | `dev-bff-agent.sh`<br/>`run_console_e2e_tests.sh`<br/>`dev-stop.sh` | [查看 Dev 文档](./dev/README.md) |
+| [`scripts/dev/`](./dev/README.md) | **本地开发与测试**：一键启动 Go Agent + BFF + 前端 HMR、中台微服务联动、E2E 自动化测试 | `dev-engine-console.sh`<br/>`run_console_e2e_tests.sh`<br/>`dev-stop.sh` | [查看 Dev 文档](./dev/README.md) |
 | [`scripts/prod/`](./prod/README.md) | **生产发布与运维**：Docker Compose 生产编排、Helm/K8s 发布、全量 SQLite 备份与生产巡检 | `deploy-docker-compose.sh`<br/>`deploy-helm.sh`<br/>`backup-sqlite-databases.sh` | [查看 Prod 文档](./prod/README.md) |
 | [`scripts/data/`](./data/README.md) | **数据与规则生成**：仿真医疗/医保/康养数据生成、多模态病历图片生成、规则与词表扩充 | `generate_medical_data.py`<br/>`generate_yibao_data.py`<br/>`expand_keywords_with_llm.py` | [查看 Data 文档](./data/README.md) |
 | [`scripts/env/`](./env/README.md) | **硬件加速与环境构建**：NVIDIA Blackwell (sm_120) CUDA 12.8 安装、TensorRT 引擎编译 | `install_cuda_pytorch_sm120.sh`<br/>`export_tensorrt_engine.sh` | [查看 Env 文档](./env/README.md) |

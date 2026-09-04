@@ -1,1 +1,0 @@
-dev-app-lz.sh

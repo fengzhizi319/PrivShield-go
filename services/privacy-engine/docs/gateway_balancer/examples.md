@@ -10,7 +10,7 @@
 
 ```bash
 cd /path/to/PrivShield
-bash ./scripts/dev/go-gateway-start.sh
+bash ./scripts/dev/start-privacy-gateway.sh
 ```
 
 脚本将以默认配置启动网关：

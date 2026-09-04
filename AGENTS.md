@@ -120,8 +120,6 @@ go run ./services/privacy-engine/cmd/privshield-gateway
 ### 一键启动 Privacy Engine 开发控制台全家桶 (Agent + Engine Console BFF + Vite 前端)
 
 ```bash
-bash ./scripts/dev/dev-bff-agent.sh
-# 或
 bash ./scripts/dev/dev-engine-console.sh
 ```
 

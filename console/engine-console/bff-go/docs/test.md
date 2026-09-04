@@ -160,7 +160,7 @@ go run ./cmd/server
 
 ```bash
 cd /path/to/PrivShield
-./scripts/dev/dev-bff-agent.sh
+./scripts/dev/dev-engine-console.sh
 ./scripts/dev/dev-stop.sh    # 在另一个终端停止
 ```
 

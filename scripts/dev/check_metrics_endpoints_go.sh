@@ -1,1 +1,0 @@
-check_metrics_endpoints.sh

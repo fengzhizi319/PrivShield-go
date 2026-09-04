@@ -56,7 +56,7 @@
 
 ## 1. 本地原生开发与控制台启动脚本
 
-### `dev-engine-console.sh`（兼容 `dev-bff-agent.sh` / `dev-bff-go-agent.sh`）
+### `dev-engine-console.sh`
 - **作用说明**: 【推荐主力】一键启动 Privacy Engine 核心计算引擎（REST `:8079`、gRPC `:50051`）、Engine Console Go 代理网关 BFF (`:8081`)，以及基于 Vite 的 React Web 前端开发服务器 (`:5173`，支持毫秒级 HMR 热更新）。同时支持 `--mtls` 参数以 mTLS 双向认证模式启动。
 - **参数选项**:
   - `--force`: 端口被占用时自动释放占用进程。
@@ -74,7 +74,7 @@ bash ./scripts/dev/dev-engine-console.sh --mtls
 
 Windows PowerShell 启动：
 ```powershell
-.\scripts\dev\dev-bff-agent.ps1
+.\scripts\dev\dev-engine-console.ps1
 ```
 
 ---
@@ -132,7 +132,7 @@ curl -s -X POST http://127.0.0.1:8082/v1/hub/dispatch \
 
 ---
 
-### `start-privacy-engine.sh`（兼容 `go-engine-start.sh`）
+### `start-privacy-engine.sh`
 - **作用说明**: 快速启动 Go 核心隐私计算与动态分类分级引擎 Agent（`privshield-agent`），监听 REST `:8079` 与 gRPC `:50051`。
 
 执行启动命令：
@@ -142,7 +142,7 @@ bash ./scripts/dev/start-privacy-engine.sh
 
 ---
 
-### `start-privacy-gateway.sh`（兼容 `go-gateway-start.sh`）
+### `start-privacy-gateway.sh`
 - **作用说明**: 快速启动 Go 高性能隐私网关反向代理（`privshield-gateway`），监听 REST `:8000` 与 gRPC `:50000`，提供 P2C-EWMA 负载均衡与 BufferPool 零分配代理。
 
 执行启动命令：
@@ -153,7 +153,7 @@ bash ./scripts/dev/start-privacy-gateway.sh
 ---
 
 ### `dev-stop.sh`
-- **作用说明**: 一键优雅停止本地由 `dev-bff-agent.sh` 启动的所有进程（Go Agent、Go BFF、Vite 前端），释放相关端口资源。
+- **作用说明**: 一键优雅停止本地由 `dev-engine-console.sh` 启动的所有进程（Go Agent、Go BFF、Vite 前端），释放相关端口资源。
 
 执行停止命令：
 ```bash
@@ -174,7 +174,7 @@ bash ./scripts/dev/stop-app-lz.sh
 
 ## 2. 中台微服务群管理脚本
 
-### `dev-start-services.sh`（兼容 `dev-start-new-modules.sh`）
+### `dev-start-services.sh`
 - **作用说明**: 一键顺序编译并后台启动 PrivShield 隐私计算引擎及 3 大 Go 语言中台微服务：
   - `privshield-agent` 隐私计算引擎 (REST `:8079`，gRPC `:50051`)
   - `datasource-mgr` 数据源资产管理与探查 (REST `:8083`，gRPC `:50053`)
@@ -191,7 +191,7 @@ bash ./scripts/dev/dev-start-services.sh --force
 
 ---
 
-### `dev-stop-services.sh`（兼容 `dev-stop-new-modules.sh`）
+### `dev-stop-services.sh`
 - **作用说明**: 优雅停止由 `dev-start-services.sh` 启动的隐私引擎及 3 大微服务进程。
 
 执行停止命令：
@@ -304,7 +304,7 @@ bash ./scripts/dev/docker-stop-app-lz.sh
 
 ---
 
-### `docker-start-all.sh` / `docker-start-go-all.sh`
+### `docker-start-all.sh`
 - **作用说明**: 通过 Docker Compose 一键启动全栈容器集群（Go Agent + 3 大 Go 中台微服务 + Go BFF + Web 前端）。
 - **参数选项**:
   - `--with-llm`: 联动启动本地 vLLM 大语言模型推理容器 (`:8000`)。
@@ -324,7 +324,7 @@ bash ./scripts/dev/docker-start-all.sh --with-llm --with-postgres --with-monitor
 
 ---
 
-### `docker-start-agent.sh` / `docker-start-go-agent.sh`
+### `docker-start-agent.sh`
 - **作用说明**: 仅启动 Go 核心 Agent 容器，暴露 REST 端口 `:8079` 与 gRPC 端口 `:50051`。
 
 执行启动命令：
@@ -334,7 +334,7 @@ bash ./scripts/dev/docker-start-agent.sh
 
 ---
 
-### `docker-stop-agent.sh` / `docker-stop-go-agent.sh`
+### `docker-stop-agent.sh`
 - **作用说明**: 停止由 `docker-start-agent.sh` 启动的 Go Agent 容器。
 
 执行停止命令：
@@ -396,7 +396,7 @@ bash ./scripts/dev/start-postgres.sh --stop
 
 ## 5. 自动化测试、基准压测与环境工具 (Testing, Benchmark & Ops)
 
-### `test-privacy-engine.sh`（兼容 `go-engine-test.sh`）
+### `test-privacy-engine.sh`
 - **作用说明**: 【核心测试入口】一键按序运行全仓库 Go 模块的单元测试与集成测试（覆盖 `services/privacy-engine/sdk`、`services/privacy-engine`、`pkg`、`services`、`console/engine-console/bff-go`）。
 
 执行全量测试：
@@ -406,7 +406,7 @@ bash ./scripts/dev/test-privacy-engine.sh
 
 ---
 
-### `test-e2e-privacy-engine.sh`（兼容 `integration-test-go.sh`）
+### `test-e2e-privacy-engine.sh`
 - **作用说明**: 【Privacy Engine 集成测试】对 `privshield-agent` 暴露的 19 个 REST 端点（健康检查、掩码脱敏、差分隐私、K-匿名、查询混淆、LDP、医疗流水线、通用 Agent、动态分类及 Prometheus 指标）进行全量自动化端到端测试。
 
 执行集成测试（需 Agent 在 `:8079` 运行）：
@@ -416,7 +416,7 @@ bash ./scripts/dev/test-e2e-privacy-engine.sh
 
 ---
 
-### `integration-test-services.sh`（兼容 `integration-test-new-modules.sh`）
+### `integration-test-services.sh`
 - **作用说明**: 对 `service-hub`、`datasource-mgr` 与 `audit-log` 三大微服务执行全流程接口与数据流集成测试。
 
 执行微服务集成测试：
@@ -426,7 +426,7 @@ bash ./scripts/dev/integration-test-services.sh
 
 ---
 
-### `run_console_e2e_tests.sh`（兼容 `run_console_e2e_tests_go.sh`）
+### `run_console_e2e_tests.sh`
 - **作用说明**: 【全栈 E2E 自动化测试】自动拉起真实的 Go Agent 算力层，按序执行 4 大测试阶段：
   1. `services/privacy-engine/sdk` 隐私原语与 `services/privacy-engine` 引擎测试
   2. `console/engine-console/bff-go` 代理后端与 `pkg` 基础库测试
@@ -440,7 +440,7 @@ bash ./scripts/dev/run_console_e2e_tests.sh
 
 ---
 
-### `bench-privacy-engine.sh`（兼容 `go-engine-bench.sh`）
+### `bench-privacy-engine.sh`
 - **作用说明**: 对 `services/privacy-engine/sdk` 与 `services/privacy-engine` 中的所有核心隐私计算原语执行高并发基准性能压测（Benchmark），输出 Ops/s、单次耗时 (ns/op) 与内存分配指标。
 
 执行基准性能压测：

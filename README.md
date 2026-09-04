@@ -210,22 +210,22 @@ graph TD
 
 ### 1. 本地原生开发与控制台启动
 
-适合快速进行前端热更新调试、Python 算法原语演练或 Go BFF 网关联调。
+适合快速进行前端热更新调试、隐私计算算法原语演练或 Go BFF 网关联调。
 
 ```bash
-# 1. 启动本地开发控制台三件套（【主力推荐】Python Agent :8079/:50051 + Go BFF :8081 + Vite 前端 :5173 HMR）
+# 1. 启动本地开发控制台三件套（【主力推荐】Privacy Engine :8079/:50051 + Go BFF :8081 + Vite 前端 :5173 HMR）
 # 脚本会自动按序拉起 Agent 与 BFF，前端支持毫秒级热更新；--force 自动释放占用端口
-bash ./scripts/dev/dev-bff-agent.sh
+bash ./scripts/dev/dev-engine-console.sh
 ```
 
 ```bash
 # 2. 启用 mTLS 双向认证模式启动控制台
-bash ./scripts/dev/dev-bff-agent.sh --mtls
+bash ./scripts/dev/dev-engine-console.sh --mtls
 ```
 
 ```bash
 # 3. Windows PowerShell 环境运行
-.\scripts\dev\dev-bff-agent.ps1
+.\scripts\dev\dev-engine-console.ps1
 ```
 
 ```bash
@@ -234,8 +234,8 @@ bash ./scripts/dev/dev-stop.sh
 ```
 
 ```bash
-# 5. 仅独立运行 Python 核心隐私计算引擎（REST :8079 + gRPC :50051）
-python -m engine.server
+# 5. 仅独立运行核心隐私计算引擎（REST :8079 + gRPC :50051）
+bash ./scripts/dev/start-privacy-engine.sh
 ```
 
 ### 2. 中台微服务群管理与协同
@@ -334,13 +334,13 @@ bash ./scripts/dev/docker-stop.sh
 ### 4. 自动化测试、基准压测与环境运维工具
 
 ```bash
-# 1. 运行控制台全套 E2E 自动化测试（Mock Agent + Go BFF + Vite Web 自动化联测）
+# 1. 运行控制台全套 E2E 自动化测试（Privacy Engine + Go BFF + Vite Web 自动化联测）
 bash ./scripts/dev/run_console_e2e_tests.sh
 ```
 
 ```bash
 # 2. 运行 3 大中台微服务全流程集成测试（接口连通性、流水线调度与审计存证）
-bash ./scripts/dev/integration-test-new-modules.sh
+bash ./scripts/dev/integration-test-services.sh
 ```
 
 ```bash
@@ -372,7 +372,7 @@ bash ./scripts/dev/stop_monitoring.sh
 ```
 
 ```bash
-# 7. 本地开发环境依赖巡检（检查 Python, Go, Node.js, pnpm 及端口占用）
+# 7. 本地开发环境依赖巡检（检查 Go, Node.js, pnpm 及端口占用）
 bash ./scripts/dev/verify_console_environment.sh
 ```
 
@@ -386,22 +386,17 @@ bash ./scripts/dev/generate_all_test_certs.sh
 bash ./scripts/dev/clean_privacy_budget_db.sh
 ```
 
-```bash
-# 10. 启动轻量级 Python Mock Agent 桩服务（无 ML 依赖快速联调）
-python scripts/dev/mock_agent_server.py
-```
-
 ### 5. 本地开发与运维脚本全景速查表
 
 | 分类 | 脚本文件 | 执行命令 / 支持参数 | 核心功能与使用场景 |
 |---|---|---|---|
-| **隐私引擎** | `start-privacy-engine.sh`<br/>*(原 `go-engine-start.sh`)* | `bash ./scripts/dev/start-privacy-engine.sh` | 快速启动 Go 隐私计算引擎 Agent (REST :8079, gRPC :50051)。 |
-| **隐私网关** | `start-privacy-gateway.sh`<br/>*(原 `go-gateway-start.sh`)* | `bash ./scripts/dev/start-privacy-gateway.sh` | 快速启动反向代理与 P2C 负载均衡网关 (REST :8000, gRPC :50000)。 |
-| **控制台开发** | `dev-engine-console.sh`<br/>*(原 `dev-bff-agent.sh`)* | `bash ./scripts/dev/dev-engine-console.sh`<br/>`[--mtls] [--force]` | **【主力推荐】** 启动 Privacy Engine + Go BFF (:8081) + Vite 前端 (:5173 HMR)。 |
+| **隐私引擎** | `start-privacy-engine.sh` | `bash ./scripts/dev/start-privacy-engine.sh` | 快速启动 Go 隐私计算引擎 Agent (REST :8079, gRPC :50051)。 |
+| **隐私网关** | `start-privacy-gateway.sh` | `bash ./scripts/dev/start-privacy-gateway.sh` | 快速启动反向代理与 P2C 负载均衡网关 (REST :8000, gRPC :50000)。 |
+| **控制台开发** | `dev-engine-console.sh` | `bash ./scripts/dev/dev-engine-console.sh`<br/>`[--mtls] [--force]` | **【主力推荐】** 启动 Privacy Engine + Go BFF (:8081) + Vite 前端 (:5173 HMR)。 |
 | **控制台开发** | `dev-app-lz.sh` | `bash ./scripts/dev/dev-app-lz.sh`<br/>`[--force] [--mtls\|--tlcp]` | 启动调度之眼控制台 (4微服务 + App-LZ BFF :8085 + 前端 :5174)。 |
 | **控制台开发** | `dev-stop.sh` | `bash ./scripts/dev/dev-stop.sh` | 优雅停止本地运行的 Agent、Go BFF 及 Vite 前端。 |
-| **中台微服务** | `dev-start-services.sh`<br/>*(原 `dev-start-new-modules.sh`)* | `bash ./scripts/dev/dev-start-services.sh --force` | 一键顺序启动 Engine + 3 大 Go 中台微服务 (Hub, Datasource, Audit)。 |
-| **中台微服务** | `dev-stop-services.sh`<br/>*(原 `dev-stop-new-modules.sh`)* | `bash ./scripts/dev/dev-stop-services.sh` | 停止由 `dev-start-services.sh` 启动的微服务与引擎。 |
+| **中台微服务** | `dev-start-services.sh` | `bash ./scripts/dev/dev-start-services.sh --force` | 一键顺序启动 Engine + 3 大 Go 中台微服务 (Hub, Datasource, Audit)。 |
+| **中台微服务** | `dev-stop-services.sh` | `bash ./scripts/dev/dev-stop-services.sh` | 停止由 `dev-start-services.sh` 启动的微服务与引擎。 |
 | **中台微服务** | `e2e-start-all-services.sh` | `bash ./scripts/dev/e2e-start-all-services.sh` | **【真实环境】** 一键按序拉起 Agent + 3 大 Go 中台微服务。 |
 | **中台微服务** | `e2e-stop-all-services.sh` | `bash ./scripts/dev/e2e-stop-all-services.sh` | 停止真实 E2E 环境的全量服务进程。 |
 | **中台微服务** | `start_all_services.sh` | `bash ./scripts/dev/start_all_services.sh --with-services` | 后台守护进程模式启动全量服务群（记录 PID 文件）。 |
@@ -412,10 +407,10 @@ python scripts/dev/mock_agent_server.py
 | **Docker 联调** | `docker-stop-agent.sh` | `bash ./scripts/dev/docker-stop-agent.sh` | 停止由 `docker-start-agent.sh` 启动的 Agent 容器。 |
 | **Docker 联调** | `docker-start-llm.sh`<br/>`docker-stop-llm.sh` | `bash ./scripts/dev/docker-start-llm.sh`<br/>`bash ./scripts/dev/docker-stop-llm.sh` | 启动 / 停止独立的本地 vLLM 大模型推理容器 (:8000)。 |
 | **Docker 联调** | `docker-stop.sh` | `bash ./scripts/dev/docker-stop.sh` | 一键停止并清理所有通过 Docker Compose 启动的开发容器及网络。 |
-| **测试与基准** | `test-privacy-engine.sh`<br/>*(原 `go-engine-test.sh`)* | `bash ./scripts/dev/test-privacy-engine.sh` | 全仓库 Go 模块 (SDK, Engine, Pkg, Services, BFF) 单元/集成测试。 |
-| **测试与基准** | `test-e2e-privacy-engine.sh`<br/>*(原 `integration-test-go.sh`)* | `bash ./scripts/dev/test-e2e-privacy-engine.sh` | Privacy Engine 19 大 REST 端点全量端到端测试。 |
-| **测试与基准** | `integration-test-services.sh`<br/>*(原 `integration-test-new-modules.sh`)* | `bash ./scripts/dev/integration-test-services.sh` | 执行 3 大 Go 中台微服务全流程集成测试与数据流校验。 |
-| **测试与基准** | `bench-privacy-engine.sh`<br/>*(原 `go-engine-bench.sh`)* | `bash ./scripts/dev/bench-privacy-engine.sh` | 对 SDK 与 Engine 所有核心隐私计算原语执行基准性能压测 (Benchmark)。 |
+| **测试与基准** | `test-privacy-engine.sh` | `bash ./scripts/dev/test-privacy-engine.sh` | 全仓库 Go 模块 (SDK, Engine, Pkg, Services, BFF) 单元/集成测试。 |
+| **测试与基准** | `test-e2e-privacy-engine.sh` | `bash ./scripts/dev/test-e2e-privacy-engine.sh` | Privacy Engine 19 大 REST 端点全量端到端测试。 |
+| **测试与基准** | `integration-test-services.sh` | `bash ./scripts/dev/integration-test-services.sh` | 执行 3 大 Go 中台微服务全流程集成测试与数据流校验。 |
+| **测试与基准** | `bench-privacy-engine.sh` | `bash ./scripts/dev/bench-privacy-engine.sh` | 对 SDK 与 Engine 所有核心隐私计算原语执行基准性能压测 (Benchmark)。 |
 | **测试与基准** | `benchmark_performance.sh` | `bash ./scripts/dev/benchmark_performance.sh` | 执行脱敏、DP、K-匿名、LDP、QOL、分级分类 HTTP 吞吐与延迟压测。 |
 | **测试与基准** | `benchmark-data-api.sh` | `bash ./scripts/dev/benchmark-data-api.sh` | 预设数据 API (医保/康养) 全链路性能基准压测。 |
 | **测试与基准** | `run_console_e2e_tests.sh` | `bash ./scripts/dev/run_console_e2e_tests.sh` | 启动真实 Agent + BFF + Vite 并运行全套自动化回归测试。 |
@@ -426,14 +421,14 @@ python scripts/dev/mock_agent_server.py
 | **安全与数据** | `generate_all_test_certs.sh` | `bash ./scripts/dev/generate_all_test_certs.sh` | 一键生成全套 mTLS 开发测试证书链（CA、Server、Client）。 |
 | **安全与数据** | `clean_privacy_budget_db.sh` | `bash ./scripts/dev/clean_privacy_budget_db.sh` | 重置并清理开发阶段生成的 SQLite 隐私预算消费数据库。 |
 
-> 💡 **提示**：Windows PowerShell 环境可运行同名 `.ps1` 脚本（如 `dev-bff-agent.ps1`、`docker-start-bff-agent.ps1` 等）。关于生产部署脚本（`scripts/prod/`）、数据生成脚本（`scripts/data/`）及硬件加速脚本（`scripts/env/`）详见 [scripts/README.md](scripts/README.md)。
+> 💡 **提示**：Windows PowerShell 环境可运行同名 `.ps1` 脚本（如 `dev-engine-console.ps1`、`docker-start-bff-agent.ps1` 等）。关于生产部署脚本（`scripts/prod/`）、数据生成脚本（`scripts/data/`）及硬件加速脚本（`scripts/env/`）详见 [scripts/README.md](scripts/README.md)。
 
 ### 6. 全服务端口与职责速查表
 
 | 服务模块 | 默认端口 | 运行形态 | 职责说明 |
 |---|---|---|---|
-| **Privacy Engine (REST)** | `8079` | Python / FastAPI | 核心隐私算法与动态分类分级 REST 接口 |
-| **Privacy Engine (gRPC)** | `50051` | Python / gRPC | 核心隐私算法高性能 RPC 通信接口 |
+| **Privacy Engine (REST)** | `8079` | Go 1.25+ / Gin REST | 核心隐私算法与动态分类分级 REST 接口 |
+| **Privacy Engine (gRPC)** | `50051` | Go 1.25+ / gRPC | 核心隐私算法高性能 RPC 通信接口 |
 | **Console Web UI** | `5173` | React 18 + Vite | 控制台可视化大屏与各功能交互调试页面 |
 | **Console BFF (Go)** | `8081` | Go / Gin + gRPC | 控制台 BFF 聚合网关，连接池与协议分流 |
 | **Service Hub** | `8082` / `50052` | Go / Gin + gRPC | 数据流通流水线 6 阶段调度中枢微服务 |
@@ -447,17 +442,14 @@ python scripts/dev/mock_agent_server.py
 
 ## 四、 自动化构建与测试
 
-### 1. 运行多语言全量测试
+### 1. 运行自动化全量测试
 
 ```bash
-# 运行 Go 基础库与全部 Go 微服务单测（含 Go BFF）
-make test-go
+# 运行全模块 Go 测试（覆盖 SDK、Privacy Engine、共享基础库、中台微服务、BFF）
+make test
 
-# 运行 Python 核心算力引擎单测（420+ 个用例）
-PYTHONPATH=. pytest tests/ -q
-
-# 运行前端控制台 Vitest 单测（77 个用例）
-cd console/web && corepack pnpm test -- --run
+# 运行前端控制台 Vitest 单测
+cd console/engine-console/web && pnpm test -- --run
 
 # 运行真实跨服务 E2E 全链路流水线测试
 PRIVSHIELD_E2E=1 go test -v -run TestRealE2E ./services/service-hub/internal/handlers/
@@ -466,29 +458,16 @@ PRIVSHIELD_E2E=1 go test -v -run TestRealE2E ./services/service-hub/internal/han
 ### 2. 容器镜像构建
 
 ```bash
-# 构建 core 镜像（推荐，轻量算力镜像，不含 ML 大依赖）
-make docker-core
-```
+# 构建全套 Docker 镜像
+make docker-all
 
-```bash
-# 构建 ml 镜像（含 Torch/Transformers/ModelScope 依赖）
-make docker-ml
-```
+# 构建独立组件镜像
+make docker-agent
+make docker-services
+make docker-console
 
-```bash
 # 校验 Helm 语法与模板渲染
 make helm-lint && make helm-template
-```
-
-### 3. 本地可编辑安装
-
-```bash
-pip install -e .
-```
-
-```bash
-# 或安装完整开发依赖
-pip install -e ".[dev,observability,docs]"
 ```
 
 ---
@@ -500,16 +479,15 @@ pip install -e ".[dev,observability,docs]"
 所有安全特性默认开启平滑兼容，生产环境建议开启：
 
 ```bash
-PRIVACY_TLS_ENABLED=true \
-PRIVACY_TLS_CERT_FILE=deploy/tls/server.crt \
-PRIVACY_TLS_KEY_FILE=deploy/tls/server.key \
-PRIVACY_TLS_CA_FILE=deploy/tls/ca.crt \
-PRIVACY_TLS_CLIENT_AUTH=require \
-PRIVACY_AUTH_ENABLED=true \
-PRIVACY_AUTH_INTERNAL_MTLS_ENABLED=true \
-PRIVACY_AUTH_MTLS_WHITELIST_FILE=config/mtls-whitelist.yaml \
-PRIVACY_RATE_LIMIT_ENABLED=true \
-python -m engine.server
+AGENT_TLS_ENABLED=true \
+AGENT_TLS_CERT_FILE=deploy/tls/server.crt \
+AGENT_TLS_KEY_FILE=deploy/tls/server.key \
+AGENT_TLS_CA_FILE=deploy/tls/ca.crt \
+AGENT_AUTH_ENABLED=true \
+AGENT_AUTH_INTERNAL_MTLS_ENABLED=true \
+AGENT_AUTH_MTLS_WHITELIST_FILE=config/mtls-whitelist.yaml \
+AGENT_RATE_LIMIT_ENABLED=true \
+go run ./services/privacy-engine/cmd/privshield-agent
 ```
 
 ### 2. 生产可观测性 (Prometheus/Grafana/Tracing)
