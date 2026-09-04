@@ -53,13 +53,9 @@ __pycache__
 .models/
 models/
 basemodels/
-llmlora/.venv
-llmlora/*.pt
-llmlora/*.bin
-llmlora/*.safetensors
-llmlora/output*
-llmlora/runs
-llmlora/basemodels
+services/privacy-engine/model-training/
+**/model-training/
+llmlora/
 
 # ----------------------------------------------------------------------------
 # 前端构建产物（由多阶段构建处理）
