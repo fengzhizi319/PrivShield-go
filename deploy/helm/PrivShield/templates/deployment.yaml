@@ -99,16 +99,20 @@ spec:
             - name: AGENT_LOG_LEVEL
               value: {{ .Values.agent.logLevel | upper | quote }}
             {{- else }}
+            # env-scope: python-engine
             - name: PRIVACY_REST_HOST
               value: "0.0.0.0"
             - name: PRIVACY_REST_PORT
               value: "{{ .Values.service.restPort }}"
             # PRIVACY_GRPC_HOST：Python 引擎读取，默认 127.0.0.1；
             # 容器编排必须显式置 0.0.0.0，否则 gRPC 仅环回可达、外部容器无法调用。
+            # env-scope: python-engine
             - name: PRIVACY_GRPC_HOST
               value: "0.0.0.0"
+            # env-scope: python-engine
             - name: PRIVACY_GRPC_PORT
               value: "{{ .Values.service.grpcPort }}"
+            # env-scope: python-engine
             - name: PRIVACY_LOG_LEVEL
               value: {{ .Values.agent.logLevel | upper | quote }}
             {{- end }}
@@ -151,10 +155,13 @@ spec:
             - name: AGENT_TLS_KEY_FILE
               value: {{ .Values.security.tls.keyFile | quote }}
             {{- else }}
+            # env-scope: python-engine
             - name: PRIVACY_TLS_ENABLED
               value: "true"
+            # env-scope: python-engine
             - name: PRIVACY_TLS_CERT_FILE
               value: {{ .Values.security.tls.certFile | quote }}
+            # env-scope: python-engine
             - name: PRIVACY_TLS_KEY_FILE
               value: {{ .Values.security.tls.keyFile | quote }}
             {{- end }}
@@ -170,6 +177,7 @@ spec:
             - name: AGENT_TLS_CA_FILE
               value: {{ .Values.security.tls.caFile | quote }}
             {{- else }}
+            # env-scope: python-engine
             - name: PRIVACY_TLS_CA_FILE
               value: {{ .Values.security.tls.caFile | quote }}
             {{- end }}
@@ -213,10 +221,12 @@ spec:
                   key: api-keys
             {{- end }}
             {{- else }}
+            # env-scope: python-engine
             - name: PRIVACY_AUTH_ENABLED
               value: "true"
             {{- if .Values.security.auth.apiKeysSecret }}
             # 外部 Secret（用户自管，数据键 api-keys）
+            # env-scope: python-engine
             - name: PRIVACY_AUTH_INTERNAL_API_KEYS
               valueFrom:
                 secretKeyRef:
@@ -224,6 +234,7 @@ spec:
                   key: api-keys
             {{- else }}
             # Chart 自动生成的 Secret
+            # env-scope: python-engine
             - name: PRIVACY_AUTH_INTERNAL_API_KEYS
               valueFrom:
                 secretKeyRef:
@@ -245,12 +256,14 @@ spec:
               value: {{ .Values.security.auth.internalMtls.allowedCns | quote }}
             {{- end }}
             {{- else }}
+            # env-scope: python-engine
             - name: PRIVACY_AUTH_INTERNAL_MTLS_ENABLED
               value: "true"
             {{- if .Values.security.auth.internalMtls.whitelistConfigMap }}
             - name: PRIVACY_AUTH_MTLS_WHITELIST_FILE
               value: "/etc/PrivShield/mtls-whitelist.yaml"
             {{- else if .Values.security.auth.internalMtls.allowedCns }}
+            # env-scope: python-engine
             - name: PRIVACY_AUTH_MTLS_ALLOWED_CNS
               value: {{ .Values.security.auth.internalMtls.allowedCns | quote }}
             {{- end }}
@@ -258,21 +271,33 @@ spec:
             {{- end }}
             # ── 速率限制（可选）──
             {{- if .Values.security.rateLimit.enabled }}
+            {{- if eq .Values.engineType "go" }}
+            - name: AGENT_RATE_LIMIT_ENABLED
+              value: "true"
+            - name: AGENT_RATE_LIMIT_RPS
+              value: {{ .Values.security.rateLimit.defaultRps | quote }}
+            - name: AGENT_RATE_LIMIT_BURST
+              value: {{ .Values.security.rateLimit.defaultBurst | quote }}
+            {{- else }}
+            # env-scope: python-engine
             - name: PRIVACY_RATE_LIMIT_ENABLED
               value: "true"
+            # env-scope: python-engine
             - name: PRIVACY_RATE_LIMIT_DEFAULT_RPS
               value: {{ .Values.security.rateLimit.defaultRps | quote }}
+            # env-scope: python-engine
             - name: PRIVACY_RATE_LIMIT_DEFAULT_BURST
               value: {{ .Values.security.rateLimit.defaultBurst | quote }}
             {{- if .Values.security.rateLimit.redisUrl }}
+            # env-scope: python-engine
             - name: PRIVACY_RATE_LIMIT_REDIS_URL
               value: {{ .Values.security.rateLimit.redisUrl | quote }}
             {{- end }}
             {{- if .Values.security.rateLimit.perEndpointJson }}
-            # env-scope: python-engine —— Go 侧限流为内置 32 分片令牌桶（PRIVACY_RATE_LIMIT_RPS/_BURST），
-            # 不读取逐端点 JSON 覆盖。
+            # env-scope: python-engine
             - name: PRIVACY_RATE_LIMIT_PER_ENDPOINT_JSON
               value: {{ .Values.security.rateLimit.perEndpointJson | quote }}
+            {{- end }}
             {{- end }}
             {{- end }}
             # ── Layer-3 LLM 推理服务连接（可选）──
@@ -280,17 +305,17 @@ spec:
             {{- if eq .Values.engineType "go" }}
             # Go 引擎读取点与 Python 命名不同：PRIVACY_LLM_ENABLE / _ENDPOINT / _MODEL。
             # 端点必须是完整 chat/completions URL（Python 侧的 _API_BASE 只到 /v1，Go 不自动补路径）。
-            - name: PRIVACY_LLM_ENABLE
+            - name: AGENT_LLM_ENABLE
               value: "true"
-            - name: PRIVACY_LLM_ENDPOINT
+            - name: AGENT_LLM_ENDPOINT
               value: "http://{{ include "PrivShield.fullname" . }}-llm:{{ .Values.llm.port }}/v1/chat/completions"
             # P0-5：Go 引擎默认拒绝非环回 http:// 端点；本端点为集群内 vLLM 明文 HTTP，
             # 需显式置 llm.allowInsecureHTTP=true 才下发豁免（默认 false，改用 https 后请置回）。
-            - name: PRIVACY_LLM_ALLOW_INSECURE_HTTP_ENDPOINT
+            - name: AGENT_LLM_ALLOW_INSECURE_HTTP_ENDPOINT
               value: {{ .Values.llm.allowInsecureHTTP | quote }}
-            - name: PRIVACY_LLM_MODEL
+            - name: AGENT_LLM_MODEL
               value: {{ .Values.llm.servedModelName | quote }}
-            - name: PRIVACY_LLM_API_KEY
+            - name: AGENT_LLM_API_KEY
               value: {{ .Values.llm.apiKey | default "EMPTY" | quote }}
             {{- else }}
             # env-scope: python-engine —— 以下三个名字仅 Python 引擎读取
@@ -302,7 +327,7 @@ spec:
             # env-scope: python-engine
             - name: PRIVACY_LLM_MODEL_NAME
               value: {{ .Values.llm.servedModelName | quote }}
-            - name: PRIVACY_LLM_API_KEY
+            - name: AGENT_LLM_API_KEY
               value: {{ .Values.llm.apiKey | default "EMPTY" | quote }}
             {{- end }}
             {{- end }}

@@ -35,7 +35,6 @@ services:
       AGENT_GRPC_HOST: "0.0.0.0"
       AGENT_GRPC_PORT: "50051"
       AGENT_LOG_LEVEL: "${PRIVACY_LOG_LEVEL:-DEBUG}"
-      PRIVACY_SERVICE_NAME: "PrivShield-Go-Dev"
       # 开发模式：关闭 TLS；鉴权按 P0-1 不可关闭（0.0.0.0 监听且无入站 Key 会被启动门禁直接拒绝）
       AGENT_TLS_ENABLED: "false"
       AGENT_AUTH_ENABLED: "true"
@@ -43,11 +42,11 @@ services:
       AGENT_RATE_LIMIT_ENABLED: "false"
       # Layer-3 LLM：dev.yml 声明的是 Python 命名（PROVIDER/API_BASE/MODEL_NAME），Go 引擎不读取，
       # 故在此覆盖为 Go 侧真实读取点；默认 false，需要 LLM 时置 PRIVACY_LLM_ENABLE=true。
-      PRIVACY_LLM_ENABLE: "${PRIVACY_LLM_ENABLE:-false}"
-      PRIVACY_LLM_ENDPOINT: "${LLM_API_BASE:-http://vllm:8000/v1/chat/completions}"
+      AGENT_LLM_ENABLE: "${AGENT_LLM_ENABLE:-false}"
+      AGENT_LLM_ENDPOINT: "${LLM_API_BASE:-http://vllm:8000/v1/chat/completions}"
       # P0-5：非环回 http:// 端点默认被拒，容器内网调用需显式声明豁免开关。
-      PRIVACY_LLM_ALLOW_INSECURE_HTTP_ENDPOINT: "${PRIVACY_LLM_ALLOW_INSECURE_HTTP_ENDPOINT:-false}"
-      PRIVACY_LLM_MODEL: "${PRIVACY_LLM_MODEL:-Qwen3.5-0.8B-Privacy-Classifier-Smoother}"
+      AGENT_LLM_ALLOW_INSECURE_HTTP_ENDPOINT: "${AGENT_LLM_ALLOW_INSECURE_HTTP_ENDPOINT:-false}"
+      AGENT_LLM_MODEL: "${AGENT_LLM_MODEL:-Qwen3.5-0.8B-Privacy-Classifier-Smoother}"
     # Go 引擎不需要 Python 源码挂载，仅保留数据卷
     volumes:
       - budget-db-dev:/data/budget

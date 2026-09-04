@@ -69,14 +69,14 @@ services:
     image: privacy-console-backend-go:1.8.0-test
     container_name: privacy-console-backend-go-test
     environment:
-      PRIVACY_CONSOLE_HOST: "0.0.0.0"
-      PRIVACY_CONSOLE_PORT: "8081"
-      PRIVACY_AGENT_GRPC_HOST: "PrivShield"
-      PRIVACY_AGENT_GRPC_PORT: "50051"
-      PRIVACY_AGENT_URL: "http://PrivShield:8079"
+      BFF_HOST: "0.0.0.0"
+      BFF_PORT: "8081"
+      BFF_AGENT_GRPC_HOST: "PrivShield"
+      BFF_AGENT_GRPC_PORT: "50051"
+      BFF_AGENT_URL: "http://PrivShield:8079"
       # P0-1：0.0.0.0 监听 ⇒ BFF 自身入站 Key 必填；调用引擎时带引擎的 test key。
-      CONSOLE_API_KEY: "${CONSOLE_API_KEY:-test-console-key}"
-      PRIVACY_AGENT_API_KEY: "${PRIVACY_TEST_ENGINE_KEY:-test-engine-key}"
+      BFF_API_KEY: "${BFF_API_KEY:-test-console-key}"
+      BFF_AGENT_API_KEY: "${PRIVACY_TEST_ENGINE_KEY:-test-engine-key}"
     depends_on:
       PrivShield:
         condition: service_healthy

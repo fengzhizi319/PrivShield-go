@@ -101,6 +101,29 @@ func TestAgentBaseURL(t *testing.T) {
 	}
 }
 
+// TestDatasourceBaseURLs tests DatasourceBaseURL and DatasourceBaseURLs helpers.
+func TestDatasourceBaseURLs(t *testing.T) {
+	cfg := &Config{DatasourceRESTHost: "10.0.0.2", DatasourceRESTPort: 8083}
+	if url := cfg.DatasourceBaseURL(); url != "http://10.0.0.2:8083" {
+		t.Errorf("expected http://10.0.0.2:8083, got %s", url)
+	}
+	// Fallback when no env var set
+	os.Unsetenv("DATASOURCE_MGR_URLS")
+	os.Unsetenv("DATASOURCE_URLS")
+	urls := cfg.DatasourceBaseURLs()
+	if len(urls) != 1 || urls[0] != "http://10.0.0.2:8083" {
+		t.Errorf("expected fallback to DatasourceBaseURL, got %v", urls)
+	}
+
+	// Override via env var
+	os.Setenv("DATASOURCE_MGR_URLS", "http://ds1:8083, http://ds2:8083")
+	defer os.Unsetenv("DATASOURCE_MGR_URLS")
+	urls = cfg.DatasourceBaseURLs()
+	if len(urls) != 2 || urls[0] != "http://ds1:8083" || urls[1] != "http://ds2:8083" {
+		t.Errorf("expected 2 URLs from DATASOURCE_MGR_URLS, got %v", urls)
+	}
+}
+
 // TestGRPCAddress tests the GRPCAddress() helper method.
 // TestGRPCAddress 测试 GRPCAddress() 方法能正确输出 gRPC 监听网络地址。
 func TestGRPCAddress(t *testing.T) {

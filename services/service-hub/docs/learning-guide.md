@@ -49,7 +49,7 @@
             │ HTTP                    │ HTTP / gRPC              │ HTTP / gRPC
             ▼                         ▼                          ▼
 ┌──────────────────────────┐ ┌──────────────────────────┐ ┌──────────────────────────┐
-│ datasource-mgr (:8083)   │ │ PrivShield 引擎 (:8079)  │ │  audit-log (:8084)       │
+│ mock-datasource (:8083)   │ │ PrivShield 引擎 (:8079)  │ │  audit-log (:8084)       │
 │ 数据源资产与模拟数据抽取   │ │ 三层分类漏斗与脱敏原语     │ │ 国密 SM3 存证与合规报告  │
 └──────────────────────────┘ └──────────────────────────┘ └──────────────────────────┘
 ```
@@ -57,7 +57,7 @@
 ### 核心职责与设计目标
 
 1. **统一任务流编排**：对外提供原子化任务调度与端到端自动化流水线（Pipeline）。
-2. **多微服务协同**：横向联动数据源管理 (`datasource-mgr`)、隐私计算 Agent (`PrivShield`) 与审计存证 (`audit-log`)。
+2. **多微服务协同**：横向联动数据源管理 (`mock-datasource`)、隐私计算 Agent (`PrivShield`) 与审计存证 (`audit-log`)。
 3. **双协议暴露与互通**：对外提供面向 Web UI 的 HTTP RESTful API (:8082)，以及面向后端服务高吞吐、低延迟调用的 gRPC API (:50052)。
 4. **金融级零信任传输**：支持 TLS 1.3 / 国密 SM2 双向认证（mTLS）、证书 CN 白名单鉴权，杜绝中间人攻击与伪造证书。
 5. **生产级高可用与弹性存储**：支持 PostgreSQL Phase B 多副本原子租约（带自适应连接池与 3s 探针自动降级）及 SQLite WAL 持久化引擎。
@@ -88,7 +88,7 @@ flowchart TB
     end
 
     subgraph Downstream [协同下游服务]
-        DSMgr[datasource-mgr :8083<br/>数据资产与真实/模拟源]
+        DSMgr[mock-datasource :8083<br/>数据资产与真实/模拟源]
         Agent["PrivShield核心引擎:8079<br/>Rule→NER→LLM动态分类<br/>Mask/DP/K-Anon隐私原语"]
         Audit[audit-log:8084<br/>国密 SM3 存证与快照校验]
     end
@@ -160,7 +160,7 @@ services/service-hub/
 │   ├── audit/                   # audit-log 出域存证客户端封装 (P0-6)
 │   │   ├── client.go
 │   │   └── client_test.go
-│   ├── datasource/              # datasource-mgr 客户端封装
+│   ├── datasource/              # mock-datasource 客户端封装
 │   │   ├── client.go
 │   │   └── client_test.go
 │   ├── retry/                   # 失败任务可重试判定与指数退避
@@ -311,8 +311,8 @@ func main() {
 
 ```go
 type Server struct {
-    agent      *agent.Client      // 上游 PrivShield Python Agent 客户端
-    datasource *datasource.Client // 下游 datasource-mgr 数据源服务客户端
+    agent      *agent.Client      // 上游 PrivShield Privacy Engine 客户端
+    datasource *datasource.Client // 下游 mock-datasource 数据源服务客户端
     cfg        *config.Config     // 模块全局运行配置
     startTime  time.Time          // 服务启动时间戳
     tasks      store.TaskStore    // 任务持久化存储介质
@@ -364,7 +364,7 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 
 ### 5.4 上游 Agent 客户端与熔断机制 (`internal/agent/client.go`)
 
-`agent.Client` 封装对 `PrivShield` Python 引擎的 HTTP 通信：
+`agent.Client` 封装对 `PrivShield` Privacy Engine的 HTTP 通信：
 1. **自动超时控制**：调用方以 `context.WithTimeout` 约束请求。
 2. **安全凭证传递**：底层共享客户端在配置后自动追加 API Key。
 3. **预评估调用**：gRPC `ClassifyAndDispatch` 使用 `Classify(ctx, payload)` 请求 `POST /v1/dynclassification/eval_record`。
@@ -560,7 +560,7 @@ docker run -d \
 - **解决**：确保运行用户对目标目录具备读写权限，或执行 `mkdir -p $(dirname $SERVICE_HUB_DB_PATH)`。若不配置该变量，系统将自动回退到纯内存模式。
 
 ### Q2: 任务执行提示 `agent client classify failed: connection refused`
-- **原因**：上游 `PrivShield` Python Agent（默认 `:8079`）未启动或端口不通。
+- **原因**：上游 `PrivShield` Privacy Engine（默认 `:8079`）未启动或端口不通。
 - **解决**：检查 Agent 是否已通过 `python -m engine.server` 启动，并在终端执行 `curl http://127.0.0.1:8079/health` 确认健康状态。
 
 ### Q3: gRPC 调用报错 `client public key pin verification failed`

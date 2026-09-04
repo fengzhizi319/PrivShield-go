@@ -11,15 +11,15 @@ services:
   # 1. PrivShield 引擎 Sidecar (mTLS 双向认证 + HTTPS REST)
   PrivShield:
     environment:
-      PRIVACY_TLS_ENABLED: "true"
-      PRIVACY_TLS_CERT_FILE: "/certs/server.crt"
-      PRIVACY_TLS_KEY_FILE: "/certs/server.key"
-      PRIVACY_TLS_CA_FILE: "/certs/ca.crt"
-      PRIVACY_AUTH_INTERNAL_MTLS_ENABLED: "true"
-      PRIVACY_AUTH_MTLS_ALLOWED_CNS: '["privshield-client", "privacy-console-go-client"]'
+      AGENT_TLS_ENABLED: "true"
+      AGENT_TLS_CERT_FILE: "/certs/server.crt"
+      AGENT_TLS_KEY_FILE: "/certs/server.key"
+      AGENT_TLS_CA_FILE: "/certs/ca.crt"
+      AGENT_AUTH_INTERNAL_MTLS_ENABLED: "true"
+      AGENT_AUTH_MTLS_ALLOWED_CNS: '["privshield-client", "privacy-console-go-client"]'
       # P0-1：TLS + gRPC 开启时 CN 白名单文件为必填项（缺失即拦截器不注册 → 启动门禁拒绝）。
       # 唯一生效的白名单来源是下面这个文件；上面的 ALLOWED_CNS 仅作为无文件时的静态兜底。
-      PRIVACY_AUTH_MTLS_WHITELIST_FILE: "/etc/PrivShield/mtls-whitelist.yaml"
+      AGENT_AUTH_MTLS_WHITELIST_FILE: "/etc/PrivShield/mtls-whitelist.yaml"
     volumes:
       - ../../console/engine-console/bff-go/certs:/certs:ro
       - ../../config/mtls-whitelist.yaml:/etc/PrivShield/mtls-whitelist.yaml:ro
@@ -29,14 +29,14 @@ services:
   # 2. Console Go 后端代理服务 (mTLS 客户端连接 Agent)
   console-backend-go:
     environment:
-      PRIVACY_AGENT_TLS_ENABLED: "true"
+      BFF_AGENT_TLS_ENABLED: "true"
       PRIVACY_AGENT_TLS_CA_FILE: "/certs/ca.crt"
-      PRIVACY_AGENT_TLS_CERT_FILE: "/certs/client.crt"
-      PRIVACY_AGENT_TLS_KEY_FILE: "/certs/client.key"
-      PRIVACY_AGENT_TLS_SERVER_NAME: "PrivShield"
-      PRIVACY_AGENT_URL: "https://PrivShield:8079"
+      BFF_AGENT_TLS_CERT_FILE: "/certs/client.crt"
+      BFF_AGENT_TLS_KEY_FILE: "/certs/client.key"
+      BFF_AGENT_TLS_SERVER_NAME: "PrivShield"
+      BFF_AGENT_URL: "https://PrivShield:8079"
       # 与引擎共用同一份 CN 白名单事实源（可选入站 gRPC 面启用时用于拦截器注册）
-      PRIVACY_AUTH_MTLS_WHITELIST_FILE: "/etc/PrivShield/mtls-whitelist.yaml"
+      AGENT_AUTH_MTLS_WHITELIST_FILE: "/etc/PrivShield/mtls-whitelist.yaml"
     volumes:
       - ../../console/engine-console/bff-go/certs:/certs:ro
       - ../../config/mtls-whitelist.yaml:/etc/PrivShield/mtls-whitelist.yaml:ro

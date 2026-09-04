@@ -112,14 +112,14 @@ services:
     ports:
       - "8081:8081"
     environment:
-      PRIVACY_CONSOLE_HOST: "0.0.0.0"
-      PRIVACY_CONSOLE_PORT: "8081"
-      PRIVACY_AGENT_GRPC_HOST: "PrivShield"
-      PRIVACY_AGENT_GRPC_PORT: "50051"
-      PRIVACY_AGENT_URL: "http://PrivShield:8079"
+      BFF_HOST: "0.0.0.0"
+      BFF_PORT: "8081"
+      BFF_AGENT_GRPC_HOST: "PrivShield"
+      BFF_AGENT_GRPC_PORT: "50051"
+      BFF_AGENT_URL: "http://PrivShield:8079"
       # ── P0-1 零信任默认态（开发态密钥，可用 .env 覆盖）──
-      CONSOLE_API_KEY: "${CONSOLE_API_KEY:-dev-console-key}"
-      PRIVACY_AGENT_API_KEY: "${PRIVSHIELD_ENGINE_API_KEY:-dev-engine-key}"
+      BFF_API_KEY: "${BFF_API_KEY:-dev-console-key}"
+      BFF_AGENT_API_KEY: "${PRIVSHIELD_ENGINE_API_KEY:-dev-engine-key}"
       BFF_HUB_URL: "http://service-hub:8082"
       BFF_HUB_API_KEY: "${SERVICE_HUB_API_KEY:-dev-service-hub-key}"
       BFF_DATASOURCE_URL: "http://datasource-mgr:8083"
@@ -183,7 +183,7 @@ services:
       SERVICE_HUB_DB_PATH: "/app/data/service-hub.db"
       # ── P0-1 零信任默认态（开发态密钥，可用 .env 覆盖）──
       SERVICE_HUB_API_KEY: "${SERVICE_HUB_API_KEY:-dev-service-hub-key}"
-      PRIVACY_AGENT_API_KEY: "${PRIVSHIELD_ENGINE_API_KEY:-dev-engine-key}"
+      BFF_AGENT_API_KEY: "${PRIVSHIELD_ENGINE_API_KEY:-dev-engine-key}"
       SERVICE_HUB_DATASOURCE_API_KEY: "${DATASOURCE_MGR_API_KEY:-dev-datasource-key}"
       SERVICE_HUB_AUDIT_LOG_API_KEY: "${AUDIT_LOG_API_KEY:-dev-audit-key}"
       # P1-8：开发栈不注入 SERVICE_HUB_PG_DSN ⇒ 中枢走 SQLite 单副本并在启动日志显式告警。

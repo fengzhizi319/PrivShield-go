@@ -225,3 +225,43 @@ func TestDatasourceClient_CircuitBreaker(t *testing.T) {
 		t.Fatalf("expected half-open state, got: %s", client.CircuitStateString())
 	}
 }
+
+func TestDatasourceClient_MultiNodeFailover(t *testing.T) {
+	// Node 1 fails with 500
+	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "server error", http.StatusInternalServerError)
+	}))
+	defer failSrv.Close()
+
+	// Node 2 succeeds
+	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "node": "node2"})
+	}))
+	defer okSrv.Close()
+
+	cfg := &config.Config{
+		DatasourceRESTHost: "127.0.0.1",
+		DatasourceRESTPort: 8083,
+	}
+
+	client := New(cfg)
+	client.baseURLs = []string{failSrv.URL, okSrv.URL}
+	client.breakers = map[string]*circuitbreaker.Breaker{
+		failSrv.URL: circuitbreaker.NewBreaker(2, 500*time.Millisecond),
+		okSrv.URL:   circuitbreaker.NewBreaker(2, 500*time.Millisecond),
+	}
+	client.maxRetries = 1
+	client.retryBaseDelay = 10 * time.Millisecond
+
+	ctx := context.Background()
+
+	// Call Health: node 1 should fail, then failover to node 2 and succeed!
+	resp, err := client.Health(ctx)
+	if err != nil {
+		t.Fatalf("expected failover to succeed, got: %v", err)
+	}
+	if resp["node"] != "node2" {
+		t.Fatalf("expected response from node2, got: %+v", resp)
+	}
+}

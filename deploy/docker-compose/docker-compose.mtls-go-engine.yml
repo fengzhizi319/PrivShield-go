@@ -29,12 +29,12 @@ services:
   # 2. Console Go 后端代理服务 (mTLS 客户端连接 Go Agent)
   console-backend-go:
     environment:
-      PRIVACY_AGENT_TLS_ENABLED: "true"
-      PRIVACY_AGENT_TLS_CA_FILE: "/certs/ca.crt"
-      PRIVACY_AGENT_TLS_CERT_FILE: "/certs/client.crt"
-      PRIVACY_AGENT_TLS_KEY_FILE: "/certs/client.key"
-      PRIVACY_AGENT_TLS_SERVER_NAME: "PrivShield"
-      PRIVACY_AGENT_URL: "https://PrivShield:8079"
+      BFF_AGENT_TLS_ENABLED: "true"
+      BFF_AGENT_TLS_CA_FILE: "/certs/ca.crt"
+      BFF_AGENT_TLS_CERT_FILE: "/certs/client.crt"
+      BFF_AGENT_TLS_KEY_FILE: "/certs/client.key"
+      BFF_AGENT_TLS_SERVER_NAME: "PrivShield"
+      BFF_AGENT_URL: "https://PrivShield:8079"
       PRIVACY_AUTH_MTLS_WHITELIST_FILE: "/etc/PrivShield/mtls-whitelist.yaml"
     volumes:
       - ../../console/engine-console/bff-go/certs:/certs:ro

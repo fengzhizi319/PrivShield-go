@@ -27,6 +27,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -47,7 +48,9 @@ import (
 // Client 结构体负责与 datasource-mgr 微服务进行双协议通信，管理 HTTP 传输层与 gRPC 连接生命周期。
 type Client struct {
 	cfg        *config.Config // 全局运行配置引用
-	baseURL    string         // datasource-mgr HTTP REST 基础 URL（如 "http://127.0.0.1:8083"）
+	baseURL    string         // datasource-mgr HTTP REST 基础 URL（首选/兼容）
+	baseURLs   []string       // datasource-mgr HTTP REST 多节点集群地址列表（用于负载均衡与故障转移）
+	rrIndex    atomic.Uint64  // 轮询调度序号计数器
 	grpcAddr   string         // datasource-mgr gRPC 监听网络地址（如 "127.0.0.1:50053"）
 	httpClient *http.Client   // 配置了超时与可选 mTLS 的 HTTP 客户端
 	logger     *slog.Logger
@@ -55,11 +58,20 @@ type Client struct {
 	// Retry & Circuit Breaker / 重试与熔断配置
 	maxRetries     int
 	retryBaseDelay time.Duration
-	breaker        *circuitbreaker.Breaker
+	breaker        *circuitbreaker.Breaker            // 兼容性主熔断器引用
+	cbMu           sync.Mutex                         // 保护 per-node 熔断器注册表的互斥锁
+	breakers       map[string]*circuitbreaker.Breaker // 归一化节点地址 → 该节点独立的熔断器状态
+	cbThreshold    int                                // 触发单节点熔断的连续失败阈值（默认 5 次）
+	cbCooldown     time.Duration                      // 熔断开启后的冷却等待时间（默认 30s）
 
 	mu         sync.RWMutex                        // 保护 gRPC 连接与客户端实例的读写互斥锁
 	grpcConn   *grpc.ClientConn                    // gRPC 底层长连接实例
 	grpcClient dspb.DataSourceManagerServiceClient // gRPC 生成桩客户端
+}
+
+// normalizeEndpoint 归一化节点基础地址（去除末尾斜杠与空白）。
+func normalizeEndpoint(baseURL string) string {
+	return strings.TrimRight(strings.TrimSpace(baseURL), "/")
 }
 
 // New creates a new Client instance with optional HTTPS mTLS support and circuit breaker.
@@ -93,15 +105,44 @@ func New(cfg *config.Config) *Client {
 		}
 	}
 
+	// 收集并归一化全部数据源 REST 节点地址
+	rawURLs := cfg.DatasourceBaseURLs()
+	var baseURLs []string
+	seen := make(map[string]struct{}, len(rawURLs))
+	for _, u := range rawURLs {
+		norm := normalizeEndpoint(u)
+		if norm != "" {
+			if _, ok := seen[norm]; !ok {
+				seen[norm] = struct{}{}
+				baseURLs = append(baseURLs, norm)
+			}
+		}
+	}
+	if len(baseURLs) == 0 {
+		baseURLs = []string{normalizeEndpoint(cfg.DatasourceBaseURL())}
+	}
+
+	const cbThreshold = 5
+	const cbCooldown = 30 * time.Second
+
+	breakers := make(map[string]*circuitbreaker.Breaker, len(baseURLs))
+	for _, ep := range baseURLs {
+		breakers[ep] = circuitbreaker.NewBreaker(cbThreshold, cbCooldown)
+	}
+
 	return &Client{
 		cfg:            cfg,
-		baseURL:        strings.TrimRight(cfg.DatasourceBaseURL(), "/"),
+		baseURL:        baseURLs[0],
+		baseURLs:       baseURLs,
 		grpcAddr:       cfg.DatasourceGRPCAddress(),
 		httpClient:     httpClient,
 		logger:         slog.Default(),
 		maxRetries:     3,
 		retryBaseDelay: 500 * time.Millisecond,
-		breaker:        circuitbreaker.NewBreaker(5, 30*time.Second),
+		breaker:        breakers[baseURLs[0]],
+		breakers:       breakers,
+		cbThreshold:    cbThreshold,
+		cbCooldown:     cbCooldown,
 	}
 }
 
@@ -119,43 +160,198 @@ func (c *Client) Close() error {
 	return nil
 }
 
-// CircuitStateString returns the current circuit breaker status as a string.
+// BaseURL returns the primary/first configured datasource base URL.
+func (c *Client) BaseURL() string {
+	if len(c.baseURLs) > 0 {
+		return c.baseURLs[0]
+	}
+	return c.baseURL
+}
+
+// BaseURLs returns all configured datasource base URLs.
+func (c *Client) BaseURLs() []string {
+	return c.baseURLs
+}
+
+// breakerFor 返回指定 endpoint 对应的熔断器状态，必要时惰性初始化。
+func (c *Client) breakerFor(endpoint string) *circuitbreaker.Breaker {
+	endpoint = normalizeEndpoint(endpoint)
+	c.cbMu.Lock()
+	defer c.cbMu.Unlock()
+	if endpoint == "" || endpoint == c.BaseURL() {
+		if c.breaker != nil {
+			if c.breakers != nil {
+				c.breakers[c.BaseURL()] = c.breaker
+			}
+			return c.breaker
+		}
+		endpoint = c.BaseURL()
+	}
+	if c.breakers == nil {
+		c.breakers = make(map[string]*circuitbreaker.Breaker)
+	}
+	b, ok := c.breakers[endpoint]
+	if !ok {
+		b = circuitbreaker.NewBreaker(c.cbThreshold, c.cbCooldown)
+		c.breakers[endpoint] = b
+	}
+	return b
+}
+
+// allowRequest 判定指定节点的熔断器当前是否允许发起请求。
+func (c *Client) allowRequest(endpoint string) error {
+	b := c.breakerFor(endpoint)
+	if !b.Allow() {
+		return fmt.Errorf("datasource circuit breaker open for endpoint %s (cooling down)", endpoint)
+	}
+	return nil
+}
+
+// PickEndpoint returns the next healthy URL using round-robin.
+func (c *Client) PickEndpoint() string {
+	ep, err := c.pickEndpoint("")
+	if err != nil {
+		return c.BaseURL()
+	}
+	return ep
+}
+
+// pickEndpoint 轮询选取一个允许请求的节点，exclude 用于重试时避开刚失败的节点。
+func (c *Client) pickEndpoint(exclude string) (string, error) {
+	if len(c.baseURLs) == 0 {
+		return "", fmt.Errorf("no datasource endpoint configured")
+	}
+	if len(c.baseURLs) == 1 {
+		if c.baseURLs[0] == exclude {
+			return "", fmt.Errorf("no alternative datasource endpoint available")
+		}
+		if err := c.allowRequest(c.baseURLs[0]); err != nil {
+			return "", err
+		}
+		return c.baseURLs[0], nil
+	}
+
+	start := c.rrIndex.Add(1) - 1
+	var lastErr error = fmt.Errorf("all datasource endpoints circuit breakers open")
+	for k := uint64(0); k < uint64(len(c.baseURLs)); k++ {
+		ep := c.baseURLs[(start+k)%uint64(len(c.baseURLs))]
+		if ep == exclude {
+			continue
+		}
+		if err := c.allowRequest(ep); err != nil {
+			lastErr = err
+			continue
+		}
+		return ep, nil
+	}
+	return "", lastErr
+}
+
+// retryEndpoint 在重试轮次解析目标节点：优先故障转移到其他允许请求的节点。
+func (c *Client) retryEndpoint(current string) (string, error) {
+	if len(c.baseURLs) > 1 {
+		if ep, err := c.pickEndpoint(current); err == nil {
+			return ep, nil
+		}
+	}
+	return current, c.allowRequest(current)
+}
+
+// CircuitStateString returns the aggregate circuit breaker status as a string.
 func (c *Client) CircuitStateString() string {
-	return c.breaker.StateString()
+	c.cbMu.Lock()
+	defer c.cbMu.Unlock()
+	if c.breaker != nil && c.breakers != nil && len(c.baseURLs) <= 1 {
+		c.breakers[c.BaseURL()] = c.breaker
+	}
+	if len(c.breakers) == 0 {
+		if c.breaker != nil {
+			return c.breaker.StateString()
+		}
+		return "closed"
+	}
+	allOpen, anyHalfOpen := true, false
+	for _, b := range c.breakers {
+		switch b.State() {
+		case circuitbreaker.StateOpen:
+		case circuitbreaker.StateHalfOpen:
+			allOpen = false
+			anyHalfOpen = true
+		default:
+			allOpen = false
+		}
+	}
+	switch {
+	case allOpen:
+		return "open"
+	case anyHalfOpen:
+		return "half-open"
+	default:
+		return "closed"
+	}
 }
 
 func (c *Client) checkCircuit() error {
-	if c.breaker.Allow() {
+	c.cbMu.Lock()
+	defer c.cbMu.Unlock()
+	if len(c.breakers) == 0 {
+		if c.breaker != nil && !c.breaker.Allow() {
+			return fmt.Errorf("datasource circuit breaker open (cooling down)")
+		}
 		return nil
+	}
+	for _, b := range c.breakers {
+		if b.Allow() {
+			return nil
+		}
 	}
 	return fmt.Errorf("datasource circuit breaker open (cooling down)")
 }
 
-func (c *Client) recordSuccess() {
-	prev := c.breaker.State()
-	c.breaker.RecordSuccess()
-	if prev == circuitbreaker.StateHalfOpen && c.breaker.State() == circuitbreaker.StateClosed {
-		c.logger.Info("datasource client circuit breaker closed (recovered)")
+func (c *Client) recordSuccess(endpoint ...string) {
+	ep := ""
+	if len(endpoint) > 0 {
+		ep = endpoint[0]
+	}
+	b := c.breakerFor(ep)
+	prev := b.State()
+	b.RecordSuccess()
+	if prev == circuitbreaker.StateHalfOpen && b.State() == circuitbreaker.StateClosed {
+		c.logger.Info("datasource client circuit breaker closed (recovered)", "endpoint", ep)
+	}
+	if c.breaker != nil && c.breaker != b {
+		c.breaker.RecordSuccess()
 	}
 }
 
-func (c *Client) recordFailure() {
-	prev := c.breaker.State()
-	c.breaker.RecordFailure()
-	if prev == circuitbreaker.StateClosed && c.breaker.State() == circuitbreaker.StateOpen {
-		c.logger.Warn("datasource client circuit breaker opened", "breaker", c.breaker.StateString())
+func (c *Client) recordFailure(endpoint ...string) {
+	ep := ""
+	if len(endpoint) > 0 {
+		ep = endpoint[0]
+	}
+	b := c.breakerFor(ep)
+	prev := b.State()
+	b.RecordFailure()
+	if prev == circuitbreaker.StateClosed && b.State() == circuitbreaker.StateOpen {
+		c.logger.Warn("datasource client circuit breaker opened", "endpoint", ep, "breaker", b.StateString())
 	} else if prev == circuitbreaker.StateHalfOpen {
-		c.logger.Warn("datasource client circuit breaker re-opened (probe failed)")
+		c.logger.Warn("datasource client circuit breaker re-opened (probe failed)", "endpoint", ep)
+	}
+	if c.breaker != nil && c.breaker != b {
+		c.breaker.RecordFailure()
 	}
 }
 
-// doHTTP executes an HTTP request with circuit breaker, retries, and body limit.
+// doHTTP executes an HTTP request with circuit breaker, retries, multi-node failover, and body limit.
 // Injects trace headers (X-Request-ID / X-Trace-ID) and outbound API Key for
 // zero-trust service-to-service authentication.
 func (c *Client) doHTTP(req *http.Request) ([]byte, error) {
-	if err := c.checkCircuit(); err != nil {
-		return nil, err
+	initialEndpoint := normalizeEndpoint(req.URL.Scheme + "://" + req.URL.Host)
+	if initialEndpoint == "://" || initialEndpoint == "" {
+		initialEndpoint = c.PickEndpoint()
 	}
+	endpoint := initialEndpoint
+	requestTarget := req.URL.RequestURI()
 
 	if rid := pkgobs.RequestIDFromContext(req.Context()); rid != "" {
 		if req.Header.Get("X-Request-ID") == "" {
@@ -174,12 +370,33 @@ func (c *Client) doHTTP(req *http.Request) ([]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
 		if attempt > 0 {
+			next, err := c.retryEndpoint(endpoint)
+			if err != nil {
+				// No available endpoint to failover
+				if lastErr != nil {
+					return nil, fmt.Errorf("datasource request failed after %d attempts: %w (failover blocked: %v)", attempt, lastErr, err)
+				}
+				return nil, err
+			}
+			if next != endpoint {
+				c.logger.Info("failing over to another datasource endpoint",
+					"method", req.Method, "path", requestTarget,
+					"from", endpoint, "to", next, "attempt", attempt+1)
+				endpoint = next
+				u, perr := url.Parse(endpoint + requestTarget)
+				if perr != nil {
+					return nil, fmt.Errorf("retry: rebuild request url: %w", perr)
+				}
+				req.URL = u
+			}
+
 			delay := c.retryBaseDelay * time.Duration(1<<(attempt-1))
 			jitter := time.Duration(rand.Int64N(int64(delay / 2)))
 			sleepDur := delay + jitter
 
 			c.logger.Info("retrying datasource HTTP request",
 				"path", req.URL.Path,
+				"endpoint", endpoint,
 				"attempt", attempt+1,
 				"backoff", sleepDur.String(),
 			)
@@ -197,11 +414,26 @@ func (c *Client) doHTTP(req *http.Request) ([]byte, error) {
 				}
 				req.Body = newBody
 			}
+		} else {
+			// Initial attempt: ensure endpoint circuit is checked
+			if err := c.allowRequest(endpoint); err != nil {
+				// If initial endpoint circuit is open, try pick another
+				alt, perr := c.pickEndpoint("")
+				if perr == nil && alt != endpoint {
+					endpoint = alt
+					u, parseErr := url.Parse(endpoint + requestTarget)
+					if parseErr == nil {
+						req.URL = u
+					}
+				} else {
+					return nil, err
+				}
+			}
 		}
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
-			c.recordFailure()
+			c.recordFailure(endpoint)
 			lastErr = fmt.Errorf("datasource HTTP do: %w", err)
 			continue
 		}
@@ -210,17 +442,17 @@ func (c *Client) doHTTP(req *http.Request) ([]byte, error) {
 		body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize+1))
 		resp.Body.Close()
 		if err != nil {
-			c.recordFailure()
+			c.recordFailure(endpoint)
 			lastErr = fmt.Errorf("read datasource response: %w", err)
 			continue
 		}
 		if int64(len(body)) > maxBodySize {
-			c.recordFailure()
+			c.recordFailure(endpoint)
 			return nil, fmt.Errorf("datasource response too large: exceeds %d bytes", maxBodySize)
 		}
 
 		if resp.StatusCode >= 500 {
-			c.recordFailure()
+			c.recordFailure(endpoint)
 			lastErr = fmt.Errorf("datasource server error %d: %s", resp.StatusCode, string(body))
 			continue
 		} else if resp.StatusCode >= 400 {
@@ -228,7 +460,7 @@ func (c *Client) doHTTP(req *http.Request) ([]byte, error) {
 			return nil, fmt.Errorf("datasource request failed with status %d: %s", resp.StatusCode, string(body))
 		}
 
-		c.recordSuccess()
+		c.recordSuccess(endpoint)
 		return body, nil
 	}
 
@@ -242,7 +474,7 @@ func (c *Client) doHTTP(req *http.Request) ([]byte, error) {
 // Health checks datasource-mgr connectivity via HTTP REST.
 // Health 通过 HTTP GET /health 探测 datasource-mgr 的健康状态。
 func (c *Client) Health(ctx context.Context) (map[string]any, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.PickEndpoint()+"/health", nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -261,7 +493,7 @@ func (c *Client) Health(ctx context.Context) (map[string]any, error) {
 
 // ListDataSources fetches the list of mock datasources via HTTP REST.
 func (c *Client) ListDataSources(ctx context.Context) (map[string]any, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/datasources", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.PickEndpoint()+"/v1/datasources", nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -280,7 +512,7 @@ func (c *Client) ListDataSources(ctx context.Context) (map[string]any, error) {
 
 // GetDataSource fetches a single datasource by ID via HTTP REST.
 func (c *Client) GetDataSource(ctx context.Context, id string) (map[string]any, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/datasources/"+url.PathEscape(id), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.PickEndpoint()+"/v1/datasources/"+url.PathEscape(id), nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -299,7 +531,7 @@ func (c *Client) GetDataSource(ctx context.Context, id string) (map[string]any, 
 
 // TestConnection tests datasource connectivity via HTTP REST.
 func (c *Client) TestConnection(ctx context.Context, id string) (map[string]any, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/datasources/"+url.PathEscape(id)+"/test", bytes.NewReader(nil))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.PickEndpoint()+"/v1/datasources/"+url.PathEscape(id)+"/test", bytes.NewReader(nil))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -481,7 +713,7 @@ func (c *Client) GetDataSourceGRPC(ctx context.Context, id string) (*dspb.DataSo
 func (c *Client) FetchRecordByIDCard(ctx context.Context, datasourceID, idCardNo string) (map[string]any, error) {
 	path := fmt.Sprintf("/v1/datasources/%s/record-by-id?id_card_no=%s",
 		url.PathEscape(datasourceID), url.QueryEscape(idCardNo))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.PickEndpoint()+path, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

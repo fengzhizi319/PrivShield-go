@@ -2,7 +2,7 @@
 
 ## 1. 产品概述
 
-**数据服务调度中枢**（Service Hub）是 PrivShield 平台的企业级数据流通中枢微服务，部署于**主机甲（业务网关算力节点 · ECS）**，负责统一接入上游调用（React Web 控制台、Go BFF、外部业务系统），并将数据治理请求编排为 **6 阶段安全流水线**（`ingest` ➔ `fetch` ➔ `classify` ➔ `desensitize` ➔ `return` ➔ `audit`），协同数据源管理（`datasource-mgr`）、隐私计算引擎（`PrivShield Agent`）与不可篡改审计存证（`audit-log`）。
+**数据服务调度中枢**（Service Hub）是 PrivShield 平台的企业级数据流通中枢微服务，部署于**主机甲（业务网关算力节点 · ECS）**，负责统一接入上游调用（React Web 控制台、Go BFF、外部业务系统），并将数据治理请求编排为 **6 阶段安全流水线**（`ingest` ➔ `fetch` ➔ `classify` ➔ `desensitize` ➔ `return` ➔ `audit`），协同数据源管理（`mock-datasource`）、隐私计算引擎（`PrivShield Agent`）与不可篡改审计存证（`audit-log`）。
 
 | 属性 | 值 | 说明 |
 |---|---|---|
@@ -11,7 +11,7 @@
 | gRPC 端口 | `50052` | 默认监听地址 `127.0.0.1:50052`（支持国密 SM2 / TLS 1.3 mTLS 与 CN 白名单） |
 | 开发语言与框架 | Go 1.25+ / Gin / gRPC | 原生协程并发、强类型、高吞吐 |
 | 上游依赖 | PrivShield Agent (`:8079` REST) | 3 层动态分类漏斗与脱敏隐私原语 |
-| 下游数据源依赖 | datasource-mgr (`:8083` REST / `:50053` gRPC) | 医保 (`ds_yibao` 19字段) / 康养 (`ds_kangyang` 27字段) 等仿真模拟数据源 |
+| 下游数据源依赖 | mock-datasource (`:8083` REST / `:50053` gRPC) | 医保 (`ds_yibao` 19字段) / 康养 (`ds_kangyang` 27字段) 等仿真模拟数据源 |
 | 下游审计依赖 | audit-log (`:8084` REST / `:50054` gRPC) | 国密 SM3 区块链式防篡改存证与 SM4-GCM 快照 |
 | 存储引擎 | PostgreSQL Phase B (多副本原子租约) / SQLite WAL (自愈降级) | 任务持久化、自适应连接池与崩溃恢复 |
 | 行业标准 | 四川省健康医疗大数据应用指南 DB51/T 2989—2023 | L1~L5 五级分级、6 类字段矩阵与四柱强剥离 |

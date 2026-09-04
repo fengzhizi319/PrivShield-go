@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	pkgagent "github.com/fengzhizi319/PrivShield-go/pkg/agent"
+	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 	"github.com/tjfoc/gmsm/gmtls"
 )

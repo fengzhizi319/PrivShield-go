@@ -241,27 +241,27 @@ services:
     ports:
       - "8081:8081"
     environment:
-      PRIVACY_CONSOLE_HOST: "0.0.0.0"
-      PRIVACY_CONSOLE_PORT: "8081"
+      BFF_HOST: "0.0.0.0"
+      BFF_PORT: "8081"
       # 上游 Agent（gRPC + REST）走 TLS：必须校验服务端证书，禁止 skip-verify。
-      PRIVACY_AGENT_GRPC_HOST: "PrivShield"
-      PRIVACY_AGENT_GRPC_PORT: "50051"
-      PRIVACY_AGENT_URL: "https://PrivShield:8079"
-      PRIVACY_AGENT_TLS_ENABLED: "true"
-      PRIVACY_AGENT_TLS_CA_FILE: "${PRIVACY_AGENT_TLS_CA_FILE:-/certs/ca.crt}"
-      PRIVACY_AGENT_TLS_SERVER_NAME: "${PRIVACY_AGENT_TLS_SERVER_NAME:-PrivShield}"
-      PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY: "false"
+      BFF_AGENT_GRPC_HOST: "PrivShield"
+      BFF_AGENT_GRPC_PORT: "50051"
+      BFF_AGENT_URL: "https://PrivShield:8079"
+      BFF_AGENT_TLS_ENABLED: "true"
+      BFF_AGENT_TLS_CA_FILE: "${BFF_AGENT_TLS_CA_FILE:-/certs/ca.crt}"
+      BFF_AGENT_TLS_SERVER_NAME: "${BFF_AGENT_TLS_SERVER_NAME:-PrivShield}"
+      BFF_AGENT_TLS_INSECURE_SKIP_VERIFY: "false"
       # 客户端证书（Agent 侧开启 mTLS 时必须提供，CN 需在白名单内）
-      PRIVACY_AGENT_TLS_CERT_FILE: "${PRIVACY_AGENT_TLS_CERT_FILE:-/certs/console-client/tls.crt}"
-      PRIVACY_AGENT_TLS_KEY_FILE: "${PRIVACY_AGENT_TLS_KEY_FILE:-/certs/console-client/tls.key}"
+      BFF_AGENT_TLS_CERT_FILE: "${BFF_AGENT_TLS_CERT_FILE:-/certs/console-client/tls.crt}"
+      BFF_AGENT_TLS_KEY_FILE: "${BFF_AGENT_TLS_KEY_FILE:-/certs/console-client/tls.key}"
       # 调用 Agent 的出站密钥（必须与 PRIVACY_AUTH_INTERNAL_API_KEYS 中的 token 一致）
-      PRIVACY_AGENT_API_KEY: "${PRIVACY_AGENT_API_KEY:?PRIVACY_AGENT_API_KEY is required in production: the Agent rejects unauthenticated calls}"
+      BFF_AGENT_API_KEY: "${BFF_AGENT_API_KEY:?PRIVACY_AGENT_API_KEY is required in production: the Agent rejects unauthenticated calls}"
       # ── BFF 自身入站鉴权 + TLS（非环回监听，缺密钥则进程拒绝启动）──
-      CONSOLE_API_KEY: "${CONSOLE_API_KEY:?CONSOLE_API_KEY is required in production: an empty console key exposes the raw-record proxy bypass (P0-7)}"
-      CONSOLE_RATE_LIMIT: "${CONSOLE_RATE_LIMIT:-600}"
-      PRIVACY_CONSOLE_TLS_ENABLED: "true"
-      PRIVACY_CONSOLE_TLS_CERT_FILE: "${PRIVACY_CONSOLE_TLS_CERT_FILE:-/certs/console/tls.crt}"
-      PRIVACY_CONSOLE_TLS_KEY_FILE: "${PRIVACY_CONSOLE_TLS_KEY_FILE:-/certs/console/tls.key}"
+      BFF_API_KEY: "${BFF_API_KEY:?CONSOLE_API_KEY is required in production: an empty console key exposes the raw-record proxy bypass (P0-7)}"
+      BFF_RATE_LIMIT: "${BFF_RATE_LIMIT:-600}"
+      BFF_TLS_ENABLED: "true"
+      BFF_TLS_CERT_FILE: "${BFF_TLS_CERT_FILE:-/certs/console/tls.crt}"
+      BFF_TLS_KEY_FILE: "${BFF_TLS_KEY_FILE:-/certs/console/tls.key}"
       # ── 直连中台三服务的出站密钥（与各服务 *_API_KEY 一致）──
       # ⚠️ 东西向 REST 仍是 http://：Go 侧这三条链路的基础地址硬编码 http 方案且没有自定义 CA/客户端证书入口
       # （services/service-hub/internal/config/config.go DatasourceBaseURL、console/engine-console/bff-go/internal/microservices/client.go），
@@ -385,7 +385,7 @@ services:
       PRIVACY_AGENT_URLS: "${PRIVACY_AGENT_URLS:-https://PrivShield:8079}"
       PRIVACY_AGENT_REST_HOST: "PrivShield"
       PRIVACY_REST_PORT: "8079"
-      PRIVACY_AGENT_API_KEY: "${PRIVACY_AGENT_API_KEY:?PRIVACY_AGENT_API_KEY is required in production}"
+      BFF_AGENT_API_KEY: "${BFF_AGENT_API_KEY:?PRIVACY_AGENT_API_KEY is required in production}"
       # ── 上游 datasource-mgr 出站密钥（REST 基址由代码固定 http，见 backend internal 网段说明）──
       DATASOURCE_MGR_HOST: "datasource-mgr"
       DATASOURCE_MGR_PORT: "8083"
@@ -566,7 +566,7 @@ services:
       PRIVACY_AGENT_REST_HOST: "PrivShield"
       PRIVACY_REST_PORT: "8079"
       PRIVACY_AGENT_URLS: "${PRIVACY_AGENT_URLS:-https://PrivShield:8079}"
-      PRIVACY_AGENT_API_KEY: "${PRIVACY_AGENT_API_KEY:?PRIVACY_AGENT_API_KEY is required in production}"
+      BFF_AGENT_API_KEY: "${BFF_AGENT_API_KEY:?PRIVACY_AGENT_API_KEY is required in production}"
     depends_on:
       PrivShield:
         condition: service_healthy

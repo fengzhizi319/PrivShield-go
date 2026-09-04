@@ -101,7 +101,7 @@ SERVICE_HUB_RETENTION_DAYS=30 \
 | `SERVICE_HUB_RATE_LIMIT_BURST` | `200` | int | IP 级令牌桶突发容量 |
 | `SERVICE_HUB_RATE_LIMIT_PER_IDENTITY_RPS` | `50` | int | 身份级限流（鉴权后生效，key = 身份 + 归一化路径，匿名回退客户端 IP）每身份每路径每秒请求数（`<=0` = 关闭） |
 | `SERVICE_HUB_RATE_LIMIT_PER_IDENTITY_BURST` | `100` | int | 身份级令牌桶突发容量；`/health`、`/readyz`、`/metrics` 探针端点豁免 |
-| `SERVICE_HUB_DATASOURCE_API_KEY` | `""` | string | 访问下游 datasource-mgr 的 API Key |
+| `SERVICE_HUB_DATASOURCE_API_KEY` | `""` | string | 访问下游 mock-datasource 的 API Key |
 | `PRIVACY_ALLOWED_CIDRS` | `""` | string | 允许访问的客户端 CIDR 白名单（逗号分隔） |
 | `SERVICE_HUB_AUDIT_LOG_URLS` | `""` | string | 出域存证 audit-log REST 地址列表（逗号分隔；未配置时回退 `SERVICE_HUB_AUDIT_HTTP` ➔ `http://audit-log:8084`） |
 | `SERVICE_HUB_AUDIT_HTTP` | `""` | string | audit-log 存证备用地址（docker-compose 注入的别名） |
@@ -209,7 +209,7 @@ curl -s http://127.0.0.1:8082/metrics | head -n 30
                                       │
                  ┌────────────────────┼────────────────────┐
                  ▼                    ▼                    ▼
-        [PrivShield Agent]   [datasource-mgr]        [audit-log]
+        [PrivShield Agent]   [mock-datasource]        [audit-log]
              (:8079)              (:8083)              (:8084)
 ```
 
@@ -223,7 +223,7 @@ curl -s http://127.0.0.1:8082/metrics | head -n 30
    - 避免将内部微服务杂乱端口（8082, 8083, 8084, 5173）直接向公网开放导致的端口扫描与攻击面扩大；
    - 统一使用 `https://api.privshield.com` 泛域名收敛：
      - `/v1/hub/` ──▶ `service-hub:8082`（调度中枢）
-     - `/v1/datasources/` ──▶ `datasource-mgr:8083`（数据源管理）
+     - `/v1/datasources/` ──▶ `mock-datasource:8083`（数据源管理）
      - `/v1/audit/` ──▶ `audit-log:8084`（不可篡改审计存证）
      - `/` ──▶ `console-web:5173`（前端控制台）
 4. **Web 应用防火墙（WAF）与深度报文检测 (Payload Inspection)**：
@@ -482,7 +482,7 @@ services:
       - SERVICE_HUB_GRPC_PORT=50052
       - PRIVACY_AGENT_REST_HOST=privshield-agent
       - PRIVACY_REST_PORT=8079
-      - DATASOURCE_MGR_HOST=datasource-mgr
+      - DATASOURCE_MGR_HOST=mock-datasource
       - DATASOURCE_MGR_PORT=8083
     networks:
       - privshield-net
@@ -614,14 +614,14 @@ spec:
                 ▼
       [安全组规则 SG-INTERNAL]
       放行: 仅接受来自 service-hub IP/子网的入站连接
-      - engine-go:8079 / :50051
-      - datasource-mgr:8083 / :50053
+      - privacy-engine:8079 / :50051
+      - mock-datasource:8083 / :50053
       - audit-log:8084
       拒绝: 外部业务区及公网的一切直接访问
 ```
 
 **生产配置基线**：
-1. **禁止内部端口公网映射**：生产 `docker-compose.prod.yml` 或 K8s 清单中，`engine-go`、`datasource-mgr`、`audit-log` 的 `ports:` 不得映射到公网主机（K8s 服务类型设为 `ClusterIP`）；
+1. **禁止内部端口公网映射**：生产 `docker-compose.prod.yml` 或 K8s 清单中，`privacy-engine`、`mock-datasource`、`audit-log` 的 `ports:` 不得映射到公网主机（K8s 服务类型设为 `ClusterIP`）；
 2. **零信任启动门禁**：在生产部署中设置 `SERVICE_HUB_REQUIRE_TLS=true`，若未配置有效 TLS 证书，服务将立即 fail-closed 终止启动，防止明文启动。
 
 ---

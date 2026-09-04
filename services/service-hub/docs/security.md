@@ -15,7 +15,7 @@
 
 ### 1.1 唯一编排入口（P0-2 Single Orchestration Gateway）
 
-`Service-Hub` 是整个 PrivShield 数据流通基础设施中**对外部业务系统开放的唯一调度入口**。在企业与政务云架构中，外部模拟程序或业务系统（如 `app-lz`）**严禁跨过调度中枢直接访问底层服务**（`engine-go`、`datasource-mgr`、`audit-log`）。
+`Service-Hub` 是整个 PrivShield 数据流通基础设施中**对外部业务系统开放的唯一调度入口**。在企业与政务云架构中，外部模拟程序或业务系统（如 `app-lz`）**严禁跨过调度中枢直接访问底层服务**（`privacy-engine`、`mock-datasource`、`audit-log`）。
 
 ```
                                  外部网络 / 业务区 (DMZ)
@@ -43,7 +43,7 @@
 ### 1.2 核心安全铁律：「原始数据切片不出域」
 
 在政务云与医疗大数据流通场景下，本中枢确立了**「资产属地留存、可用不可见、回传严脱敏、过程全存证」**的安全原则：
-1. **原始数据仅限内部流转**：`Service-Hub` 从 `datasource-mgr` 抽取到的原始数据（`raw_record`），仅在内部内存中单向流向 `engine-go` 进行分类分级与深度脱敏；
+1. **原始数据仅限内部流转**：`Service-Hub` 从 `mock-datasource` 抽取到的原始数据（`raw_record`），仅在内部内存中单向流向 `privacy-engine` 进行分类分级与深度脱敏；
 2. **严禁向外暴露原始明文**：`Service-Hub` 面向外部调用方（如 `POST /v1/hub/fetch-and-desensitize`）的响应报文、以及异步任务结果中，**彻底剥离 `raw_record` 字段**，外部调用方物理上不可能通过 API 获取任何原始敏感切片；
 3. **出域存证责任绑定（P0-6 Fail-Closed）**：任何脱敏数据出域前，必须先向独立存证节点 `audit-log` 真实提交入站与出站的哈希指纹（SM3/SHA-256）；一旦存证节点不可达或提交失败，请求立即被阻断（HTTP 502 Bad Gateway），绝不放行。
 
@@ -75,7 +75,7 @@
 ### 2.1 第一道防线：网络拓扑与端口外露收敛（无法触达）
 
 - **网络分区**：`Service-Hub` 部署在网络边界（或反向代理网关后），对外仅开放统一调度端口（HTTP `:8082` / gRPC `:50052`）；
-- **内部服务禁止映射**：`engine-go`（`:8079` / `:50051`）、`datasource-mgr`（`:8083` / `:50053`）、`audit-log`（`:8084`）仅绑定在私有内网或容器网络，在 K8s 中使用 `ClusterIP` 且通过 `NetworkPolicy` 限制仅接受 `Service-Hub` Pod 访问；
+- **内部服务禁止映射**：`privacy-engine`（`:8079` / `:50051`）、`mock-datasource`（`:8083` / `:50053`）、`audit-log`（`:8084`）仅绑定在私有内网或容器网络，在 K8s 中使用 `ClusterIP` 且通过 `NetworkPolicy` 限制仅接受 `Service-Hub` Pod 访问；
 - **攻击面收敛**：外部即使发起端口扫描，核心计算与数据节点在网络层均处于不可达（Unreachable）状态。
 
 ### 2.2 第二道防线：传输层双向证书认证与 CN 白名单（无法连接）
@@ -86,7 +86,7 @@
 - **服务端公钥固定（SPKI Pinning）**：`SERVICE_HUB_TLS_PINNED_PUBKEY_FILE` 支持固定对端公钥指纹，彻底防御伪造 CA 或中间人攻击；
 - **动态 CN 白名单（5 秒热重载）**：
   - `PRIVACY_AUTH_MTLS_WHITELIST_FILE` 维护允许访问的证书主体列表（如 `CN=service-hub`, `CN=privshield-ops`）；
-  - 底层 `engine-go` 严格验证调用者 CN，外部程序因没有内部专管 CA 签发的专用证书，在握手阶段即被断开连接。
+  - 底层 `privacy-engine` 严格验证调用者 CN，外部程序因没有内部专管 CA 签发的专用证书，在握手阶段即被断开连接。
 
 ### 2.3 第三道防线：基于 Scope 的 API 接口权限控制（无法越权）
 
@@ -128,7 +128,7 @@
 | | **安全审计覆盖面** | 调度全链路日志结构化输出（`log/slog` 带 `trace_id` 与 `task_id`）；任务出域与完成必须生成链式审计存证并记录入站/出站指纹。 | **完全满足** |
 | | **审计记录保护（防篡改）** | 存证数据由独立审计节点 `audit-log` 负责维护；出域指纹采用 SHA-256 / SM3 密码杂凑算法；支持定期链式验真（`/v1/hub/audit/verify`）。 | **完全满足** |
 | | **输入合法性验证** | 严格校验身份证号格式（18 位且防越界）、数据源标识（`naming.ResolveInbound` 白名单机制）、任务参数合法性过滤。 | **完全满足** |
-| **安全管理中心** | **三权分立与权责分离** | 架构上明确拆分为“业务调用方”（app-lz）、“调度控制中枢”（service-hub）、“数据源资产方”（datasource-mgr）与“独立审计方”（audit-log），职责边界完全物理隔离。 | **完全满足** |
+| **安全管理中心** | **三权分立与权责分离** | 架构上明确拆分为“业务调用方”（app-lz）、“调度控制中枢”（service-hub）、“数据源资产方”（mock-datasource）与“独立审计方”（audit-log），职责边界完全物理隔离。 | **完全满足** |
 
 ---
 
@@ -163,7 +163,7 @@
 ### 4.2 网络与通信安全（TLCP 国密通道）
 - **国密传输模式**：服务支持通过配置 `SERVICE_HUB_TLS_ENABLED=true` 和 `AGENT_TLS_NATIONAL_CIPHER=true`，启用纯国密 GM/T 0024 TLCP 传输协议；
 - **双证书体系**：服务端配置签名证书/私钥（用于身份鉴别）与加密证书/私钥（用于密钥协商协商）；
-- **出站信任配置**：在中枢调用底层 `engine-go` 时，配置 `PRIVACY_AGENT_URLS="tlcp://..."`，通过 `PRIVACY_AGENT_TLCP_CA_FILE` 验证引擎的 SM2 证书链。
+- **出站信任配置**：在中枢调用底层 `privacy-engine` 时，配置 `PRIVACY_AGENT_URLS="tlcp://..."`，通过 `PRIVACY_AGENT_TLCP_CA_FILE` 验证引擎的 SM2 证书链。
 
 ### 4.3 应用与数据安全（出域防篡改与存证链）
 - **9 要素不可篡改链**：调度中枢完成任务或同步调用后，采集包括任务 ID、数据源、API Code、操作类型、状态、输入哈希（SM3）、输出哈希（SM3）、前序哈希等 9 大核心要素；
@@ -189,7 +189,7 @@
 
 在正式投产或进行等保/密评测评前，运维团队必须核对以下配置项：
 
-- [ ] **网络层隔离**：已确认 `engine-go:8079` 和 `datasource-mgr:8083` 未对外部网络做公网映射，且防火墙仅放行 `8082`；
+- [ ] **网络层隔离**：已确认 `privacy-engine:8079` 和 `mock-datasource:8083` 未对外部网络做公网映射，且防火墙仅放行 `8082`；
 - [ ] **生产零信任门禁**：配置 `SERVICE_HUB_REQUIRE_TLS=true`，确保未配 TLS 时服务拒绝启动；
 - [ ] **强鉴权开启**：`SERVICE_HUB_API_KEY` 或 `SERVICE_HUB_API_KEYS` 非空，禁止免密生产运行；
 - [ ] **外部申请方最小权限**：外部申请方（如 `app-lz`）签发的 API Key 仅配置特定的 `hub:dispatch:<ds_name>` 权限，未授予 `*` 或内部 Scope；

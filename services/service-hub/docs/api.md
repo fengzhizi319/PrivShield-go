@@ -3,7 +3,7 @@
 > **版本**：v2.5.0 (新增按身份证号端到端查询+脱敏同步 API FetchAndDesensitize)  
 > **文档定位**：本规范为 **数联天下 · 数盾 (`PrivShield`)** 体系中「数据服务调度中枢（Service Hub）」的标准化通信与数据交互规约。  
 > **面向对象**：**前端控制台研发团队、BFF 网关开发团队、运维 SRE 团队、第三方系统对接方**。  
-> **重要说明**：`service-hub` 是 PrivShield 隐私计算治理平台的**核心调度中枢**，负责串联上游隐私计算引擎 (`engine-go`)、下游数据源服务 (`datasource-mgr`) 与独立审计存证节点 (`audit-log`)，提供 **REST (Gin :8082) + gRPC (mTLS :50052)** 双协议接入能力，支持多副本 PostgreSQL 租约并发争抢与 SQLite WAL 自愈降级。
+> **重要说明**：`service-hub` 是 PrivShield 隐私计算治理平台的**核心调度中枢**，负责串联上游隐私计算引擎 (`privacy-engine`)、下游数据源服务 (`mock-datasource`) 与独立审计存证节点 (`audit-log`)，提供 **REST (Gin :8082) + gRPC (mTLS :50052)** 双协议接入能力，支持多副本 PostgreSQL 租约并发争抢与 SQLite WAL 自愈降级。
 
 ---
 
@@ -64,8 +64,8 @@
 
 **生产调用关系说明**：
 - **唯一调度入口**：`service-hub` 是所有隐私治理任务的**唯一调度入口**，前端控制台 (`web`) 与 BFF 网关 (`bff-go`) 通过 REST/gRPC 向其提交任务；
-- **上游依赖**：隐私计算引擎 (`engine-go` / `PrivShield Agent`，REST :8079) 提供 44 个隐私原语与 3 层分类分级能力；
-- **下游依赖**：数据源服务 (`datasource-mgr`，REST :8083 / gRPC :50053) 提供数据源元数据查询与连通性探测；
+- **上游依赖**：隐私计算引擎 (`privacy-engine` / `PrivShield Agent`，REST :8079) 提供 44 个隐私原语与 3 层分类分级能力；
+- **下游依赖**：数据源服务 (`mock-datasource`，REST :8083 / gRPC :50053) 提供数据源元数据查询与连通性探测；
 - **存证依赖**：审计存证节点 (`audit-log`，:8084) 提供不可篡改的出域存证，出域动作与存证代码级强绑定（P0-6）。
 
 ```mermaid
@@ -78,8 +78,8 @@ flowchart LR
 
     subgraph PrivShieldCluster ["数盾 PrivShield 集群"]
         ServiceHub["调度中枢 service-hub<br/>HTTP :8082 / gRPC :50052<br/>【6 阶段流水线调度】"]
-        Engine["隐私计算引擎 engine-go<br/>(:8079 / :50051)<br/>44 个隐私原语 + 3 层分类分级"]
-        DatasourceMgr["数据源服务 datasource-mgr<br/>(:8083 / :50053)"]
+        Engine["隐私计算引擎 privacy-engine<br/>(:8079 / :50051)<br/>44 个隐私原语 + 3 层分类分级"]
+        DatasourceMgr["数据源服务 mock-datasource<br/>(:8083 / :50053)"]
         AuditLog["审计存证 audit-log<br/>(:8084)<br/>不可篡改 SHA-256 / SM3 存证"]
     end
 
@@ -198,7 +198,7 @@ flowchart LR
 
 #### 3.1.2 服务就绪探针 (GET /readyz)
 
-- **功能说明**：K8s Readiness 探针。深度探测上游 `PrivShield Agent` 与下游 `datasource-mgr` 的网络连通性。上游 Agent 不可用时返回 `503 Service Unavailable`，以便 K8s Ingress / Service Mesh 识别并暂停流量导入。
+- **功能说明**：K8s Readiness 探针。深度探测上游 `PrivShield Agent` 与下游 `mock-datasource` 的网络连通性。上游 Agent 不可用时返回 `503 Service Unavailable`，以便 K8s Ingress / Service Mesh 识别并暂停流量导入。
 - **请求方法**：`GET`
 - **请求路径**：`/readyz`
 - **鉴权要求**：无（免 Token 访问）
@@ -519,8 +519,8 @@ flowchart LR
 ### 3.4 按身份证号查询并脱敏端点 (POST /v1/hub/fetch-and-desensitize)
 
 - **功能说明**：端到端同步 API。调用方只需提供数据源标识与 18 位公民身份证号，调度中枢自动完成以下全链路：
-  1. 向下游 `datasource-mgr` 按身份证号精确拉取单条记录；
-  2. 调用上游 `engine-go` 隐私计算引擎执行 3-Layer 分类分级 + PII 掩码脱敏；
+  1. 向下游 `mock-datasource` 按身份证号精确拉取单条记录；
+  2. 调用上游 `privacy-engine` 隐私计算引擎执行 3-Layer 分类分级 + PII 掩码脱敏；
   3. 同步返回脱敏后数据、分类级别与分类报告。
 - **请求方法**：`POST`
 - **请求路径**：`/v1/hub/fetch-and-desensitize`
@@ -584,7 +584,7 @@ flowchart LR
   - `HTTP 400 Bad Request` (`INVALID_DATASOURCE_ID`)：`datasource_id` 无法归一化识别
   - `HTTP 404 Not Found` (`RECORD_NOT_FOUND`)：数据源中未找到该身份证号对应的记录
   - `HTTP 409 Conflict` (`RESERVED_DATASOURCE`)：尝试访问已登记但未上线的预留数据源
-  - `HTTP 502 Bad Gateway` (`UPSTREAM_UNAVAILABLE`)：上游 `datasource-mgr` 拉取失败或 `engine-go` 处理失败
+  - `HTTP 502 Bad Gateway` (`UPSTREAM_UNAVAILABLE`)：上游 `mock-datasource` 拉取失败或 `privacy-engine` 处理失败
 
 - **完整 curl 端到端示例**：
   ```bash
@@ -608,8 +608,8 @@ flowchart LR
 sequenceDiagram
     participant Client as 前端控制台 / BFF<br/>(app-lz web / bff-go)
     participant Hub as 调度中枢<br/>service-hub :8082
-    participant DS as 数据源服务<br/>datasource-mgr :8083
-    participant Engine as 隐私计算引擎<br/>engine-go :8079
+    participant DS as 数据源服务<br/>mock-datasource :8083
+    participant Engine as 隐私计算引擎<br/>privacy-engine :8079
     participant Audit as 审计存证<br/>audit-log :8084
 
     Client->>+Hub: ① POST /v1/hub/fetch-and-desensitize<br/>{datasource_id, id_card_no}
@@ -660,11 +660,11 @@ sequenceDiagram
 
 ---
 
-##### ② 调度中枢 → 数据源服务 (datasource-mgr)：拉取原始记录
+##### ② 调度中枢 → 数据源服务 (mock-datasource)：拉取原始记录
 
-调度中枢收到请求后，首先归一化 `datasource_id`（支持别名如 `yibao` → `ds_yibao`），然后向 `datasource-mgr` 发起按身份证号精确查询。
+调度中枢收到请求后，首先归一化 `datasource_id`（支持别名如 `yibao` → `ds_yibao`），然后向 `mock-datasource` 发起按身份证号精确查询。
 
-- **端点**：`GET http://datasource-mgr:8083/v1/datasources/{datasource_id}/record-by-id?id_card_no={id_card_no}`
+- **端点**：`GET http://mock-datasource:8083/v1/datasources/{datasource_id}/record-by-id?id_card_no={id_card_no}`
 - **鉴权**：`Authorization: Bearer <DATASOURCE_MGR_API_KEY>`（内部 mTLS 环境下可省略）
 - **请求头**：`X-Request-ID: <trace-id>`（链路追踪透传）
 - **响应体**（`HTTP 200 OK`）：
@@ -678,22 +678,22 @@ sequenceDiagram
       "diagnosis": "J18.9 社区获得性肺炎"
     },
     "found": true,
-    "via": "datasource-mgr"
+    "via": "mock-datasource"
   }
   ```
 - **错误场景**：
   - `found=false`：数据源中无该身份证号匹配记录 → 调度中枢返回 `HTTP 404 RECORD_NOT_FOUND`
   - `HTTP 400 INVALID_ARGUMENT`：`id_card_no` 缺失或长度不为 18
 
-> **gRPC 替代路径**：调度中枢也可通过 gRPC 调用 `datasourcemgr.DataSourceManagerService/GetRecordByIDCard`，消息结构见 `datasource-mgr/proto/datasourcemgr.proto`。
+> **gRPC 替代路径**：调度中枢也可通过 gRPC 调用 `datasourcemgr.DataSourceManagerService/GetRecordByIDCard`，消息结构见 `mock-datasource/proto/datasourcemgr.proto`。
 
 ---
 
-##### ③ 调度中枢 → 隐私计算引擎 (engine-go)：分类分级 + 脱敏
+##### ③ 调度中枢 → 隐私计算引擎 (privacy-engine)：分类分级 + 脱敏
 
-拿到原始记录后，调度中枢将其发送至 `engine-go` 的通用处理流水线，**一次 HTTP 调用同时完成 3-Layer 分类分级 + L4/L5 高敏文本剥离 + PII 强掩码 + 诊断残留清除**。
+拿到原始记录后，调度中枢将其发送至 `privacy-engine` 的通用处理流水线，**一次 HTTP 调用同时完成 3-Layer 分类分级 + L4/L5 高敏文本剥离 + PII 强掩码 + 诊断残留清除**。
 
-- **端点**：`POST http://engine-go:8079/v1/agent/process`
+- **端点**：`POST http://privacy-engine:8079/v1/agent/process`
 - **回退别名**：若返回 404 则自动回退至 `POST /v1/medical/process`
 - **鉴权**：`Authorization: Bearer <PRIVACY_AGENT_API_KEY>`
 - **请求头**：
@@ -845,7 +845,7 @@ sequenceDiagram
 #### 3.5.3 全链路 curl 端到端示例
 
 ```bash
-# 完整端到端：前端/BFF → service-hub → datasource-mgr → engine-go → audit-log → 返回脱敏结果
+# 完整端到端：前端/BFF → service-hub → mock-datasource → privacy-engine → audit-log → 返回脱敏结果
 curl -s -X POST \
   -H "Authorization: Bearer <SERVICE_HUB_API_KEY>" \
   -H "Content-Type: application/json" \
@@ -861,9 +861,9 @@ curl -s -X POST \
 |---|---|---|---|
 | ① 参数校验失败 | `400 Bad Request` | `INVALID_ARGUMENT` | `datasource_id` 或 `id_card_no` 缺失/非法 |
 | ① 数据源无法识别 | `400 Bad Request` | `INVALID_DATASOURCE_ID` | `datasource_id` 无法归一化 |
-| ② datasource-mgr 不可达 | `502 Bad Gateway` | `UPSTREAM_UNAVAILABLE` | 熔断器打开或网络超时 |
+| ② mock-datasource 不可达 | `502 Bad Gateway` | `UPSTREAM_UNAVAILABLE` | 熔断器打开或网络超时 |
 | ② 记录未找到 | `404 Not Found` | `RECORD_NOT_FOUND` | 数据源中无该身份证号匹配记录 |
-| ③ engine-go 不可达 | `502 Bad Gateway` | `UPSTREAM_UNAVAILABLE` | 引擎熔断或超时（15 秒） |
+| ③ privacy-engine 不可达 | `502 Bad Gateway` | `UPSTREAM_UNAVAILABLE` | 引擎熔断或超时（15 秒） |
 | ③ 引擎未返回级别 | `502 Bad Gateway` | `UPSTREAM_UNAVAILABLE` | 3-Layer 漏斗未产出任何级别（P1-1 fail-closed） |
 | ④ audit-log 不可达 | `502 Bad Gateway` | `UPSTREAM_UNAVAILABLE` | 存证提交失败，P0-6 fail-closed |
 | ④ audit-log 拒绝 | `502 Bad Gateway` | `UPSTREAM_UNAVAILABLE` | 4xx 契约级拒绝，重试无意义 |
@@ -872,12 +872,12 @@ curl -s -X POST \
 
 ### 3.6 外部系统统一编排代理端点 (External Orchestration Endpoints)
 
-> **核心架构原则**：`app-lz BFF` 作为模拟的外部业务程序，运行在受保护网络边界外，**除了访问 `service-hub` (:8082)，并没有直接访问内部微服务（`datasource-mgr` / `engine-go` / `audit-log`）的权限**。  
+> **核心架构原则**：`app-lz BFF` 作为模拟的外部业务程序，运行在受保护网络边界外，**除了访问 `service-hub` (:8082)，并没有直接访问内部微服务（`mock-datasource` / `privacy-engine` / `audit-log`）的权限**。  
 > `service-hub` 承担唯一编排调度中枢职能，对外统一暴露以下代理编排端点。
 
 #### 3.6.1 集群拓扑健康探针 (GET /v1/hub/topology)
 
-由调度中枢统一探测自身及所有下游微服务节点（`engine`、`datasource-mgr`、`audit-log`）的健康状态与微秒级往返延迟，以固定顺序返回完整网格拓扑。
+由调度中枢统一探测自身及所有下游微服务节点（`engine`、`mock-datasource`、`audit-log`）的健康状态与微秒级往返延迟，以固定顺序返回完整网格拓扑。
 
 - **端点**：`GET /v1/hub/topology?protocol=rest|grpc`
 - **鉴权**：`hub:read`
@@ -906,7 +906,7 @@ curl -s -X POST \
         "rest_rtt_ms": 3.4
       },
       {
-        "id": "datasource-mgr",
+        "id": "mock-datasource",
         "name": "数据源管理 (Datasource Mgr)",
         "status": "ready",
         "rest_status": "ready",
@@ -925,7 +925,7 @@ curl -s -X POST \
 
 #### 3.6.2 数据源目录查询 (GET /v1/hub/datasources)
 
-代理查询内部 `datasource-mgr` 中已注册的数据源资产目录。
+代理查询内部 `mock-datasource` 中已注册的数据源资产目录。
 
 - **端点**：`GET /v1/hub/datasources`
 - **鉴权**：`hub:read`
@@ -1273,7 +1273,7 @@ message FetchAndDesensitizeResponse {
 | `413 Payload Too Large`| `PAYLOAD_TOO_LARGE` | 请求体超过 32 MiB 单包保护限制 |
 | `429 Too Many Requests`| `RATE_LIMITED` | 客户端 IP 请求速率触发 IP 级令牌桶限流阈值，或认证身份 + 路径维度触发身份级细粒度限流阈值（均返回 `Retry-After` 头） |
 | `500 Internal Error` | `INTERNAL_ERROR` | 调度中枢内部 TaskStore 读写异常、Agent 调用失败或未知崩溃 |
-| `503 Unavailable` | `UPSTREAM_UNAVAILABLE` | 上游 Agent 不可达、下游 datasource-mgr 连接失败或并发排队超限 |
+| `503 Unavailable` | `UPSTREAM_UNAVAILABLE` | 上游 Agent 不可达、下游 mock-datasource 连接失败或并发排队超限 |
 
 ---
 
@@ -1383,7 +1383,7 @@ message FetchAndDesensitizeResponse {
 # 1. 存活探针检查
 curl -s http://127.0.0.1:8082/health | jq .
 
-# 2. 就绪探针检查（含上游 Agent 与下游 datasource-mgr 连通性）
+# 2. 就绪探针检查（含上游 Agent 与下游 mock-datasource 连通性）
 curl -s http://127.0.0.1:8082/readyz | jq .
 
 # 3. 查询调度中枢运行概况

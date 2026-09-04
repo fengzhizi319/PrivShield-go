@@ -30,7 +30,6 @@ services:
       AGENT_REST_PORT: "8079"
       AGENT_GRPC_HOST: "0.0.0.0"
       AGENT_GRPC_PORT: "50051"
-      PRIVACY_SERVICE_NAME: "PrivShield-Go-test"
       AGENT_LOG_LEVEL: "INFO"
       AGENT_TLS_ENABLED: "false"
       # P0-1：0.0.0.0 监听 ⇒ 必须配置入站 Key；沿用与 test.yml 相同的 test key 约定

@@ -400,6 +400,20 @@ func (c *Config) DatasourceBaseURL() string {
 	return "http://" + c.DatasourceRESTHost + ":" + strconv.Itoa(c.DatasourceRESTPort)
 }
 
+// DatasourceBaseURLs returns all configured datasource manager HTTP base URLs for load balancing/failover.
+// DatasourceBaseURLs 返回所有已配置的数据源 HTTP REST URL 列表：
+// 优先读取 DATASOURCE_MGR_URLS / DATASOURCE_URLS 环境变量（逗号分隔的多个数据源地址），未配置时回退为单个 DatasourceBaseURL()。
+func (c *Config) DatasourceBaseURLs() []string {
+	envURLs := pkgconfig.EnvStringSlice("DATASOURCE_MGR_URLS")
+	if len(envURLs) == 0 {
+		envURLs = pkgconfig.EnvStringSlice("DATASOURCE_URLS")
+	}
+	if len(envURLs) > 0 {
+		return envURLs
+	}
+	return []string{c.DatasourceBaseURL()}
+}
+
 // DatasourceGRPCAddress returns the datasource manager gRPC address.
 // DatasourceGRPCAddress 返回模拟数据源服务的 gRPC 监听网络地址（如 "127.0.0.1:50053"）。
 func (c *Config) DatasourceGRPCAddress() string {

@@ -30,11 +30,11 @@ services:
     container_name: PrivShield-Go
     environment:
       # Go 引擎环境变量
-      PRIVACY_REST_HOST: "0.0.0.0"
-      PRIVACY_REST_PORT: "8079"
-      PRIVACY_GRPC_HOST: "0.0.0.0"
-      PRIVACY_GRPC_PORT: "50051"
-      PRIVACY_LOG_LEVEL: "${PRIVACY_LOG_LEVEL:-INFO}"
+      AGENT_REST_HOST: "0.0.0.0"
+      AGENT_REST_PORT: "8079"
+      AGENT_GRPC_HOST: "0.0.0.0"
+      AGENT_GRPC_PORT: "50051"
+      AGENT_LOG_LEVEL: "${AGENT_LOG_LEVEL:-INFO}"
       # Go 引擎没有 PRIVACY_LOG_FORMAT / PRIVACY_PROFILE / PRIVACY_BUDGET_DB 读取点：
       # 日志固定 JSON（observability.InitLogger），参数面走 PRIVACY_CONFIG_FILE + PRIVACY_RULES_DIR，
       # 隐私预算为进程内无锁原子会计（PRIVACY_NAMESPACE 做租户隔离），故不声明主文件里的 Python 变量。
@@ -42,11 +42,11 @@ services:
       #   Go:  PRIVACY_LLM_ENABLE / PRIVACY_LLM_ENDPOINT / PRIVACY_LLM_MODEL / PRIVACY_LLM_API_KEY
       #   Python: PRIVACY_LLM_PROVIDER / PRIVACY_LLM_API_BASE / PRIVACY_LLM_MODEL_NAME
       # 端点必须是完整 chat/completions URL；默认 false，需要 Layer-3 时显式置 PRIVACY_LLM_ENABLE=true。
-      PRIVACY_LLM_ENABLE: "${PRIVACY_LLM_ENABLE:-false}"
+      AGENT_LLM_ENABLE: "${AGENT_LLM_ENABLE:-false}"
       # 跨容器明文 HTTP：P0-5 默认拒绝非环回 http:// 端点，故必须显式声明容器内网豁免开关。
-      PRIVACY_LLM_ENDPOINT: "${LLM_API_BASE:-http://vllm:8000/v1/chat/completions}"
-      PRIVACY_LLM_ALLOW_INSECURE_HTTP_ENDPOINT: "${PRIVACY_LLM_ALLOW_INSECURE_HTTP_ENDPOINT:-false}"
-      PRIVACY_LLM_MODEL: "${PRIVACY_LLM_MODEL:-Qwen3.5-0.8B-Privacy-Classifier-Smoother}"
+      AGENT_LLM_ENDPOINT: "${LLM_API_BASE:-http://vllm:8000/v1/chat/completions}"
+      AGENT_LLM_ALLOW_INSECURE_HTTP_ENDPOINT: "${AGENT_LLM_ALLOW_INSECURE_HTTP_ENDPOINT:-false}"
+      AGENT_LLM_MODEL: "${AGENT_LLM_MODEL:-Qwen3.5-0.8B-Privacy-Classifier-Smoother}"
     # Go 引擎不需要 Python 的 volumes 挂载
     volumes:
       - budget-db:/data/budget

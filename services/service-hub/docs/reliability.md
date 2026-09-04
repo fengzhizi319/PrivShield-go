@@ -181,7 +181,7 @@ func (s *Server) localWorkerLoop() {
 
 ## 5. 下游客户端弹性与幂等防护
 
-service-hub 在调用下游 **PrivShield Agent**（Python 隐私引擎）和 **datasource-mgr**（数据源管理中台）时，内置了完整的防御性弹性与幂等保障：
+service-hub 在调用下游 **PrivShield Agent**（Privacy Engine 隐私引擎）和 **mock-datasource**（数据源管理中台）时，内置了完整的防御性弹性与幂等保障：
 
 ### 5.1 差分隐私预算与脱敏幂等凭据 (`X-Idempotency-Key`)
 

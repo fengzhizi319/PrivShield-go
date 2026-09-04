@@ -9,7 +9,7 @@
 在政务云数据安全架构中，**数联数据服务调度中枢 (Service Hub)** 部署于**主机甲（业务网关算力节点 · ECS）**，是数据流通链路的核心枢纽与调度中枢，负责：
 
 1. **统一接入与协商**：统一接收来自各调用方的数据申请请求与协商凭证；
-2. **数据源跨服务联动**：对接 `services/datasource-mgr`，按需调取医保（`ds_yibao` 19字段）、康养（`ds_kangyang` 27字段）及预留数据源进行高保真仿真调度；
+2. **数据源跨服务联动**：对接 `console/mock-datasource`，按需调取医保（`ds_yibao` 19字段）、康养（`ds_kangyang` 27字段）及预留数据源进行高保真仿真调度；
 3. **六阶段流水线编排**：按「请求接入 → 申请原数 → 分类与脱敏一体化处理 → 返回结果 → 完成」编排任务；状态机保留 `ingest`、`fetch`、`classify`、`desensitize`、`return`、`audit` 六个追踪标签；
 4. **分类分级智能联动 (DB51/T 2989—2023)**：接入 Layer-1~3 分类分级漏斗，根据动态评估得出的数据敏感度（L1~L5）自动决策并下发最适隐私原语（明文/字段脱敏/K-匿名/差分隐私；L4/L5 均映射为差分隐私 `dp`）；
 5. **双协议服务暴露**：同时提供面向 Web 前端与管控端的 HTTP REST API (:8082)，以及面向高性能微服务互通的双向 mTLS / CN 白名单 gRPC 服务 (:50052)；
@@ -46,7 +46,7 @@ graph TD
     end
 
     subgraph MockDatasource [模拟数据源 :8083 / :50053 (主机甲 · ECS)]
-        DSMgr[datasource-mgr<br/>ds_yibao / ds_kangyang / mock3 / mock4]
+        DSMgr[mock-datasource<br/>ds_yibao / ds_kangyang / mock3 / mock4]
     end
 
     subgraph UpstreamAgent [PrivShield 核心 Agent :8079 (主机甲 · ECS)]

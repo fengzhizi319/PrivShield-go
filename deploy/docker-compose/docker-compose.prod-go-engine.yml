@@ -42,7 +42,6 @@ services:
       AGENT_GRPC_HOST: "0.0.0.0"
       AGENT_GRPC_PORT: "50051"
       AGENT_LOG_LEVEL: "${PRIVACY_LOG_LEVEL:-INFO}"
-      PRIVACY_SERVICE_NAME: "PrivShield-Go"
       # 分类分级规则与 Profile 路径（agent 仍在读取的 PRIVACY_* 路径变量）
       PRIVACY_CONFIG_FILE: "${PRIVACY_CONFIG_FILE:-/app/config/privacy.yaml}"
       PRIVACY_RULES_DIR: "${PRIVACY_RULES_DIR:-/app/rules/domains}"
