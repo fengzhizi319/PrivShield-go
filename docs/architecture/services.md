@@ -65,6 +65,9 @@ graph LR
   5. `Return`：封装脱敏后的安全数据流并返回调用方；
   6. `Audit`：异步向 Audit Log 微服务写入 9 要素存证与加密快照；
   7. `Done`：持久化任务终态结果。
+* **统一出站多节点负载均衡与故障转移**：
+  - **算力节点负载均衡 (`agentClient`)**：通过 `PRIVACY_AGENT_URLS` 读取多 `privacy-engine` 算力节点地址，基于 `pkg/agent/client.go` 的无锁原子 Round-Robin 均衡轮询调度与按节点独立熔断，遭遇节点单点故障透明切换至健康节点重试；
+  - **数据源与存证节点高可用 (`dsClient` / `evidenceClient`)**：分别支持 `DATASOURCE_MGR_URLS` 与 `SERVICE_HUB_AUDIT_LOG_URLS` 多实例轮询与自动重试故障转移（Failover），实现出站全链路三态熔断与故障隔离；
 * **高可用与原子租约并发**：
   - 集成 `pkg/store.LeasedTaskStore`，在 PostgreSQL 上基于 `FOR UPDATE SKIP LOCKED` 实现多副本无阻塞竞争领取（`ClaimNext`）；
   - 任务持有者使用 `lease_token` 与乐观锁版本号（`version`）进行租约续期（`RenewLease`）与完成确认，彻底消除脑裂与重复执行；

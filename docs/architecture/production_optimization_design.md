@@ -85,13 +85,14 @@ flowchart TD
 
 ### 2.2 智能动态负载均衡与零分配网关 (Smart Load Balancing & BufferPool)
 
-#### 1. Go 微服务共享客户端多节点池化 (`pkg/agent/client.go`)
-- **多端点配置**：`Config.BaseURLs` 支持传入多个 Agent REST 地址；service-hub、audit-log 等模块的配置层读取环境变量 `PRIVACY_AGENT_URLS=http://agent-1:8079,http://agent-2:8079`（逗号分隔）并注入 `BaseURLs`；
+#### 1. Go 微服务共享客户端多节点池化 (`pkg/agent/client.go` / `internal/datasource/client.go`)
+- **多端点配置**：`Config.BaseURLs` 支持传入多个后端 REST 地址；`service-hub` 分别读取环境变量 `PRIVACY_AGENT_URLS`（多 `privacy-engine` 引擎节点）、`DATASOURCE_MGR_URLS`（多 `mock-datasource` 数据源节点）与 `SERVICE_HUB_AUDIT_LOG_URLS`（多 `audit-log` 存证节点），支持逗号分隔多地址集群；未配置时优雅回退为单节点地址；
 - **客户端轮询与故障转移 (Client-Side Round-Robin & Failover)**：
-  - 维护健康的节点列表，自动轮询分发；
-  - 当某个节点连续失败达到阈值（如 5 次）时自动熔断并隔离，在后台异步进行心跳探活；
-  - 探活恢复后通过半开（Half-Open）状态自动重新纳入可用节点池。
-- **响应体及时释放**：重试循环内显式 `resp.Body.Close()`（读取完毕后立即关闭），避免 `defer` 导致所有响应体累积到函数返回才释放，防止极端场景下 256 MiB 内存占用与连接池耗尽。
+  - 基于无锁原子递增序号（`atomic.Uint64`）实现无锁平滑 Round-Robin 均衡分发；
+  - **按节点独立熔断（Per-Node Circuit Breaker）**：为每个实例维护独立的三态熔断器（连续 5 次失败触发 Open），单节点宕机只隔离故障节点，绝不引发全池熔断；经过 30s 冷却后放行半开探测流量进行自愈验证；
+  - **重试智能故障转移**：请求遭遇超时或 5xx 错误时，触发带随机抖动的指数退避重试，并在重试轮次自动切换到下一个健康节点，无需上层业务介入重连；
+  - **4xx 业务错误不计入熔断**：防止非法参数或客户端探针异常打穿熔断器；
+- **响应体及时释放与 64 MiB 防 OOM 限制**：重试循环内显式 `resp.Body.Close()`（读取完毕后立即关闭），并配合 `io.LimitReader` 硬限制 64 MiB，防止响应体累积导致内存泄漏与连接池耗尽。
 
 #### 2. Go 网关 P2C-EWMA 动态负载调度与 BufferPool (`services/privacy-engine/internal/gateway/`)
 - **Power of Two Choices + EWMA 算法 (`balancer.go`)**：

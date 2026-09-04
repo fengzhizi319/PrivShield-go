@@ -18,7 +18,7 @@
   - [2.6 企业级中台微服务群实践](#26-企业级中台微服务群实践)
 - [三、核心高光工程设计](#三核心高光工程设计)
   - [3.1 三层递进式动态分类分级漏斗 (3-Layer Funnel)](#31-三层递进式动态分类分级漏斗-3-layer-funnel)
-  - [3.2 P2C-EWMA 智能动态负载均衡与 BufferPool 零分配反向代理](#32-p2c-ewma-智能动态负载均衡与-bufferpool-零分配反向代理)
+  - [3.2 客户端去中心化负载均衡与网关 P2C-EWMA 零分配反向代理](#32-客户端去中心化负载均衡与网关-p2c-ewma-零分配反向代理)
   - [3.3 9 层统一中间件栈与纵深防 DDoS 体系](#33-9-层统一中间件栈与纵深防-ddos-体系)
 - [四、工程注意事项与避坑指南](#四工程注意事项与避坑指南)
 - [五、可复用设计模式清单](#五可复用设计模式清单)
@@ -135,10 +135,13 @@ Layer 2: Small-NER 引擎 (1~5ms)   → ONNX Runtime Go 抽取中文专有实体
 Layer 3: External LLM 仲裁 (100~500ms) → HTTP 连接池 + 三态熔断器调度独立 vLLM/Ollama (Closed/Open/HalfOpen)
 ```
 
-### 3.2 P2C-EWMA 智能动态负载均衡与 BufferPool 零分配反向代理
+### 3.2 客户端去中心化负载均衡与网关 P2C-EWMA 零分配反向代理
 
-- **Go 客户端多节点负载池 (`pkg/agent/client.go`)**：原生支持 `PRIVACY_AGENT_URLS` 集群列表，内置平滑轮询与三态熔断故障转移；
-- **P2C-EWMA 负载均衡 (`services/privacy-engine/internal/gateway/balancer.go`)**：Power of Two Choices 算法结合指数加权移动平均（EWMA）延迟与在途请求动态打分，消除羊群效应；
+- **Service Hub 出站多节点矩阵 (`pkg/agent/client.go` / `datasource/client.go`)**：
+  - 原生支持 `PRIVACY_AGENT_URLS`、`DATASOURCE_MGR_URLS` 与 `SERVICE_HUB_AUDIT_LOG_URLS` 多实例列表；
+  - 内置无锁原子 Round-Robin 轮询调度与按节点独立三态熔断（Per-Node Circuit Breaker）；
+  - 遇到节点崩溃或 5xx 故障自动触发带抖动的指数退避，并在重试轮次透明故障转移（Failover）至健康节点；
+- **P2C-EWMA 服务端负载均衡 (`services/privacy-engine/internal/gateway/balancer.go`)**：Power of Two Choices 算法结合指数加权移动平均（EWMA）延迟与在途请求动态打分，消除羊群效应；
 - **BufferPool 零分配反向代理 (`services/privacy-engine/internal/gateway/http_proxy.go`)**：基于 `sync.Pool` 复用 32KB 数据包切片，实现反向代理数据流转发 0 堆内存分配；
 - **gRPC 零反序列化流代理 (`services/privacy-engine/internal/gateway/grpc_proxy.go`)**：采用 `rawCodec` 直通模式，避免 Proto 编解码 CPU 损耗。
 
