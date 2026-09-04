@@ -259,37 +259,36 @@ func (k *KeyConfig) IsExpired() bool {
 
 #### 5.3.3 路径归一化与 REST 权限映射（`PermissionForRESTPath`）
 
-函数入口处执行两步归一化，确保别名路由与主路由共享同一权限映射：
+函数入口处执行两步归一化，确保直调别名与主路由共享同一权限映射：
 
 ```go
 func PermissionForRESTPath(path string) string {
     // 1. 去除尾部斜杠（防 /api/hub/dispatch/ 绕过精确匹配）
-    // 2. 前缀归一化：/api/v1/* → /v1/*（别名路由统一映射）
-    // 3. switch-case 前缀匹配 → 返回权限字符串
-    // 4. 未映射路径返回 ""（对所有已认证身份开放）
+    // 2. switch-case 前缀匹配（/v1/* 规范前缀 + 根路径直调别名）→ 返回权限字符串
+    // 3. 未映射路径返回 "admin"（fail-closed）
 }
 ```
 
-> **已修复的安全漏洞（SEC-09）**：早期版本仅匹配 `/v1/*` 前缀，导致 40+ 别名路由（`/api/v1/*`、根路径别名、快捷别名）完全绕过权限校验。修复方案是在函数入口统一归一化路径前缀。
+> **历史修复（SEC-09）**：早期版本曾同时注册 `/api/v1/*` 别名路由组，并在函数入口统一执行 `/api/v1/*` → `/v1/*` 前缀归一化，确保别名路由不绕过权限校验。当前版本已整体移除 `/api/v1/*` 别名路由组与归一化逻辑，`/v1/*` 为唯一规范前缀。
 
 ##### Engine 权限映射表
 
 | REST 路径 / gRPC 方法 | 对应权限 Scope |
 |---|---|
 | `/health`, `/livez`, `/readyz` / `Health` | `health:read` |
-| `/v1/privacy/mask*`, `/api/v1/mask*`, `/privacy/process_file` / `Mask`, `MaskRecord` | `privacy:mask` |
-| `/v1/privacy/hash`, `/api/v1/hash/hmac` / `Hash` | `privacy:hash` |
-| `/v1/privacy/dp/*`, `/v1/privacy/ldp/*`, `/api/v1/dp/*`, `/api/v1/ldp/*` / `DPCount`, `DPSum`, `DPMean` | `privacy:dp` |
-| `/v1/privacy/k_anonymize*`, `/api/v1/kano/*` / `KAnonymizeRecord` | `privacy:kano` |
-| `/v1/privacy/qol/*`, `/api/v1/qol/*` / `ObfuscateQuery` | `privacy:qol` |
-| `/v1/privacy/budget`, `/v1/privacy/budget/reset`, `/api/v1/budget`, `/api/v1/budget/reset` | `privacy:budget` |
+| `/v1/privacy/mask*`, `/privacy/process_file` / `Mask`, `MaskRecord` | `privacy:mask` |
+| `/v1/privacy/hash` / `Hash` | `privacy:hash` |
+| `/v1/privacy/dp/*`, `/v1/privacy/ldp/*` / `DPCount`, `DPSum`, `DPMean` | `privacy:dp` |
+| `/v1/privacy/k_anonymize*` / `KAnonymizeRecord` | `privacy:kano` |
+| `/v1/privacy/qol/*` / `ObfuscateQuery` | `privacy:qol` |
+| `/v1/privacy/budget`, `/v1/privacy/budget/reset` | `privacy:budget` |
 | `/v1/privacy/profile/recommend` | `privacy:profile` |
-| `/v1/privacy/classify/*`, `/api/v1/classify*` | `classification:read` |
-| `/v1/dynclassification/classify*`, `/v1/dynclassification/eval_record`, `/api/v1/dynclassification/*` | `dynclassification:read` |
+| `/v1/privacy/classify/*` | `classification:read` |
+| `/v1/dynclassification/classify*`, `/v1/dynclassification/eval_record` | `dynclassification:read` |
 | `/v1/dynclassification/profiles/reload`, `/v1/dynclassification/generate_profile` | `dynclassification:write` |
-| `/v1/agent/process`, `/api/v1/agent/process`, `/agent/process` | `agent:process` |
-| `/v1/medical/*`, `/api/v1/medical/*`, `/medical/process` | `medical:process` |
-| `/v1/ops/*`, `/api/v1/ops/*`, `/ops/diagnostics` | `ops:diagnostics` |
+| `/v1/agent/process`, `/agent/process` | `agent:process` |
+| `/v1/medical/*`, `/medical/process` | `medical:process` |
+| `/v1/ops/*`, `/ops/diagnostics` | `ops:diagnostics` |
 | `/debug/pprof*` | `ops:admin` |
 
 #### 5.3.4 gRPC 方法权限映射（`PermissionForGRPCMethod`）

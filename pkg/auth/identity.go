@@ -48,19 +48,12 @@ func IsHealthPathOrMethod(pathOrMethod string) bool {
 }
 
 // PermissionForRESTPath 将 REST 路径映射为所需权限字符串。
-// 支持 /v1/* 与 /api/v1/* 双前缀（别名路由归一化后统一匹配）。
 func PermissionForRESTPath(path string) string {
 	// 去除尾部斜杠
 	if len(path) > 1 && path[len(path)-1] == '/' {
 		path = path[:len(path)-1]
 	}
-	// 归一化：/api/v1/* → /v1/*，确保别名路由与主路由共享同一权限映射。
 	normalized := path
-	if strings.HasPrefix(normalized, "/api/v1/") {
-		normalized = "/v1/" + normalized[len("/api/v1/"):]
-	} else if normalized == "/api/v1" {
-		normalized = "/v1"
-	}
 	switch {
 	case normalized == "/health" || normalized == "/livez" || normalized == "/readyz" || normalized == "/readyz/llm":
 		return "health:read"
@@ -108,25 +101,6 @@ func PermissionForRESTPath(path string) string {
 		return "ops:diagnostics"
 	case strings.HasPrefix(normalized, "/debug/pprof"):
 		return "ops:admin"
-	// /api/v1/* 别名路由中 kano/classify/hash/budget 等子路径
-	case strings.HasPrefix(normalized, "/v1/mask"):
-		return "privacy:mask"
-	case strings.HasPrefix(normalized, "/v1/dp/"):
-		return "privacy:dp"
-	case strings.HasPrefix(normalized, "/v1/kano/"):
-		return "privacy:kano"
-	case normalized == "/v1/classify" || normalized == "/v1/classify/batch":
-		return "classification:read"
-	case normalized == "/v1/hash/hmac":
-		return "privacy:hash"
-	case normalized == "/v1/budget":
-		return "privacy:budget"
-	case normalized == "/v1/budget/reset":
-		return "privacy:budget"
-	case strings.HasPrefix(normalized, "/v1/qol/"):
-		return "privacy:qol"
-	case strings.HasPrefix(normalized, "/v1/ldp/"):
-		return "privacy:dp"
 	default:
 		// fail-closed：未显式映射的非豁免路径默认归入最高 admin 权限，防止空 scope 绕过
 		return "admin"

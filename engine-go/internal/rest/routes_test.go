@@ -433,18 +433,18 @@ func TestClassify(t *testing.T) {
 	}
 }
 
-// TestClassify_AliasRoutes 验证 /api/v1/dynclassification/* 别名路由已注册并可正常访问（SEC-09/SEC-11 完整覆盖）。
-func TestClassify_AliasRoutes(t *testing.T) {
+// TestClassify_Routes 验证 /v1/dynclassification/* 路由已注册并可正常访问（SEC-09/SEC-11 完整覆盖）。
+func TestClassify_Routes(t *testing.T) {
 	r, _ := setupRouter(t)
 	cases := []struct {
 		path   string
 		method string
 		body   any
 	}{
-		{"/api/v1/dynclassification/classify", "POST", map[string]any{"field": "phone", "value": "13812345678"}},
-		{"/api/v1/dynclassification/classify/batch", "POST", map[string]any{"records": []map[string]any{{"phone": "13812345678"}}}},
-		{"/api/v1/dynclassification/eval_record", "POST", map[string]any{"record": map[string]any{"phone": "13812345678"}}},
-		{"/api/v1/dynclassification/profiles/reload", "POST", nil},
+		{"/v1/dynclassification/classify", "POST", map[string]any{"field": "phone", "value": "13812345678"}},
+		{"/v1/dynclassification/classify/batch", "POST", map[string]any{"records": []map[string]any{{"phone": "13812345678"}}}},
+		{"/v1/dynclassification/eval_record", "POST", map[string]any{"record": map[string]any{"phone": "13812345678"}}},
+		{"/v1/dynclassification/profiles/reload", "POST", nil},
 	}
 	for _, tc := range cases {
 		w := doJSON(r, tc.method, tc.path, tc.body)
@@ -454,14 +454,7 @@ func TestClassify_AliasRoutes(t *testing.T) {
 	}
 }
 
-// TestProfileRecommend_AliasRoute 验证 /api/v1/privacy/profile/recommend 别名路由已注册（SEC-09 完整覆盖）。
-func TestProfileRecommend_AliasRoute(t *testing.T) {
-	r, _ := setupRouter(t)
-	w := doJSON(r, "GET", "/api/v1/privacy/profile/recommend", nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-}
+// TestProfileRecommend 已在上文覆盖 /v1/privacy/profile/recommend，此处不再重复注册别名测试。
 
 // ──────────────────────────────────────────────
 // Profile 推荐端点
@@ -494,7 +487,7 @@ func TestAgentProcess(t *testing.T) {
 		"datasource_id": "ds_yibao",
 	}
 
-	for _, path := range []string{"/v1/agent/process", "/agent/process", "/api/v1/agent/process"} {
+	for _, path := range []string{"/v1/agent/process", "/agent/process"} {
 		w := doJSON(r, "POST", path, payload)
 		if w.Code != http.StatusOK {
 			t.Fatalf("[%s] expected 200, got %d: %s", path, w.Code, w.Body.String())
@@ -527,7 +520,7 @@ func TestMedicalProcess(t *testing.T) {
 			},
 		},
 	}
-	for _, path := range []string{"/v1/medical/process", "/medical/process", "/api/v1/medical/process"} {
+	for _, path := range []string{"/v1/medical/process", "/medical/process"} {
 		w := doJSON(r, "POST", path, payload)
 		if w.Code != http.StatusOK {
 			t.Fatalf("[%s] expected 200, got %d: %s", path, w.Code, w.Body.String())
@@ -541,7 +534,7 @@ func TestMedicalProcess(t *testing.T) {
 
 func TestOpsDiagnostics(t *testing.T) {
 	r, _ := setupRouter(t)
-	for _, path := range []string{"/v1/ops/diagnostics", "/ops/diagnostics", "/api/v1/ops/diagnostics"} {
+	for _, path := range []string{"/v1/ops/diagnostics", "/ops/diagnostics"} {
 		w := doJSON(r, "GET", path, nil)
 		if w.Code != http.StatusOK {
 			t.Fatalf("[%s] expected 200, got %d: %s", path, w.Code, w.Body.String())
@@ -568,7 +561,7 @@ func TestProcessFile_CSV(t *testing.T) {
 	r, _ := setupRouter(t)
 	csvData := "name,phone,id_card_no\n张三,13800138000,110101199001011234\n李四,13900139000,110101199202022345"
 
-	for _, path := range []string{"/v1/privacy/process_file", "/privacy/process_file", "/api/v1/privacy/process_file"} {
+	for _, path := range []string{"/v1/privacy/process_file", "/privacy/process_file"} {
 		w := doMultipart(r, path, "file", "test.csv", csvData, "mask_dataframe", `{"columns":["phone","id_card_no"]}`)
 		if w.Code != http.StatusOK {
 			t.Fatalf("[%s] expected 200, got %d: %s", path, w.Code, w.Body.String())
@@ -630,7 +623,7 @@ func TestKAnonymizeTable(t *testing.T) {
 		"k":       2,
 	}
 
-	for _, path := range []string{"/v1/privacy/k_anonymize/table", "/api/v1/kano/table"} {
+	for _, path := range []string{"/v1/privacy/k_anonymize/table"} {
 		w := doJSON(r, "POST", path, payload)
 		if w.Code != http.StatusOK {
 			t.Fatalf("[%s] expected 200, got %d: %s", path, w.Code, w.Body.String())
@@ -656,7 +649,7 @@ func TestKAnonymizeDataFrame(t *testing.T) {
 		"k":       2,
 	}
 
-	for _, path := range []string{"/v1/privacy/k_anonymize/dataframe", "/api/v1/kano/dataframe"} {
+	for _, path := range []string{"/v1/privacy/k_anonymize/dataframe"} {
 		w := doJSON(r, "POST", path, payload)
 		if w.Code != http.StatusOK {
 			t.Fatalf("[%s] expected 200, got %d: %s", path, w.Code, w.Body.String())

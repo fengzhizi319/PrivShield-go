@@ -68,168 +68,174 @@ func RegisterRoutes(r *gin.Engine, svc *service.PrivacyService) {
 	}
 
 	// 健康检查（无前缀，与 Python /health, /livez, /readyz 对齐）
+	//curl http://127.0.0.1:8079/health
 	r.GET("/health", healthHandlerWithService(svc))
+	// Demo: curl http://127.0.0.1:8079/livez
 	r.GET("/livez", livezHandler)
+	// Demo: curl http://127.0.0.1:8079/readyz
 	r.GET("/readyz", readyzHandler)
+	// Demo: curl http://127.0.0.1:8079/readyz/llm
 	r.GET("/readyz/llm", readyzLLMHandler(svc))
 
 	// 根路径直调别名路由（兼容直接调用）
+	// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/agent/process
 	r.POST("/agent/process", agentProcessHandler(svc))
+	// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/medical/process
 	r.POST("/medical/process", medicalProcessHandler(svc))
+	// Demo: curl http://127.0.0.1:8079/ops/diagnostics
 	r.GET("/ops/diagnostics", diagnosticsHandler(svc))
+	// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/privacy/process_file
 	r.POST("/privacy/process_file", processFileHandler(svc))
 
 	// /v1/privacy/* — 隐私原语
 	v1p := r.Group("/v1/privacy")
 	{
 		// 掩码
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/mask
 		v1p.POST("/mask", maskHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/mask/record
 		v1p.POST("/mask/record", maskRecordHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/mask_record
 		v1p.POST("/mask_record", maskRecordHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/mask/batch
 		v1p.POST("/mask/batch", maskBatchHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/mask/dataframe
 		v1p.POST("/mask/dataframe", maskDataFrameHandler(svc))
 
 		// 差分隐私 — 基础
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/dp/count
 		v1p.POST("/dp/count", dpCountHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/dp/sum
 		v1p.POST("/dp/sum", dpSumHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/dp/mean
 		v1p.POST("/dp/mean", dpMeanHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/dp/histogram
 		v1p.POST("/dp/histogram", dpHistogramHandler(svc))
 		// 差分隐私 — 噪声
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/dp/noisy_count
 		v1p.POST("/dp/noisy_count", noisyCountHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/dp/noisy_sum
 		v1p.POST("/dp/noisy_sum", noisySumHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/dp/noisy_mean
 		v1p.POST("/dp/noisy_mean", noisyMeanHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/dp/noisy_histogram
 		v1p.POST("/dp/noisy_histogram", dpNoisyHistogramHandler(svc))
 		// 差分隐私 — 分块
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/dp/chunked_count
 		v1p.POST("/dp/chunked_count", dpChunkedCountHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/dp/chunked_sum
 		v1p.POST("/dp/chunked_sum", dpChunkedSumHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/dp/chunked_mean
 		v1p.POST("/dp/chunked_mean", dpChunkedMeanHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/dp/chunked_histogram
 		v1p.POST("/dp/chunked_histogram", dpChunkedHistogramHandler(svc))
 		// 差分隐私 — 向量/高级
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/dp/vector_sum
 		v1p.POST("/dp/vector_sum", dpVectorSumHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/dp/vector_mean
 		v1p.POST("/dp/vector_mean", dpVectorMeanHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/dp/aggregate
 		v1p.POST("/dp/aggregate", dpAggregateHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/dp/adaptive_clip
 		v1p.POST("/dp/adaptive_clip", dpAdaptiveClipHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/dp/groupby
 		v1p.POST("/dp/groupby", dpGroupByHandler(svc))
 
 		// 本地差分隐私
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/ldp/randomized_response
 		v1p.POST("/ldp/randomized_response", randomizedResponseHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/ldp/orr
 		v1p.POST("/ldp/orr", orrHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/ldp/perturb/binary
 		v1p.POST("/ldp/perturb/binary", perturbBinaryBatchHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/ldp/perturb/categorical
 		v1p.POST("/ldp/perturb/categorical", perturbCategoricalBatchHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/ldp/estimate/binary
 		v1p.POST("/ldp/estimate/binary", estimateBinaryFrequencyHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/ldp/estimate/categorical
 		v1p.POST("/ldp/estimate/categorical", estimateCategoricalHistogramHandler(svc))
 
 		// K-匿名（记录级 + 表级 Mondrian + DataFrame）
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/k_anonymize
 		v1p.POST("/k_anonymize", kAnonymizeHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/k_anonymize/record
 		v1p.POST("/k_anonymize/record", kAnonymizeHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/k_anonymize/table
 		v1p.POST("/k_anonymize/table", kAnonymizeTableHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/k_anonymize/dataframe
 		v1p.POST("/k_anonymize/dataframe", kAnonymizeDataFrameHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/k_anonymize_table
 		v1p.POST("/k_anonymize_table", kAnonymizeTableHandler(svc))
 
 		// 查询混淆
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/qol/obfuscate
 		v1p.POST("/qol/obfuscate", obfuscateHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/qol/obfuscate/batch
 		v1p.POST("/qol/obfuscate/batch", obfuscateBatchHandler(svc))
 
 		// HMAC 散列
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/hash
 		v1p.POST("/hash", hashHMACHanlder(svc))
 
 		// 预算
+		// Demo: curl http://127.0.0.1:8079/v1/privacy/budget
 		v1p.GET("/budget", budgetHandler(svc))
+		// Demo: curl -X POST http://127.0.0.1:8079/v1/privacy/budget/reset
 		v1p.POST("/budget/reset", budgetResetHandler(svc))
 
 		// 文件上传处理 (CSV / JSON)
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/process_file
 		v1p.POST("/process_file", processFileHandler(svc))
 
 		// Profile 推荐
+		// Demo: curl http://127.0.0.1:8079/v1/privacy/profile/recommend
 		v1p.GET("/profile/recommend", profileRecommendHandler(svc))
 
 		// 分类（兼容旧路径）
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/classify/field
 		v1p.POST("/classify/field", classifyHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/classify/record
 		v1p.POST("/classify/record", classifyBatchHandler(svc))
 	}
 
 	// /v1/agent/* — 通用处理流水线 (P0)
 	v1a := r.Group("/v1/agent")
 	{
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/agent/process
 		v1a.POST("/process", agentProcessHandler(svc))
 	}
 
 	// /v1/ops/* — 运维诊断 (P1)
 	v1o := r.Group("/v1/ops")
 	{
+		// Demo: curl http://127.0.0.1:8079/v1/ops/diagnostics
 		v1o.GET("/diagnostics", diagnosticsHandler(svc))
 	}
 
 	// /v1/medical/* — 医疗流水线
 	v1m := r.Group("/v1/medical")
 	{
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/medical/process
 		v1m.POST("/process", medicalProcessHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/medical/sanitize
 		v1m.POST("/sanitize", medicalSanitizeHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/medical/sanitize/batch
 		v1m.POST("/sanitize/batch", medicalBatchHandler(svc))
 	}
 
 	// /v1/dynclassification/* — 动态分类
 	v1d := r.Group("/v1/dynclassification")
 	{
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/dynclassification/classify
 		v1d.POST("/classify", classifyHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/dynclassification/classify/batch
 		v1d.POST("/classify/batch", classifyBatchHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/dynclassification/eval_record
 		v1d.POST("/eval_record", evalRecordHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/dynclassification/profiles/reload
 		v1d.POST("/profiles/reload", dynProfilesReloadHandler(svc))
 	}
 
-	// /api/v1/* 别名组（支持所有微服务兼容访问）
-	apiV1 := r.Group("/api/v1")
-	{
-		apiV1.POST("/agent/process", agentProcessHandler(svc))
-		apiV1.POST("/medical/process", medicalProcessHandler(svc))
-		apiV1.GET("/ops/diagnostics", diagnosticsHandler(svc))
-		apiV1.POST("/privacy/process_file", processFileHandler(svc))
-		apiV1.POST("/mask", maskHandler(svc))
-		apiV1.POST("/mask/record", maskRecordHandler(svc))
-		apiV1.POST("/mask/batch", maskBatchHandler(svc))
-		apiV1.POST("/mask/dataframe", maskDataFrameHandler(svc))
-		apiV1.POST("/dp/count", dpCountHandler(svc))
-		apiV1.POST("/dp/sum", dpSumHandler(svc))
-		apiV1.POST("/dp/mean", dpMeanHandler(svc))
-		apiV1.POST("/dp/histogram", dpHistogramHandler(svc))
-		apiV1.POST("/dp/noisy_count", noisyCountHandler(svc))
-		apiV1.POST("/dp/noisy_sum", noisySumHandler(svc))
-		apiV1.POST("/dp/noisy_mean", noisyMeanHandler(svc))
-		apiV1.POST("/dp/noisy_histogram", dpNoisyHistogramHandler(svc))
-		apiV1.POST("/dp/chunked_count", dpChunkedCountHandler(svc))
-		apiV1.POST("/dp/chunked_sum", dpChunkedSumHandler(svc))
-		apiV1.POST("/dp/chunked_mean", dpChunkedMeanHandler(svc))
-		apiV1.POST("/dp/chunked_histogram", dpChunkedHistogramHandler(svc))
-		apiV1.POST("/dp/vector_sum", dpVectorSumHandler(svc))
-		apiV1.POST("/dp/vector_mean", dpVectorMeanHandler(svc))
-		apiV1.POST("/dp/aggregate", dpAggregateHandler(svc))
-		apiV1.POST("/dp/adaptive_clip", dpAdaptiveClipHandler(svc))
-		apiV1.POST("/dp/groupby", dpGroupByHandler(svc))
-		apiV1.POST("/ldp/randomized_response", randomizedResponseHandler(svc))
-		apiV1.POST("/ldp/orr", orrHandler(svc))
-		apiV1.POST("/ldp/perturb/binary", perturbBinaryBatchHandler(svc))
-		apiV1.POST("/ldp/perturb/categorical", perturbCategoricalBatchHandler(svc))
-		apiV1.POST("/ldp/estimate/binary", estimateBinaryFrequencyHandler(svc))
-		apiV1.POST("/ldp/estimate/categorical", estimateCategoricalHistogramHandler(svc))
-		apiV1.POST("/kano/anonymize", kAnonymizeHandler(svc))
-		apiV1.POST("/kano/table", kAnonymizeTableHandler(svc))
-		apiV1.POST("/kano/dataframe", kAnonymizeDataFrameHandler(svc))
-		apiV1.POST("/qol/obfuscate", obfuscateHandler(svc))
-		apiV1.POST("/qol/obfuscate/batch", obfuscateBatchHandler(svc))
-		apiV1.POST("/classify", classifyHandler(svc))
-		apiV1.POST("/classify/batch", classifyBatchHandler(svc))
-		// 动态分类分级别名路由（SEC-09/SEC-11 完整覆盖）
-		apiV1.POST("/dynclassification/classify", classifyHandler(svc))
-		apiV1.POST("/dynclassification/classify/batch", classifyBatchHandler(svc))
-		apiV1.POST("/dynclassification/eval_record", evalRecordHandler(svc))
-		apiV1.POST("/dynclassification/profiles/reload", dynProfilesReloadHandler(svc))
-		apiV1.GET("/privacy/profile/recommend", profileRecommendHandler(svc))
-		apiV1.POST("/medical/sanitize", medicalSanitizeHandler(svc))
-		apiV1.POST("/medical/sanitize/batch", medicalBatchHandler(svc))
-		apiV1.POST("/hash/hmac", hashHMACHanlder(svc))
-		apiV1.GET("/budget", budgetHandler(svc))
-		apiV1.POST("/budget/reset", budgetResetHandler(svc))
-	}
 }
 
 // ──────────────────────────────────────────────

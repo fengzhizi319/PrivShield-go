@@ -156,24 +156,24 @@ class Identity:
 
 #### Engine 权限映射（`PermissionForRESTPath`）
 
-支持 `/v1/*` 与 `/api/v1/*` 双前缀归一化匹配，以及根路径直调别名。
+支持 `/v1/*` 规范前缀匹配，以及根路径直调别名。
 
 | REST 路径 / gRPC 方法 | 对应权限 Scope |
 |---|---|
 | `/health`, `/livez`, `/readyz` / `Health` | `health:read` |
-| `/v1/privacy/mask*`, `/api/v1/mask*`, `/privacy/process_file` / `Mask`, `MaskRecord` | `privacy:mask` |
-| `/v1/privacy/hash`, `/api/v1/hash/hmac` / `Hash` | `privacy:hash` |
-| `/v1/privacy/dp/*`, `/v1/privacy/ldp/*`, `/api/v1/dp/*`, `/api/v1/ldp/*` / `DPCount`, `DPSum`, `DPMean` | `privacy:dp` |
-| `/v1/privacy/k_anonymize*`, `/api/v1/kano/*` / `KAnonymizeRecord` | `privacy:kano` |
-| `/v1/privacy/qol/*`, `/api/v1/qol/*` / `ObfuscateQuery` | `privacy:qol` |
-| `/v1/privacy/budget`, `/v1/privacy/budget/reset`, `/api/v1/budget*` | `privacy:budget` |
+| `/v1/privacy/mask*`, `/privacy/process_file` / `Mask`, `MaskRecord` | `privacy:mask` |
+| `/v1/privacy/hash` / `Hash` | `privacy:hash` |
+| `/v1/privacy/dp/*`, `/v1/privacy/ldp/*` / `DPCount`, `DPSum`, `DPMean` | `privacy:dp` |
+| `/v1/privacy/k_anonymize*` / `KAnonymizeRecord` | `privacy:kano` |
+| `/v1/privacy/qol/*` / `ObfuscateQuery` | `privacy:qol` |
+| `/v1/privacy/budget`, `/v1/privacy/budget/reset` | `privacy:budget` |
 | `/v1/privacy/profile/recommend` | `privacy:profile` |
-| `/v1/privacy/classify/*`, `/api/v1/classify*` | `classification:read` |
+| `/v1/privacy/classify/*` | `classification:read` |
 | `/v1/dynclassification/classify*`, `/v1/dynclassification/eval_record` | `dynclassification:read` |
 | `/v1/dynclassification/profiles/reload`, `/v1/dynclassification/generate_profile` | `dynclassification:write` |
-| `/v1/agent/process`, `/api/v1/agent/process`, `/agent/process` | `agent:process` |
-| `/v1/medical/*`, `/api/v1/medical/*`, `/medical/process` | `medical:process` |
-| `/v1/ops/*`, `/api/v1/ops/*`, `/ops/diagnostics` | `ops:diagnostics` |
+| `/v1/agent/process`, `/agent/process` | `agent:process` |
+| `/v1/medical/*`, `/medical/process` | `medical:process` |
+| `/v1/ops/*`, `/ops/diagnostics` | `ops:diagnostics` |
 | `/debug/pprof*` | `ops:admin` |
 
 #### service-hub 权限映射（`ServiceHubPermissionForPath`）

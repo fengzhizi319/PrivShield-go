@@ -543,23 +543,23 @@ Identity { ServiceType: "external", Name: "portal", Scopes: ["privacy:mask", "cl
 
 #### 6.4.2 REST 路径→权限映射（`PermissionForRESTPath`）
 
-支持 `/v1/*` 与 `/api/v1/*` 双前缀归一化——别名路由 `/api/v1/*` 自动剥离 `/api` 前缀后与主路由共享同一权限映射，杜绝因路径前缀差异导致的权限绕过。同时覆盖根路径直调别名（`/agent/process`、`/medical/process` 等）。
+支持 `/v1/*` 规范前缀，同时覆盖根路径直调别名（`/agent/process`、`/medical/process` 等）；未映射路径默认归入 `admin` 权限（fail-closed），杜绝权限绕过。
 
-| 权限 Scope | 覆盖路由（含 `/v1/*` 与 `/api/v1/*` 双前缀） |
+| 权限 Scope | 覆盖路由（`/v1/*` 规范前缀 + 根路径直调别名） |
 |---|---|
-| `privacy:mask` | `/mask*`、`/privacy/process_file`、`/privacy/process_file` |
-| `privacy:hash` | `/privacy/hash`、`/hash/hmac` |
-| `privacy:dp` | `/dp/*`、`/ldp/*` |
-| `privacy:kano` | `/k_anonymize*`、`/kano/*` |
-| `privacy:qol` | `/qol/*` |
-| `privacy:budget` | `/budget`、`/budget/reset` |
-| `privacy:profile` | `/profile/recommend` |
-| `classification:read` | `/classify/*` |
-| `dynclassification:read` | `/dynclassification/classify*`、`/dynclassification/eval_record` |
-| `dynclassification:write` | `/dynclassification/profiles/reload`、`/dynclassification/generate_profile` |
-| `agent:process` | `/agent/process` |
-| `medical:process` | `/medical/*` |
-| `ops:diagnostics` | `/ops/*` |
+| `privacy:mask` | `/v1/privacy/mask*`、`/v1/privacy/process_file`、`/privacy/process_file` |
+| `privacy:hash` | `/v1/privacy/hash` |
+| `privacy:dp` | `/v1/privacy/dp/*`、`/v1/privacy/ldp/*` |
+| `privacy:kano` | `/v1/privacy/k_anonymize*` |
+| `privacy:qol` | `/v1/privacy/qol/*` |
+| `privacy:budget` | `/v1/privacy/budget`、`/v1/privacy/budget/reset` |
+| `privacy:profile` | `/v1/privacy/profile/recommend` |
+| `classification:read` | `/v1/privacy/classify/*` |
+| `dynclassification:read` | `/v1/dynclassification/classify*`、`/v1/dynclassification/eval_record` |
+| `dynclassification:write` | `/v1/dynclassification/profiles/reload`、`/v1/dynclassification/generate_profile` |
+| `agent:process` | `/v1/agent/process`、`/agent/process` |
+| `medical:process` | `/v1/medical/*`、`/medical/process` |
+| `ops:diagnostics` | `/v1/ops/*`、`/ops/diagnostics` |
 | `ops:admin` | `/debug/pprof*` |
 
 #### 6.4.3 service-hub 对外接口权限映射（`ServiceHubPermissionForPath`）

@@ -44,7 +44,7 @@ pkg/
 │   ├── client.go           # Client（多端点独立熔断器、原子轮询、重试、鉴权头注入、64MiB 响应保护）
 │   └── client_test.go      # 基础请求、鉴权、熔断器状态流转、端点选择单测
 ├── auth/                   # Scope-based 身份认证与权限映射基础设施
-│   ├── identity.go         # Identity 结构、PermissionForRESTPath（/v1/* + /api/v1/* 归一化）、ServiceHubPermissionForPath、ParseAPIKeysEnv
+│   ├── identity.go         # Identity 结构、PermissionForRESTPath（/v1/* 规范前缀 + 根路径直调别名）、ServiceHubPermissionForPath、ParseAPIKeysEnv
 │   ├── middleware.go        # AuthMiddleware（Gin）、RequirePermission、ConstantTimeLookup
 │   └── settings.go         # KeyConfig / Settings 认证配置
 ├── circuitbreaker/         # 三态熔断器内核（Closed → Open → HalfOpen）

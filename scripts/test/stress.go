@@ -39,10 +39,12 @@ func main() {
 			}
 			payload, _ = json.Marshal(reqBody)
 		case "hub":
-			url = "http://127.0.0.1:8082/api/v1/pipeline/execute"
+			url = "http://127.0.0.1:8082/api/hub/dispatch"
 			reqBody := map[string]interface{}{
-				"task_id": "stress_task_001",
-				"records": []map[string]string{
+				"api_code":      "api1_yibao",
+				"datasource_id": "ds_yibao",
+				"operation":     "mask",
+				"payload": []map[string]string{
 					{"name": "张三", "phone": "13812345678", "id_card_no": "110101199001011234"},
 				},
 			}

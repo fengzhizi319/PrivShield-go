@@ -919,7 +919,7 @@ type Settings struct {
 | 函数 | 签名 | 说明 |
 |---|---|---|
 | `HasPermission` | `(id *Identity) HasPermission(permission string) bool` | 通配符 `"*"` 授予所有权限，否则精确匹配 |
-| `PermissionForRESTPath` | `PermissionForRESTPath(path string) string` | 将 REST 路径映射为权限字符串，支持 `/v1/*` 与 `/api/v1/*` 双前缀归一化 |
+| `PermissionForRESTPath` | `PermissionForRESTPath(path string) string` | 将 REST 路径映射为权限字符串，支持 `/v1/*` 前缀与根路径直调别名 |
 | `ServiceHubPermissionForPath` | `ServiceHubPermissionForPath(path string) string` | 将 service-hub 路由映射为权限字符串（`hub:read` / `hub:dispatch`） |
 | `PermissionForGRPCMethod` | `PermissionForGRPCMethod(method string) string` | 将 gRPC 全限定方法名映射为权限字符串 |
 | `ParseAPIKeysEnv` | `ParseAPIKeysEnv(raw string) map[string]*KeyConfig` | 解析 `"token:name:scope1,scope2;..."` 格式 |
@@ -931,7 +931,7 @@ type Settings struct {
 
 ### 权限映射清单
 
-**Engine（`PermissionForRESTPath`）**：支持 `/v1/*` 与 `/api/v1/*` 双前缀归一化，以及根路径直调别名（`/agent/process` 等）。未映射路径返回空串（对所有已认证身份开放）。
+**Engine（`PermissionForRESTPath`）**：支持 `/v1/*` 规范前缀，以及根路径直调别名（`/agent/process` 等）。未映射路径默认归入 `admin` 权限（fail-closed）。
 
 **service-hub（`ServiceHubPermissionForPath`）**：
 

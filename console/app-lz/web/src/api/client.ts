@@ -170,7 +170,7 @@ export const api = {
 
   /**
    * 获取 Phase B 租约信息（哪些 Worker 持有哪些任务的租约）。
-   * BFF 内部转发到 Service Hub 的 GET /api/v1/hub/tasks/leases。
+   * BFF 内部基于 Service Hub 的 GET /api/hub/tasks?status=running 推导租约信息。
    */
   async getLeases(): Promise<LeasedTasksResponse> {
     return fetchJSON<LeasedTasksResponse>(`${BASE_URL}/tasks/leases`);

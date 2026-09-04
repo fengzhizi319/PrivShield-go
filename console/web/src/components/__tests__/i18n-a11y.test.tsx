@@ -31,7 +31,7 @@ describe('HistoryPanel i18n tooltip & aria-label', () => {
 
   it('删除按钮具有 aria-label（中文）', () => {
     const entries = [
-      { id: '1', method: 'POST', path: '/api/v1/mask', body: '{"a":1}', status: 200, timestamp: Date.now() },
+      { id: '1', method: 'POST', path: '/v1/privacy/mask', body: '{"a":1}', status: 200, timestamp: Date.now() },
     ];
     renderWithI18n(
       <HistoryPanel entries={entries} onRestore={noop} onDelete={noop} onClear={noop} onClose={noop} />,
@@ -43,7 +43,7 @@ describe('HistoryPanel i18n tooltip & aria-label', () => {
 
   it('历史条目具有回填 title（中文）', () => {
     const entries = [
-      { id: '1', method: 'POST', path: '/api/v1/mask', body: '{"a":1}', status: 200, timestamp: Date.now() },
+      { id: '1', method: 'POST', path: '/v1/privacy/mask', body: '{"a":1}', status: 200, timestamp: Date.now() },
     ];
     renderWithI18n(
       <HistoryPanel entries={entries} onRestore={noop} onDelete={noop} onClear={noop} onClose={noop} />,

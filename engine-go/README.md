@@ -118,7 +118,7 @@ curl http://localhost:8079/health
 
 #### 字段掩码
 ```bash
-curl -X POST http://localhost:8079/api/v1/mask \
+curl -X POST http://localhost:8079/v1/privacy/mask \
   -H "Content-Type: application/json" \
   -d '{
     "field": "id_card",
@@ -131,7 +131,7 @@ curl -X POST http://localhost:8079/api/v1/mask \
 
 #### 差分隐私 - 噪声计数
 ```bash
-curl -X POST http://localhost:8079/api/v1/dp/noisy_count \
+curl -X POST http://localhost:8079/v1/privacy/dp/noisy_count \
   -H "Content-Type: application/json" \
   -d '{
     "count": 100,
@@ -141,7 +141,7 @@ curl -X POST http://localhost:8079/api/v1/dp/noisy_count \
 
 #### 差分隐私 - 噪声求和
 ```bash
-curl -X POST http://localhost:8079/api/v1/dp/noisy_sum \
+curl -X POST http://localhost:8079/v1/privacy/dp/noisy_sum \
   -H "Content-Type: application/json" \
   -d '{
     "values": [1.0, 2.0, 3.0, 4.0, 5.0],
@@ -152,7 +152,7 @@ curl -X POST http://localhost:8079/api/v1/dp/noisy_sum \
 
 #### 动态分类
 ```bash
-curl -X POST http://localhost:8079/api/v1/classify \
+curl -X POST http://localhost:8079/v1/privacy/classify/field \
   -H "Content-Type: application/json" \
   -d '{
     "records": [
@@ -163,7 +163,7 @@ curl -X POST http://localhost:8079/api/v1/classify \
 
 #### 预算查询
 ```bash
-curl http://localhost:8079/api/v1/budget
+curl http://localhost:8079/v1/privacy/budget
 ```
 
 ## 环境变量

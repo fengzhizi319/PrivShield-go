@@ -6,9 +6,9 @@
 # 执行步骤总览：
 #   1. 解析命令行参数（--host、--port、--requests、--concurrency）
 #   2. 初始化 Python 多线程并发 HTTP 压测执行引擎
-#   3. 对脱敏原语（/api/v1/mask）执行高并发吞吐压测并统计 P50/P95/P99 时延
-#   4. 对差分隐私原语（/api/v1/dp/laplace）执行加噪性能压测
-#   5. 对动态分类分级漏斗（/api/v1/classification/classify）执行端到端压测
+#   3. 对脱敏原语（/v1/privacy/mask）执行高并发吞吐压测并统计 P50/P95/P99 时延
+#   4. 对差分隐私原语（/v1/privacy/dp/count）执行加噪性能压测
+#   5. 对动态分类分级漏斗（/v1/dynclassification/classify）执行端到端压测
 #   6. 汇总结算 RPS (Requests Per Second) 与延迟百分位数分布
 #
 # 用法 / Usage:

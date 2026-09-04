@@ -38,9 +38,9 @@ func TestNewEngineMetrics_RegistersAll(t *testing.T) {
 
 func TestEngineMetrics_RecordRequest(t *testing.T) {
 	m := NewEngineMetrics()
-	m.RecordRequest("http", "/api/v1/mask", 200, 0.005)
-	m.RecordRequest("http", "/api/v1/mask", 200, 0.010)
-	m.RecordRequest("http", "/api/v1/classify", 400, 0.001)
+	m.RecordRequest("http", "/v1/privacy/mask", 200, 0.005)
+	m.RecordRequest("http", "/v1/privacy/mask", 200, 0.010)
+	m.RecordRequest("http", "/v1/privacy/classify/field", 400, 0.001)
 
 	// 验证 /metrics 输出包含指标
 	body := scrapeMetrics(t, m.Handler())
@@ -181,7 +181,7 @@ func TestGatewayMetrics_MiddlewareSkipsHealthAndMetrics(t *testing.T) {
 	r.Use(m.PrometheusMiddleware())
 	r.GET("/health", func(c *gin.Context) { c.String(200, "ok") })
 	r.GET("/metrics", func(c *gin.Context) { c.String(200, "ok") })
-	r.GET("/api/v1/mask", func(c *gin.Context) { c.String(200, "ok") })
+	r.GET("/v1/privacy/mask", func(c *gin.Context) { c.String(200, "ok") })
 
 	// /health 和 /metrics 不应被记录
 	for _, path := range []string{"/health", "/metrics"} {
@@ -189,8 +189,8 @@ func TestGatewayMetrics_MiddlewareSkipsHealthAndMetrics(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 	}
-	// /api/v1/mask 应被记录
-	req := httptest.NewRequest("GET", "/api/v1/mask", nil)
+	// /v1/privacy/mask 应被记录
+	req := httptest.NewRequest("GET", "/v1/privacy/mask", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 

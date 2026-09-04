@@ -24,7 +24,7 @@ describe('Console Web App.tsx UI 单元与视图切换集成测试', () => {
     {
       name: '数据脱敏示例',
       method: 'POST',
-      path: '/api/v1/mask',
+      path: '/v1/privacy/mask',
       category: 'masking',
       body: { records: [] },
       description: '将输入记录中的手机号身份证等进行脱敏',
@@ -33,7 +33,7 @@ describe('Console Web App.tsx UI 单元与视图切换集成测试', () => {
     {
       name: '动态分类示例',
       method: 'POST',
-      path: '/api/v1/classification/classify',
+      path: '/v1/dynclassification/classify',
       category: 'classification',
       body: { text: '示例文本' },
       description: '三层分类分级判定',
