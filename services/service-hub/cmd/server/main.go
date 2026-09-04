@@ -107,8 +107,7 @@ func main() {
 	// =========================================================================
 	// 优先使用 PostgreSQL 租约存储；未配置时使用 SQLite 或进程内内存存储。
 	//
-	// 3.1 SQLite Integrity Check / SQLite 完整性校验
-	// 启动时先校验数据库完整性，检测损坏并阻止服务启动，防止带病运行。
+	// - SQLite Integrity Check: 启动时先校验数据库完整性，检测损坏并阻止服务启动，防止带病运行。
 	if cfg.PGDSN == "" && cfg.DBPath != "" {
 		if err := sqlite.ValidateIntegrity(cfg.DBPath); err != nil {
 			log.Fatalf("sqlite integrity check failed: %v", err)
