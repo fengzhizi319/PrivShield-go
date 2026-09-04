@@ -13,7 +13,7 @@
 - **SQL 级高性能统计与合规报告**：基于 SQLite 聚合引擎提供毫秒级多维统计指标与权威合规治理建议；
 - **高可用与生产加固**：Slowloris 防护、32 MiB MaxBodySize 限制、Prometheus `/metrics` 监控与 SQLite WAL 模式持久化；
 - **完整性校验**：启动时 `PRAGMA integrity_check` 阻断损坏数据库，统一备份脚本支持全量/增量备份；
-- **独立校验脚本**：`scripts/prod/verify_audit.sh`（封装 `engine/privacy/verify_audit.py`）独立验证审计数据完整性，支持 CI/CD 集成；
+- **独立校验脚本**：`scripts/prod/verify-audit.sh`（封装 `scripts/prod/verify_audit.go`）独立验证审计数据完整性，支持 CI/CD 集成；
 - 📖 **可靠性能力详解**：[docs/reliability.md](docs/reliability.md)
 
 > 📖 **深度学习指南**：完整架构解析、8 要素 SHA-256 存证原理与源码导读见 [docs/learning-guide.md](docs/learning-guide.md)。

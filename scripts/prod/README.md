@@ -18,14 +18,15 @@
   - [`docker-start-agent.sh` / `docker-start-agent.ps1` (生产 Agent 容器启动)](#docker-start-agentsh--docker-start-agentps1)
   - [`docker-stop-agent.sh` / `docker-stop-agent.ps1` (生产 Agent 容器停止)](#docker-stop-agentsh--docker-stop-agentps1)
 - [2. 本地单机生产模式 (Native Process Production)](#2-本地单机生产模式-native-process-production)
-  - [`prod-bff-agent.sh` (Agent + Go BFF 生产模式，支持 mTLS)](#prod-bff-agentsh)
+  - [`prod-engine-console.sh` (Privacy Engine + 控制台生产模式，支持 mTLS)](#prod-engine-consolesh)
   - [`prod-app-lz.sh` (调度之眼 App-LZ 生产静态托管模式)](#prod-app-lzsh)
   - [`prod-stop.sh` (停止生产单机服务)](#prod-stopsh)
-- [3. 数据备份与生产巡检 (Backup & Health Check)](#3-数据备份与生产巡检-backup--health-check)
-  - [`prod_health_check.sh` (生产全链路健康状态巡检)](#prod_health_checksh)
+- [3. 数据备份、巡检与迁移 (Backup, Health Check & Migration)](#3-数据备份巡检与迁移-backup-health-check--migration)
+  - [`prod-health-check.sh` (生产全链路健康状态巡检)](#prod-health-checksh)
   - [`backup-sqlite-databases.sh` (全量 SQLite 数据库备份与存证)](#backup-sqlite-databasessh)
-  - [`backup_privacy_budget.sh` (隐私预算库专项备份)](#backup_privacy_budgetsh)
-  - [`verify_audit.sh` (审计日志 HMAC 签名完整性校验)](#verify_auditsh)
+  - [`backup-privacy-budget.sh` (隐私预算库专项备份)](#backup-privacy-budgetsh)
+  - [`verify-audit.sh` (审计日志 HMAC 签名完整性校验)](#verify-auditsh)
+  - [`migrate-sqlite-to-postgres.sh` (SQLite 至 PostgreSQL 数据库平滑迁移)](#migrate-sqlite-to-postgressh)
 
 ---
 
@@ -137,8 +138,8 @@
 
 ## 2. 本地单机生产模式 (Native Process Production)
 
-### `prod-bff-agent.sh`
-- **作用说明**: 在本地或单机以生产模式启动 Agent 算力层与 Go BFF 服务（Go BFF 直接托管已编译打包的 Web 控制台前端静态资源，端口 `:8081`）。
+### `prod-engine-console.sh`
+- **作用说明**: 在本地或单机以生产模式启动 Privacy Engine 算力层与 Engine 控制台 Go BFF 服务（Go BFF 直接托管已编译打包的 Web 控制台前端静态资源，端口 `:8081`）。
 - **参数选项**:
   - `--rebuild`: 启动前强制重新构建 Web 静态文件与 Go 二进制。
   - `--force`: 端口被占用时自动释放占用进程。
@@ -146,10 +147,10 @@
 - **执行命令**:
   ```bash
   # 标准生产单机模式
-  bash ./scripts/prod/prod-bff-agent.sh
+  bash ./scripts/prod/prod-engine-console.sh
 
   # 强制重新构建并以 mTLS 安全模式启动
-  bash ./scripts/prod/prod-bff-agent.sh --rebuild --mtls
+  bash ./scripts/prod/prod-engine-console.sh --rebuild --mtls
   ```
 
 ---
@@ -174,13 +175,13 @@
 
 ---
 
-## 3. 数据备份与生产巡检 (Backup & Health Check)
+## 3. 数据备份、巡检与迁移 (Backup, Health Check & Migration)
 
-### `prod_health_check.sh`
+### `prod-health-check.sh`
 - **作用说明**: 全链路生产健康巡检脚本，检查 Agent、BFF、微服务群、数据库与 TLS 连通性。
 - **执行命令**:
   ```bash
-  bash ./scripts/prod/prod_health_check.sh
+  bash ./scripts/prod/prod-health-check.sh
   ```
 
 ---
@@ -194,17 +195,17 @@
 
 ---
 
-### `backup_privacy_budget.sh`
+### `backup-privacy-budget.sh`
 - **作用说明**: 专项备份隐私预算（Privacy Budget）SQLite 数据库。
 - **执行命令**:
   ```bash
-  bash ./scripts/prod/backup_privacy_budget.sh
+  bash ./scripts/prod/backup-privacy-budget.sh
   ```
 
 ---
 
-### `verify_audit.sh`
-- **作用说明**: 审计日志 HMAC-SHA256 签名完整性校验工具（`engine/privacy/verify_audit.py` 的运维便捷包装），校验 BudgetAuditLogger 写入的审计日志是否被篡改。
+### `verify-audit.sh`
+- **作用说明**: 审计日志 HMAC-SHA256 签名完整性校验工具（基于 `scripts/prod/verify_audit.go` 纯 Go 引擎），校验 BudgetAuditLogger 写入的审计日志是否被篡改。
 - **参数选项**:
   - `--key KEY`: HMAC-SHA256 签名密钥（也可通过 `PRIVACY_AUDIT_KEY` 环境变量提供）。
   - `--key-file PATH`: 从文件读取 HMAC 密钥。
@@ -212,8 +213,32 @@
 - **执行命令**:
   ```bash
   # 使用环境变量
-  PRIVACY_AUDIT_KEY=my-secret bash ./scripts/prod/verify_audit.sh
+  PRIVACY_AUDIT_KEY=my-secret bash ./scripts/prod/verify-audit.sh
 
   # 显式指定密钥与日志文件
-  bash ./scripts/prod/verify_audit.sh --key my-secret --log-file /var/log/privshield/budget_audit.log
+  bash ./scripts/prod/verify-audit.sh --key my-secret --log-file /var/log/privshield/budget_audit.log
+  ```
+
+---
+
+### `migrate-sqlite-to-postgres.sh`
+- **作用说明**: SQLite 至 PostgreSQL Phase B 数据平滑迁移包装器（基于 `pkg/store/cmd/migrate`），支持断点校验、哈希链验真与密文校验。
+- **参数选项**:
+  - `--hub-db PATH`: service-hub SQLite 数据库路径。
+  - `--audit-db PATH`: audit-log SQLite 数据库路径。
+  - `--pg-dsn DSN`: 目标 PostgreSQL 数据库连接串。
+  - `--batch NUM`: 批量写入批次大小（默认 500）。
+  - `--dry-run`: 演练模式，仅统计与校验不实际写入。
+  - `--verify`: 迁移完成后自动执行哈希链与密文验证。
+- **执行命令**:
+  ```bash
+  # 演练验证
+  bash ./scripts/prod/migrate-sqlite-to-postgres.sh --dry-run
+
+  # 执行全量迁移并校验
+  bash ./scripts/prod/migrate-sqlite-to-postgres.sh \
+    --hub-db ./data/service-hub.db \
+    --audit-db ./data/audit-log.db \
+    --pg-dsn "postgres://user:pass@localhost:5432/privshield?sslmode=disable" \
+    --verify
   ```

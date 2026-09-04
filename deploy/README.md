@@ -188,7 +188,7 @@ bash ./scripts/prod/stop-k8s.sh
   - `service-hub-dashboard.json` — 调度中枢专属大屏（租约状态/微服务健康/Go 协程池）
   
   启用 `--profile monitoring` 时经 provisioning 自动加载；也可在 Grafana 中手动 Import。
-- **健康检查**：`bash ./scripts/prod/prod_health_check.sh`（REST `/health`、`/readyz`、gRPC 探活）。
+- **健康检查**：`bash ./scripts/prod/prod-health-check.sh`（REST `/health`、`/readyz`、gRPC 探活）。
 - **日志**：Go 引擎与 Go 微服务固定输出 JSON 结构化日志，便于 ELK / Loki 收集（Go 微服务用 `*_LOG_LEVEL` 调级别，`*_LOG_FORMAT` 仅 Python 引擎读取）。
 - 深度文档：[`docs/production_observability/`](../docs/production_observability/)。
 
@@ -202,8 +202,8 @@ bash ./scripts/prod/stop-k8s.sh
 | 停止生产 Compose | `bash ./scripts/prod/stop-docker-compose.sh` |
 | Helm 部署 / 卸载 | `bash ./scripts/prod/deploy-helm.sh` / `uninstall-helm.sh` |
 | K8s 部署 / 停止 | `bash ./scripts/prod/deploy-k8s.sh [--with-postgres]` / `stop-k8s.sh [--with-postgres]` |
-| 生产健康检查 | `bash ./scripts/prod/prod_health_check.sh` |
-| 备份隐私预算库 | `bash ./scripts/prod/backup_privacy_budget.sh` |
+| 生产健康检查 | `bash ./scripts/prod/prod-health-check.sh` |
+| 备份隐私预算库 | `bash ./scripts/prod/backup-privacy-budget.sh` |
 | 构建 core / ml 镜像 | `make docker-core` / `make docker-ml` |
 | Helm lint / template | `make helm-lint` / `make helm-template` |
 

@@ -12,7 +12,7 @@
 #   6. 自动轮转扫描并清理超过保留天数的过期备份文件
 #
 # 用法 / Usage:
-#   ./scripts/prod/backup_privacy_budget.sh [选项]
+#   ./scripts/prod/backup-privacy-budget.sh [选项]
 #
 # 选项 / Options:
 #   --db-path PATH        待备份的 SQLite 数据库路径 (默认: .data/privacy_budget.db)

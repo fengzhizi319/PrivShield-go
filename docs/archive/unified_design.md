@@ -15,7 +15,7 @@
 | 统一错误信封 | ✅ Phase 1 完成 | Python `engine/observability/envelope.py` + Go `pkg/middleware/envelope.go`；FastAPI/Starlette 全局捕获；MaxBodySize 走信封 | 无 |
 | 全链路分布式追踪 | ✅ Phase 1+2 完成 | HTTP/gRPC 入口注入 `X-Request-ID`/`X-Trace-ID`；engine gRPC 提取 metadata；service-hub task 持久化 TraceID；BFF-Go/app-lz/bff-go REST 已向上游透传双头并注入 API Key；service-hub→datasource-mgr HTTP/gRPC 已透传双头并注入 API Key | 统一引入 OpenTelemetry SDK，实现跨服务 Span 聚合（长期演进） |
 | SSOT 数据源命名 | ✅ Phase 1 完成 | `pkg/naming/` SSOT；Go/Python/TS 常量对齐；`make lint-naming` | 无 |
-| SQLite → PostgreSQL 迁移 | 🟡 Phase 1+2 部分完成 | `pkg/store/cmd/migrate/main.go` + `scripts/prod/migrate_sqlite_to_postgres.sh`；哈希链迁移后校验；snapshot 密文 SM4-GCM 验真已支持 skip/after-migrate/only 模式 | 只读锁定/幂等重跑优化 |
+| SQLite → PostgreSQL 迁移 | 🟡 Phase 1+2 部分完成 | `pkg/store/cmd/migrate/main.go` + `scripts/prod/migrate-sqlite-to-postgres.sh`；哈希链迁移后校验；snapshot 密文 SM4-GCM 验真已支持 skip/after-migrate/only 模式 | 只读锁定/幂等重跑优化 |
 | mTLS CN 白名单 | ✅ Phase 1 完成 | `pkg/tlsutil/whitelist.go` + `grpc_interceptor.go` + `NewWhitelistInterceptor` 辅助函数；热重载（mtime 轮询）；Python 端消费；Go service-hub/datasource-mgr/audit-log/bff-go gRPC server 已注册拦截器；统一读取 `PRIVACY_AUTH_MTLS_WHITELIST_FILE` | 无 |
 | 前端双控制台 | ✅ Phase 1 完成 | `console/web` 与 `console/app-lz/web` 统一错误解析、状态指示器、动态 API 渲染 | 无 |
 | 可观测性指标 | ✅ Phase 1+2 完成 | Python `privacy_*_duration_seconds` 已覆盖 classification/masking/kano/dp/qol；`privacy_classification_total/rule_hits/composite_hits/jobs_*` 已补齐；Go `service_hub_ready` / `circuit_breaker_state` 已更新 | 无 |
@@ -417,7 +417,7 @@ flowchart TD
 ##### Step 4.1：PostgreSQL 生产表结构
 任务表结构由 `pkg/store/postgres/schema.go` 维护；审计日志与快照表结构由 `pkg/store/postgres/audit.go` 维护。均支持 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN IF NOT EXISTS` 增量演进。
 
-##### Step 4.2：迁移工具 (`pkg/store/cmd/migrate/main.go`，包装器 `scripts/prod/migrate_sqlite_to_postgres.sh`)
+##### Step 4.2：迁移工具 (`pkg/store/cmd/migrate/main.go`，包装器 `scripts/prod/migrate-sqlite-to-postgres.sh`)
 原子执行以下关键步骤：
 1. **按哈希链顺序从 SQLite WAL 流式抽取** `tasks`、`audit_logs`、`snapshots` → 2. **snapshot 密文原样迁移**（不重新加解密） → 3. **使用 `pgx.Batch` 批量写入 PostgreSQL** → 4. **迁移后校验 9 要素哈希链完整性**
 
@@ -939,16 +939,16 @@ bash ./scripts/prod/deploy-docker-compose.sh --with-postgres
 
 ```bash
 # 隐私预算备份
-bash ./scripts/prod/backup_privacy_budget.sh
+bash ./scripts/prod/backup-privacy-budget.sh
 
 # SQLite → PostgreSQL 迁移（干运行）
-bash scripts/prod/migrate_sqlite_to_postgres.sh --dry-run
+bash scripts/prod/migrate-sqlite-to-postgres.sh --dry-run
 
 # 审计哈希链验真
 curl -X POST http://localhost:8084/api/audit/chain/verify
 
 # 生产健康检查
-bash ./scripts/prod/prod_health_check.sh
+bash ./scripts/prod/prod-health-check.sh
 ```
 
 </details>

@@ -30,6 +30,8 @@
 # set -u: 引用未定义变量时报错（防止拼写错误导致静默失败）
 # set -o pipefail: 管道中任一命令失败则整体返回非零（防止 | 后掩盖错误）
 set -euo pipefail
+export NO_PROXY="*"
+export no_proxy="*"
 
 # ── 步骤 0：定位路径 ──────────────────────────────────────────────────────
 # 通过 $0（脚本自身路径）反推项目根目录，确保无论从哪里调用都能正确定位 compose 文件
@@ -40,7 +42,7 @@ COMPOSE_DIR="$PROJECT_ROOT/deploy/docker-compose"      # Docker Compose 编排�
 # ── 步骤 1：设置参数默认值 ────────────────────────────────────────────────
 # 默认使用生产 compose 文件；LLM/监控默认关闭；构建/拉取标志默认空
 COMPOSE_FILE="docker-compose.prod.yml"
-GO_ENGINE=false                                        # 是否使用 Go 原生引擎覆盖层
+GO_ENGINE=true                                         # 默认使用 Go 原生高性能引擎
 WITH_LLM=false                                         # 是否启用 vLLM GPU 推理容器
 WITH_MONITORING=false                                  # 是否启用 Prometheus + Grafana 监控
 WITH_POSTGRES=false                                    # 是否启用 Phase B PostgreSQL
@@ -271,5 +273,5 @@ echo "  常用维护命令:"
 echo "    - 查看容器运行状态 : cd $COMPOSE_DIR && docker compose -f $COMPOSE_FILE ps"
 echo "    - 实时查看服务日志 : cd $COMPOSE_DIR && docker compose -f $COMPOSE_FILE logs -f"
 echo "    - 停止生产服务集群 : ./scripts/prod/stop-docker-compose.sh"
-echo "    - 生产健康全面巡检 : ./scripts/prod/prod_health_check.sh"
+echo "    - 生产健康全面巡检 : ./scripts/prod/prod-health-check.sh"
 echo "============================================================================"

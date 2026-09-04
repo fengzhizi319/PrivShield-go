@@ -380,14 +380,14 @@ SQLite `BEGIN IMMEDIATE` 排他事务机制保障多实例并发更新时不会�
 
 ### 5.2 预算数据库定时备份与恢复
 
-生产环境推荐使用项目内置脚本 [`scripts/prod/backup_privacy_budget.sh`](scripts/prod/backup_privacy_budget.sh)：
+生产环境推荐使用项目内置脚本 [`scripts/prod/backup-privacy-budget.sh`](scripts/prod/backup-privacy-budget.sh)：
 
 ```bash
 # 1. 手动执行备份
-bash ./scripts/prod/backup_privacy_budget.sh
+bash ./scripts/prod/backup-privacy-budget.sh
 
 # 2. 配置 Crontab 定时任务（每天凌晨 2 点执行）
-0 2 * * * /bin/bash /opt/PrivShield/scripts/prod/backup_privacy_budget.sh >> /var/log/budget_backup.log 2>&1
+0 2 * * * /bin/bash /opt/PrivShield/scripts/prod/backup-privacy-budget.sh >> /var/log/budget_backup.log 2>&1
 ```
 
 **恢复操作**：
@@ -921,7 +921,7 @@ cat /var/log/privshield/gateway.log | jq 'select(.message == "Node status change
 - **排查与恢复步骤**：
   1. 运行诊断脚本检查证书剩余有效期：
      ```bash
-     ./scripts/prod/prod_health_check.sh --tls --cert-file /etc/privshield/certs/gateway-server.crt
+     ./scripts/prod/prod-health-check.sh --tls --cert-file /etc/privshield/certs/gateway-server.crt
      ```
   2. 检查域名与 SAN (Subject Alternative Name) 是否匹配：
      ```bash
@@ -958,11 +958,11 @@ cat /var/log/privshield/gateway.log | jq 'select(.message == "Node status change
 
 ## 9. 生产健康巡检与诊断工具
 
-项目提供了开箱即用的生产全链路健康巡检脚本 [`scripts/prod/prod_health_check.sh`](scripts/prod/prod_health_check.sh)：
+项目提供了开箱即用的生产全链路健康巡检脚本 [`scripts/prod/prod-health-check.sh`](scripts/prod/prod-health-check.sh)：
 
 ```bash
 # 1. 基础巡检 (HTTP/gRPC/Metrics/DB)
-bash ./scripts/prod/prod_health_check.sh \
+bash ./scripts/prod/prod-health-check.sh \
   --rest-host 127.0.0.1 \
   --rest-port 8000 \
   --grpc-host 127.0.0.1 \
@@ -970,7 +970,7 @@ bash ./scripts/prod/prod_health_check.sh \
   --db-path /data/privacy_budget.db
 
 # 2. 启用 TLS 证书过期诊断
-bash ./scripts/prod/prod_health_check.sh \
+bash ./scripts/prod/prod-health-check.sh \
   --rest-host gateway.privshield.internal \
   --rest-port 8000 \
   --tls \
@@ -1031,7 +1031,7 @@ bash ./scripts/prod/prod_health_check.sh \
 | 7 | **结构化日志** | `PRIVACY_LOG_FORMAT=json`，日志已接入集中式收集平台 (ELK/Loki) | [ ] |
 | 8 | **熔断与重试** | 节点连续失败阈值 (5) 与恢复窗口 (30s) 已通过集成测试验证 | [ ] |
 | 9 | **K8s 双层协同** | Agent Service 已配置为 Headless（`clusterIP: None`），彻底消除 gRPC 长连接倾斜 | [ ] |
-| 10 | **全链路健康巡检** | 执行 `./scripts/prod/prod_health_check.sh` 退出码为 0 | [ ] |
+| 10 | **全链路健康巡检** | 执行 `./scripts/prod/prod-health-check.sh` 退出码为 0 | [ ] |
 
 ---
 

@@ -8,14 +8,19 @@
 # ============================================================================
 
 set -euo pipefail
+export NO_PROXY="*"
+export no_proxy="*"
 
 FORCE=false
+REBUILD=false
 for arg in "$@"; do
     case "$arg" in
         --force) FORCE=true ;;
+        --rebuild) REBUILD=true ;;
         -h|--help)
             echo "用法: $0 [选项]"
             echo "  --force   端口被占用时自动终止占用进程（非交互模式）"
+            echo "  --rebuild 强制重新构建 Web 静态文件"
             echo "  -h, --help 显示此帮助信息"
             exit 0
             ;;
@@ -34,14 +39,7 @@ BFF_PORT=8085
 
 _is_port_in_use() {
     local port="$1"
-    python3 -c "
-import socket, sys
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.settimeout(0.5)
-res = s.connect_ex(('127.0.0.1', int('$port')))
-s.close()
-sys.exit(0 if res == 0 else 1)
-" 2>/dev/null
+    (exec 3<>/dev/tcp/127.0.0.1/"$port") 2>/dev/null && { exec 3<&-; return 0; } || return 1
 }
 
 _kill_port() {
@@ -69,8 +67,17 @@ echo " 🚀 构建并启动 PrivShield App-LZ [生产模式 (Static SPA Embedded
 echo "=================================================================="
 
 # 1. 构建 Web 前端生产包
-echo "构建 Web 前端生产静态资源..."
-(cd "$APP_LZ_DIR/web" && npx vite build)
+if [[ "$REBUILD" == "true" || ! -d "$APP_LZ_DIR/web/dist" ]]; then
+    echo "构建 Web 前端生产静态资源..."
+    (
+        cd "$APP_LZ_DIR/web"
+        if command -v pnpm >/dev/null 2>&1; then
+            pnpm build
+        else
+            npm run build
+        fi
+    )
+fi
 
 # 2. 编译 Go BFF
 echo "编译 App-LZ Go BFF..."

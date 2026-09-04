@@ -180,7 +180,7 @@ graph TD
 * **只增不改 (Append-Only) 与数据库完整性校验**：
   * 存储层严格遵循 Append-Only 规范，代码级杜绝 `UPDATE` 与 `DELETE` 接口；
   * 采用 SQLite WAL 读写分离引擎，启动自动执行 `PRAGMA integrity_check` 坏库阻断；
-  * 提供在线动态存证核验（`POST /v1/audit/snapshots/verify`）以及独立离线校验脚本（`scripts/prod/verify_audit.sh`）。
+  * 提供在线动态存证核验（`POST /v1/audit/snapshots/verify`）以及独立离线校验脚本（`scripts/prod/verify-audit.sh`）。
 * **SQL 级高性能合规报告与多维统计**：
   * 基于 SQLite 原生 SQL 聚合引擎（`GetStats` / `GenerateReport`）执行毫秒级多维统计（按算子、等级、时间段、用户），从架构上杜绝大数据集载入内存导致的 OOM 隐患。
 * **业务合规存证 vs 基础设施运维日志 (Loki / ELK) 职责分离**：

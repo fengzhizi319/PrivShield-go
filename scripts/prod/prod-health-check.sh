@@ -13,10 +13,12 @@
 #   7. 输出巡检综合评估结论与退出码（0: 全部通过, 1: 存在致命异常）
 #
 # 用法 / Usage:
-#   ./scripts/prod/prod_health_check.sh [选项]
+#   ./scripts/prod/prod-health-check.sh [选项]
 # ==============================================================================
 
 set -euo pipefail
+export NO_PROXY="*"
+export no_proxy="*"
 
 # ANSI 颜色定义
 RED='\033[0;31m'
@@ -38,6 +40,7 @@ GRPC_HOST="${PRIVACY_GRPC_HOST:-127.0.0.1}"
 GRPC_PORT="${PRIVACY_GRPC_PORT:-50051}"
 METRICS_PORT="${PRIVACY_METRICS_PORT:-$REST_PORT}"
 USE_TLS="${AGENT_TLS_ENABLED:-false}"
+WITH_LLM=false
 API_KEY="${PRIVACY_AUTH_API_KEY:-}"
 CERT_FILE="${AGENT_TLS_CERT_FILE:-}"
 DB_PATH="${PRIVACY_BUDGET_DB:-$PROJECT_ROOT/.data/privacy_budget.db}"
@@ -58,6 +61,7 @@ usage() {
   --grpc-host HOST     gRPC 目标地址 (默认: 127.0.0.1 或 PRIVACY_GRPC_HOST)
   --grpc-port PORT     gRPC 端口 (默认: 50051 或 PRIVACY_GRPC_PORT)
   --tls                强制启用 HTTPS / TLS 探测
+  --with-llm           强制要求 LLM 引擎就绪 (默认: 可选)
   --cert-file FILE     TLS 证书文件路径 (用于校验过期剩余天数)
   --api-key KEY        Bearer Token / API Key (若开启了鉴权)
   --db-path PATH       SQLite 预算库路径 (默认: .data/privacy_budget.db)
@@ -73,6 +77,7 @@ while [[ $# -gt 0 ]]; do
         --grpc-host) GRPC_HOST="$2"; shift 2 ;;
         --grpc-port) GRPC_PORT="$2"; shift 2 ;;
         --tls) USE_TLS="true"; shift 1 ;;
+        --with-llm) WITH_LLM="true"; shift 1 ;;
         --cert-file) CERT_FILE="$2"; shift 2 ;;
         --api-key) API_KEY="$2"; shift 2 ;;
         --db-path) DB_PATH="$2"; shift 2 ;;
@@ -112,7 +117,8 @@ check_http_endpoint() {
     start_ns=$(date +%s%N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1e9))')
     
     local http_code
-    http_code=$(curl -s -k -o /dev/null -w "%{http_code}" "${AUTH_HEADER[@]}" "$url" 2>/dev/null || echo "000")
+    http_code=$(curl -s -k -o /dev/null -w "%{http_code}" "${AUTH_HEADER[@]}" "$url" 2>/dev/null) || http_code="000"
+    if [[ -z "$http_code" ]]; then http_code="000"; fi
     
     local end_ns
     end_ns=$(date +%s%N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1e9))')
@@ -120,6 +126,9 @@ check_http_endpoint() {
     
     if [[ "$http_code" == "$expected_code" ]]; then
         echo -e "  [PASS] $name ($path) -> HTTP $http_code (${latency_ms}ms)"
+        PASSED_CHECKS=$((PASSED_CHECKS + 1))
+    elif [[ "$path" == "/readyz/llm" && "$WITH_LLM" == "false" ]]; then
+        echo -e "  [INFO] $name ($path) -> HTTP $http_code (未启用大模型推理，纯规则/NER模式)"
         PASSED_CHECKS=$((PASSED_CHECKS + 1))
     else
         echo -e "  ${RED}[FAIL]${NC} $name ($path) -> 期望 HTTP $expected_code, 实际返回 $http_code"
@@ -151,14 +160,11 @@ fi
 echo ""
 echo -e "${BOLD}[3/6] gRPC 核心服务连通性检查${NC}"
 TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
-if python3 -c "
-import socket, sys
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.settimeout(2.0)
-res = s.connect_ex(('$GRPC_HOST', $GRPC_PORT))
-s.close()
-sys.exit(res)
-" 2>/dev/null; then
+if (exec 3<>/dev/tcp/"$GRPC_HOST"/"$GRPC_PORT") 2>/dev/null; then
+    exec 3>&- 2>/dev/null || true
+    echo -e "  [PASS] gRPC 端口可用 ($GRPC_HOST:$GRPC_PORT)"
+    PASSED_CHECKS=$((PASSED_CHECKS + 1))
+elif command -v nc >/dev/null 2>&1 && nc -z -w 2 "$GRPC_HOST" "$GRPC_PORT" 2>/dev/null; then
     echo -e "  [PASS] gRPC 端口可用 ($GRPC_HOST:$GRPC_PORT)"
     PASSED_CHECKS=$((PASSED_CHECKS + 1))
 else
@@ -228,7 +234,8 @@ check_microservice() {
     local url="$2"
     TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
     local code
-    code=$(curl -s -k -o /dev/null -w "%{http_code}" --max-time 3 "$url" 2>/dev/null || echo "000")
+    code=$(curl -s -k -o /dev/null -w "%{http_code}" --max-time 3 "$url" 2>/dev/null) || code="000"
+    if [[ -z "$code" ]]; then code="000"; fi
     if [[ "$code" == "200" ]]; then
         echo -e "  [PASS] ${name} (${url}) -> HTTP 200 OK"
         PASSED_CHECKS=$((PASSED_CHECKS + 1))
@@ -238,6 +245,7 @@ check_microservice() {
     fi
 }
 check_microservice "BFF-Go 代理网关" "http://127.0.0.1:8081/health"
+check_microservice "App-LZ BFF 调度之眼" "http://127.0.0.1:8085/health"
 check_microservice "Service Hub 调度中枢" "http://127.0.0.1:8082/health"
 check_microservice "Datasource Mgr 数据源" "http://127.0.0.1:8083/health"
 check_microservice "Audit Log 审计日志" "http://127.0.0.1:8084/health"

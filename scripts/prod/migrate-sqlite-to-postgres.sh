@@ -5,7 +5,7 @@
 # Wraps pkg/store/cmd/migrate so it can be invoked from scripts/prod.
 #
 # Usage:
-#   bash scripts/prod/migrate_sqlite_to_postgres.sh \
+#   bash scripts/prod/migrate-sqlite-to-postgres.sh \
 #     --hub-db ./data/service-hub.db \
 #     --audit-db ./data/audit-log.db \
 #     --pg-dsn "postgres://user:pass@localhost:5432/privshield?sslmode=disable" \

@@ -55,9 +55,11 @@ kill_by_port() {
     local name="$2"
     local pids=""
     if command -v lsof >/dev/null 2>&1; then
-        pids=$(lsof -t -i :"$port" 2>/dev/null | sort -u | tr '\n' ' ')
+        pids=$( (lsof -t -nP -i :"$port" 2>/dev/null || true) | sort -u | tr '\n' ' ')
+    elif command -v ss >/dev/null 2>&1; then
+        pids=$( (ss -tlnp 2>/dev/null || true) | (grep -E "LISTEN.*:$port\\s" || true) | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | sort -u | tr '\n' ' ')
     elif command -v fuser >/dev/null 2>&1; then
-        pids=$(fuser "$port"/tcp 2>/dev/null | tr -s ' ')
+        pids=$(fuser "$port"/tcp 2>/dev/null | tr -s ' ' || true)
     fi
 
     if [[ -n "$pids" ]]; then
@@ -78,6 +80,7 @@ echo "正在停止【生产模式】控制台所有服务..."
 
 for dir in "$PIDS_DIR" "$LEGACY_PIDS_DIR"; do
     if [[ -d "$dir" ]]; then
+        kill_by_pid_file "$dir/app-lz-prod.pid" "App-LZ BFF 生产服务"
         kill_by_pid_file "$dir/console-go-mtls.pid" "Go gRPC 代理后端 (mTLS)"
         kill_by_pid_file "$dir/console-go-all.pid" "Go gRPC 代理后端 (all)"
         kill_by_pid_file "$dir/console-go.pid" "Go BFF 代理后端"
@@ -91,6 +94,7 @@ for dir in "$PIDS_DIR" "$LEGACY_PIDS_DIR"; do
     fi
 done
 
+kill_by_port 8085 "App-LZ BFF 调度之眼"
 kill_by_port 8084 "audit-log 审计日志"
 kill_by_port 8083 "datasource-mgr 数据源管理"
 kill_by_port 8082 "service-hub 调度中枢"

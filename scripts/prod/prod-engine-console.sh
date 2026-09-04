@@ -4,7 +4,7 @@
 # Launch PrivShield Agent + Go BFF with static frontend hosting in PROD mode
 #
 # 用法 / Usage:
-#   ./scripts/prod/prod-bff-agent.sh [--rebuild] [--force] [--mtls]
+#   ./scripts/prod/prod-engine-console.sh [--rebuild] [--force] [--mtls]
 #
 # 参数说明 / Options:
 #   --rebuild: 强制重新编译打包前端与 Go BFF
@@ -14,6 +14,8 @@
 # ============================================================================
 
 set -euo pipefail
+export NO_PROXY="*"
+export no_proxy="*"
 
 REBUILD=false
 FORCE=false
@@ -43,7 +45,6 @@ LOGS_DIR="$PROJECT_ROOT/.logs"
 
 mkdir -p "$PIDS_DIR" "$LOGS_DIR"
 
-AGENT_VENV="$PROJECT_ROOT/.venv"
 AGENT_URL="http://127.0.0.1:8079"
 if [[ "$MTLS_MODE" == "true" ]]; then
     AGENT_URL="https://127.0.0.1:8079"
@@ -171,19 +172,7 @@ check_port_available() {
     esac
 }
 
-# 1. Agent 虚拟环境检查与初始化
-if [[ ! -d "$AGENT_VENV" ]]; then
-    echo "未找到 agent 虚拟环境，自动创建并安装依赖：$AGENT_VENV"
-    python3 -m venv "$AGENT_VENV"
-    (
-        source "$AGENT_VENV/bin/activate"
-        cd "$PROJECT_ROOT"
-        pip install --upgrade pip >/dev/null
-        pip install -e .
-    )
-fi
-
-# 2. Go 工具链检查
+# 1. Go 工具链检查
 if ! command -v go >/dev/null 2>&1; then
     echo "错误：未找到 Go 工具链，请先安装 Go。"
     exit 1
@@ -256,9 +245,6 @@ launch_agent() {
     local agent_log="$LOGS_DIR/agent.log"
     echo "启动 PrivShield (REST: $AGENT_URL, gRPC: $AGENT_GRPC_ADDR)，日志: $agent_log..."
     (
-        if [ -f "$AGENT_VENV/bin/activate" ]; then
-            source "$AGENT_VENV/bin/activate"
-        fi
         cd "$PROJECT_ROOT"
         if [[ "$MTLS_MODE" == "true" ]]; then
             export AGENT_TLS_ENABLED=true

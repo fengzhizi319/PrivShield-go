@@ -39,7 +39,7 @@ K8S_DIR="$PROJECT_ROOT/deploy/k8s"                     # 原生 K8s 清单目录
 # 命名空间优先级：命令行 -n > 环境变量 K8S_NAMESPACE > 默认值 privshield
 NAMESPACE="${K8S_NAMESPACE:-privshield}"
 WITH_POSTGRES=false
-GO_ENGINE=false
+GO_ENGINE=true
 
 # 遍历所有位置参数，按 --key value 配对消费（shift 2 跳过已处理的两个参数）
 while [[ $# -gt 0 ]]; do

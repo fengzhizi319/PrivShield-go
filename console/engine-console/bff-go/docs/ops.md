@@ -340,7 +340,7 @@ sequenceDiagram
 | `./scripts/dev/dev-engine-console.sh` | 启动 agent + Go BFF + Vite 前端（自动补依赖、构建前端、预编译二进制），Ctrl+C 停止 |
 | `./scripts/dev/dev-engine-console.sh --mtls` | 以 **mTLS 双向认证模式** 启动 agent + Go BFF + Vite 前端 |
 | `./scripts/dev/dev-stop.sh` | 安全停止本地所有开发进程（含 Agent、BFF、Vite） |
-| `./scripts/prod/prod-bff-agent.sh` | 生产模式启动 agent + Go BFF（托管静态前端 dist 页面） |
+| `./scripts/prod/prod-engine-console.sh` | 生产模式启动 agent + Go BFF（托管静态前端 dist 页面） |
 | `./scripts/prod/prod-stop.sh` | 停止生产进程 |
 
 启动脚本每次运行都会自动补齐依赖并构建前端（Go 二进制每次均重新编译）；如需强制重建前端，删除 `console/web/dist` 后重新运行 `./scripts/dev/dev-engine-console.sh` 即可。
