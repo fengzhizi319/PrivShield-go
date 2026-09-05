@@ -33,6 +33,11 @@ const bcryptCost = 12
 // diskFormatVersion 为持久化文件格式版本，便于后续无损迁移。
 const diskFormatVersion = 2
 
+// maxUserStoreFileSize 为凭证库文件加载上限（32 MiB）。
+// 超限直接拒绝加载而非无界读入：凭证库只存摘要与 bcrypt 密文，正常规模远小于该值，
+// 一旦被替换为超大文件（磁盘填充 / 恶意挂载）会导致启动期内存耗尽。
+const maxUserStoreFileSize = 32 << 20
+
 type activeKeyEntry struct {
 	Username string
 	KeyID    string
@@ -181,7 +186,29 @@ func (s *UserStore) Version() uint64 {
 }
 
 // loadFromFile 从磁盘读取用户数据并重建活跃密钥索引（以 Token 摘要为键）。
+//
+// 加载前做三道体检（等保三级 G-14 / 密评：敏感凭证存储的完整性与保密性）：
+//  1. 体积上限 maxUserStoreFileSize，防止超大文件在启动期耗尽内存；
+//  2. 权限位检查：组/其他位被放开时告警并立即收敛为 0600（best-effort，不阻断启动）；
+//  3. 过期密钥就地清理并标记回写，避免脏数据长期驻留凭证库。
 func (s *UserStore) loadFromFile() error {
+	info, err := os.Stat(s.filePath)
+	if err != nil {
+		return err
+	}
+	if info.Size() > maxUserStoreFileSize {
+		return fmt.Errorf("auth: user store file %s is %d bytes, exceeds the %d bytes safety limit",
+			s.filePath, info.Size(), maxUserStoreFileSize)
+	}
+	if mode := info.Mode().Perm(); mode&0o077 != 0 {
+		s.logger.Warn("UserStore: credential store file is readable by group/others; tightening to 0600",
+			"path", s.filePath, "mode", mode.String())
+		if cerr := os.Chmod(s.filePath, 0o600); cerr != nil {
+			s.logger.Error("UserStore: failed to tighten credential store file permissions",
+				"path", s.filePath, "error", cerr.Error())
+		}
+	}
+
 	data, err := os.ReadFile(s.filePath)
 	if err != nil {
 		return err
@@ -220,6 +247,12 @@ func (s *UserStore) loadFromFile() error {
 				s.migrated = true
 			}
 			rec.LegacyToken = ""
+			// 过期密钥在加载期即清理并触发回写，防止已失效凭证长期驻留凭证库
+			// （等保三级 G-14：密钥必须具备有效期且到期失效）。
+			if rec.TokenHash == "" || rec.IsExpired() {
+				delete(u.APIKeys, keyID)
+				s.migrated = true
+			}
 		}
 		users[u.Username] = u
 	}
@@ -307,12 +340,40 @@ func (s *UserStore) saveToFileLocked() error {
 		return fmt.Errorf("auth: failed to replace user store file: %w", err)
 	}
 	renamed = true
+	// fsync 父目录：rename 本身只保证「文件内容」落盘，目录项在崩溃后可能丢失，
+	// 导致凭证库回退到旧版本（已吊销密钥复活 / 新签密钥消失）。best-effort，
+	// 目录不可打开（如只读挂载点）时不阻断保存。
+	if dh, derr := os.Open(dir); derr == nil {
+		_ = dh.Sync()
+		_ = dh.Close()
+	}
 	return nil
 }
 
 // Register 注册新用户。
 // 口令满足等保三级 G-04 复杂度与长度上下限，采用 bcrypt (cost=12) 加盐存储。
 func (s *UserStore) Register(username, password, displayName, role string, scopes []string) (*User, error) {
+	return s.register(username, password, displayName, role, scopes, false)
+}
+
+// RegisterBootstrapAdmin 仅在用户库为空时创建首个 admin 账号（系统引导期）。
+//
+// 安全语义：「库为空」的判定与写入在**同一把写锁**内完成，杜绝并发双引导（TOCTOU）。
+// 历史上 Handler 先调 Count()==0 再调 Register，两步之间存在窗口：引导期并发打入多个
+// 注册请求时会出现**多个自封管理员**。现由本方法原子化：仅第一个请求能成功，
+// 其余一律 ErrBootstrapClosed。引导期强制 role=admin 并忽略自定义 scope（使用 admin 预置权限），
+// 避免未认证调用者借引导通道给自己组装任意权限。
+func (s *UserStore) RegisterBootstrapAdmin(username, password, displayName string) (*User, error) {
+	// 锁外廉价预检：引导窗口已关时直接返回，不白耗一次 bcrypt(cost=12)（~250ms CPU），
+	// 否则引导期结束后的注册洪水会成为未认证 CPU 耗尽放大器。权威判定仍在写锁内。
+	if s.Count() > 0 {
+		return nil, ErrBootstrapClosed
+	}
+	return s.register(username, password, displayName, "admin", nil, true)
+}
+
+// register 为注册与引导共用的内部实现；bootstrapOnly=true 时额外要求在写锁内确认用户库为空。
+func (s *UserStore) register(username, password, displayName, role string, scopes []string, bootstrapOnly bool) (*User, error) {
 	username = NormalizeUsername(username)
 	if !IsValidUsername(username) {
 		return nil, ErrInvalidUsername
@@ -339,13 +400,8 @@ func (s *UserStore) Register(username, password, displayName, role string, scope
 		finalScopes = DefaultScopesForRole(role)
 	}
 	// 防越权：非特权角色不得携带管理类 scope（即使由管理员显式指定也需角色匹配）。
-	if !IsPrivilegedRole(role) {
-		for _, sc := range finalScopes {
-			switch sc {
-			case "*", "admin", "user:admin", "ops:admin", "hub:admin":
-				return nil, fmt.Errorf("%w: role %q cannot hold management scope %q", ErrForbiddenScope, role, sc)
-			}
-		}
+	if err := validateRoleScopeConsistency(role, finalScopes); err != nil {
+		return nil, err
 	}
 
 	// bcrypt 计算在锁外执行（cost=12 约 200ms+），避免注册风暴阻塞全部认证操作。
@@ -357,6 +413,10 @@ func (s *UserStore) Register(username, password, displayName, role string, scope
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// 引导判定与写入同锁：并发双引导仅第一个胜出，其余一律 ErrBootstrapClosed。
+	if bootstrapOnly && len(s.users) > 0 {
+		return nil, ErrBootstrapClosed
+	}
 	if _, exists := s.users[username]; exists {
 		return nil, ErrUserAlreadyExists
 	}
@@ -392,6 +452,10 @@ func (s *UserStore) Register(username, password, displayName, role string, scope
 // 三级等保 G-03：连续 5 次错误锁定账号 15 分钟。成功后重置失败计数。
 // 用户不存在时同样执行一次 bcrypt 比对（哑哈希），使「用户不存在」与「口令错误」耗时一致，
 // 抑制基于时序的账号枚举。
+//
+// 反枚举补强：冻结账号**先校验口令再暴露状态**。若先返回 ErrUserDisabled，未掌握口令的
+// 攻击者仅凭 403/401 差异就能枚举出「哪些账号真实存在且被冻结」，与「用户不存在/口令错误
+// 统一响应」的设计目标相背。
 func (s *UserStore) Authenticate(username, password string) (*User, error) {
 	username = NormalizeUsername(username)
 
@@ -412,11 +476,8 @@ func (s *UserStore) Authenticate(username, password string) (*User, error) {
 		_ = bcrypt.CompareHashAndPassword([]byte(s.dummyHash()), []byte(password))
 		return nil, ErrUserNotFound
 	}
-	if user.Status != UserStatusActive {
-		s.mu.Unlock()
-		return nil, ErrUserDisabled
-	}
 	hash := user.PasswordHash
+	disabled := user.Status != UserStatusActive
 	s.mu.Unlock()
 
 	// 口令哈希缺失（历史脏数据）时 fail-closed，绝不放行。
@@ -426,6 +487,10 @@ func (s *UserStore) Authenticate(username, password string) (*User, error) {
 	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)); err != nil {
 		s.recordFailedLogin(username)
 		return nil, ErrInvalidPassword
+	}
+	// 口令正确后才披露「账号已冻结」：未掌握口令者得到的仍是统一的口令错误响应。
+	if disabled {
+		return nil, ErrUserDisabled
 	}
 
 	s.resetFailedLogin(username)
@@ -564,6 +629,12 @@ func (s *UserStore) UpdatePermissions(username, role string, scopes []string) er
 		nextScopes = normScopes
 	} else if role != "" {
 		nextScopes = DefaultScopesForRole(role)
+	}
+
+	// 角色与 scope 一致性（与注册路径共用同一口径）：改权不得把管理类 scope 挂到
+	// 非特权角色上，否则会出现「guest 持 `*`」这类绕过角色矩阵的隐式提权。
+	if err := validateRoleScopeConsistency(nextRole, nextScopes); err != nil {
+		return err
 	}
 
 	// 自锁防护：若本次变更会摘掉最后一个活跃管理员的管理能力，直接拒绝。
@@ -890,6 +961,7 @@ func (s *UserStore) ListAPIKeys(username string) ([]APIKeyRecord, error) {
 // ChangePassword 修改用户口令。
 // bcrypt 计算全部在锁外执行；成功后强制失效该用户全部登录会话（口令可能已泄露），
 // 并按 PasswordHistoryDepth 禁止重用最近若干次口令（等保三级 G-04）。
+// 写入前在锁内复核口令哈希未被并发修改，避免锁外校验窗口造成的丢失更新。
 func (s *UserStore) ChangePassword(username, oldPassword, newPassword string) error {
 	username = NormalizeUsername(username)
 
@@ -940,6 +1012,22 @@ func (s *UserStore) ChangePassword(username, oldPassword, newPassword string) er
 	u, ok := s.users[username]
 	if !ok {
 		return ErrUserNotFound
+	}
+
+	// 丢失更新防护：锁外 bcrypt 校验（~250ms）期间口令可能已被并发修改（另一会话改密、
+	// 管理员重置）。若不复核，本次校验结论已失效却仍会覆写新哈希，既绕过口令历史判定
+	// 又形成「后到者胜」的静默覆盖。哈希不一致即拒绝，要求客户端重试。
+	if u.PasswordHash != currentHash {
+		return ErrPasswordChangedConcurrently
+	}
+	// 口令历史同样在写锁内基于**最新状态**复核，堵住并发窗口内的历史口令重用。
+	for _, h := range u.PasswordHistory {
+		if h == "" {
+			continue
+		}
+		if bcrypt.CompareHashAndPassword([]byte(h), []byte(newPassword)) == nil {
+			return ErrPasswordReused
+		}
 	}
 
 	newHistory := append([]string{u.PasswordHash}, u.PasswordHistory...)

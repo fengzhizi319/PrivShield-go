@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -72,6 +73,15 @@ type UserSummary struct {
 	CreatedAt         time.Time  `json:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at"`
 	PasswordUpdatedAt time.Time  `json:"password_updated_at"`
+}
+
+// PasswordExpired 判定口令是否已超过 MaxPasswordAge（等保三级 G-04 口令定期更换）。
+// PasswordUpdatedAt 为零值（历史脏数据）时不误报，交由合规巡检另行处置。
+func (u *User) PasswordExpired() bool {
+	if u == nil || u.PasswordUpdatedAt.IsZero() {
+		return false
+	}
+	return time.Since(u.PasswordUpdatedAt) > MaxPasswordAge
 }
 
 // ToSummary 转换为脱敏摘要。
@@ -174,6 +184,28 @@ func IsPrivilegedRole(role string) bool {
 	}
 }
 
+// managementScopes 为管理类 scope 全集：仅特权角色（IsPrivilegedRole）可持有。
+var managementScopes = map[string]bool{
+	"*": true, "admin": true, "user:admin": true, "ops:admin": true, "hub:admin": true,
+}
+
+// validateRoleScopeConsistency 校验角色与 scope 的一致性，**注册与改权共用同一口径**。
+//
+// 非特权角色不得携带管理类 scope，即使由管理员显式指定也必须角色匹配；否则会出现
+// 「guest 持 `*`」这类破坏角色矩阵与审计口径的隐式提权（改权路径历史上缺失本校验，
+// 与注册路径口径分叉）。
+func validateRoleScopeConsistency(role string, scopes []string) error {
+	if IsPrivilegedRole(role) {
+		return nil
+	}
+	for _, sc := range scopes {
+		if managementScopes[sc] {
+			return fmt.Errorf("%w: role %q cannot hold management scope %q", ErrForbiddenScope, role, sc)
+		}
+	}
+	return nil
+}
+
 // HasAdminCapability 判定用户是否具备用户管理能力（用于「最后一个管理员」保护）。
 func HasAdminCapability(u *User) bool {
 	if u == nil || u.Status != UserStatusActive {
@@ -228,6 +260,11 @@ var (
 	ErrInvalidTTL           = errors.New("auth: ttl_seconds must be between 0 (default 30d) and 90 days")
 	ErrLastAdmin            = errors.New("auth: operation refused because it would remove the last active administrator")
 	ErrSelfRegisterDisabled = errors.New("auth: self-service registration is disabled; ask an administrator to create the account")
+	// ErrBootstrapClosed 引导窗口已关闭：首个管理员既已创建，「用户库为空」这一免认证开户
+	// 通道即永久失效（引导判定与写入同锁，见 UserStore.RegisterBootstrapAdmin）。
+	ErrBootstrapClosed = errors.New("auth: bootstrap window is closed; the first administrator already exists")
+	// ErrPasswordChangedConcurrently 改密期间口令已被并发修改，锁外 bcrypt 校验结论失效。
+	ErrPasswordChangedConcurrently = errors.New("auth: password was changed concurrently; please retry with the current password")
 )
 
 const (
@@ -258,8 +295,14 @@ const (
 	MaxKeyNameLength     = 64
 	// LoginThrottleWindow / LoginThrottleMaxPerIP 登录端点每 IP 固定窗口限速，
 	// 缓解「多账号口令喷洒」与「故意锁死管理员」两类拒绝服务。
+	// 注册端点共用同一配额（独立计数）：公开注册每次都要跑一遍 bcrypt(cost=12)，
+	// 不限速即成为**未认证 CPU 耗尽放大器**。
 	LoginThrottleWindow   = time.Minute
 	LoginThrottleMaxPerIP = 20
+	// MaxPasswordAge 等保三级 G-04：身份鉴别信息应具有有效期并定期更换。
+	// 超期口令在登录响应中以 password_expired 标记并输出审计告警（**不阻断登录**，
+	// 避免唯一管理员因口令过期被永久锁死），由合规巡检驱动闭环改密。
+	MaxPasswordAge = 90 * 24 * time.Hour
 )
 
 var weakPasswords = []string{

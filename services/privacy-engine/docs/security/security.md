@@ -586,13 +586,13 @@ pkgauth.LogRoutePermissionAudit(nil, "privacy-engine", r.Routes(),
 
 | 方法与路径 | 权限与访问控制 | 核心行为与联动 |
 |---|---|---|
-| `POST /v1/auth/login` | 公开免密 | 校验等保口令与防爆破锁定；成功下发会话 Bearer Token（默认 24h，内存态不落盘）；用户不存在与口令错误统一 `401`，抑制账号枚举 |
-| `POST /v1/auth/users/register` | 公开（**仅引导期首个 admin**，或显式开启自注册）/ `user:admin` | 用户库为空时允许创建首个管理员（角色必须为 `admin`，否则 `400 INVALID_BOOTSTRAP_ROLE`）；默认关闭公开自注册（`403 SELF_REGISTER_DISABLED`） |
+| `POST /v1/auth/login` | 公开免密 | 校验等保口令与防爆破锁定；成功下发会话 Bearer Token（默认 24h，内存态不落盘）；用户不存在与口令错误统一 `401`，抑制账号枚举；口令超过 `MaxPasswordAge` 时响应 `data.password_expired=true` 并打 WARN 审计（不阻断登录） |
+| `POST /v1/auth/users/register` | 公开（**仅引导期首个 admin**，或显式开启自注册）/ `user:admin` | 每 IP 独立限速（与登录端点分别计数）；用户库为空时允许创建首个管理员（角色必须为 `admin`，否则 `400 INVALID_BOOTSTRAP_ROLE`；**不接受自定义 scope**，否则 `400 INVALID_BOOTSTRAP_SCOPES`）；引导窗口关闭后的并发竞争者得 `409 BOOTSTRAP_CLOSED`；默认关闭公开自注册（`403 SELF_REGISTER_DISABLED`） |
 | `POST /v1/auth/logout` | 已认证 | 吊销当前会话 Token，同一 Token 后续请求立即 `401`；长期 API Key 不适用（`404 SESSION_NOT_FOUND`） |
-| `POST /v1/auth/change-password` | 本人或 `user:admin` | 校验旧口令 + 新口令等保复杂度 + 口令历史禁重用（最近 3 个）；成功后**强制吊销该用户全部会话** |
+| `POST /v1/auth/change-password` | 本人或 `user:admin` | 校验旧口令 + 新口令等保复杂度 + 口令历史禁重用（最近 3 个）；写锁内复核口令哈希未被并发修改，陈旧写入者得 `409 PASSWORD_CHANGED_CONCURRENTLY`；成功后**强制吊销该用户全部会话** |
 | `GET /v1/auth/users` | `user:read` 或 `user:admin` | 输出脱敏摘要（抹除口令哈希与 Token 材料） |
 | `GET /v1/auth/users/:username` | 本人或 `user:read` / `user:admin` | 用户档案 + 名下绑定的 API Key 概要 |
-| `PUT /v1/auth/users/:username/permissions` | `user:admin` | 更新角色与自定义 scope；名下所有活密钥权限**毫秒级联动刷新**，无须重启 |
+| `PUT /v1/auth/users/:username/permissions` | `user:admin` | 更新角色与自定义 scope（与注册路径**共用同一角色/scope 一致性口径**，非特权角色不得持有管理类 scope）；名下所有活密钥权限**毫秒级联动刷新**，无须重启 |
 | `PUT /v1/auth/users/:username/status` | `user:admin` | `disabled` 时名下全部 Key 与会话立即失效（拦截器 `401`）；`active` 解冻后自动恢复 |
 | `DELETE /v1/auth/users/:username` | `user:admin` | 删除账号，所有活跃 Token 从活密钥池注销 |
 | `POST /v1/auth/users/:username/keys` | 本人或 `user:admin` | 请求体 `{"key_name":"etl-runner","scopes":["privacy:mask"],"ttl_seconds":2592000}`；生成 `psk_<32hex>` 随机 Token，**明文仅本次响应下发一次**，服务端只存 SHA-256 摘要 |
@@ -612,9 +612,15 @@ pkgauth.LogRoutePermissionAudit(nil, "privacy-engine", r.Routes(),
 | 字符类别 | 大写/小写/数字/特殊字符 **至少 3 类** | G-04 | `ErrPasswordWeak` |
 | 禁止包含用户名 | 含**逆序**同样拒绝 | G-04 | `ErrPasswordContainsName`（独立哨兵错误，便于客户端提示） |
 | 弱口令字典 | 18 项常见弱口令前缀/全等拦截 | G-04 | `ErrPasswordBlacklisted` |
-| 口令历史 | 最近 **3** 个不得重用；新旧不得相同 | G-04 | `ErrPasswordReused` / `ErrPasswordSame` |
+| 口令历史 | 最近 **3** 个不得重用；新旧不得相同 | G-04 | `ErrPasswordReused` / `ErrPasswordSame`；历史复核在**写锁内**基于最新状态重做，堵住并发窗口内的重用 |
+| 口令有效期 | `MaxPasswordAge = 90` 天 | G-04 | 超期仅在登录响应置 `password_expired=true` 并打 WARN 审计，**不阻断登录**（避免唯一管理员被锁死），由巡检驱动闭环改密 |
 | 连续失败锁定 | **5** 次 → 锁定 **15** 分钟 | G-03 | 登录成功自动清零；锁定期返回 `429 ACCOUNT_LOCKED` + `Retry-After` |
-| 登录限速 | 每 IP 每分钟 **20** 次（8 分片固定窗口） | G-03 / 抗 DoS | 超限 `429 RATE_LIMITED` + `Retry-After`；缓解口令喷洒与“故意锁死管理员” |
+| 登录限速 | 每 IP 每分钟 **20** 次（8 分片固定窗口，键前缀 `login:`） | G-03 / 抗 DoS | 超限 `429 RATE_LIMITED` + `Retry-After`；缓解口令喷洒与“故意锁死管理员” |
+| 注册限速 | 复用同一配额，键前缀 `register:` **独立计数** | 抗 DoS | 公开注册每次都跑 bcrypt(cost=12)，不限速即未认证 CPU 耗尽放大器；两端点互不牵连 |
+| 凭证库文件上限 | **32 MiB** | 抗 DoS | 超限直接拒绝加载（fail-fast），防止启动期被超大文件耗尽内存 |
+| 凭证库权限位 | 加载期检测，组/其他位被放开即告警并收敛为 `0600` | G-14 / 密评 | best-effort（chmod 失败仅记错不阻断启动） |
+| 过期密钥清理 | 加载期就地删除并回写 | G-14 | 避免已失效凭证长期驻留凭证库 |
+| 500 响应口径 | 仅回泛化文案 + `trace_id`（`INTERNAL_ERROR`） | G-11 | 文件路径/OS 错误码/内部状态只写服务端 `auth_internal_error` 日志，不对未信任调用者暴露部署拓扑 |
 | 会话有效期 | 默认 = 上限 **24h** | G-14 | 会话为**内存态**，重启即失效（不持久化凭证） |
 | 并发会话配额 | 每用户 **8** 个 | G-14 | 超出淘汰最早会话 |
 | API Key 有效期 | 默认 **30 天**，上限 **90 天** | G-14 | `ttl_seconds=0` 归一化为 30 天而非“永不过期”；负值/超限 `400 INVALID_TTL` |
@@ -632,7 +638,7 @@ pkgauth.LogRoutePermissionAudit(nil, "privacy-engine", r.Routes(),
 
 - **版本驱动聚合器**（[`pkg/auth/live_keys.go::Aggregator`](../../../../pkg/auth/live_keys.go)）：合并后的快照仅在任一来源版本号变化时重建，其余请求零分配复用同一份**只读共享快照**；重建时对配置源做深拷贝，快照与来源内部状态无指针别名。
 - **毫秒级联动**：权限调整、状态冻结/解冻、Token 签发/吊销、改密与注销都会 `bump` 版本号，活密钥表即刻原子更新，实现「配置不动、服务不启、权限秒级生效」。
-- **持久化保障**：`UserStore` 采用临时文件写入 + `os.Rename` 原子替换，目录 `0700`、文件 `0600`；重启后账号、口令哈希与**有效 API Key 摘要**无损恢复（会话 Token 因内存态而失效，需重新登录）。
+- **持久化保障**：`UserStore` 采用临时文件写入 + `os.Rename` 原子替换，目录 `0700`、文件 `0600`，并在 rename 后对**父目录 fsync**（否则掉电可能只留下目录项而未落盘 inode，重启后凭证库回退到旧版本）；重启后账号、口令哈希与**有效 API Key 摘要**无损恢复（会话 Token 因内存态而失效，需重新登录）。
 
 ##### (6) 用户体系环境变量
 
@@ -644,6 +650,23 @@ pkgauth.LogRoutePermissionAudit(nil, "privacy-engine", r.Routes(),
 | `AGENT_AUTH_USER_LOGIN_THROTTLE_PER_MIN` | `20` | 登录端点每 IP 每分钟最大尝试次数，`<=0` 关闭该层限速 |
 
 > 变量名以 [`pkg/auth/user_handlers.go::userPolicyEnvTable`](../../../../pkg/auth/user_handlers.go) 为唯一事实源（service-hub 侧前缀为 `SERVICE_HUB_`），编排清单与本表须保持一致，否则会被 `scripts/check_orchestration_env_consistency.sh` 门禁判定为幽灵变量。
+
+##### (7) 引导期与反枚举加固（安全审计回合）
+
+用户体系引入了一个历史上不存在的**免认证写入面**（引导期注册），因而需要一组专门的收敛措施。以下项均有回归用例守护（[`pkg/auth/security_hardening_test.go`](../../../../pkg/auth/security_hardening_test.go)）：
+
+| 风险 | 攻击路径 | 收敛措施 |
+|---|---|---|
+| **引导期 TOCTOU** | Handler 先读 `Count()==0` 再 `Register`，并发请求可产生多个自封 admin | “库为空”判定与写入下沉到 `UserStore.RegisterBootstrapAdmin`，在**同一把写锁**内完成；竞争失败者得 `ErrBootstrapClosed` → `409 BOOTSTRAP_CLOSED` |
+| **匿名自封管理员** | `isCallerAdmin(nil)==true`（未启认证/遗留免密透传时身份为 nil），未认证请求可走管理员开户通道自封 `admin` 并授予 `"*"` | 管理员开户通道要求**真实身份上下文**（`caller != nil && isCallerAdmin(caller)`）；引导期另拒绝自定义 scope（`400 INVALID_BOOTSTRAP_SCOPES`） |
+| **账号状态枚举** | `Authenticate` 先返回 `ErrUserDisabled`（403）再验口令，未掌握口令者可枚举“存在且被冻结”的账号 | 先 bcrypt 验口令，**只有口令正确才披露冻结状态**；冻结账号 + 错误口令与不存在账号的响应逐字段一致 |
+| **注册端点 CPU 放大** | 公开注册无限速，每请求强制服务端跑一次 bcrypt(cost=12) | `register:`+IP 独立计数，超限 `429 RATE_LIMITED` + `Retry-After` |
+| **角色/scope 矩阵被破坏** | `UpdatePermissions` 缺少注册路径的一致性校验，可造出“guest 持 `*`” | 抽出 `validateRoleScopeConsistency`，注册与改权**共用同一口径** |
+| **改密丢失更新** | bcrypt 校验在锁外、写入在锁内，窗口内另一会话改密会被静默覆盖，并绕过口令历史 | 写锁内复核 `PasswordHash` 快照与口令历史，不一致则 `ErrPasswordChangedConcurrently` → `409` |
+| **密钥热轮转崩溃** | `ChannelSecretWatcher.Close()` 关闭发送侧 channel，与 `Push` 并发时 `send on closed channel` panic 拖垮进程 | `Close()` 只关 `stopCh`（幂等），事件 channel 交由 GC 回收 |
+| **公开身份共用令牌桶** | 未携 Token 的调用者均得到同一个 `public-caller` 身份，单一 IP 洪泛可耗尽全体公开端点配额 | 限流分片键对 `ServiceType == "public"` 同样追加客户端 IP（引擎与 service-hub 两侧同口径） |
+
+> **引导期定义**：用户库为空。它是唯一的免认证开户窗口，因此同时受三重收敛：每 IP 限速、库空判定与写入同锁原子、匿名调用者不得自带角色/scope。引导完成后窗口**永久关闭**，后续账号一律由管理员开户或显式开启自注册（且强制降权为 `developer`）。
 
 ---
 
@@ -1252,10 +1275,12 @@ STRIDE 提供系统化的威胁枚举框架。下表的每一行是一种威胁�
 | [`pkg/auth/middleware.go`](../../../../pkg/auth/middleware.go) | `ConstantTimeLookup`、`AuthenticateAPIKey`、`AuthMiddleware`、错误信封、安全指标 | §3.3 §3.4 §7.4 |
 | [`pkg/auth/keystore.go`](../../../../pkg/auth/keystore.go) | KeyStore 热轮转（5s mtime / SecretWatcher） | §3.5 |
 | [`pkg/auth/settings.go`](../../../../pkg/auth/settings.go) | `KeyConfig`、`IsExpired`、`Settings` | §3.2 |
-| [`pkg/auth/user.go`](../../../../pkg/auth/user.go) | 用户模型与状态机、等保口令复杂度校验（`ValidatePasswordStrength`）、角色→Scope 矩阵（`KnownRoles`）、安全常数 | §3.9.3 (2)(4) |
-| [`pkg/auth/user_store.go`](../../../../pkg/auth/user_store.go) | 用户全生命周期存储、动态 API Key 签发/吊销、会话管理、`LiveHashedKeys` 只读快照、原子持久化 | §3.9.3 (3)(5) |
-| [`pkg/auth/user_handlers.go`](../../../../pkg/auth/user_handlers.go) | `/v1/auth/*` REST 控制器、`userPolicyEnvTable` 环境变量事实源、Handler 内 ABAC 授权 | §3.9.3 (3)(6) |
+| [`pkg/auth/user.go`](../../../../pkg/auth/user.go) | 用户模型与状态机、等保口令复杂度校验（`ValidatePasswordStrength`）、角色→Scope 矩阵（`KnownRoles`）、`validateRoleScopeConsistency`、口令有效期（`PasswordExpired`）、安全常数 | §3.9.3 (2)(4)(7) |
+| [`pkg/auth/user_store.go`](../../../../pkg/auth/user_store.go) | 用户全生命周期存储、引导期原子化（`RegisterBootstrapAdmin`）、动态 API Key 签发/吊销、会话管理、改密丢失更新复核、`LiveHashedKeys` 只读快照、凭证库文件加固与原子持久化 | §3.9.3 (3)(5)(7) |
+| [`pkg/auth/user_handlers.go`](../../../../pkg/auth/user_handlers.go) | `/v1/auth/*` REST 控制器、`userPolicyEnvTable` 环境变量事实源、Handler 内 ABAC 授权、反枚举统一响应口径、`internalError` 500 泛化、登录/注册双端点限速 | §3.9.3 (3)(6)(7) |
 | [`pkg/auth/live_keys.go`](../../../../pkg/auth/live_keys.go) | `HashToken`、版本驱动 `Aggregator` 缓存、深拷贝隔离的活密钥聚合 | §3.9.3 (5) |
+| [`pkg/auth/secret_manager.go`](../../../../pkg/auth/secret_manager.go) | `SecretWatcher` 抽象与 `ChannelSecretWatcher`（`Close` 只关 `stopCh`、不关事件通道，避免密钥热轮转期 panic） | §3.5 §3.9.3 (7) |
+| [`pkg/auth/security_hardening_test.go`](../../../../pkg/auth/security_hardening_test.go) | 引导期原子化、反枚举、500 泛化、注册限速、角色/scope 一致性、改密丢失更新、凭证库加固、Watcher 并发关闭的安全回归防线 | §3.9.3 (7) |
 | [`pkg/auth/route_audit.go`](../../../../pkg/auth/route_audit.go) | `AuditRoutePermissions`/`LogRoutePermissionAudit` 启动期审计 | §3.8 |
 | [`services/privacy-engine/internal/security/auth.go`](../../../../services/privacy-engine/internal/security/auth.go) | 引擎侧 Auth/SecurityHeaders/RateLimit 中间件 | §2 §3.4 §6.4 |
 | [`services/privacy-engine/internal/security/config.go`](../../../../services/privacy-engine/internal/security/config.go) | `Settings` 装配与 `AGENT_*` 环境变量读取 | 附录 A |

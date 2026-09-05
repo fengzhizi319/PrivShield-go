@@ -28,6 +28,7 @@ package handlers
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -365,6 +366,19 @@ func (s *Server) scopeAuthMiddleware() gin.HandlerFunc {
 			middleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: missing credentials", nil)
 			return
 		}
+
+		// 遗留单 Key（SERVICE_HUB_API_KEY）在 Scope 模式下继续被接受：
+		// 用户体系一旦开户即进入 Scope 鉴权，若此处不兼容遗留 Key，历史上仅配置单 Key
+		// 的部署会在首次开户后瞬间全量 401（可用性回归）。常量时间比对，映射为全权限
+		// 内部身份，语义与遗留模式一致；运维应在迁移完成后清空该环境变量。
+		if s.cfg.APIKey != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.APIKey)) == 1 {
+			c.Set(pkgauth.IdentityContextKey, &pkgauth.Identity{
+				ServiceType: "internal", Name: "legacy-api-key", Scopes: []string{"*"},
+			})
+			c.Next()
+			return
+		}
+
 		identity := pkgauth.AuthenticateAPIKey(settings, token)
 		if identity == nil {
 			pkgauth.AuthFailuresTotal.WithLabelValues("invalid_token").Inc()
@@ -398,10 +412,14 @@ func (s *Server) scopeAuthMiddleware() gin.HandlerFunc {
 		}
 		// 鉴权模式**运行期动态判定**（KeyStore 热轮转与用户体系均可在启动后发生变化）：
 		//   · 存在静态/热轮转 Scope Key → Scope 细粒度鉴权（与历史行为一致）；
-		//   · 未配置遗留单 APIKey 且用户体系已开户 → Scope 鉴权（纯动态开户部署，
-		//     引导期创建首个 admin 后自动从开发免密透传收敛为强制鉴权）；
+		//   · 用户体系已开户 → Scope 鉴权（引导期创建首个 admin 后自动从开发免密透传
+		//     收敛为强制鉴权；遗留单 APIKey 由 scopeHandler 内的兼容分支继续接受）；
 		//   · 其余情形 → 遗留单 APIKey 模式（APIKey 为空即开发免密透传），保持向后兼容。
-		if len(s.currentAuthKeys()) > 0 || (s.cfg.APIKey == "" && s.userStore.Count() > 0) {
+		//
+		// 安全要点：不得以「SERVICE_HUB_API_KEY 非空」作为退回遗留模式的条件——那会使
+		// 已开户的用户体系（动态密钥、登录会话、失败锁定、ABAC 授权）被永久整体旁路，
+		// 任何仅持遗留单 Key 的调用者都能绕过用户级最小权限访问全部管理面。
+		if len(s.currentAuthKeys()) > 0 || s.userStore.Count() > 0 {
 			scopeHandler(c)
 			return
 		}
@@ -411,8 +429,10 @@ func (s *Server) scopeAuthMiddleware() gin.HandlerFunc {
 
 // identityRateLimitMiddleware 返回身份级细粒度限流中间件（32 分片令牌桶，复用 pkg/middleware）。
 //
-// 限流 key = 「身份 ServiceType:Name + 归一化路径」；未认证（匿名）调用者追加客户端 IP 作为分片因子，
-// 防止单 IP 洪泛。路径经 NormalizeRateLimitPath 归一化（动态数字/UUID 段替换为 :id），防止高基数路径
+// 限流 key = 「身份 ServiceType:Name + 归一化路径」；未认证（匿名）与公开身份（public-caller，
+// 即未携 Token 访问 /v1/auth/login 等公开端点）调用者追加客户端 IP 作为分片因子，
+// 防止单 IP 洪泛、也防止所有公开调用者共用同一令牌桶造成的跨用户拒绝服务。
+// 路径经 NormalizeRateLimitPath 归一化（动态数字/UUID 段替换为 :id），防止高基数路径
 // 导致限流桶爆炸。/health、/readyz、/metrics 探针端点完全豁免，保障 K8s 探针与 Prometheus 抓取畅通。
 // 该层挂载在鉴权中间件之后，确保已认证请求以 API 身份（而非共享 IP）为限流维度。
 func (s *Server) identityRateLimitMiddleware() gin.HandlerFunc {
@@ -424,7 +444,7 @@ func (s *Server) identityRateLimitMiddleware() gin.HandlerFunc {
 			serviceType, name = identity.ServiceType, identity.Name
 		}
 		key := serviceType + ":" + name + ":" + middleware.NormalizeRateLimitPath(path)
-		if identity == nil {
+		if identity == nil || serviceType == "public" {
 			if clientIP := middleware.RealClientIP(c); clientIP != "" {
 				key += ":" + clientIP
 			}

@@ -274,13 +274,13 @@ Scope 鉴权采用「集中式 `path → permission` 映射」（本服务的 `p
 
 | 方法与路径 | 权限与访问控制 | 核心行为与联动 |
 |---|---|---|
-| `POST /v1/auth/login` | 公开免密 | 校验等保口令与防爆破锁定；成功下发会话 Bearer Token（默认 24h，内存态不落盘）；用户不存在与口令错误统一 `401`，抑制账号枚举 |
-| `POST /v1/auth/users/register` | 公开（**仅引导期首个 admin**，或显式开启自注册）/ `user:admin` | 用户库为空时允许创建首个管理员（角色必须为 `admin`，否则 `400 INVALID_BOOTSTRAP_ROLE`）；默认关闭公开自注册（`403 SELF_REGISTER_DISABLED`）；开启时强制降权 `developer` 并禁止特权角色与自定义 scope |
+| `POST /v1/auth/login` | 公开免密 | 校验等保口令与防爆破锁定；成功下发会话 Bearer Token（默认 24h，内存态不落盘）；用户不存在、口令错误、**账号已冻结但口令错误**统一 `401` 且信封逐字段一致，抑制账号枚举；冻结状态只在口令校验通过后才披露（`403 ACCOUNT_DISABLED`）；口令超过 `MaxPasswordAge` 时响应 `data.password_expired=true` 并打 WARN 审计（提示改密，不阻断登录） |
+| `POST /v1/auth/users/register` | 公开（**仅引导期首个 admin**，或显式开启自注册）/ `user:admin` | 用户库为空时允许创建首个管理员（角色必须为 `admin`，否则 `400 INVALID_BOOTSTRAP_ROLE`）；**不接受调用方自定义 scope**，否则 `400 INVALID_BOOTSTRAP_SCOPES`；引导判定与建号在同一把写锁内完成（并发竞争者恰有一个 200，其余 `409 BOOTSTRAP_CLOSED`）；无身份上下文（认证中间件未生效）的调用者不得进入管理员开户通道，一律 `403`；默认关闭公开自注册（`403 SELF_REGISTER_DISABLED`）；开启时强制降权 `developer` 并禁止特权角色与自定义 scope；**每 IP 独立限速**（键前缀 `register:`，与登录端点分别计数），超限 `429` + `Retry-After` 且不建号 |
 | `POST /v1/auth/logout` | 已认证 | 吊销当前会话 Token，同一 Token 后续请求立即 `401`；长期 API Key 不适用（`404 SESSION_NOT_FOUND`） |
-| `POST /v1/auth/change-password` | 本人或 `user:admin` | 校验旧口令 + 新口令等保复杂度 + 口令历史禁重用（最近 3 个）；成功后**强制吊销该用户全部会话** |
+| `POST /v1/auth/change-password` | 本人或 `user:admin` | 校验旧口令 + 新口令等保复杂度 + 口令历史禁重用（最近 3 个）；成功后**强制吊销该用户全部会话**；bcrypt 校验与派生均在锁外执行，故写入前在**同一把写锁内复核口令哈希未被并发修改**，陈旧写入者得 `409 PASSWORD_CHANGED_CONCURRENTLY`（防止丢失更新覆盖已提交口令） |
 | `GET /v1/auth/users` | `user:read` 或 `user:admin` | 输出脱敏摘要（抹除口令哈希与 Token 材料） |
 | `GET /v1/auth/users/:username` | 本人或 `user:read` / `user:admin` | 用户档案 + 名下 API Key 概要 |
-| `PUT /v1/auth/users/:username/permissions` | `user:admin` | 更新角色与自定义 scope；名下所有活密钥权限**毫秒级联动刷新** |
+| `PUT /v1/auth/users/:username/permissions` | `user:admin` | 更新角色与自定义 scope；与注册路径**共用同一角色/scope 一致性口径**（`validateRoleScopeConsistency`），非特权角色不得被授予管理类 scope（`403 FORBIDDEN_SCOPE`）且无副作用；名下所有活密钥权限**毫秒级联动刷新** |
 | `PUT /v1/auth/users/:username/status` | `user:admin` | `disabled` 时名下全部 Key 与会话立即失效（拦截器 `401`）；`active` 解冻后自动恢复 |
 | `DELETE /v1/auth/users/:username` | `user:admin` | 删除账号，所有活跃 Token 从活密钥池注销 |
 | `POST /v1/auth/users/:username/keys` | 本人或 `user:admin` | 生成 `psk_<32hex>` 随机 Token，**明文仅本次响应下发一次**，服务端只存 SHA-256 摘要；即刻载入活密钥表 |
@@ -295,19 +295,25 @@ Scope 鉴权采用「集中式 `path → permission` 映射」（本服务的 `p
 
 | 控制项 | 取值 | 等保/密评对应 | 说明 |
 |---|---|---|---|
-| 口令存储 | `bcrypt cost=12` 加盐杂凑 | G-04 | 明文严禁落盘或进日志；bcrypt 计算在写锁外执行，避免阻塞并发认证 |
+| 口令存储 | `bcrypt cost=12` 加盐杂凑 | G-04 | 明文严禁落盘或进日志；bcrypt 计算（校验与派生）均在写锁外执行，避免阻塞并发认证，并因此引入锁内哈希复核（见下表“口令历史”） |
 | 口令长度 | `8 ~ 72` 字节 | G-04 | 上限 72 是 bcrypt 硬限制：超出部分被**静默截断**会使两个不同口令等价，故显式拒绝（`ErrPasswordTooLong`） |
 | 字符类别 | 大写/小写/数字/特殊字符 **至少 3 类** | G-04 | 不足返回 `ErrPasswordWeak` |
 | 禁止包含用户名 | 含**逆序**同样拒绝 | G-04 | 返回独立哨兵错误 `ErrPasswordContainsName`，便于客户端给出可操作提示 |
 | 弱口令字典 | 18 项常见弱口令前缀/全等拦截 | G-04 | `ErrPasswordBlacklisted` |
-| 口令历史 | 最近 **3** 个不得重用；新旧不得相同 | G-04 | `ErrPasswordReused` / `ErrPasswordSame` |
+| 口令历史 | 最近 **3** 个不得重用；新旧不得相同 | G-04 | `ErrPasswordReused` / `ErrPasswordSame`；写入前在写锁内复核哈希快照，并发陈旧写入者得 `ErrPasswordChangedConcurrently` → `409` |
+| 口令有效期 | **90** 天（`MaxPasswordAge`） | G-04 | 超期登录仍放行但响应 `data.password_expired=true` 并打 WARN 审计（避免到期日全员锁定造成可用性事故）；`PasswordUpdatedAt` 缺失视为未过期 |
 | 连续失败锁定 | **5** 次失败 → 锁定 **15** 分钟 | G-03 | 登录成功自动清零；锁定期内即使口令正确也返回 `429 ACCOUNT_LOCKED` 并携带 `Retry-After` |
-| 登录限速 | 每 IP 每分钟 **20** 次（8 分片固定窗口） | G-03 / 抗 DoS | 超限 `429 RATE_LIMITED` + `Retry-After`；缓解口令喷洒与“故意锁死管理员” |
+| 登录限速 | 每 IP 每分钟 **20** 次（8 分片固定窗口，键前缀 `login:`） | G-03 / 抗 DoS | 超限 `429 RATE_LIMITED` + `Retry-After`；缓解口令喷洒与“故意锁死管理员” |
+| 注册限速 | 复用同一限速器，键前缀 `register:` **独立计数** | G-03 / 抗 DoS | 公开注册每次都要跑一遍 bcrypt(cost=12)，不限速即**未认证 CPU 耗尽放大器**；两端点互不牵连（注册配额打满不得连带阻断登录） |
 | 会话有效期 | 默认 = 上限 **24h** | G-14 | 请求更长 TTL 自动收敛到上限；会话为**内存态**，重启即失效（不持久化凭证） |
 | 并发会话配额 | 每用户 **8** 个 | G-14 | 超出淘汰最早会话 |
 | API Key 有效期 | 默认 **30 天**，上限 **90 天** | G-14 | `ttl_seconds=0` 归一化为 30 天而非“永不过期”；负值/超限 `400 INVALID_TTL` |
 | API Key 配额 | 每用户 **32** 个活跃 Key | 抗 DoS | 认证为 O(n) 常量时间比对，须防止密钥表无界膨胀 |
+| 凭证库文件上限 | **32 MiB**（`maxUserStoreFileSize`） | 抗 DoS | 加载前 `os.Stat` 体检，超限直接拒启（防止超大/被注入文件在启动期耗尽内存） |
+| 凭证库权限位 | 目录 `0700` / 文件 `0600` | G-04 / G-14 | 加载时检查组/其他位，被放开则 WARN 并立即收敛为 `0600`（best-effort，不阻断启动） |
+| 过期密钥清理 | 加载期就地剔除并回写 | G-14 | `TokenHash` 为空或 `IsExpired()` 的 API Key 不再进入活密钥索引，且不残留于磁盘 |
 | 特权操作审计 | 全量结构化 `auth_audit` 日志 | G-07 | 记录 `actor`/`target_user`/`result`/`reason`/`client_ip`/`trace_id`；严禁记录口令与明文 Token |
+| 500 响应口径 | 统一 `internalError`：对外只回 `INTERNAL_ERROR` + 泛化文案 | G-11 | 内部错误细节（文件路径、OS 错误码、SQL/目录结构）**只落服务端日志**（事件名 `auth_internal_error`），不随响应体外泄 |
 
 #### 3.3.5 运行时零重启动态生效（双通道活密钥）
 
@@ -321,8 +327,9 @@ Scope 鉴权采用「集中式 `path → permission` 映射」（本服务的 `p
 - **版本驱动聚合器**（`pkg/auth/live_keys.go::Aggregator`）：静态密钥与热轮转密钥合并后的快照仅在任一来源版本号变化时重建，其余请求零分配复用同一份**只读共享快照**；重建时对配置源做深拷贝，快照与来源内部状态无指针别名。
 - **毫秒级联动**：权限调整、冻结/解冻、Key 签发/吊销、改密、注销都会 `bump` 版本号，下一次认证即读到新状态，无需重启进程。
 - **REST 与 gRPC 凭证视图对称**：`main.go` 在构造 `handlers.Server` 后调用 `grpcserver.SetLiveAuthProviders(server.LiveAuthKeys(), server.LiveHashedAuthKeys())`，确保登录会话与动态密钥在两条协议路径上同时生效（否则会出现“REST 可登录、gRPC 一律 Unauthenticated”的双路径不对称）。
-- **鉴权模式运行期动态判定**：存在静态/热轮转 Scope Key → Scope 细粒度鉴权；未配置遗留单 `SERVICE_HUB_API_KEY` 且用户体系已开户 → 同样走 Scope 鉴权（纯动态开户部署在引导期创建首个 admin 后自动从开发免密透传收敛为强制鉴权）；其余情形 → 遗留单 Key 模式，保持向后兼容。
-- **持久化保障**：`UserStore` 采用临时文件写入 + `os.Rename` 原子替换，目录 `0700`、文件 `0600`；服务重启后账号、口令哈希与**有效 API Key 摘要**自动无损恢复（会话 Token 因内存态而失效，需重新登录）。
+- **鉴权模式运行期动态判定**：存在静态/热轮转 Scope Key **或用户体系已开户**（`userStore.Count() > 0`）→ Scope 细粒度鉴权（纯动态开户部署在引导期创建首个 admin 后自动从开发免密透传收敛为强制鉴权）；其余情形 → 遗留单 Key 模式，保持向后兼容。
+  > **安全要点（不得回退）**：判定条件**不包含**「`SERVICE_HUB_API_KEY` 是否非空」。若把「遗留单 Key 非空」当作退回遗留模式的条件，则已开户的用户体系（动态密钥、登录会话、失败锁定、冻结/注销、ABAC 数据源授权）会被**永久整体旁路**——任何仅持有遗留单 Key 的调用者都能绕过用户级最小权限访问全部管理面。正确做法是让两者**共存**：走 Scope 鉴权，同时在 `scopeHandler` 内以 `subtle.ConstantTimeCompare` 接受遗留单 Key 并映射为 `legacy-api-key` + `"*"` 的**内部身份**（语义与遗留模式一致），避免历史部署在首次开户瞬间全量 `401`；迁移完成后运维应清空 `SERVICE_HUB_API_KEY`。
+- **持久化保障**：`UserStore` 采用临时文件写入 + `os.Rename` 原子替换，并在 rename 后对**父目录 fsync**（否则掉电可能只留下目录项而未落盘 inode，重启后凭证库回退到旧版本），目录 `0700`、文件 `0600`；服务重启后账号、口令哈希与**有效 API Key 摘要**自动无损恢复（会话 Token 因内存态而失效，需重新登录）。
 
 #### 3.3.6 用户体系环境变量
 
@@ -334,6 +341,25 @@ Scope 鉴权采用「集中式 `path → permission` 映射」（本服务的 `p
 | `SERVICE_HUB_USER_LOGIN_THROTTLE_PER_MIN` | `20` | 登录端点每 IP 每分钟最大尝试次数，`<=0` 关闭该层限速 |
 
 > 变量名以 [`pkg/auth/user_handlers.go::userPolicyEnvTable`](../../../pkg/auth/user_handlers.go) 为唯一事实源（privacy-engine 侧前缀为 `AGENT_AUTH_`），编排清单与本表须保持一致，否则会被 `scripts/check_orchestration_env_consistency.sh` 门禁判定为幽灵变量。
+
+#### 3.3.7 引导期与反枚举加固（安全审计回合）
+
+下表汇总一轮专项安全审计发现并收敛的风险，逐项已由 [`pkg/auth/security_hardening_test.go`](../../../pkg/auth/security_hardening_test.go) 与 [`handlers_test.go`](../internal/handlers/handlers_test.go) 回归锁定：
+
+| 风险 | 攻击路径 | 收敛措施 |
+|---|---|---|
+| 引导期 TOCTOU | 用户库尚为空时并发打 `/v1/auth/users/register`，多个请求同时读到“空库”并各自建号 | 引导判定与建号合并到 `RegisterBootstrapAdmin` 的**同一把写锁**内，恰有一个胜出，其余 `ErrBootstrapClosed` → `409 BOOTSTRAP_CLOSED` |
+| 匿名自封管理员 | 认证中间件未生效（`GetIdentity` 为 nil）时走管理员开户通道，自带 `role=admin` + `scopes:["*"]` | 无身份上下文一律不得进入管理员通道（`403`）；引导期**拒绝自定义 scope**（`400 INVALID_BOOTSTRAP_SCOPES`），权限只能来自 `admin` 角色预置 |
+| 账号状态枚举 | 冻结账号 + 任意错误口令即返回 `ACCOUNT_DISABLED`，无需掌握口令即可测绘“存在且被冻结”的账号 | 冻结判定下沉到口令校验**之后**；未掌握口令者得到的 `401` 与“账号不存在”**信封逐字段一致** |
+| 注册端点 CPU 放大 | 未认证调用者洪泛公开注册，每请求强制服务端跑一次 bcrypt(cost=12) | 注册端点接入每 IP 限速（键前缀 `register:` 与登录分开计数），超限 `429` + `Retry-After` 且不建号 |
+| 角色/scope 矩阵被破坏 | 经改权路径给 `guest`/`developer` 挂上 `*`、`admin`、`user:admin` 等管理类 scope | `UpdatePermissions` 与注册路径共用 `validateRoleScopeConsistency`，非法组合 `403 FORBIDDEN_SCOPE` 且**无任何副作用** |
+| 改密丢失更新 | 两个并发改密请求均在锁外校验同一份旧哈希，后提交者默默覆盖前者 | 写入前在写锁内复核哈希快照，陈旧写入者 `409 PASSWORD_CHANGED_CONCURRENTLY` |
+| 凭证库脏数据/暂存风险 | 无体积上限、权限位被放开、过期密钥长期驻留、掉电后回退旧版本 | 32 MiB 上限拒启 + 加载期收敛 `0600` + 过期密钥就地清理回写 + 父目录 fsync |
+| 密钥热轮转崩溃 | `ChannelSecretWatcher.Close` 关闭事件通道，与 `Push` 并发时 send on closed channel **直接 panic 拖垮进程** | `Close` 只关 `stopCh`、不关事件通道；幂等（重复调用返回 nil），`Push` 关闭后返回 error；channel 交由 GC 回收 |
+| 遗留单 Key 旁路用户体系 | `SERVICE_HUB_API_KEY` 非空时被当作退回遗留模式的条件，开户后整个用户体系被永久旁路 | 模式判定只看“Scope Key 存在 **或** 用户库非空”；遗留单 Key 在 Scope 通道内以常量时间比对被接受并映射为 `legacy-api-key` 内部身份 |
+| 公开身份共用令牌桶 | 身份级限流键只含 `serviceType:name:path`，所有匿名/公开调用者共用同一桶（单 IP 洪泛可拖垮全部公开端点） | 匿名与 `public` 身份追加分片因子 `RealClientIP`（等保三级 G-02 源地址维度限流），引擎侧 `internal/security/auth.go` 同口径 |
+
+> **引导期定义**：仅指 `UserStore.Count() == 0`（用户库完全为空）的瞬间。一旦首个账号落库，窗口即永久关闭，后续开户只能由持 `user:admin` 的管理员经认证通道完成，或在显式开启 `SERVICE_HUB_USER_SELF_REGISTER=true` 时降权为 `developer` 自注册。
 
 ---
 
@@ -348,7 +374,7 @@ Scope 鉴权采用「集中式 `path → permission` 映射」（本服务的 `p
 | | **通信双方双向身份鉴别** | 生产模式强制 `SERVICE_HUB_TLS_CLIENT_AUTH=require`，配合客户端 CA 校验与 mTLS CN 白名单（`PRIVACY_AUTH_MTLS_WHITELIST_FILE`）双向核验身份。 | **完全满足** |
 | **安全区域边界** | **边界访问控制** | 调度中枢作为单一暴露点（P0-2），默认拒绝未登记路由（Fail-closed 兜底返回 404/403）；内部组件通过独立端口与私网逻辑隔离。 | **完全满足** |
 | | **访问控制粒度** | 基于 `pkg/auth` 实现用户/服务身份识别，粒度达到接口级（Scope）与数据源级（ABAC 细粒度数据源白名单）。 | **完全满足** |
-| | **抗拒绝服务与速率限制** | 边缘限流默认全开：IP 级令牌桶（默认 100 RPS，突发 200）+ 鉴权后身份级细粒度限流（默认 50 RPS / 100 Burst，key = 身份 + 归一化路径，匿名回退 IP，32 分片并发安全；`/health`、`/readyz`、`/metrics` 探针豁免）；并发调度信号量控制（`taskSem` 最大并发 10 个重量级任务）。 | **完全满足** |
+| | **抗拒绝服务与速率限制** | 边缘限流默认全开：IP 级令牌桶（默认 100 RPS，突发 200）+ 鉴权后身份级细粒度限流（默认 50 RPS / 100 Burst，key = 身份 + 归一化路径，匿名与 `public` 身份追加客户端 IP 作为分片因子，32 分片并发安全；`/health`、`/readyz`、`/metrics` 探针豁免）；并发调度信号量控制（`taskSem` 最大并发 10 个重量级任务）。 | **完全满足** |
 | **安全计算环境** | **身份鉴别** | API Key 采用常量时间查找（`ConstantTimeLookupKeys`）防时序攻击；支持 KeyStore 动态多版本轮换（G-14 支持失效时间自动失效）。 | **完全满足** |
 | | **自主/强制访问控制** | 严格执行最小权限原则；外部数据申请方仅限调度脱敏数据，无底层数据源探查或直接调用脱敏算子的权限。 | **完全满足** |
 | | **安全审计覆盖面** | 调度全链路日志结构化输出（`log/slog` 带 `trace_id` 与 `task_id`）；任务出域与完成必须生成链式审计存证并记录入站/出站指纹。 | **完全满足** |
@@ -406,7 +432,7 @@ Scope 鉴权采用「集中式 `path → permission` 映射」（本服务的 `p
 | **T (Tampering) 数据篡改** | 传输过程中篡改查询身份证号或篡改脱敏结果 | 传输层全链路 TLS 1.3 / TLCP 密文传输；存证层记录输入/输出 SM3 哈希链，事后验真防篡改。 |
 | **R (Repudiation) 抵赖** | 申请方调用接口获取数据后否认发生过调用 | P0-6 强约束：出域必须同步向独立存证节点写入留痕，包含操作时间、租户身份与出域数据指纹，无法抵赖。 |
 | **I (Information Disclosure) 信息泄露** | 外部申请方试图获取原始明文数据库切片 | **原始数据不出域原则**：中枢响应结构彻底剔除 `raw_record` 字段，原始明文在内部脱敏后立即析构，不提供外泄通道。 |
-| **D (Denial of Service) 拒绝服务** | 恶意高频并发打垮调度中枢与底层脱敏引擎 | 32 分片并发安全令牌桶限流（边缘默认全开：IP 级 100 RPS / 200 Burst + 身份级 50 RPS / 100 Burst，探针端点豁免）；`taskSem` 并发信号量限流（最多 10 并发重任务）；超时熔断保护。 |
+| **D (Denial of Service) 拒绝服务** | 恶意高频并发打垮调度中枢与底层脱敏引擎 | 32 分片并发安全令牌桶限流（边缘默认全开：IP 级 100 RPS / 200 Burst + 身份级 50 RPS / 100 Burst，匿名/公开身份按客户端 IP 再分片、探针端点豁免）；公开注册/登录端点每 IP 限速（bcrypt CPU 放大防护）；`taskSem` 并发信号量限流（最多 10 并发重任务）；超时熔断保护。 |
 | **E (Elevation of Privilege) 权限越权** | 外部申请方尝试调用未授权的敏感数据源 (如跨源查社保/税务) | **Tier 4 数据源租户授权检查（ABAC）**：比对 Token 的 Scopes 是否含有指定数据源授权，越权立即抛出 403 阻断。 |
 
 ---
@@ -417,7 +443,7 @@ Scope 鉴权采用「集中式 `path → permission` 映射」（本服务的 `p
 
 - [ ] **网络层隔离**：已确认 `privacy-engine:8079` 和 `mock-datasource:8083` 未对外部网络做公网映射，且防火墙仅放行 `8082`；
 - [ ] **生产零信任门禁**：配置 `SERVICE_HUB_REQUIRE_TLS=true`，确保未配 TLS 时服务拒绝启动；
-- [ ] **强鉴权开启**：`SERVICE_HUB_API_KEY` 或 `SERVICE_HUB_API_KEYS` 非空，禁止免密生产运行；
+- [ ] **强鉴权开启**：`SERVICE_HUB_API_KEY` 或 `SERVICE_HUB_API_KEYS` 非空，禁止免密生产运行；若已启用用户体系（`SERVICE_HUB_USER_STORE_FILE` 非空且已开户），应在迁移完成后**清空 `SERVICE_HUB_API_KEY`**，避免遗留单 Key 长期以 `"*"` 全权限共存；
 - [ ] **用户体系安全基线**：`SERVICE_HUB_USER_SELF_REGISTER` 保持 `false`（或经安全审批后显式开启）；首个 `admin` 已由运维当面创建并立即改密；`SERVICE_HUB_USER_STORE_FILE` 指向持久化卷（目录 `0700`/文件 `0600`，只存摘要与口令哈希）；
 - [ ] **凭证视图对称**：已确认 REST 与 gRPC 共享同一活密钥视图（`grpcserver.SetLiveAuthProviders` 已接线），登录会话与动态密钥在两条协议路径上同时生效；
 - [ ] **外部申请方最小权限**：外部申请方（如 `app-lz`）签发的 API Key 仅配置特定的 `hub:dispatch:<ds_name>` 权限，未授予 `*` 或内部 Scope；

@@ -1102,6 +1102,86 @@ func TestScopeAuthMiddleware_PublicAuthPaths(t *testing.T) {
 	}
 }
 
+// TestScopeAuthMiddleware_LegacySingleKeyCoexistsWithUserStore 回归验证（F-8）：
+// 遗留单 Key（SERVICE_HUB_API_KEY）非空时，用户体系一旦开户就必须进入 Scope 鉴权，
+// 不得被整体旁路；同时遗留单 Key 仍被接受，避免历史部署在首次开户后全量 401。
+func TestScopeAuthMiddleware_LegacySingleKeyCoexistsWithUserStore(t *testing.T) {
+	cfg := &config.Config{
+		Host:          "127.0.0.1",
+		Port:          0,
+		AgentRESTHost: "127.0.0.1",
+		AgentRESTPort: 19999,
+		// 只配遗留单 Key，刻意不配 ScopeKeys：把判定条件逼到「用户体系是否已开户」这一支
+		APIKey: "legacy-single-key",
+	}
+	d := newTestDeps()
+	ag, err := agent.New(cfg, d.mc)
+	if err != nil {
+		t.Fatalf("new agent client: %v", err)
+	}
+	ds := datasource.New(cfg)
+	s := New(ag, ds, cfg, nil, d.tasks, d.logger, d.mc)
+	defer s.Shutdown()
+
+	r := gin.New()
+	s.RegisterRoutes(r)
+
+	do := func(method, path, token, body string) *httptest.ResponseRecorder {
+		req, _ := http.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+
+	// ① 用户库为空：仍为遗留单 Key 模式（向后兼容）
+	if w := do("GET", "/v1/hub/status", "legacy-single-key", ""); w.Code != http.StatusOK {
+		t.Fatalf("legacy single key must work before any account exists, got %d: %s", w.Code, w.Body.String())
+	}
+	if w := do("GET", "/v1/hub/status", "", ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without credentials, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// ② 用户体系开户：必须切换到 Scope 鉴权，用户级最小权限开始生效
+	if _, err := s.userStore.RegisterBootstrapAdmin("hubroot", "HubR00t#2026!", "Hub Root"); err != nil {
+		t.Fatalf("bootstrap admin failed: %v", err)
+	}
+	if _, err := s.userStore.Register("hubreader", "Str0ng#Reader2026!", "Hub Reader", "guest", []string{"hub:read"}); err != nil {
+		t.Fatalf("register reader failed: %v", err)
+	}
+
+	// 遗留单 Key 继续被接受（可用性不回归）
+	if w := do("GET", "/v1/hub/status", "legacy-single-key", ""); w.Code != http.StatusOK {
+		t.Fatalf("legacy single key must stay accepted after bootstrap, got %d: %s", w.Code, w.Body.String())
+	}
+	// 非法与缺失凭证一律 401：不得因遗留 Key 存在而放开鉴权
+	if w := do("GET", "/v1/hub/status", "not-the-legacy-key", ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for an unknown token, got %d: %s", w.Code, w.Body.String())
+	}
+	if w := do("GET", "/v1/hub/status", "", ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for a missing token, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// ③ 用户会话参与鉴权，且严格遵守自身 scope（用户体系未被旁路的核心断言）
+	session, _, err := s.userStore.CreateSession("hubreader", time.Hour)
+	if err != nil {
+		t.Fatalf("create reader session failed: %v", err)
+	}
+	if w := do("GET", "/v1/hub/status", session, ""); w.Code != http.StatusOK {
+		t.Fatalf("reader session must access hub:read paths, got %d: %s", w.Code, w.Body.String())
+	}
+	if w := do("POST", "/v1/hub/dispatch", session, `{"api_code":"api1_yibao","payload":{"records":[{"name":"test"}]}}`); w.Code != http.StatusForbidden {
+		t.Fatalf("reader session must not dispatch, got %d: %s", w.Code, w.Body.String())
+	}
+	// 非特权会话不得访问用户管理面（若用户体系被遗留 Key 旁路，这里会退化为 200）
+	if w := do("GET", "/v1/auth/users", session, ""); w.Code != http.StatusForbidden {
+		t.Fatalf("reader session must not enumerate users, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 // TestServer_ShutdownGraceful tests graceful shutdown execution without panic.
 // TestServer_ShutdownGraceful 测试优雅停机方法能平滑执行完毕。
 func TestServer_ShutdownGraceful(t *testing.T) {

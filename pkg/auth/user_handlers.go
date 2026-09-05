@@ -204,6 +204,9 @@ type loginResponse struct {
 	TokenType string      `json:"token_type"`
 	ExpiresAt time.Time   `json:"expires_at"`
 	User      UserSummary `json:"user"`
+	// PasswordExpired 标记口令已超过 MaxPasswordAge（等保三级 G-04 定期更换）。
+	// 仅标记不阻断登录（避免唯一管理员被锁死），供前端引导改密与合规巡检取证。
+	PasswordExpired bool `json:"password_expired"`
 }
 
 type registerRequest struct {
@@ -307,13 +310,43 @@ func (a *userAPI) respondError(c *gin.Context, status int, code, message string,
 	abortWithError(c, status, code, message, detail)
 }
 
+// logger 返回审计日志输出器（未配置时回退 slog.Default，避免直接构造 userAPI 时空指针）。
+func (a *userAPI) logger() *slog.Logger {
+	if a == nil || a.cfg == nil || a.cfg.Logger == nil {
+		return slog.Default()
+	}
+	return a.cfg.Logger
+}
+
+// internalError 输出统一的服务端错误响应：对外**仅暴露泛化文案**（搭配 trace_id 供排障），
+// 具体错误细节（文件路径、OS 错误码、内部状态）只写服务端日志。
+//
+// 动机：直接把 err.Error() 回给客户端会把部署拓扑与文件系统布局泄露给未信任调用者
+// （例如 "mkdir /var/lib/privshield: permission denied"），为后续攻击提供情报；
+// 等保三级 G-11 要求最小化对外信息暴露。
+func (a *userAPI) internalError(c *gin.Context, event, target, publicMessage string, err error) {
+	logger := a.logger()
+	reason := ""
+	if err != nil {
+		reason = err.Error()
+	}
+	logger.Error("auth_internal_error",
+		"event", event,
+		"actor", callerLabel(GetIdentity(c)),
+		"target_user", target,
+		"error", reason,
+		"method", c.Request.Method,
+		"path", c.Request.URL.Path,
+		"client_ip", c.ClientIP(),
+		"trace_id", pkgobs.GetTraceID(c),
+	)
+	a.respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", publicMessage, nil)
+}
+
 // audit 输出结构化审计日志（等保三级 G-07：管理操作可追溯）。
 // 严禁记录口令、明文 Token；密钥仅记录脱敏前缀。
 func (a *userAPI) audit(c *gin.Context, event, target, result, reason string, extra ...any) {
-	logger := a.cfg.Logger
-	if logger == nil {
-		logger = slog.Default()
-	}
+	logger := a.logger()
 	args := make([]any, 0, len(extra)+16)
 	args = append(args,
 		"event", event,
@@ -410,7 +443,9 @@ type userAPI struct {
 // handleLogin 处理账号密码认证登录，签发内存态会话 Token（默认 24h，不落盘）。
 func (a *userAPI) handleLogin(c *gin.Context) {
 	ip := c.ClientIP()
-	if ok, retryAfter := a.throttle.allow(ip, a.cfg.LoginThrottlePerWindow, LoginThrottleWindow); !ok {
+	// 限速键带端点前缀，使登录与注册共用实现但**各自独立计数**（否则一个洪水端点会
+	// 误伤另一个端点的正常调用者）。
+	if ok, retryAfter := a.throttle.allow("login:"+ip, a.cfg.LoginThrottlePerWindow, LoginThrottleWindow); !ok {
 		seconds := int(retryAfter.Seconds()) + 1
 		c.Header("Retry-After", strconv.Itoa(seconds))
 		a.respondError(c, http.StatusTooManyRequests, "RATE_LIMITED", "too many login attempts from this client, slow down", nil)
@@ -448,16 +483,32 @@ func (a *userAPI) handleLogin(c *gin.Context) {
 
 	token, expiresAt, err := a.store.CreateSession(user.Username, a.cfg.SessionTTL)
 	if err != nil {
-		a.respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to create session", err.Error())
+		a.internalError(c, "login", user.Username, "failed to create session", err)
 		return
 	}
 
-	a.audit(c, "login", user.Username, "success", "", "session_expires_at", expiresAt.Format(time.RFC3339))
+	passwordExpired := user.PasswordExpired()
+	if passwordExpired {
+		// 等保三级 G-04：口令超期必须可发现、可追溯（不阻断登录，由巡检驱动闭环改密）。
+		a.logger().Warn("auth_audit: password exceeded maximum age",
+			"event", "password_expired",
+			"target_user", user.Username,
+			"password_updated_at", user.PasswordUpdatedAt.Format(time.RFC3339),
+			"max_password_age_days", int(MaxPasswordAge/(24*time.Hour)),
+			"client_ip", ip,
+			"trace_id", pkgobs.GetTraceID(c),
+		)
+	}
+
+	a.audit(c, "login", user.Username, "success", "",
+		"session_expires_at", expiresAt.Format(time.RFC3339),
+		"password_expired", passwordExpired)
 	a.respondSuccess(c, "login succeeded", loginResponse{
-		Token:     token,
-		TokenType: "Bearer",
-		ExpiresAt: expiresAt,
-		User:      user.ToSummary(),
+		Token:           token,
+		TokenType:       "Bearer",
+		ExpiresAt:       expiresAt,
+		User:            user.ToSummary(),
+		PasswordExpired: passwordExpired,
 	})
 }
 
@@ -480,7 +531,23 @@ func (a *userAPI) handleLogout(c *gin.Context) {
 }
 
 // handleRegister 处理新用户自主注册（引导期/开关开启）或管理员开户。
+//
+// 引导期（用户库为空）是唯一的**免认证开户窗口**，因此受三重收敛：
+//  1. 每 IP 限速：公开注册每次都跑一遍 bcrypt(cost=12)，不限速即未认证 CPU 耗尽放大器；
+//  2. 「库为空」判定与写入由 UserStore.RegisterBootstrapAdmin 在同一把锁内原子完成，
+//     杜绝并发双引导产生多个自封管理员（TOCTOU）；引导期忽略自定义 scope；
+//  3. 匿名调用者（无身份上下文：认证中间件未生效或遗留免密透传）**不得**走管理员
+//     开户通道，否则未认证请求可自封 admin 并授予 "*" 等任意 scope。
 func (a *userAPI) handleRegister(c *gin.Context) {
+	ip := c.ClientIP()
+	if ok, retryAfter := a.throttle.allow("register:"+ip, a.cfg.LoginThrottlePerWindow, LoginThrottleWindow); !ok {
+		seconds := int(retryAfter.Seconds()) + 1
+		c.Header("Retry-After", strconv.Itoa(seconds))
+		a.respondError(c, http.StatusTooManyRequests, "RATE_LIMITED", "too many registration attempts from this client, slow down", nil)
+		a.audit(c, "register", "", "denied", "ip_throttled", "client_ip", ip, "retry_after_seconds", seconds)
+		return
+	}
+
 	var req registerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		a.respondError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "invalid register payload", err.Error())
@@ -488,8 +555,10 @@ func (a *userAPI) handleRegister(c *gin.Context) {
 	}
 
 	caller := GetIdentity(c)
-	isAdmin := isCallerAdmin(caller)
-	bootstrap := a.store.Count() == 0
+	// 管理员开户必须具备**真实身份上下文**：nil 身份意味着认证中间件未生效（或遗留免密透传），
+	// 此时授予「任意角色 + 自定义 scope」等于把最高权限白送给未认证调用者。
+	isAdmin := caller != nil && isCallerAdmin(caller)
+	bootstrap := !isAdmin && a.store.Count() == 0
 	username := NormalizeUsername(req.Username)
 
 	switch {
@@ -501,6 +570,14 @@ func (a *userAPI) handleRegister(c *gin.Context) {
 			a.respondError(c, http.StatusBadRequest, "INVALID_BOOTSTRAP_ROLE",
 				"the first account must be created with role 'admin'", nil)
 			a.audit(c, "register", username, "denied", "bootstrap_role_not_admin", "role", req.Role)
+			return
+		}
+		// 引导期忽略自定义 scope：未认证调用者不得借引导通道给自己组装任意权限，
+		// 首个管理员一律使用 admin 角色的预置权限。
+		if len(req.Scopes) > 0 {
+			a.respondError(c, http.StatusBadRequest, "INVALID_BOOTSTRAP_SCOPES",
+				"custom scopes are not accepted while bootstrapping the first administrator", nil)
+			a.audit(c, "register", username, "denied", "bootstrap_custom_scopes")
 			return
 		}
 		req.Role = "admin"
@@ -525,7 +602,22 @@ func (a *userAPI) handleRegister(c *gin.Context) {
 		return
 	}
 
-	user, err := a.store.Register(req.Username, req.Password, req.DisplayName, req.Role, req.Scopes)
+	var (
+		user *User
+		err  error
+	)
+	if bootstrap {
+		// 原子引导：判定与写入同锁，并发竞争失败者得到 409（绝不静默降级为管理员开户）。
+		user, err = a.store.RegisterBootstrapAdmin(req.Username, req.Password, req.DisplayName)
+		if errors.Is(err, ErrBootstrapClosed) {
+			a.respondError(c, http.StatusConflict, "BOOTSTRAP_CLOSED",
+				"the first administrator has already been created; ask an administrator to provision this account", nil)
+			a.audit(c, "register", username, "denied", "bootstrap_race_closed")
+			return
+		}
+	} else {
+		user, err = a.store.Register(req.Username, req.Password, req.DisplayName, req.Role, req.Scopes)
+	}
 	if err != nil {
 		a.respondRegisterError(c, username, err)
 		return
@@ -556,7 +648,7 @@ func (a *userAPI) respondRegisterError(c *gin.Context, username string, err erro
 		a.respondError(c, http.StatusForbidden, "FORBIDDEN_SCOPE", err.Error(), nil)
 		a.audit(c, "register", username, "denied", "forbidden_scope")
 	default:
-		a.respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error(), nil)
+		a.internalError(c, "register", username, "failed to register user", err)
 	}
 }
 
@@ -616,7 +708,7 @@ func (a *userAPI) handleUpdatePermissions(c *gin.Context) {
 
 	user, err := a.store.GetUser(username)
 	if err != nil {
-		a.respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "permissions updated but profile reload failed", err.Error())
+		a.internalError(c, "update_permissions", NormalizeUsername(username), "permissions updated but profile reload failed", err)
 		return
 	}
 	a.audit(c, "update_permissions", user.Username, "success", "", "role", user.Role, "scopes", user.Scopes)
@@ -655,7 +747,7 @@ func (a *userAPI) handleSetStatus(c *gin.Context) {
 
 	user, err := a.store.GetUser(username)
 	if err != nil {
-		a.respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "status updated but profile reload failed", err.Error())
+		a.internalError(c, "set_status", NormalizeUsername(username), "status updated but profile reload failed", err)
 		return
 	}
 	a.audit(c, "set_status", user.Username, "success", "", "status", string(user.Status), "reason", req.Reason)
@@ -741,7 +833,7 @@ func (a *userAPI) handleListKeys(c *gin.Context) {
 			a.respondError(c, http.StatusNotFound, "USER_NOT_FOUND", "user not found", nil)
 			return
 		}
-		a.respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error(), nil)
+		a.internalError(c, "list_keys", NormalizeUsername(username), "failed to list api keys", err)
 		return
 	}
 	a.respondSuccess(c, "api keys listed", keys)
@@ -797,8 +889,12 @@ func (a *userAPI) handleChangePassword(c *gin.Context) {
 			errors.Is(err, ErrPasswordContainsName), errors.Is(err, ErrPasswordBlacklisted),
 			errors.Is(err, ErrPasswordReused):
 			a.respondError(c, http.StatusBadRequest, "INVALID_PASSWORD", err.Error(), nil)
+		case errors.Is(err, ErrPasswordChangedConcurrently):
+			// 锁外 bcrypt 校验窗口内口令已被并发修改：本次校验结论失效，要求重试（避免丢失更新）。
+			a.respondError(c, http.StatusConflict, "PASSWORD_CHANGED_CONCURRENTLY", err.Error(), nil)
+			a.audit(c, "change_password", username, "denied", "concurrent_modification")
 		default:
-			a.respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error(), nil)
+			a.internalError(c, "change_password", username, "failed to change password", err)
 		}
 		return
 	}
@@ -837,6 +933,6 @@ func (a *userAPI) respondMutationError(c *gin.Context, event, username string, e
 	case errors.Is(err, ErrInvalidKeyName), errors.Is(err, ErrInvalidScope), errors.Is(err, ErrTooManyScopes):
 		a.respondError(c, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error(), nil)
 	default:
-		a.respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error(), nil)
+		a.internalError(c, event, NormalizeUsername(username), "request could not be completed", err)
 	}
 }

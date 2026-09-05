@@ -75,14 +75,18 @@ func (w *ChannelSecretWatcher) Push(event SecretEvent) error {
 	}
 }
 
-// Close 关闭 Watcher 通道并停止监听。
+// Close 关闭 Watcher，停止后续事件注入。
+//
+// 只关闭 stopCh、**不关闭事件通道本身**：Push 与 Close 并发时，向已关闭的 channel
+// 发送会直接 panic 并拖垮整个进程（密钥热轮转路径上的崩溃 = 可用性事故）。
+// close(stopCh) 已足以让 Push 的预检与消费者的 select 收敛退出，channel 由 GC 回收。
+// 幂等：重复调用返回 nil，不重复 close。
 func (w *ChannelSecretWatcher) Close() error {
 	select {
 	case <-w.stopCh:
 		return nil
 	default:
 		close(w.stopCh)
-		close(w.ch)
 		return nil
 	}
 }

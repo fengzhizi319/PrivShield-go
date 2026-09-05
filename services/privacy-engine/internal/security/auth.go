@@ -66,11 +66,13 @@ func RateLimitMiddleware() gin.HandlerFunc {
 			identity = &Identity{ServiceType: "external", Name: "anonymous"}
 		}
 
-		// 匿名调用者追加客户端 IP 作为分片因子，防止单 IP 洪泛攻击
+		// 匿名与公开身份（public-caller，即未携 Token 访问登录/注册等公开端点）调用者
+		// 追加客户端 IP 作为分片因子：既防止单 IP 洪泛，也避免所有公开调用者共用
+		// 同一令牌桶造成跨用户拒绝服务（等保三级 G-02 源地址维度限流）。
 		// 对 path 做前缀归一化，去除动态 ID 段，防止高基数路径导致桶爆炸
 		normalizedPath := pkgmiddleware.NormalizeRateLimitPath(path)
 		key := identity.ServiceType + ":" + identity.Name + ":" + normalizedPath
-		if identity.Name == "anonymous" {
+		if identity.Name == "anonymous" || identity.ServiceType == "public" {
 			clientIP := pkgmiddleware.RealClientIP(c)
 			if clientIP != "" {
 				key += ":" + clientIP
