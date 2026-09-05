@@ -340,3 +340,106 @@ func TestTyped_DPGroupBy(t *testing.T) {
 		t.Error("result_json should not be empty")
 	}
 }
+
+func TestTyped_DynEval(t *testing.T) {
+	ts := newTypedTestServer(t)
+	resp, err := ts.DynEval(context.Background(), &pb.DynEvalRequest{
+		FieldName: "phone",
+		Value:     "13800138000",
+		Domain:    "telecom",
+	})
+	if err != nil {
+		t.Fatalf("DynEval: %v", err)
+	}
+	if resp.GetField() != "phone" {
+		t.Errorf("field = %s, want phone", resp.GetField())
+	}
+	if resp.GetResultJson() == "" {
+		t.Error("result_json should not be empty")
+	}
+}
+
+func TestTyped_DynEvalRecord(t *testing.T) {
+	ts := newTypedTestServer(t)
+
+	// 1. Single record
+	resp, err := ts.DynEvalRecord(context.Background(), &pb.DynEvalRecordRequest{
+		Record: map[string]string{"name": "李四", "phone": "13800138000"},
+	})
+	if err != nil {
+		t.Fatalf("DynEvalRecord single: %v", err)
+	}
+	if resp.GetResultJson() == "" {
+		t.Error("result_json should not be empty")
+	}
+
+	// 2. Batch records
+	respBatch, err := ts.DynEvalRecord(context.Background(), &pb.DynEvalRecordRequest{
+		Records: []*pb.RecordEntry{
+			{Fields: map[string]string{"name": "张三", "phone": "13800138000"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DynEvalRecord batch: %v", err)
+	}
+	if respBatch.GetResultJson() == "" {
+		t.Error("result_json should not be empty")
+	}
+}
+
+func TestTyped_DynStandards(t *testing.T) {
+	ts := newTypedTestServer(t)
+	resp, err := ts.DynStandards(context.Background(), &pb.DynStandardsRequest{})
+	if err != nil {
+		t.Fatalf("DynStandards: %v", err)
+	}
+	if resp.GetDetailsJson() == "" {
+		t.Error("details_json should not be empty")
+	}
+}
+
+func TestTyped_DynDomains(t *testing.T) {
+	ts := newTypedTestServer(t)
+	resp, err := ts.DynDomains(context.Background(), &pb.DynDomainsRequest{})
+	if err != nil {
+		t.Fatalf("DynDomains: %v", err)
+	}
+	if len(resp.GetDomains()) == 0 {
+		t.Error("domains should not be empty")
+	}
+}
+
+func TestTyped_DynOperators(t *testing.T) {
+	ts := newTypedTestServer(t)
+	resp, err := ts.DynOperators(context.Background(), &pb.DynOperatorsRequest{})
+	if err != nil {
+		t.Fatalf("DynOperators: %v", err)
+	}
+	if len(resp.GetOperators()) == 0 {
+		t.Error("operators should not be empty")
+	}
+}
+
+func TestTyped_DynValidate(t *testing.T) {
+	ts := newTypedTestServer(t)
+	resp, err := ts.DynValidate(context.Background(), &pb.DynValidateRequest{})
+	if err != nil {
+		t.Fatalf("DynValidate: %v", err)
+	}
+	if !resp.GetIsValid() && len(resp.GetErrors()) == 0 && len(resp.GetWarnings()) == 0 {
+		t.Error("unexpected empty validate response")
+	}
+}
+
+func TestTyped_DynGenerateProfile(t *testing.T) {
+	ts := newTypedTestServer(t)
+	resp, err := ts.DynGenerateProfile(context.Background(), &pb.DynGenerateProfileRequest{
+		DocPath: "test.md",
+	})
+	if err != nil {
+		t.Fatalf("DynGenerateProfile: %v", err)
+	}
+	if resp.GetStatus() == "" {
+		t.Error("status should not be empty")
+	}
+}

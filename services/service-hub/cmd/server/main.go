@@ -202,6 +202,9 @@ func main() {
 	// 实例化 HTTP 处理器集合（任务分发调度、流水线查询、数据源代理等端点），
 	// 并构造 RESTServerRunner：Gin 引擎 + 中间件漏斗 + http.Server 超时 + TLS/mTLS 配置。
 	server := handlers.New(agentClient, dsClient, cfg, keyStore, taskStore, logger, mc)
+	// 将 REST 侧的活密钥视图（静态 ScopeKeys + KeyStore 热轮转 + UserStore 动态用户密钥/登录会话）
+	// 接线给 gRPC 拦截器，避免双路径凭证视图不对称（REST 登录可用、gRPC 一律 Unauthenticated）。
+	grpcserver.SetLiveAuthProviders(server.LiveAuthKeys(), server.LiveHashedAuthKeys())
 	restRunner, err := newRESTServerRunner(cfg, server, keyStore, logger)
 	if err != nil {
 		log.Fatalf("%v", err)

@@ -1018,6 +1018,90 @@ func TestScopeAuthMiddleware_AccessControl(t *testing.T) {
 	}
 }
 
+// TestScopeAuthMiddleware_PublicAuthPaths 回归验证：开启 Scope 细粒度鉴权后，
+// 用户管理面的公开认证端点（登录 / 引导期首个管理员开户）不得被中间件一刀切 401 拦死，
+// 且登录换来的会话 Token 必须立即在 REST 鉴权链路生效（LiveInternalHashedKeys 双通道）。
+func TestScopeAuthMiddleware_PublicAuthPaths(t *testing.T) {
+	cfg := &config.Config{
+		Host:          "127.0.0.1",
+		Port:          0,
+		AgentRESTHost: "127.0.0.1",
+		AgentRESTPort: 19999,
+		ScopeKeys: map[string]*pkgauth.KeyConfig{
+			"read-only-token": {Name: "reader", Scopes: []string{"hub:read"}},
+		},
+	}
+	d := newTestDeps()
+	ag, err := agent.New(cfg, d.mc)
+	if err != nil {
+		t.Fatalf("new agent client: %v", err)
+	}
+	ds := datasource.New(cfg)
+	s := New(ag, ds, cfg, nil, d.tasks, d.logger, d.mc)
+	defer s.Shutdown()
+
+	r := gin.New()
+	s.RegisterRoutes(r)
+
+	do := func(method, path, token, body string) *httptest.ResponseRecorder {
+		req, _ := http.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+
+	// 业务端点仍需鉴权（确认已进入 Scope 鉴权模式）
+	if w := do("GET", "/v1/hub/status", "", ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated business path, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 引导期：匿名创建首个管理员必须放行（不得 401 死锁）
+	const adminPass = "HubAdm1n#2026!"
+	w := do("POST", "/v1/auth/users/register", "", `{"username":"hubadmin","password":"`+adminPass+`"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("bootstrap register must be public, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 登录换取会话 Token
+	w = do("POST", "/v1/auth/login", "", `{"username":"hubadmin","password":"`+adminPass+`"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("login must be public, got %d: %s", w.Code, w.Body.String())
+	}
+	var loginEnv struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &loginEnv); err != nil || loginEnv.Data.Token == "" {
+		t.Fatalf("login response missing session token: %s (%v)", w.Body.String(), err)
+	}
+	session := loginEnv.Data.Token
+
+	// 会话 Token 立即在 REST 鉴权链路生效（admin 通配 scope 覆盖 hub:read）
+	if w := do("GET", "/v1/hub/status", session, ""); w.Code != http.StatusOK {
+		t.Fatalf("session token rejected by REST auth chain: %d %s", w.Code, w.Body.String())
+	}
+
+	// 引导完成后默认关闭公开自注册：匿名开户必须 403
+	w = do("POST", "/v1/auth/users/register", "", `{"username":"intruder","password":"Intrud3r#2026!"}`)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for anonymous registration after bootstrap, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// gRPC 拦截器共享同一活密钥视图（避免 REST 可登录、gRPC 一律 Unauthenticated 的双路径不对称）
+	hashedProvider := s.LiveHashedAuthKeys()
+	if hashedProvider == nil {
+		t.Fatal("LiveHashedAuthKeys must be wired for gRPC interceptor parity")
+	}
+	if _, ok := hashedProvider()[pkgauth.HashToken(session)]; !ok {
+		t.Fatal("session token must be visible to the gRPC live-key provider")
+	}
+}
+
 // TestServer_ShutdownGraceful tests graceful shutdown execution without panic.
 // TestServer_ShutdownGraceful 测试优雅停机方法能平滑执行完毕。
 func TestServer_ShutdownGraceful(t *testing.T) {

@@ -19,8 +19,11 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 )
 
 func ctxWithPeerIP(ip string) context.Context {
@@ -168,3 +171,60 @@ type stubServerStream struct {
 }
 
 func (s *stubServerStream) Context() context.Context { return s.ctx }
+
+func (s *stubServerStream) SetHeader(md metadata.MD) error {
+	return nil
+}
+
+func TestUnaryTraceInterceptor(t *testing.T) {
+	interceptor := UnaryTraceInterceptor()
+	info := &grpc.UnaryServerInfo{FullMethod: "/test/Method"}
+
+	// 1. With incoming trace ID
+	ctxIn := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-trace-id", "trace-12345"))
+	var capturedTraceID string
+	handler := func(ctx context.Context, req any) (any, error) {
+		capturedTraceID = pkgobs.RequestIDFromContext(ctx)
+		return "ok", nil
+	}
+
+	_, err := interceptor(ctxIn, nil, info, handler)
+	if err != nil {
+		t.Fatalf("interceptor error: %v", err)
+	}
+	if capturedTraceID != "trace-12345" {
+		t.Errorf("expected capturedTraceID trace-12345, got %s", capturedTraceID)
+	}
+
+	// 2. Without incoming trace ID -> automatically generated
+	capturedTraceID = ""
+	_, err = interceptor(context.Background(), nil, info, handler)
+	if err != nil {
+		t.Fatalf("interceptor error: %v", err)
+	}
+	if capturedTraceID == "" {
+		t.Errorf("expected generated trace ID, got empty")
+	}
+}
+
+func TestStreamTraceInterceptor(t *testing.T) {
+	interceptor := StreamTraceInterceptor()
+	info := &grpc.StreamServerInfo{FullMethod: "/test/StreamMethod"}
+
+	ctxIn := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-request-id", "req-xyz"))
+	stream := &stubServerStream{ctx: ctxIn}
+
+	var capturedTraceID string
+	handler := func(srv any, ss grpc.ServerStream) error {
+		capturedTraceID = pkgobs.RequestIDFromContext(ss.Context())
+		return nil
+	}
+
+	err := interceptor(nil, stream, info, handler)
+	if err != nil {
+		t.Fatalf("interceptor error: %v", err)
+	}
+	if capturedTraceID != "req-xyz" {
+		t.Errorf("expected capturedTraceID req-xyz, got %s", capturedTraceID)
+	}
+}

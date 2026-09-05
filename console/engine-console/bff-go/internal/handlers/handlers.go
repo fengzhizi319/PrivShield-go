@@ -578,6 +578,20 @@ func normalizeRestPayload(path string, body json.RawMessage) (string, json.RawMe
 		}
 	}
 
+	// 5. 针对 QOL 查询混淆，将 num_dummies 映射为 num_decoys
+	if dummies, ok := m["num_dummies"]; ok {
+		if _, hasDecoys := m["num_decoys"]; !hasDecoys {
+			m["num_decoys"] = dummies
+		}
+	}
+
+	// 6. 针对 K-匿名，将 qi_cols 映射为 qi_fields
+	if qiCols, ok := m["qi_cols"]; ok {
+		if _, hasQIFields := m["qi_fields"]; !hasQIFields {
+			m["qi_fields"] = qiCols
+		}
+	}
+
 	newBytes, err := json.Marshal(m)
 	if err != nil {
 		return normPath, body

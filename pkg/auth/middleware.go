@@ -111,28 +111,34 @@ func ConstantTimeLookup(keys map[string]*KeyConfig, token string) *KeyConfig {
 // 过期 key（IsExpired() == true）视为无效，返回 nil。
 //
 // 热轮转语义：若 Settings.LiveInternalKeys 已提供，先查活密钥（KeyStore 当前快照），
-// 再回退静态内部密钥。REST 与 gRPC 拦截器都调本函数，因此密钥轮换/吊销在两条路径上
+// 再查 LiveInternalHashedKeys（UserStore 只落盘摘要的动态用户密钥与会话），
+// 最后回退静态内部/外部密钥。REST 与 gRPC 拦截器都调本函数，因此密钥轮换/吊销在两条路径上
 // 行为完全一致，不需各服务自己复制“热重载中间件”（历史上副本会遗漏 scope 鉴权）。
 func AuthenticateAPIKey(settings *Settings, token string) *Identity {
-	if settings == nil {
+	if settings == nil || token == "" {
 		return nil
 	}
 	if settings.LiveInternalKeys != nil {
 		if live := ConstantTimeLookup(settings.LiveInternalKeys(), token); live != nil {
-			return &Identity{ServiceType: "internal", Name: live.Name, Scopes: live.Scopes}
+			return &Identity{ServiceType: "internal", Name: live.Name, Subject: live.Subject, Scopes: live.Scopes}
+		}
+	}
+	if settings.LiveInternalHashedKeys != nil {
+		if live := ConstantTimeLookup(settings.LiveInternalHashedKeys(), HashToken(token)); live != nil {
+			return &Identity{ServiceType: "internal", Name: live.Name, Subject: live.Subject, Scopes: live.Scopes}
 		}
 	}
 	if internal := ConstantTimeLookup(settings.InternalKeys, token); internal != nil {
 		if internal.IsExpired() {
 			return nil
 		}
-		return &Identity{ServiceType: "internal", Name: internal.Name, Scopes: internal.Scopes}
+		return &Identity{ServiceType: "internal", Name: internal.Name, Subject: internal.Subject, Scopes: internal.Scopes}
 	}
 	if external := ConstantTimeLookup(settings.ExternalKeys, token); external != nil {
 		if external.IsExpired() {
 			return nil
 		}
-		return &Identity{ServiceType: "external", Name: external.Name, Scopes: external.Scopes}
+		return &Identity{ServiceType: "external", Name: external.Name, Subject: external.Subject, Scopes: external.Scopes}
 	}
 	return nil
 }
@@ -157,6 +163,14 @@ func AuthMiddleware(settings *Settings) gin.HandlerFunc {
 		}
 
 		token := ExtractBearerToken(c.GetHeader("Authorization"))
+
+		// 公开认证端点（登录与自注册）：若未提供 Token 则注入 public-caller 放行；若提供了 Token 则向下正常校验以识别特权身份
+		if IsAuthPublicPath(path) && token == "" {
+			c.Set(IdentityContextKey, &Identity{ServiceType: "public", Name: "public-caller", Scopes: []string{"auth:public"}})
+			c.Next()
+			return
+		}
+
 		if token == "" {
 			AuthFailuresTotal.WithLabelValues("missing_token").Inc()
 			abortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: missing credentials", nil)
@@ -173,6 +187,16 @@ func AuthMiddleware(settings *Settings) gin.HandlerFunc {
 		// 接口级权限校验 (PermissionForRESTPath)
 		// 映射函数对未显式登记的路径 fail-closed 返回最高权限 "admin"（而非空串），
 		// 因此新增路由若遗忘配 scope 会被默认锁死，由启动期审计与 CI 门禁提醒补显式映射。
+		//
+		// 公开认证端点（/v1/auth/login、/v1/auth/users/register）例外：其映射值为 "auth:public"，
+		// 仅用于路由审计可追溯，**不得**作为已认证调用者的强制 scope；否则只持有 user:admin
+		// 而无 "*" 的管理员将无法调用注册端点为下属开户（管理员开户流程被锁死）。
+		if IsAuthPublicPath(path) {
+			c.Set(IdentityContextKey, identity)
+			c.Next()
+			return
+		}
+
 		requiredPerm := PermissionForRESTPath(path)
 		if requiredPerm != "" && !identity.HasPermission(requiredPerm) {
 			AuthForbiddenTotal.Inc()

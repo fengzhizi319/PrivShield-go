@@ -8,21 +8,35 @@ package grpcserver
 
 import (
 	"context"
+	"log/slog"
+	"runtime/debug"
 	"strings"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/security"
 	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
 	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 )
 
-// grpcGuardInterceptors 组装 gRPC 侧完整拦截器链：IP 准入 → 鉴权 → 身份级限流。
-// 未启用的防护自动跳过，因此返回切片可能只含鉴权一项。
+// grpcGuardInterceptors 组装 gRPC 侧完整拦截器链：异常恢复 → IP 准入 → 鉴权 → 身份级限流。
+// 未启用的防护自动跳过。
 //
+// 异常恢复拦截器置于最外层（与 REST 侧 gin.Recovery() 对齐），保证 RPC 执行过程中任何
+// 未预期的 panic 均被捕获转为 codes.Internal，记录结构化堆栈而不导致进程崩溃。
 // IP 准入置于鉴权之前，既省去对非法来源做无谓的常量时间密钥比对（避免成为免费的身份
 // 验证 oracle），也让非法来源立即被拒；限流置于鉴权之后，才能拿到身份做分片键。
 func grpcGuardInterceptors(auth grpc.UnaryServerInterceptor) (unary []grpc.UnaryServerInterceptor, stream []grpc.StreamServerInterceptor) {
+	// 0. 异常恢复拦截器（最外层守卫，与 REST 侧 gin.Recovery() 对称）
+	unary = append(unary, unaryRecoveryInterceptor())
+	stream = append(stream, streamRecoveryInterceptor())
+
+	// 1. 全链路分布式追踪拦截器（提取/生成 TraceID 注入 ctx 并回传响应头）
+	unary = append(unary, middleware.UnaryTraceInterceptor())
+	stream = append(stream, middleware.StreamTraceInterceptor())
+
 	settings := security.GetSettings()
 
 	networks := middleware.ParseAllowedNetworks(settings.AllowedCIDRs)
@@ -81,4 +95,31 @@ func shortMethodName(fullMethod string) string {
 		return fullMethod[i+1:]
 	}
 	return fullMethod
+}
+
+// unaryRecoveryInterceptor 捕获一元 RPC 处理协程中的 panic，
+// 记录结构化错误日志与完整堆栈，并转换为标准的 codes.Internal 状态码。
+func unaryRecoveryInterceptor() grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp any, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("gRPC unary panic recovered", "method", info.FullMethod, "panic", r, "stack", string(debug.Stack()))
+				err = status.Errorf(codes.Internal, "internal server error: panic recovered")
+			}
+		}()
+		return handler(ctx, req)
+	}
+}
+
+// streamRecoveryInterceptor 捕获流式 RPC 处理协程中的 panic。
+func streamRecoveryInterceptor() grpc.StreamServerInterceptor {
+	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("gRPC stream panic recovered", "method", info.FullMethod, "panic", r, "stack", string(debug.Stack()))
+				err = status.Errorf(codes.Internal, "internal server error: panic recovered")
+			}
+		}()
+		return handler(srv, ss)
+	}
 }

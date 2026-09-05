@@ -40,6 +40,7 @@ var (
 	settingsOnce   sync.Once
 	cachedSettings *Settings
 	keyStore       *pkgauth.KeyStore
+	userStore      *pkgauth.UserStore
 )
 
 // GetSettings 返回缓存的安全配置单例。
@@ -52,7 +53,14 @@ func GetSettings() *Settings {
 
 // GetKeyStore 返回 API Key 热重载存储（可能为 nil）。
 func GetKeyStore() *pkgauth.KeyStore {
+	_ = GetSettings()
 	return keyStore
+}
+
+// GetUserStore 返回普通用户与动态权限存储单例。
+func GetUserStore() *pkgauth.UserStore {
+	_ = GetSettings()
+	return userStore
 }
 
 // ResetSettings 重置缓存（仅测试用）。
@@ -63,6 +71,7 @@ func ResetSettings() {
 		keyStore.Close()
 		keyStore = nil
 	}
+	userStore = nil
 }
 
 func loadSettings() *Settings {
@@ -75,20 +84,33 @@ func loadSettings() *Settings {
 	}
 
 	keysFile := pkgconfig.EnvString("AGENT_AUTH_KEYS_FILE", "")
-	var liveKeys func() map[string]*KeyConfig
 	if keysFile != "" {
 		ks, err := pkgauth.NewKeyStore(keysFile)
 		if err != nil {
 			slog.Error("failed to initialize API Key store; falling back to env vars", "path", keysFile, "error", err.Error())
 		} else {
 			keyStore = ks
-			// 文件型密钥只经 LiveInternalKeys 活读，**不再**并入启动期静态快照：
-			// 一旦并入，密钥从文件删除（吊销）后仍会命中旧快照而在 gRPC 面永久有效（撤销绕过）。
-			// 环境变量密钥继续走 InternalKeys，与文件密钥取并集，语义与历史合并方式等价。
-			liveKeys = ks.Keys
 			slog.Info("API Key store initialized with hot-reload", "path", keysFile, "keys", len(ks.Keys()))
 		}
 	}
+
+	userStoreFile := pkgconfig.EnvString("AGENT_AUTH_USER_STORE_FILE", "")
+	if userStoreFile == "" {
+		userStoreFile = pkgconfig.EnvString("PRIVACY_USER_STORE_FILE", "")
+	}
+	us, err := pkgauth.NewUserStore(userStoreFile)
+	if err != nil {
+		slog.Error("failed to initialize user store; falling back to in-memory", "path", userStoreFile, "error", err.Error())
+		us, _ = pkgauth.NewUserStore("")
+	}
+	userStore = us
+
+	// 活密钥接入认证内核（两条独立通道，避免热路径每请求重建全量 map）：
+	//  1. KeyStore（AGENT_AUTH_KEYS_FILE / Secret 热轮转）以**明文 Token** 为索引，
+	//     由版本驱动的 Aggregator 缓存快照，仅在重载时重建；
+	//  2. UserStore（动态用户密钥与登录会话）落盘仅存 SHA-256 摘要，
+	//     走 LiveInternalHashedKeys，认证时对来访 Token 计算一次摘要后常量时间比对。
+	liveKeys := pkgauth.NewAggregator(nil, keyStore).Keys
 
 	externalKeys := pkgauth.LoadAPIKeysFromEnv("AGENT_AUTH_EXTERNAL_API_KEYS")
 	if externalKeys == nil {
@@ -102,12 +124,13 @@ func loadSettings() *Settings {
 
 	s := &Settings{
 		Settings: pkgauth.Settings{
-			AuthEnabled:      pkgconfig.EnvBool("AGENT_AUTH_ENABLED", false),
-			TLSEnabled:       pkgconfig.EnvBool("AGENT_TLS_ENABLED", false),
-			HealthNoAuth:     pkgconfig.EnvBool("AGENT_HEALTH_NO_AUTH", true),
-			InternalKeys:     internalKeys,
-			ExternalKeys:     externalKeys,
-			LiveInternalKeys: liveKeys,
+			AuthEnabled:            pkgconfig.EnvBool("AGENT_AUTH_ENABLED", false),
+			TLSEnabled:             pkgconfig.EnvBool("AGENT_TLS_ENABLED", false),
+			HealthNoAuth:           pkgconfig.EnvBool("AGENT_HEALTH_NO_AUTH", true),
+			InternalKeys:           internalKeys,
+			ExternalKeys:           externalKeys,
+			LiveInternalKeys:       liveKeys,
+			LiveInternalHashedKeys: userStore.LiveHashedKeysFunc(),
 		},
 		RateLimitEnabled:      pkgconfig.EnvBool("AGENT_RATE_LIMIT_ENABLED", false),
 		HealthNoRateLimit:     pkgconfig.EnvBool("AGENT_HEALTH_NO_RATE_LIMIT", true),

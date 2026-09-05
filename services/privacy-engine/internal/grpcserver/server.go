@@ -14,11 +14,13 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	_ "google.golang.org/grpc/encoding/gzip"
+	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 
 	pb "github.com/fengzhizi319/PrivShield-go/engine-go/internal/grpcserver/proto"
 	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/observability"
 	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/service"
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 	pkggrpcserver "github.com/fengzhizi319/PrivShield-go/pkg/grpcserver"
 )
 
@@ -68,6 +70,10 @@ func (s *Server) Serve(lis net.Listener) error {
 		s.WithUnaryInterceptor(s.metrics.UnaryServerInterceptor())
 	}
 	pb.RegisterPrivacyServiceServer(s.Server, s)
+	if pkgconfig.EnvBool("AGENT_GRPC_REFLECTION_ENABLED", true) {
+		reflection.Register(s.Server)
+		slog.Info("gRPC server reflection enabled")
+	}
 	slog.Info("gRPC server starting (Protobuf + Type-Safe)", "addr", lis.Addr())
 	return s.ServeListener(lis)
 }

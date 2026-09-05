@@ -64,9 +64,9 @@ type Client struct {
 
 	// Per-endpoint circuit breakers / 按上游节点维度独立维护的熔断器组
 	// 单节点故障只熔断该节点流量，其余健康节点继续承接请求（故障隔离而非全局雪崩）。
-	cbMu          sync.Mutex                         // 保护熔断器状态变更的互斥锁
-	breakers      map[string]*circuitbreaker.Breaker // 归一化节点地址 → 该节点独立的熔断器状态
-	cbOrder       []string                           // 节点配置顺序，保证聚合状态与诊断输出稳定
+	cbMu            sync.Mutex                         // 保护熔断器状态变更的互斥锁
+	breakers        map[string]*circuitbreaker.Breaker // 归一化节点地址 → 该节点独立的熔断器状态
+	cbOrder         []string                           // 节点配置顺序，保证聚合状态与诊断输出稳定
 	cbThreshold     int                                // 触发单节点熔断的连续失败阈值（默认 5 次）
 	cbCooldown      time.Duration                      // 熔断开启后的冷却等待时间（默认 30s，冷却后转为 Half-Open）
 	cbHalfOpenMax   int                                // 半开探测最大并发数（默认 3）
@@ -236,9 +236,9 @@ func isRetryableError(err error) bool {
 // Config holds agent client configuration.
 // Config 定义 Client 的构造参数配置项。
 type Config struct {
-	BaseURL        string                   // 上游 agent 单节点基础地址（如 "http://127.0.0.1:8079"；国密模式用 "tlcp://host:port"）
-	BaseURLs       []string                 // 上游 agent 多节点集群地址列表（设置时优先于 BaseURL，开启客户端负载均衡）
-	APIKey         string                   // 可选的 Bearer Token 鉴权凭证
+	BaseURL         string                   // 上游 agent 单节点基础地址（如 "http://127.0.0.1:8079"；国密模式用 "tlcp://host:port"）
+	BaseURLs        []string                 // 上游 agent 多节点集群地址列表（设置时优先于 BaseURL，开启客户端负载均衡）
+	APIKey          string                   // 可选的 Bearer Token 鉴权凭证
 	Timeout         time.Duration            // HTTP 请求全局超时时间（默认 30s）
 	CBThreshold     int                      // 触发熔断的连续失败次数阈值（默认 5 次）
 	CBCooldown      time.Duration            // 熔断开启后的冷却重试等待时间（默认 30s）
@@ -246,9 +246,9 @@ type Config struct {
 	CBMaxCooldown   time.Duration            // 启用自适应退避时的最大冷却期上限（默认 0，若 BackoffFactor>1.0 则按指数退避封顶）
 	CBBackoffFactor float64                  // 连续探测失败重新熔断时的冷却期指数退避系数（<=1.0 禁用退避）
 	MaxRetries      int                      // 网络故障与 5xx 错误的最大重试次数（默认 3 次，0 表示不重试）
-	RetryBaseDelay time.Duration            // 指数退避重试的基础时间（默认 500ms）
-	Logger         *slog.Logger             // 结构化日志器（默认使用 slog.Default()）
-	StateObserver  func(node, state string) // 熔断器状态变更时的观察者回调函数（入参为 node 与 state 字符串）
+	RetryBaseDelay  time.Duration            // 指数退避重试的基础时间（默认 500ms）
+	Logger          *slog.Logger             // 结构化日志器（默认使用 slog.Default()）
+	StateObserver   func(node, state string) // 熔断器状态变更时的观察者回调函数（入参为 node 与 state 字符串）
 
 	// TLSConfig 是可选的标准 TLS 出站信任配置（https 基础地址生效）。
 	// 由调用方通过 agent.TLSConfigFromEnv(prefix) / agent.NewTLSConfig(caFile, insecure) 构建；nil 保持默认行为。

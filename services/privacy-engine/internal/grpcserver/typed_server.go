@@ -13,8 +13,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/dynclassification"
 	pb "github.com/fengzhizi319/PrivShield-go/engine-go/internal/grpcserver/proto"
 	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/service"
+	"github.com/fengzhizi319/PrivShield-go/pkg/naming"
 	"github.com/fengzhizi319/PrivShield-go/privacy-go-sdk/kano"
 )
 
@@ -181,6 +183,149 @@ func (s *TypedServer) DynClassify(_ context.Context, req *pb.DynClassificationRe
 		AuditTimestamp: time.Now().UTC().Format(time.RFC3339),
 		EngineLayer:    result.MatchedBy,
 	}, nil
+}
+
+// DynEval 动态单字段分类求值
+func (s *TypedServer) DynEval(_ context.Context, req *pb.DynEvalRequest) (*pb.DynEvalResponse, error) {
+	fieldName := req.GetFieldName()
+	value := req.GetValue()
+	res := s.svc.Classify(fieldName, value)
+	levelID := res.Level.LevelID()
+	if levelID == "" {
+		levelID = res.LevelID
+	}
+	if levelID == "" {
+		levelID = string(res.Level)
+	}
+
+	resultMap := map[string]any{
+		"field":      fieldName,
+		"value":      value,
+		"level":      res.Level,
+		"level_id":   levelID,
+		"category":   res.Category,
+		"confidence": res.Confidence,
+		"matched_by": res.MatchedBy,
+		"domain":     req.GetDomain(),
+		"standard":   req.GetStandard(),
+	}
+	rawJSON, _ := json.Marshal(resultMap)
+
+	return &pb.DynEvalResponse{
+		Field:      fieldName,
+		Value:      value,
+		Level:      string(res.Level),
+		LevelId:    levelID,
+		Category:   res.Category,
+		Confidence: res.Confidence,
+		MatchedBy:  res.MatchedBy,
+		ResultJson: string(rawJSON),
+	}, nil
+}
+
+// DynEvalRecord 动态记录/批量分类求值
+func (s *TypedServer) DynEvalRecord(_ context.Context, req *pb.DynEvalRecordRequest) (*pb.DynEvalRecordResponse, error) {
+	if len(req.GetRecords()) > 0 {
+		records := make([]map[string]string, len(req.GetRecords()))
+		for i, r := range req.GetRecords() {
+			records[i] = r.GetFields()
+		}
+		classified := s.svc.ClassifyBatch(records)
+		overall := overallSecurityLevel(classified...)
+		respMap := map[string]any{
+			"classifications": classified,
+			"level":           overall,
+			"overall_level":   overall,
+		}
+		rawJSON, _ := json.Marshal(respMap)
+		return &pb.DynEvalRecordResponse{
+			Level:        overall,
+			OverallLevel: overall,
+			ResultJson:   string(rawJSON),
+		}, nil
+	}
+
+	record := req.GetRecord()
+	results := make(map[string]any, len(record))
+	classified := make([]*dynclassification.ClassificationResult, 0, len(record))
+	for k, v := range record {
+		res := s.svc.Classify(k, v)
+		results[k] = res
+		classified = append(classified, res)
+	}
+	overall := overallSecurityLevel(classified...)
+	respMap := map[string]any{
+		"result":          results,
+		"classifications": results,
+		"level":           overall,
+		"overall_level":   overall,
+	}
+	rawJSON, _ := json.Marshal(respMap)
+	return &pb.DynEvalRecordResponse{
+		Level:        overall,
+		OverallLevel: overall,
+		ResultJson:   string(rawJSON),
+	}, nil
+}
+
+// DynStandards 获取动态分类标准列表及详情
+func (s *TypedServer) DynStandards(_ context.Context, _ *pb.DynStandardsRequest) (*pb.DynStandardsResponse, error) {
+	detail, err := s.svc.ListStandardsDetail()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list standards failed: %v", err)
+	}
+	rawJSON, _ := json.Marshal(detail)
+	return &pb.DynStandardsResponse{
+		Standards:   detail.Standards,
+		DetailsJson: string(rawJSON),
+	}, nil
+}
+
+// DynDomains 获取可用领域包列表
+func (s *TypedServer) DynDomains(_ context.Context, _ *pb.DynDomainsRequest) (*pb.DynDomainsResponse, error) {
+	resp := s.svc.ListDomains()
+	return &pb.DynDomainsResponse{
+		Domains: resp.Domains,
+	}, nil
+}
+
+// DynOperators 获取可用匹配算子列表
+func (s *TypedServer) DynOperators(_ context.Context, _ *pb.DynOperatorsRequest) (*pb.DynOperatorsResponse, error) {
+	resp := s.svc.ListOperators()
+	return &pb.DynOperatorsResponse{
+		Operators: resp.Operators,
+	}, nil
+}
+
+// DynValidate 校验规则有效性
+func (s *TypedServer) DynValidate(_ context.Context, req *pb.DynValidateRequest) (*pb.DynValidateResponse, error) {
+	resp := s.svc.ValidateRules(req.GetRulesDir())
+	return &pb.DynValidateResponse{
+		IsValid:  resp.IsValid,
+		Valid:    resp.Valid,
+		Errors:   resp.Errors,
+		Warnings: resp.Warnings,
+	}, nil
+}
+
+// DynGenerateProfile 自动生成隐私策略配置
+func (s *TypedServer) DynGenerateProfile(_ context.Context, req *pb.DynGenerateProfileRequest) (*pb.DynGenerateProfileResponse, error) {
+	resp := s.svc.GenerateProfile(req.GetDocPath())
+	return &pb.DynGenerateProfileResponse{
+		Status:         resp.Status,
+		Message:        resp.Message,
+		GeneratedFiles: resp.GeneratedFiles,
+	}, nil
+}
+
+func overallSecurityLevel(results ...*dynclassification.ClassificationResult) string {
+	ids := make([]string, 0, len(results))
+	for _, res := range results {
+		if res != nil {
+			ids = append(ids, res.Level.LevelID())
+		}
+	}
+	return naming.MaxSecurityLevelID(ids...)
 }
 
 // ──────────────────────────────────────────────

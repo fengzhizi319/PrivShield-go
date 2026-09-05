@@ -43,6 +43,11 @@ var (
 	authAPIKey    string
 	authScopeKeys map[string]*pkgauth.KeyConfig
 	authKeyStore  *pkgauth.KeyStore
+
+	// authProviderMu 保护下面两个活密钥回调（启动期注入一次，运行期只读）。
+	authProviderMu     sync.RWMutex
+	authLiveKeys       func() map[string]*pkgauth.KeyConfig // 明文 Token 索引（KeyStore 热轮转）
+	authHashedLiveKeys func() map[string]*pkgauth.KeyConfig // HashToken 索引（UserStore 动态密钥/登录会话）
 )
 
 // InitAuthSettings 存储 gRPC 鉴权配置，在 main.go 中调用一次。
@@ -59,11 +64,52 @@ func InitAuthSettings(apiKey string, scopeKeys map[string]*pkgauth.KeyConfig, ks
 	})
 }
 
+// SetLiveAuthProviders 注入活密钥回调，使 gRPC 拦截器与 REST 中间件共享同一套动态凭证视图：
+//   - liveKeys：明文 Token 索引（KeyStore 文件/Secret 热轮转）；
+//   - hashedLiveKeys：HashToken 索引（UserStore 动态用户 API Key 与登录会话，落盘仅存摘要）。
+//
+// 未接入时 gRPC 路径将无法识别登录会话与动态签发的密钥（REST 可用、gRPC 401 的双路径不对称）。
+// 必须在 grpc.Server 开始接收流量前调用一次。
+func SetLiveAuthProviders(liveKeys, hashedLiveKeys func() map[string]*pkgauth.KeyConfig) {
+	authProviderMu.Lock()
+	defer authProviderMu.Unlock()
+	authLiveKeys = liveKeys
+	authHashedLiveKeys = hashedLiveKeys
+}
+
+func liveAuthProviders() (func() map[string]*pkgauth.KeyConfig, func() map[string]*pkgauth.KeyConfig) {
+	authProviderMu.RLock()
+	defer authProviderMu.RUnlock()
+	return authLiveKeys, authHashedLiveKeys
+}
+
+// currentScopeKeys 返回静态 SERVICE_HUB_API_KEYS 与 KeyStore 热轮转密钥的并集（同名以热轮转为准）。
 func currentScopeKeys() map[string]*pkgauth.KeyConfig {
-	if authKeyStore != nil {
-		return authKeyStore.Keys()
+	if authKeyStore == nil {
+		return authScopeKeys
 	}
-	return authScopeKeys
+	live := authKeyStore.Keys()
+	if len(authScopeKeys) == 0 {
+		return live
+	}
+	merged := make(map[string]*pkgauth.KeyConfig, len(authScopeKeys)+len(live))
+	for k, v := range authScopeKeys {
+		merged[k] = v
+	}
+	for k, v := range live {
+		merged[k] = v
+	}
+	return merged
+}
+
+// hasAuthConfigured 判定是否存在任何可用凭证来源（静态 Key / 热轮转 Key / 动态用户密钥）。
+// 全部为空时 fail-closed 拒绝，不再透传未认证请求。
+func hasAuthConfigured(scopeKeys map[string]*pkgauth.KeyConfig) bool {
+	if authAPIKey != "" || len(scopeKeys) > 0 {
+		return true
+	}
+	live, hashed := liveAuthProviders()
+	return live != nil || hashed != nil
 }
 
 // AuthUnaryInterceptor 返回 gRPC 一元鉴权拦截器。
@@ -74,7 +120,7 @@ func AuthUnaryInterceptor() grpc.UnaryServerInterceptor {
 			return handler(ctx, req)
 		}
 		scopeKeys := currentScopeKeys()
-		if authAPIKey == "" && len(scopeKeys) == 0 {
+		if !hasAuthConfigured(scopeKeys) {
 			pkgauth.AuthFailuresTotal.WithLabelValues("missing_token").Inc()
 			return nil, status.Error(codes.Unauthenticated, "authentication required: no API key configured")
 		}
@@ -98,7 +144,7 @@ func AuthStreamInterceptor() grpc.StreamServerInterceptor {
 			return handler(srv, ss)
 		}
 		scopeKeys := currentScopeKeys()
-		if authAPIKey == "" && len(scopeKeys) == 0 {
+		if !hasAuthConfigured(scopeKeys) {
 			pkgauth.AuthFailuresTotal.WithLabelValues("missing_token").Inc()
 			return status.Error(codes.Unauthenticated, "authentication required: no API key configured")
 		}
@@ -164,10 +210,13 @@ func authenticateGRPCRequest(ctx context.Context, apiKey string, scopeKeys map[s
 		internalKeys[apiKey] = &pkgauth.KeyConfig{Name: "default-internal", Scopes: []string{}}
 	}
 
+	liveKeys, hashedLiveKeys := liveAuthProviders()
 	settings := &pkgauth.Settings{
-		AuthEnabled:  true,
-		InternalKeys: internalKeys,
-		ExternalKeys: scopeKeys,
+		AuthEnabled:            true,
+		InternalKeys:           internalKeys,
+		ExternalKeys:           scopeKeys,
+		LiveInternalKeys:       liveKeys,
+		LiveInternalHashedKeys: hashedLiveKeys,
 	}
 	identity := pkgauth.AuthenticateAPIKey(settings, token)
 	if identity == nil {

@@ -173,6 +173,16 @@ func New() *Mapper {
 		// ── Profile（个性化配置）────────────────────────────────
 		// 根据数据特征推荐最优隐私参数（epsilon、mechanism 等）
 		"/v1/privacy/profile/recommend": m.handleRecommendParams,
+
+		// ── Dynamic Classification（动态分类分级与管理）──────────
+		"/v1/dynclassification/classify":         m.handleDynClassify,
+		"/v1/dynclassification/eval":             m.handleDynEval,
+		"/v1/dynclassification/eval_record":      m.handleDynEvalRecord,
+		"/v1/dynclassification/standards":        m.handleDynStandards,
+		"/v1/dynclassification/domains":          m.handleDynDomains,
+		"/v1/dynclassification/operators":        m.handleDynOperators,
+		"/v1/dynclassification/validate":         m.handleDynValidate,
+		"/v1/dynclassification/generate_profile": m.handleDynGenerateProfile,
 	}
 	return m
 }

@@ -24,6 +24,8 @@ type fakePrivacyServer struct {
 	DPCountFunc          func(context.Context, *pb.DPRequest) (*pb.DPResponse, error)
 	KAnonymizeRecordFunc func(context.Context, *pb.KAnonymizeRequest) (*pb.KAnonymizeResponse, error)
 	ObfuscateQueryFunc   func(context.Context, *pb.ObfuscateQueryRequest) (*pb.ObfuscateQueryResponse, error)
+	DynEvalFunc          func(context.Context, *pb.DynEvalRequest) (*pb.DynEvalResponse, error)
+	DynStandardsFunc     func(context.Context, *pb.DynStandardsRequest) (*pb.DynStandardsResponse, error)
 }
 
 func (f *fakePrivacyServer) Health(ctx context.Context, req *pb.HealthRequest) (*pb.HealthResponse, error) {
@@ -59,6 +61,20 @@ func (f *fakePrivacyServer) ObfuscateQuery(ctx context.Context, req *pb.Obfuscat
 		return f.ObfuscateQueryFunc(ctx, req)
 	}
 	return f.UnimplementedPrivacyServiceServer.ObfuscateQuery(ctx, req)
+}
+
+func (f *fakePrivacyServer) DynEval(ctx context.Context, req *pb.DynEvalRequest) (*pb.DynEvalResponse, error) {
+	if f.DynEvalFunc != nil {
+		return f.DynEvalFunc(ctx, req)
+	}
+	return f.UnimplementedPrivacyServiceServer.DynEval(ctx, req)
+}
+
+func (f *fakePrivacyServer) DynStandards(ctx context.Context, req *pb.DynStandardsRequest) (*pb.DynStandardsResponse, error) {
+	if f.DynStandardsFunc != nil {
+		return f.DynStandardsFunc(ctx, req)
+	}
+	return f.UnimplementedPrivacyServiceServer.DynStandards(ctx, req)
 }
 
 // startBufconnServer 在内存中启动一个 gRPC 服务器并返回对应的客户端连接。
@@ -206,5 +222,59 @@ func TestDispatchObfuscateQuery(t *testing.T) {
 	m, ok := resp.(map[string][]string)
 	if !ok || len(m["result"]) != 3 {
 		t.Fatalf("unexpected obfuscate response: %+v", resp)
+	}
+}
+
+func TestDispatchDynEval(t *testing.T) {
+	fs := &fakePrivacyServer{
+		DynEvalFunc: func(_ context.Context, req *pb.DynEvalRequest) (*pb.DynEvalResponse, error) {
+			if req.FieldName != "phone" {
+				t.Fatalf("unexpected field_name: %s", req.FieldName)
+			}
+			return &pb.DynEvalResponse{
+				Field:      req.FieldName,
+				Value:      req.Value,
+				Level:      "S3",
+				LevelId:    "L3",
+				Category:   "PHONE",
+				Confidence: 0.95,
+				MatchedBy:  "rule_phone",
+				ResultJson: `{"field":"phone","level":"S3","category":"PHONE"}`,
+			}, nil
+		},
+	}
+	client, cleanup := startBufconnServer(t, fs)
+	defer cleanup()
+
+	body := json.RawMessage(`{"field_name":"phone","value":"13800138000","domain":"telecom"}`)
+	resp, err := New().Dispatch(context.Background(), client.Raw(), "/v1/dynclassification/eval", body)
+	if err != nil {
+		t.Fatalf("Dispatch dynclassification/eval failed: %v", err)
+	}
+	m, ok := resp.(map[string]any)
+	if !ok || m["field"] != "phone" {
+		t.Fatalf("unexpected dyn eval response: %+v", resp)
+	}
+}
+
+func TestDispatchDynStandards(t *testing.T) {
+	fs := &fakePrivacyServer{
+		DynStandardsFunc: func(_ context.Context, _ *pb.DynStandardsRequest) (*pb.DynStandardsResponse, error) {
+			return &pb.DynStandardsResponse{
+				Standards:   []string{"financial", "telecom"},
+				DetailsJson: `{"standards":["financial","telecom"],"count":2}`,
+			}, nil
+		},
+	}
+	client, cleanup := startBufconnServer(t, fs)
+	defer cleanup()
+
+	resp, err := New().Dispatch(context.Background(), client.Raw(), "/v1/dynclassification/standards", nil)
+	if err != nil {
+		t.Fatalf("Dispatch dynclassification/standards failed: %v", err)
+	}
+	m, ok := resp.(map[string]any)
+	if !ok || m["count"] != float64(2) {
+		t.Fatalf("unexpected dyn standards response: %+v", resp)
 	}
 }

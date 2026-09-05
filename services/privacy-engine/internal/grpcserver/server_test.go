@@ -2,7 +2,13 @@ package grpcserver
 
 import (
 	"context"
+	"net"
 	"testing"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/reflection/grpc_reflection_v1alpha"
+	"google.golang.org/grpc/test/bufconn"
 
 	pb "github.com/fengzhizi319/PrivShield-go/engine-go/internal/grpcserver/proto"
 	"github.com/fengzhizi319/PrivShield-go/engine-go/internal/service"
@@ -259,5 +265,58 @@ func TestHandleKAnonymizeRecord(t *testing.T) {
 
 	if resp.Result["patient_name"] == "张三" {
 		t.Errorf("patient_name not anonymized: %v", resp.Result["patient_name"])
+	}
+}
+
+func TestServerReflection(t *testing.T) {
+	srv := newTestServer(t)
+	lis := bufconn.Listen(1024 * 1024)
+	go func() {
+		_ = srv.Serve(lis)
+	}()
+	defer srv.Stop()
+
+	ctx := context.Background()
+	conn, err := grpc.NewClient("passthrough:///bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			return lis.Dial()
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("failed to dial: %v", err)
+	}
+	defer conn.Close()
+
+	refClient := grpc_reflection_v1alpha.NewServerReflectionClient(conn)
+	stream, err := refClient.ServerReflectionInfo(ctx)
+	if err != nil {
+		t.Fatalf("ServerReflectionInfo: %v", err)
+	}
+	err = stream.Send(&grpc_reflection_v1alpha.ServerReflectionRequest{
+		MessageRequest: &grpc_reflection_v1alpha.ServerReflectionRequest_ListServices{
+			ListServices: "*",
+		},
+	})
+	if err != nil {
+		t.Fatalf("send reflection request: %v", err)
+	}
+	resp, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv reflection response: %v", err)
+	}
+	listResp := resp.GetListServicesResponse()
+	if listResp == nil || len(listResp.Service) == 0 {
+		t.Fatalf("expected services listed, got: %+v", resp)
+	}
+	foundPrivacy := false
+	for _, s := range listResp.Service {
+		if s.Name == "privacy.local.PrivacyService" {
+			foundPrivacy = true
+			break
+		}
+	}
+	if !foundPrivacy {
+		t.Fatalf("privacy.local.PrivacyService not found in reflection list: %+v", listResp.Service)
 	}
 }

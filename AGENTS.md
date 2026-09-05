@@ -145,6 +145,10 @@ bash ./scripts/dev/dev-app-lz.sh --tlcp --force   # TLCP 国密双证书模式�
 | `AGENT_AUTH_ENABLED` | `false` | 启用 API Key 认证 |
 | `AGENT_AUTH_INTERNAL_MTLS_ENABLED` | `false` | 启用 gRPC mTLS 客户端证书认证 |
 | `AGENT_AUTH_MTLS_WHITELIST_FILE` | — | CN 白名单配置文件路径 (支持 5s 热重载；中台微服务群仍用 `PRIVACY_AUTH_MTLS_WHITELIST_FILE`) |
+| `AGENT_AUTH_USER_STORE_FILE` | 空（纯内存） | 用户与动态密钥持久化文件（兼容 `PRIVACY_USER_STORE_FILE`；目录 `0700`/文件 `0600`，只存摘要与口令哈希） |
+| `AGENT_AUTH_USER_SELF_REGISTER` | `false` | 公开自注册开关（生产保持关闭；引导期首个 `admin` 不受此限） |
+| `AGENT_AUTH_USER_SESSION_TTL` | `24h` | 登录会话有效期（`24h`/`15m`/纯秒数，超上限自动收敛） |
+| `AGENT_AUTH_USER_LOGIN_THROTTLE_PER_MIN` | `20` | 登录端点每 IP 每分钟最大尝试次数（`<=0` 关闭该层限速） |
 | `AGENT_RATE_LIMIT_ENABLED` | `false` | 启用 32 分片高并发令牌桶限流 |
 | `PRIVACY_ENGINE_CACHE_MAX_SIZE` | `10000` | 动态分类分级 LRU 缓存容量（16 分片） |
 | `PRIVACY_IMAGE_ALLOWED_DIRS` | cwd + 系统临时目录 | 医学影像处理允许读取的文件目录白名单 |
@@ -152,6 +156,17 @@ bash ./scripts/dev/dev-app-lz.sh --tlcp --force   # TLCP 国密双证书模式�
 | `PRIVACY_PPROF_ENABLED` | `false` | 启用 pprof 性能分析端点（生产默认关闭，需 `ops:admin` 权限） |
 | `PRIVACY_RULES_DIR` | `services/privacy-engine/rules/domains` | 领域分类分级规则目录 |
 | `PRIVACY_CONFIG_FILE` | `config/privacy.yaml` | 隐私策略配置文件路径 |
+
+### 用户与密钥全生命周期管理（`pkg/auth` 共享内核，两端同构）
+
+privacy-engine 与 service-hub 共用 `pkg/auth` 用户引擎，环境变量前缀分别为 `AGENT_AUTH_` 与
+`SERVICE_HUB_`（变量名以 [`pkg/auth/user_handlers.go::userPolicyEnvTable`](pkg/auth/user_handlers.go)
+为唯一事实源）。用户体系提供：等保三级口令复杂度（`bcrypt cost=12`、长度 8~72、字符类别 ≥3、
+禁含用户名、弱口令字典）、连续 5 次失败锁定 15 分钟、登录每 IP 限速、RBAC+ABAC 8 角色矩阵、
+动态 API Key 签发/吊销（`psk_<32hex>`，落盘仅存 SHA-256 摘要）、会话 Token（内存态 24h）、
+以及零重启毫秒级生效的双通道活密钥（`LiveInternalKeys` 明文 + `LiveInternalHashedKeys` 摘要）。
+`/v1/auth/login` 与 `/v1/auth/users/register` 为公开认证路径，其余 `/v1/auth/*` 路由层仅要求已认证、
+授权在 Handler 内按主体（本人 / `user:read` / `user:admin`）强校验。
 
 ### 微服务出站 Agent 传输信任（service-hub / audit-log 的 `pkg/agent` 客户端真实读取）
 

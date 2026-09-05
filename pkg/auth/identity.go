@@ -16,6 +16,9 @@ type Identity struct {
 	ServiceType string
 	// Name: 服务或账户名称，用于日志与限流 key。
 	Name string
+	// Subject: 责任主体（注册用户名）。仅由 UserStore 动态签发的 API Key 与登录会话携带，
+	// 静态服务密钥为空。用于「本人自助」授权判定与审计溯源（Token → 自然人/机构）。
+	Subject string
 	// Scopes: 已授予的权限列表。["*"] 表示完全访问。
 	Scopes []string
 }
@@ -34,6 +37,30 @@ func (id *Identity) HasPermission(permission string) bool {
 	return false
 }
 
+// IsSubject 判断该身份是否为目标用户名本人（用于 /v1/auth/users/:username 自助授权）。
+// 比对统一经 NormalizeUsername 归一化，并兼容历史密钥（Subject 为空时回退到 Name）。
+func (id *Identity) IsSubject(username string) bool {
+	if id == nil {
+		return false
+	}
+	target := NormalizeUsername(username)
+	if target == "" {
+		return false
+	}
+	if NormalizeUsername(id.Subject) == target {
+		return true
+	}
+	// 历史兼容：早期动态密钥以 "username:keyname" 作为 Name，无独立 Subject 字段。
+	if id.Subject == "" && id.Name != "" {
+		name := id.Name
+		if idx := strings.IndexByte(name, ':'); idx > 0 {
+			name = name[:idx]
+		}
+		return NormalizeUsername(name) == target
+	}
+	return false
+}
+
 // IsHealthPathOrMethod 判断给定 REST 路径或 gRPC 方法是否为健康探针。
 func IsHealthPathOrMethod(pathOrMethod string) bool {
 	switch pathOrMethod {
@@ -47,6 +74,14 @@ func IsHealthPathOrMethod(pathOrMethod string) bool {
 	return false
 }
 
+// IsAuthPublicPath 判定是否为公开认证端点（登录与新用户自主注册）。
+func IsAuthPublicPath(path string) bool {
+	if len(path) > 1 && path[len(path)-1] == '/' {
+		path = path[:len(path)-1]
+	}
+	return path == "/v1/auth/login" || path == "/v1/auth/users/register"
+}
+
 // PermissionForRESTPath 将 REST 路径映射为所需权限字符串。
 func PermissionForRESTPath(path string) string {
 	// 去除尾部斜杠
@@ -55,8 +90,21 @@ func PermissionForRESTPath(path string) string {
 	}
 	normalized := path
 	switch {
-	case normalized == "/health" || normalized == "/livez" || normalized == "/readyz" || normalized == "/readyz/llm":
+	case normalized == "/health" || normalized == "/livez" || normalized == "/readyz" || normalized == "/readyz/llm" || normalized == "/v1/privacy/health":
 		return "health:read"
+	case normalized == "/v1/auth/login" || normalized == "/v1/auth/users/register":
+		return "auth:public"
+	case strings.HasPrefix(normalized, "/v1/auth/"):
+		// 用户管理面（/v1/auth/logout、/v1/auth/change-password、/v1/auth/users*）：路由层仅要求
+		// 「已认证」，具体授权在 Handler 内按主体（ABAC）判定。
+		// 原因：PermissionForRESTPath 无 method 维度，无法区分「GET 本人资料（自助）」与
+		// 「PUT 他人权限（user:admin）」；若在路由层统一要求 user:read，则不含该 scope 的普通
+		// 业务角色（developer/data-engineer 等）将无法访问自己的账号与密钥，与最小权限相悖。
+		// Handler 内部强制：读=本人|user:read|user:admin，写=本人|user:admin，管理=user:admin。
+		// 注：/v1/auth/login 与 /v1/auth/users/register 已在上一分支返回 "auth:public"。
+		return ""
+	case normalized == "/openapi.json" || normalized == "/docs/openapi.json":
+		return "ops:diagnostics"
 	case normalized == "/metrics":
 		// Prometheus 抓取端点：归入与 /v1/ops/* 同级的运维诊断权限，避免为监控采集器发放
 		// admin 密钥（最小权限）；必须显式登记，不得落入 fail-closed 的 admin 兜底。
@@ -84,7 +132,7 @@ func PermissionForRESTPath(path string) string {
 		return "privacy:budget"
 	case normalized == "/v1/privacy/budget/reset":
 		return "privacy:budget"
-	case normalized == "/v1/privacy/profile/recommend":
+	case normalized == "/v1/privacy/profile/recommend" || normalized == "/v1/privacy/recommend":
 		return "privacy:profile"
 	case normalized == "/v1/privacy/process_file":
 		return "privacy:mask"
@@ -138,10 +186,16 @@ func PermissionForGRPCMethod(method string) string {
 		"KAnonymizeDataFrame": "privacy:kano",
 		"ObfuscateQuery":      "privacy:qol", "ObfuscateQueryBatch": "privacy:qol",
 		"ClassifyField": "classification:read", "ClassifyRecord": "classification:read",
-		"ClassifyTable":   "classification:read",
-		"DynClassify":     "dynclassification:read",
-		"Health":          "health:read",
-		"RecommendParams": "privacy:profile",
+		"DynClassify":        "dynclassification:read",
+		"DynEval":            "dynclassification:read",
+		"DynEvalRecord":      "dynclassification:read",
+		"DynStandards":       "dynclassification:read",
+		"DynDomains":         "dynclassification:read",
+		"DynOperators":       "dynclassification:read",
+		"DynValidate":        "dynclassification:read",
+		"DynGenerateProfile": "dynclassification:write",
+		"Health":             "health:read",
+		"RecommendParams":    "privacy:profile",
 	}
 	if p, ok := mapping[short]; ok {
 		return p
@@ -260,6 +314,12 @@ func ServiceHubPermissionForPath(path string) string {
 	case path == "/health" || path == "/readyz":
 		return ""
 	case path == "/metrics":
+		return ""
+	case path == "/v1/auth/login" || path == "/v1/auth/users/register":
+		return ""
+	case strings.HasPrefix(path, "/v1/auth/"):
+		// 与 PermissionForRESTPath 同义：路由层仅要求已认证，授权在 Handler 内按主体（ABAC）判定，
+		// 使不含 user:read 的普通角色仍能自助管理本人账号与密钥（含登出会话）。
 		return ""
 	case path == "/v1/hub/status" || path == "/v1/hub/tasks" ||
 		strings.HasPrefix(path, "/v1/hub/tasks/") ||

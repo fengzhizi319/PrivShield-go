@@ -110,6 +110,8 @@ Scope 鉴权采用「集中式 `path → permission` 映射」（本服务的 `p
 
 > 通用审计器 `pkgauth.AuditRoutePermissions` / `LogRoutePermissionAudit` 下沉在 [`pkg/auth/route_audit.go`](file:///home/charles/code/PrivShield-go/pkg/auth/route_audit.go)，privacy-engine、service-hub、audit-log 三服务共用同一套机制，各自传入本服务的权限函数与兜底哨兵值（`admin` / `audit:admin`）。对确属「有意仅 `admin` 可见」的基础设施路由（如指标抓取），通过 `allowFallback` 白名单显式豁免，避免噪声的同时保留对新增遗漏路由的拦截力。
 
+> **用户管理面（`/v1/auth/*`）的映射约定**：`/v1/auth/login` 与 `/v1/auth/users/register` 显式映射为公开认证路径（`IsAuthPublicPath`），未携 Token 时注入 `auth:public` 身份放行；其余 `/v1/auth/*` 路径显式映射为**空 scope**（仅需已认证），具体授权在 Handler 内按主体（ABAC：本人 / `user:read` / `user:admin`）强校验。两类映射都属于「已显式登记」，因此既不会落入 `admin` 兜底导致登录死锁（公开端点被要求管理员权限），也不会被 CI 门禁判为漏配。
+
 ### 2.4 第四道防线：数据源租户授权矩阵（ABAC / 租户数据源隔离）
 
 在 `Service-Hub` 的 [`Dispatch`](file:///home/charles/code/PrivShield-go/services/service-hub/internal/handlers/handlers.go) 与 [`FetchAndDesensitize`](file:///home/charles/code/PrivShield-go/services/service-hub/internal/handlers/handlers.go) 入口处，实现了细粒度的数据源授权检查（ABAC）：
@@ -123,7 +125,219 @@ Scope 鉴权采用「集中式 `path → permission` 映射」（本服务的 `p
 
 ---
 
-## 3. 等保三级（GB/T 22239-2019）合规性满足性分析
+## 3. 管理面架构与身份认证凭证体系 (Management Plane & Authentication)
+
+### 3.1 调度中枢双层管理面架构
+
+`Service-Hub` 作为数据流通中枢，构建了「外部业务控制台 + 核心内置管控 API」的双层管理面：
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        业务管理面 (Console Layer)                      │
+│                                                                        │
+│   [前端控制台 app-lz Web :5174] ─── (HTTP JSON) ───► [业务专有 BFF :8085] │
+└───────────────────────────────────────────────────────────────┬────────┘
+                                                                │ 唯一流通通道
+                                                                │ (带鉴权 Token / mTLS)
+                                                                ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                   调度中枢核心管控面 (Service-Hub Control APIs)        │
+│                                                                        │
+│  ┌──────────────────────┐ ┌──────────────────────┐ ┌─────────────────┐ │
+│  │ 调度编排与任务生命周期│ │ 存证链式全局验真     │ │ 运行健康与运维诊断  │ │
+│  │ /v1/hub/dispatch     │ │ /v1/hub/audit/verify │ │ /ops/diagnostics│ │
+│  │ /v1/hub/jobs/:id     │ │                      │ │ /health, /readyz│ │
+│  │ /v1/hub/jobs/:id/canc│ │                      │ │ /metrics        │ │
+│  └──────────────────────┘ └──────────────────────┘ └─────────────────┘ │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+1. **业务可视化控制台 (`console/app-lz` · 数联调度之眼)**：
+   - **前端界面 (`console/app-lz/web`，React 18 + TS + Vite，默认端口 `:5174`)**：
+     提供流式作业监控、流水线拓扑图（Pipeline Visualizer & Topology Panel）、数据源授权矩阵状态查看与任务进度跟踪。
+   - **业务 BFF (`console/app-lz/bff-go`，默认端口 `:8085`)**：
+     业务系统与调度中枢之间的安全适配层。遵循**中枢唯一编排铁律**，BFF 绝不直连底层数据源或脱敏引擎，全部请求统一委托给 `Service-Hub`。
+2. **核心内置管控与运维端点 (Control & Ops APIs)**：
+   - **调度执行**：`POST /v1/hub/fetch-and-desensitize`、`POST /v1/hub/dispatch`（需 `hub:dispatch` 权限）
+   - **作业状态监控**：`GET /v1/hub/jobs`、`GET /v1/hub/jobs/:id`（需 `hub:read` 或 `hub:dispatch` 权限）
+   - **作业中止与干预**：`POST /v1/hub/jobs/:id/cancel`（需要管理员 `hub:admin` 或 `admin` 权限）
+   - **存证全局验真**：`GET /v1/hub/audit/verify`（需要 `hub:admin` 或 `ops:diagnostics` 权限）
+   - **系统运维诊断**：`GET /ops/diagnostics`、`GET /v1/ops/diagnostics`（需要 `ops:diagnostics` 权限）
+   - **探针与指标**：`GET /health`、`GET /readyz`、`GET /livez`（需 `health:read` 权限）、`GET /metrics`（需 `ops:diagnostics` 权限）
+
+### 3.2 登录密钥与凭证体系（API Key & Tokens）
+
+#### 3.2.1 认证机制（云原生零信任模式）
+系统舍弃了传统单体 Web 的弱口令表单与 Session/Cookie 机制（防御会话劫持与 CSRF），全面采用**常量时间 API Key（Bearer Token）细粒度权限模型 + 传输层 mTLS 双向认证**。
+
+#### 3.2.2 凭据配置环境变量与语法
+- **多角色/多租户配置（推荐生产使用）**：
+  - 环境变量：`SERVICE_HUB_API_KEYS`
+  - 语法格式：`token:identity_name:scope1,scope2[:expires_at]`（多条以分号 `;` 分隔）
+  - 支持文件动态挂载：`SERVICE_HUB_API_KEYS_FILE`（支持热轮换）
+- **单密钥模式（开发/简易环境）**：
+  - 环境变量：`SERVICE_HUB_API_KEY`（等价于拥有 `*` 全局权限的默认 Token）
+- **入站 HTTP 请求头携带规范**：
+  ```http
+  Authorization: Bearer <token>
+  # 或
+  X-API-Key: <token>
+  ```
+- **入站 gRPC 元数据携带规范**：
+  ```text
+  authorization: Bearer <token>  或  x-api-key: <token>
+  ```
+
+#### 3.2.3 典型预置凭据角色矩阵
+
+| 角色类型 | 典型配置示例 (SERVICE_HUB_API_KEYS) | 持有 Scope 权限 | 适用主体 / 操作场景 |
+|---|---|---|---|
+| **超级/中枢管理员** | `hub-admin-secret:hub-admin:admin` 或 `...:hub:admin,ops:diagnostics` | `admin` 或 `hub:admin` | 控制台系统运维、取消异常运行中的任务、执行存证链路验真、访问诊断端点 |
+| **业务租户 (app-lz)** | `app-lz-token:app-lz:hub:dispatch,hub:read,hub:dispatch:ds_yibao,hub:dispatch:ds_kangyang` | `hub:dispatch`, `hub:read` + ABAC 数据源白名单 | 业务控制台 BFF 调度授权数据源数据，尝试访问 `ds_shebao` 等未授权源直接报 403 |
+| **只读监控探针** | `ops-probe-key:monitor:ops:diagnostics,health:read` | `ops:diagnostics`, `health:read` | Prometheus 采集器、K8s 探针、运维巡检系统调用 `/ops/diagnostics` 与 `/metrics` |
+
+#### 3.2.4 调度中枢出站访问下游组件凭据
+
+`Service-Hub` 作为中枢，向下游发起调用时代表自身服务身份，需配置以下出站凭据：
+- `PRIVACY_AGENT_AUTH_KEY`：访问核心脱敏引擎 `privacy-engine`（`:8079` / `:50051`）的 Token（须具备 `agent:process`、`privacy:mask` 等计算权限）；
+- `SERVICE_HUB_AUDIT_LOG_AUTH_KEY`：访问不可篡改存证服务 `audit-log`（`:8084`）的 Token（须具备 `audit:write` 存证写入权限）；
+- `SERVICE_HUB_DATASOURCE_AUTH_KEY`：访问数据源资产管理服务 `mock-datasource`（`:8083`）的 Token（须具备 `datasource:read` 权限）。
+
+### 3.3 普通用户与租户全生命周期管理系统设计 (User & Tenant Lifecycle Management)
+
+#### 3.3.1 现状评估与重新设计动因
+此前系统中鉴权主要依赖 `SERVICE_HUB_API_KEYS` 环境变量或静态文件注入，存在以下管理面缺陷：
+1. **普通用户无法动态注册与自助申请**：外部合作机构、业务部门或个人开发者无法通过管理界面/API 完成身份注册与合规建档；
+2. **权限授予与调整缺乏动态闭环**：权限变更依赖修改环境变量并重启进程，无法做到运行时秒级授权、降权或实时熔断；
+3. **缺少账号生命周期状态管理**：无法对可疑账号实施临时冻结（Freeze）、解除冻结或彻底注销，无法满足等保三级关于“账户注销与权限回收”的强制控制点。
+4. **Token 与责任主体脱节**：静态 Token 无法回溯到具体自然人或机构，审计溯源链不完整。
+
+落地后的三条**安全边界**（与默认值）：公开自注册默认**关闭**（`SERVICE_HUB_USER_SELF_REGISTER=false`），仅在用户库为空时允许匿名创建**首个** `admin`（引导期）；其余账号一律由管理员开户；降权/冻结/注销受**最后管理员保护**约束；登录同时受**每 IP 限速**与**单账号锁定**双层防爆破控制。
+
+为此，系统重构并建立了企业级**普通用户全生命周期与动态权限管理面**：
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│               普通用户与租户全生命周期状态机 (User Lifecycle)           │
+│                                                                        │
+│            [注册请求]                                                  │
+│                │                                                       │
+│                ▼                                                       │
+│        ┌───────────────┐        管理员审批 / 动态授权                   │
+│        │  待审批/初始态 │ ─────────────────────────────┐               │
+│        └───────┬───────┘                              │               │
+│                │ 默认启用                             ▼               │
+│                ▼                              ┌───────────────┐        │
+│        ┌───────────────┐     安全风控/冻结     │  正常激活态   │        │
+│        │   Active 正常 ├─────────────────────►│ (持有 APIKey) │        │
+│        └───────▲───────┘                      └───────┬───────┘        │
+│                │                                      │                │
+│                │ 解冻                                 │ 违规/离职      │
+│        ┌───────┴───────┐                              ▼                │
+│        │Disabled 已冻结│◄───────────────────── 权限回收/密钥失效       │
+│        └───────┬───────┘                                               │
+│                │ 账号注销 (Delete)                                     │
+│                ▼                                                       │
+│        ┌───────────────┐                                               │
+│        │ Deleted 已注销│ (所有关联 Token 物理吊销，历史审计存证归档永久锁定)│
+│        └───────────────┘                                               │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 3.3.2 角色权限矩阵与模型设计 (RBAC + ABAC)
+
+系统结合三级等保“三权分立”原则预置 8 类角色，并支持细粒度自定义 Scope 与数据源级授权。
+**唯一事实源**为 [`pkg/auth/user.go::DefaultScopesForRole`](../../../pkg/auth/user.go)，本表与代码必须一致（`KnownRoles` 为合法角色白名单，非法角色开户直接 `400 INVALID_ROLE`）：
+
+| 角色代码 (`role`) | 角色名称 | 预置权限集合 (`scopes`) | 适用主体与管理职责 |
+|---|---|---|---|
+| `admin` | 超级管理员 | `*`, `user:admin`, `hub:admin`, `ops:admin`, `privacy:budget` | 平台配置、用户权限审批、全局任务干预、存证链强制验真、预算重置 |
+| `operator` | 调度运营员 | `hub:dispatch`, `hub:read`, `hub:admin`, `user:read` | 日常调度流水线运维、任务重试/取消、查看用户清单 |
+| `data-engineer` | 数据工程师 | `privacy:mask`, `privacy:dp`, `privacy:kano`, `medical:process`, `file:process` | 脱敏/差分隐私/K-匿名计算与医疗、文件流水线，无权管理用户与规则 |
+| `compliance-officer` | 合规审计专员 | `dynclassification:read`, `dynclassification:write`, `privacy:budget`, `ops:diagnostics`, `user:read` | 分类分级标准与策略定义、预算消耗监控、合规审计 |
+| `auditor` | 安全审计员 | `audit:read`, `ops:diagnostics`, `health:read`, `user:read` | 独立安全员：调取存证链、验真出域指纹、安全基线审查 |
+| `developer` | 业务开发者 | `privacy:mask`, `medical:process`, `hub:dispatch`, `hub:read`, `health:read` | 外部业务部门/合作机构账号（公开自注册的默认角色），**不含 `user:read`** |
+| `user` | 普通用户 | `privacy:mask`, `health:read` | 最小权限个体账号，仅可触发基础脱敏算子 |
+| `guest` | 只读访客 | `health:read` | 仅可访问健康探针 |
+
+**关键授权语义（务必与代码一致）**：
+
+1. **`user:read` 是只读 scope**：仅可查询用户清单/详情与密钥概要，**不得**据此为他人签发或吊销密钥、改密、改权、冻结（否则任何持只读审计 scope 的账号都能越权提权）。判定函数见 `canViewUserAccount`（本人 | `user:read` | `user:admin`）与 `canManageUserAccount`（本人 | `user:admin`）。
+2. **ABAC 主体绑定**：动态签发的 API Key 与登录会话在 `KeyConfig.Subject` 上绑定自然人/机构账号，认证后注入 `Identity.Subject`，使“本人自助”判定与数据源级 ABAC（`hub:dispatch:<datasource_id>`）可追溯到责任主体。
+3. **特权角色不可自注册**：`admin`/`operator`/`compliance-officer`/`auditor` 属特权角色（`IsPrivilegedRole`），公开自注册通道一律强制降权为 `developer`，且禁止携带自定义 scope。
+4. **越权签发拦截**：普通用户为自己签发 Key 时，申请的 scope 必须是自身已持权限的子集（`ErrForbiddenScope` → `403 FORBIDDEN_SCOPE`）。
+5. **最后管理员保护**：降权、冻结、注销若会使系统失去最后一个活跃管理员，一律拒绝（`ErrLastAdmin` → `409 LAST_ADMIN`），防止管理面永久无主。
+
+#### 3.3.3 用户管理核心 API 规范
+
+全部端点挂载在 `/v1/auth` 命名空间（由 `pkg/auth/user_handlers.go::RegisterUserRoutes` 统一注册），成功响应为标准 5 字段信封（`code`/`message`/`data`/`trace_id`/`timestamp`），错误响应为 `code`/`message`/`detail`(可选)/`trace_id`/`timestamp`：
+
+| 方法与路径 | 权限与访问控制 | 核心行为与联动 |
+|---|---|---|
+| `POST /v1/auth/login` | 公开免密 | 校验等保口令与防爆破锁定；成功下发会话 Bearer Token（默认 24h，内存态不落盘）；用户不存在与口令错误统一 `401`，抑制账号枚举 |
+| `POST /v1/auth/users/register` | 公开（**仅引导期首个 admin**，或显式开启自注册）/ `user:admin` | 用户库为空时允许创建首个管理员（角色必须为 `admin`，否则 `400 INVALID_BOOTSTRAP_ROLE`）；默认关闭公开自注册（`403 SELF_REGISTER_DISABLED`）；开启时强制降权 `developer` 并禁止特权角色与自定义 scope |
+| `POST /v1/auth/logout` | 已认证 | 吊销当前会话 Token，同一 Token 后续请求立即 `401`；长期 API Key 不适用（`404 SESSION_NOT_FOUND`） |
+| `POST /v1/auth/change-password` | 本人或 `user:admin` | 校验旧口令 + 新口令等保复杂度 + 口令历史禁重用（最近 3 个）；成功后**强制吊销该用户全部会话** |
+| `GET /v1/auth/users` | `user:read` 或 `user:admin` | 输出脱敏摘要（抹除口令哈希与 Token 材料） |
+| `GET /v1/auth/users/:username` | 本人或 `user:read` / `user:admin` | 用户档案 + 名下 API Key 概要 |
+| `PUT /v1/auth/users/:username/permissions` | `user:admin` | 更新角色与自定义 scope；名下所有活密钥权限**毫秒级联动刷新** |
+| `PUT /v1/auth/users/:username/status` | `user:admin` | `disabled` 时名下全部 Key 与会话立即失效（拦截器 `401`）；`active` 解冻后自动恢复 |
+| `DELETE /v1/auth/users/:username` | `user:admin` | 删除账号，所有活跃 Token 从活密钥池注销 |
+| `POST /v1/auth/users/:username/keys` | 本人或 `user:admin` | 生成 `psk_<32hex>` 随机 Token，**明文仅本次响应下发一次**，服务端只存 SHA-256 摘要；即刻载入活密钥表 |
+| `GET /v1/auth/users/:username/keys` | 本人或 `user:read` / `user:admin` | 仅输出 `key_id`/`name`/`token_prefix`/`scopes`/`expires_at`，绝不回显明文 |
+| `DELETE /v1/auth/users/:username/keys/:key_id` | 本人或 `user:admin` | 立即从活密钥表剔除，后续请求直接 `401` |
+
+> **路由层与 Handler 层的权限分工**：`/v1/auth/login` 与 `/v1/auth/users/register` 在 `ServiceHubPermissionForPath` 中显式映射为公开认证路径；其余 `/v1/auth/*` 路径映射为空 scope（“仅需已认证”），具体授权在 Handler 内按主体（ABAC）强校验。这样既不会让新端点 fail-closed 落入 `admin` 兜底（由 `TestAllRoutesHaveExplicitPermission` 门禁守护），也不会因“只读 scope”而意外获得写能力。
+
+#### 3.3.4 口令与会话安全控制常数（等保三级 G-03 / G-04 / G-14）
+
+以下常数定义于 [`pkg/auth/user.go`](../../../pkg/auth/user.go)，属**编译期不可绕过**的硬约束：
+
+| 控制项 | 取值 | 等保/密评对应 | 说明 |
+|---|---|---|---|
+| 口令存储 | `bcrypt cost=12` 加盐杂凑 | G-04 | 明文严禁落盘或进日志；bcrypt 计算在写锁外执行，避免阻塞并发认证 |
+| 口令长度 | `8 ~ 72` 字节 | G-04 | 上限 72 是 bcrypt 硬限制：超出部分被**静默截断**会使两个不同口令等价，故显式拒绝（`ErrPasswordTooLong`） |
+| 字符类别 | 大写/小写/数字/特殊字符 **至少 3 类** | G-04 | 不足返回 `ErrPasswordWeak` |
+| 禁止包含用户名 | 含**逆序**同样拒绝 | G-04 | 返回独立哨兵错误 `ErrPasswordContainsName`，便于客户端给出可操作提示 |
+| 弱口令字典 | 18 项常见弱口令前缀/全等拦截 | G-04 | `ErrPasswordBlacklisted` |
+| 口令历史 | 最近 **3** 个不得重用；新旧不得相同 | G-04 | `ErrPasswordReused` / `ErrPasswordSame` |
+| 连续失败锁定 | **5** 次失败 → 锁定 **15** 分钟 | G-03 | 登录成功自动清零；锁定期内即使口令正确也返回 `429 ACCOUNT_LOCKED` 并携带 `Retry-After` |
+| 登录限速 | 每 IP 每分钟 **20** 次（8 分片固定窗口） | G-03 / 抗 DoS | 超限 `429 RATE_LIMITED` + `Retry-After`；缓解口令喷洒与“故意锁死管理员” |
+| 会话有效期 | 默认 = 上限 **24h** | G-14 | 请求更长 TTL 自动收敛到上限；会话为**内存态**，重启即失效（不持久化凭证） |
+| 并发会话配额 | 每用户 **8** 个 | G-14 | 超出淘汰最早会话 |
+| API Key 有效期 | 默认 **30 天**，上限 **90 天** | G-14 | `ttl_seconds=0` 归一化为 30 天而非“永不过期”；负值/超限 `400 INVALID_TTL` |
+| API Key 配额 | 每用户 **32** 个活跃 Key | 抗 DoS | 认证为 O(n) 常量时间比对，须防止密钥表无界膨胀 |
+| 特权操作审计 | 全量结构化 `auth_audit` 日志 | G-07 | 记录 `actor`/`target_user`/`result`/`reason`/`client_ip`/`trace_id`；严禁记录口令与明文 Token |
+
+#### 3.3.5 运行时零重启动态生效（双通道活密钥）
+
+认证内核在每个请求上都要取得“当前生效的密钥全集”。为避免热路径重复拷贝，`pkg/auth` 采用**双通道 + 版本驱动缓存**：
+
+| 通道 | 索引方式 | 来源 | 落盘内容 |
+|---|---|---|---|
+| `Settings.LiveInternalKeys` | **明文 Token** | 静态 `SERVICE_HUB_API_KEYS` + `KeyStore`（`SERVICE_HUB_API_KEYS_FILE` / K8s Secret 热轮转） | 明文（由部署方控制文件权限） |
+| `Settings.LiveInternalHashedKeys` | **`HashToken`（SHA-256 hex）** | `UserStore` 动态用户 API Key 与登录会话 | **仅摘要 + bcrypt 口令哈希**，明文 Token 永不落盘 |
+
+- **版本驱动聚合器**（`pkg/auth/live_keys.go::Aggregator`）：静态密钥与热轮转密钥合并后的快照仅在任一来源版本号变化时重建，其余请求零分配复用同一份**只读共享快照**；重建时对配置源做深拷贝，快照与来源内部状态无指针别名。
+- **毫秒级联动**：权限调整、冻结/解冻、Key 签发/吊销、改密、注销都会 `bump` 版本号，下一次认证即读到新状态，无需重启进程。
+- **REST 与 gRPC 凭证视图对称**：`main.go` 在构造 `handlers.Server` 后调用 `grpcserver.SetLiveAuthProviders(server.LiveAuthKeys(), server.LiveHashedAuthKeys())`，确保登录会话与动态密钥在两条协议路径上同时生效（否则会出现“REST 可登录、gRPC 一律 Unauthenticated”的双路径不对称）。
+- **鉴权模式运行期动态判定**：存在静态/热轮转 Scope Key → Scope 细粒度鉴权；未配置遗留单 `SERVICE_HUB_API_KEY` 且用户体系已开户 → 同样走 Scope 鉴权（纯动态开户部署在引导期创建首个 admin 后自动从开发免密透传收敛为强制鉴权）；其余情形 → 遗留单 Key 模式，保持向后兼容。
+- **持久化保障**：`UserStore` 采用临时文件写入 + `os.Rename` 原子替换，目录 `0700`、文件 `0600`；服务重启后账号、口令哈希与**有效 API Key 摘要**自动无损恢复（会话 Token 因内存态而失效，需重新登录）。
+
+#### 3.3.6 用户体系环境变量
+
+| 变量 | 默认值 | 用途 |
+|---|---|---|
+| `SERVICE_HUB_USER_STORE_FILE` | 空（纯内存） | 用户与动态密钥持久化文件路径（如 `data/users.json`）；只写入摘要与口令哈希 |
+| `SERVICE_HUB_USER_SELF_REGISTER` | `false` | 是否开放公开自注册（生产建议保持关闭，账号一律由管理员开户） |
+| `SERVICE_HUB_USER_SESSION_TTL` | `24h` | 登录会话有效期，支持 `24h`/`15m` 或纯秒数；超过 24h 自动收敛 |
+| `SERVICE_HUB_USER_LOGIN_THROTTLE_PER_MIN` | `20` | 登录端点每 IP 每分钟最大尝试次数，`<=0` 关闭该层限速 |
+
+> 变量名以 [`pkg/auth/user_handlers.go::userPolicyEnvTable`](../../../pkg/auth/user_handlers.go) 为唯一事实源（privacy-engine 侧前缀为 `AGENT_AUTH_`），编排清单与本表须保持一致，否则会被 `scripts/check_orchestration_env_consistency.sh` 门禁判定为幽灵变量。
+
+---
+
+## 4. 等保三级（GB/T 22239-2019）合规性满足性分析
 
 对标 GB/T 22239-2019《信息安全技术 网络安全等级保护基本要求》第三级技术控制项：
 
@@ -144,7 +358,7 @@ Scope 鉴权采用「集中式 `path → permission` 映射」（本服务的 `p
 
 ---
 
-## 4. 商用密码应用安全性评估（密评 GB/T 39786-2021 第三级）满足性分析
+## 5. 商用密码应用安全性评估（密评 GB/T 39786-2021 第三级）满足性分析
 
 对标 GB/T 39786-2021《信息系统密码应用基本要求》第三级：
 
@@ -164,7 +378,7 @@ Scope 鉴权采用「集中式 `path → permission` 映射」（本服务的 `p
 └──────────────────┴─────────────────────────────────────────────────────┘
 ```
 
-### 4.1 密码算法合规性
+### 5.1 密码算法合规性
 
 | 国密算法 | 算法标准 | 适用场景与模块实现 |
 |---|---|---|
@@ -172,19 +386,19 @@ Scope 鉴权采用「集中式 `path → permission` 映射」（本服务的 `p
 | **SM3** (密码杂凑) | GM/T 0004-2012 / GB/T 32907 | 出域数据输入/输出数字指纹、9 要素不可篡改哈希链、HMAC 消息鉴别码 |
 | **SM4** (分组对称密码) | GM/T 0002-2012 / GB/T 32907 | TLCP 会话数据传输加密（SM4-CBC/GCM）；敏感字段国密可逆/不可逆掩码 |
 
-### 4.2 网络与通信安全（TLCP 国密通道）
+### 5.2 网络与通信安全（TLCP 国密通道）
 - **国密传输模式**：服务支持通过配置 `SERVICE_HUB_TLS_ENABLED=true` 和 `AGENT_TLS_NATIONAL_CIPHER=true`，启用纯国密 GM/T 0024 TLCP 传输协议；
 - **双证书体系**：服务端配置签名证书/私钥（用于身份鉴别）与加密证书/私钥（用于密钥协商协商）；
 - **出站信任配置**：在中枢调用底层 `privacy-engine` 时，配置 `PRIVACY_AGENT_URLS="tlcp://..."`，通过 `PRIVACY_AGENT_TLCP_CA_FILE` 验证引擎的 SM2 证书链。
 
-### 4.3 应用与数据安全（出域防篡改与存证链）
+### 5.3 应用与数据安全（出域防篡改与存证链）
 - **9 要素不可篡改链**：调度中枢完成任务或同步调用后，采集包括任务 ID、数据源、API Code、操作类型、状态、输入哈希（SM3）、输出哈希（SM3）、前序哈希等 9 大核心要素；
 - **无密钥/带密钥哈希链**：支持密钥化 HMAC-SM3，由权威存证服务完成哈希追加，防止内部特权人员篡改中间状态；
 - **全链路溯源验真**：提供 `/v1/hub/audit/verify` 接口，按时间序列回放哈希链，一旦发现任何一条记录的输入指纹或输出指纹被篡改，即刻告警定位。
 
 ---
 
-## 5. 生产威胁模型（STRIDE）与防御矩阵
+## 6. 生产威胁模型（STRIDE）与防御矩阵
 
 | 威胁类型 (STRIDE) | 潜在攻击场景 | Service-Hub 系统级防御对策 |
 |---|---|---|
@@ -197,13 +411,15 @@ Scope 鉴权采用「集中式 `path → permission` 映射」（本服务的 `p
 
 ---
 
-## 6. 生产安全部署 Checklist
+## 7. 生产安全部署 Checklist
 
 在正式投产或进行等保/密评测评前，运维团队必须核对以下配置项：
 
 - [ ] **网络层隔离**：已确认 `privacy-engine:8079` 和 `mock-datasource:8083` 未对外部网络做公网映射，且防火墙仅放行 `8082`；
 - [ ] **生产零信任门禁**：配置 `SERVICE_HUB_REQUIRE_TLS=true`，确保未配 TLS 时服务拒绝启动；
 - [ ] **强鉴权开启**：`SERVICE_HUB_API_KEY` 或 `SERVICE_HUB_API_KEYS` 非空，禁止免密生产运行；
+- [ ] **用户体系安全基线**：`SERVICE_HUB_USER_SELF_REGISTER` 保持 `false`（或经安全审批后显式开启）；首个 `admin` 已由运维当面创建并立即改密；`SERVICE_HUB_USER_STORE_FILE` 指向持久化卷（目录 `0700`/文件 `0600`，只存摘要与口令哈希）；
+- [ ] **凭证视图对称**：已确认 REST 与 gRPC 共享同一活密钥视图（`grpcserver.SetLiveAuthProviders` 已接线），登录会话与动态密钥在两条协议路径上同时生效；
 - [ ] **外部申请方最小权限**：外部申请方（如 `app-lz`）签发的 API Key 仅配置特定的 `hub:dispatch:<ds_name>` 权限，未授予 `*` 或内部 Scope；
 - [ ] **国密证书齐备**：TLCP 模式下，签名证书 `server-sign.crt`、加密证书 `server-enc.crt` 及 CA 证书真实有效且无过期；
 - [ ] **存证服务强联动**：配置 `SERVICE_HUB_AUDIT_LOG_URLS` 并设置 `SERVICE_HUB_STRICT_STORAGE=true`，确保出域存证链路完整可用；

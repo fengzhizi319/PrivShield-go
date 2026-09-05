@@ -443,8 +443,14 @@ func TestClassify_Routes(t *testing.T) {
 	}{
 		{"/v1/dynclassification/classify", "POST", map[string]any{"field": "phone", "value": "13812345678"}},
 		{"/v1/dynclassification/classify/batch", "POST", map[string]any{"records": []map[string]any{{"phone": "13812345678"}}}},
+		{"/v1/dynclassification/eval", "POST", map[string]any{"fieldName": "phone", "value": "13812345678"}},
 		{"/v1/dynclassification/eval_record", "POST", map[string]any{"record": map[string]any{"phone": "13812345678"}}},
 		{"/v1/dynclassification/profiles/reload", "POST", nil},
+		{"/v1/dynclassification/standards", "GET", nil},
+		{"/v1/dynclassification/domains", "GET", nil},
+		{"/v1/dynclassification/operators", "GET", nil},
+		{"/v1/dynclassification/validate", "POST", map[string]any{}},
+		{"/v1/dynclassification/generate_profile", "POST", map[string]any{"docPath": "docs/standard/四川省健康医疗大数据应用指南.md"}},
 	}
 	for _, tc := range cases {
 		w := doJSON(r, tc.method, tc.path, tc.body)
@@ -725,5 +731,216 @@ func TestAuth_Enabled_Denied_And_Allowed(t *testing.T) {
 	w6 := doJSON(r, "GET", "/health", nil)
 	if w6.Code != http.StatusOK {
 		t.Fatalf("expected 200 for health endpoint, got %d", w6.Code)
+	}
+}
+
+func TestBatchCompatibilityPayloads(t *testing.T) {
+	r, _ := setupRouter(t)
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		body   map[string]any
+	}{
+		{
+			name:   "Health POST",
+			method: "POST",
+			path:   "/v1/privacy/health",
+			body:   map[string]any{},
+		},
+		{
+			name:   "MaskBatch with field_names and values",
+			method: "POST",
+			path:   "/v1/privacy/mask/batch",
+			body: map[string]any{
+				"field_names": []string{"email", "phone"},
+				"values":      []string{"bob@example.com", "13900139000"},
+			},
+		},
+		{
+			name:   "DP Count with values array",
+			method: "POST",
+			path:   "/v1/privacy/dp/count",
+			body: map[string]any{
+				"values":  []float64{1.0, 2.0, 3.0},
+				"epsilon": 0.1,
+			},
+		},
+		{
+			name:   "DP Mean without delta",
+			method: "POST",
+			path:   "/v1/privacy/dp/mean",
+			body: map[string]any{
+				"values":     []float64{10.0, 20.0, 30.0},
+				"epsilon":    0.1,
+				"clip_upper": 50.0,
+			},
+		},
+		{
+			name:   "DP Noisy Count with true_count",
+			method: "POST",
+			path:   "/v1/privacy/dp/noisy_count",
+			body: map[string]any{
+				"true_count": 100.0,
+				"epsilon":    0.1,
+			},
+		},
+		{
+			name:   "DP Noisy Sum with true_sum",
+			method: "POST",
+			path:   "/v1/privacy/dp/noisy_sum",
+			body: map[string]any{
+				"true_sum":    1000.0,
+				"epsilon":     0.1,
+				"sensitivity": 10.0,
+			},
+		},
+		{
+			name:   "DP Noisy Mean with true_sum and true_count",
+			method: "POST",
+			path:   "/v1/privacy/dp/noisy_mean",
+			body: map[string]any{
+				"true_sum":    1000.0,
+				"true_count":  10.0,
+				"epsilon":     0.1,
+				"sensitivity": 10.0,
+			},
+		},
+		{
+			name:   "DP Chunked Mean with clip_upper",
+			method: "POST",
+			path:   "/v1/privacy/dp/chunked_mean",
+			body: map[string]any{
+				"chunks":     [][]float64{{1.0, 2.0}, {3.0, 4.0}},
+				"epsilon":    0.1,
+				"clip_upper": 10.0,
+			},
+		},
+		{
+			name:   "DP Aggregate with slice specs",
+			method: "POST",
+			path:   "/v1/privacy/dp/aggregate",
+			body: map[string]any{
+				"rows": []map[string]string{
+					{"age": "20", "salary": "1000"},
+					{"age": "30", "salary": "2000"},
+				},
+				"specs": map[string]any{
+					"age":    []any{"mean", map[string]any{"clip_upper": 100}},
+					"salary": "sum",
+				},
+				"epsilon": 0.5,
+			},
+		},
+		{
+			name:   "K-Anonymize Record with single record and qi_cols",
+			method: "POST",
+			path:   "/v1/privacy/k_anonymize/record",
+			body: map[string]any{
+				"record":  map[string]string{"age": "30", "zip": "100000"},
+				"qi_cols": []string{"age", "zip"},
+				"k":       2,
+			},
+		},
+		{
+			name:   "K-Anonymize Table with rows and qi_cols",
+			method: "POST",
+			path:   "/v1/privacy/k_anonymize/table",
+			body: map[string]any{
+				"rows": []map[string]string{
+					{"age": "30", "zip": "100000"},
+					{"age": "31", "zip": "100001"},
+					{"age": "32", "zip": "100002"},
+					{"age": "33", "zip": "100003"},
+				},
+				"qi_cols": []string{"age", "zip"},
+				"k":       2,
+			},
+		},
+		{
+			name:   "K-Anonymize DataFrame with data and qi_cols",
+			method: "POST",
+			path:   "/v1/privacy/k_anonymize/dataframe",
+			body: map[string]any{
+				"data": []map[string]any{
+					{"age": "30", "zip": "100000"},
+					{"age": "31", "zip": "100001"},
+					{"age": "32", "zip": "100002"},
+					{"age": "33", "zip": "100003"},
+				},
+				"qi_cols": []string{"age", "zip"},
+				"k":       2,
+			},
+		},
+		{
+			name:   "Obfuscate Query with num_dummies",
+			method: "POST",
+			path:   "/v1/privacy/qol/obfuscate",
+			body: map[string]any{
+				"query":       "高血压饮食",
+				"num_dummies": 3,
+			},
+		},
+		{
+			name:   "Obfuscate Batch with num_dummies",
+			method: "POST",
+			path:   "/v1/privacy/qol/obfuscate/batch",
+			body: map[string]any{
+				"queries":     []string{"高血压饮食", "糖尿病药物"},
+				"num_dummies": 2,
+			},
+		},
+		{
+			name:   "Profile Recommend POST",
+			method: "POST",
+			path:   "/v1/privacy/profile/recommend",
+			body: map[string]any{
+				"namespace": "test",
+				"values":    []float64{1.0, 2.0, 3.0},
+			},
+		},
+		{
+			name:   "Dyn Eval Record",
+			method: "POST",
+			path:   "/v1/dynclassification/eval_record",
+			body: map[string]any{
+				"record": map[string]string{"name": "李四", "phone": "13800138000"},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := doJSON(r, tc.method, tc.path, tc.body)
+			if w.Code != http.StatusOK {
+				t.Fatalf("path %s failed with code %d: %s", tc.path, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestOpenAPISpec(t *testing.T) {
+	r, _ := setupRouter(t)
+
+	for _, p := range []string{"/openapi.json", "/docs/openapi.json"} {
+		w := doJSON(r, "GET", p, nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("[%s] expected 200, got %d: %s", p, w.Code, w.Body.String())
+		}
+		var spec map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &spec); err != nil {
+			t.Fatalf("[%s] unmarshal openapi spec failed: %v", p, err)
+		}
+		if spec["openapi"] != "3.0.3" {
+			t.Fatalf("[%s] expected openapi 3.0.3, got %v", p, spec["openapi"])
+		}
+		paths, ok := spec["paths"].(map[string]any)
+		if !ok || len(paths) == 0 {
+			t.Fatalf("[%s] expected non-empty paths, got %v", p, spec["paths"])
+		}
+		if paths["/v1/privacy/mask"] == nil {
+			t.Fatalf("[%s] expected /v1/privacy/mask in paths", p)
+		}
 	}
 }

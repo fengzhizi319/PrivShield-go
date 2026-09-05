@@ -21,6 +21,7 @@ type KeyStore struct {
 	stopCh      chan struct{}
 	stopOnce    sync.Once
 	lastModTime time.Time
+	version     versionCounter // 每次重载/更新递增，供 Aggregator 判定快照是否需要重建
 }
 
 // NewKeyStore 创建并启动一个 KeyStore，从指定文件加载 API Key。
@@ -92,6 +93,9 @@ func NewKeyStoreWithWatcher(ctx context.Context, watcher SecretWatcher, secretNa
 
 // Keys 返回当前 API Key 映射的只读快照。
 func (ks *KeyStore) Keys() map[string]*KeyConfig {
+	if ks == nil {
+		return nil
+	}
 	ks.mu.RLock()
 	defer ks.mu.RUnlock()
 	result := make(map[string]*KeyConfig, len(ks.keys))
@@ -101,8 +105,22 @@ func (ks *KeyStore) Keys() map[string]*KeyConfig {
 	return result
 }
 
+// LiveKeys 实现 LiveKeySource：返回当前文件/Secret 密钥快照（与 Keys 等价，语义上供聚合器使用）。
+func (ks *KeyStore) LiveKeys() map[string]*KeyConfig { return ks.Keys() }
+
+// Version 实现 LiveKeySource：返回密钥集变更版本号（重载/编程更新时递增）。
+func (ks *KeyStore) Version() uint64 {
+	if ks == nil {
+		return 0
+	}
+	return ks.version.get()
+}
+
 // Close 停止后台轮询 goroutine。
 func (ks *KeyStore) Close() {
+	if ks == nil {
+		return
+	}
 	ks.stopOnce.Do(func() {
 		close(ks.stopCh)
 	})
@@ -153,6 +171,7 @@ func (ks *KeyStore) reload() error {
 	ks.keys = keys
 	ks.lastModTime = info.ModTime()
 	ks.mu.Unlock()
+	ks.version.bump()
 
 	slog.Info("KeyStore: loaded keys", "path", ks.path, "count", len(keys))
 	return nil
@@ -165,6 +184,7 @@ func (ks *KeyStore) ReloadContent(content string) error {
 	ks.keys = keys
 	ks.lastModTime = time.Now()
 	ks.mu.Unlock()
+	ks.version.bump()
 	slog.Info("KeyStore: content reloaded", "source", ks.path, "count", len(keys))
 	return nil
 }
@@ -179,5 +199,6 @@ func (ks *KeyStore) UpdateKeys(newKeys map[string]*KeyConfig) {
 	}
 	ks.keys = copied
 	ks.lastModTime = time.Now()
+	ks.version.bump()
 	slog.Info("KeyStore: keys updated programmatically", "source", ks.path, "count", len(copied))
 }

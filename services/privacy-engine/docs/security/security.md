@@ -20,6 +20,10 @@
 - [1. 引擎安全定位与信任边界](#1-引擎安全定位与信任边界)
 - [2. 纵深防御中间件链：有序装配原理](#2-纵深防御中间件链有序装配原理)
 - [3. 身份认证与接口级 Scope 权限控制](#3-身份认证与接口级-scope-权限控制)
+  - [3.9 引擎管理面架构与登录凭据体系](#39-引擎管理面架构与登录凭据体系-management-plane--credentials)
+    - [3.9.1 是否有管理面？（双层管理面架构）](#391-是否有管理面双层管理面架构)
+    - [3.9.2 登录密钥与凭据体系是什么？](#392-登录密钥与凭据体系是什么)
+    - [3.9.3 普通用户与租户全生命周期管理系统设计](#393-普通用户与租户全生命周期管理系统设计-user--tenant-lifecycle-management)
 - [4. 传输层安全：TLS 1.3 / 国密 TLCP / mTLS CN 白名单](#4-传输层安全tls-13--国密-tlcp--mtls-cn-白名单)
 - [5. 隐私计算内核安全：国密算法与数据防护](#5-隐私计算内核安全国密算法与数据防护)
 - [6. Web 攻击净化 WAF 与 DoS 纵深防御](#6-web-攻击净化-waf-与-dos-纵深防御)
@@ -431,6 +435,215 @@ pkgauth.LogRoutePermissionAudit(nil, "privacy-engine", r.Routes(),
 ```
 
 > **新增接口规范动作**：在 `routes.go` 注册路由后，必须同步在 `PermissionForRESTPath` 补充对应 `case`；否则启动审计会告警、CI 门禁会拦截。对确属「有意仅 `admin` 可见」的基础设施路由（如 pprof），通过 `allowFallback` 白名单显式豁免，避免误报。
+
+### 3.9 引擎管理面架构与登录凭据体系 (Management Plane & Credentials)
+
+#### 3.9.1 是否有管理面？（双层管理面架构）
+
+`privacy-engine` 拥有**图形化管理控制台生态**与**引擎内部原生管控 API** 构成的双层管理面：
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                   管理控制台生态 (Engine Console)                      │
+│                                                                        │
+│   [Web 前端 :5173] ─── (HTTP JSON) ───► [BFF 代理后端 :8081]           │
+│   • 44 隐私原语演练场                   • 协议分发 (REST / gRPC)        │
+│   • 动态规则/标准体系管理               • 凭据代发 & 批量测试聚合       │
+│   • 批量测试矩阵 (39 样例)                                             │
+└──────────────────────────────────┬─────────────────────────────────────┘
+                                   │ 代理访问 (REST :8079 / gRPC :50051)
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                 引擎原生运维与管控端点 (Internal Control & Ops APIs)    │
+│                                                                        │
+│  ┌──────────────────────┐ ┌──────────────────────┐ ┌─────────────────┐ │
+│  │ 动态分类规则与策略管控│ │ 隐私预算管理与重置   │ │ 系统诊断与性能剖析  │ │
+│  │ /v1/dynclass.../eval │ │ /v1/privacy/budget   │ │ /ops/diagnostics│ │
+│  │ .../profiles/reload  │ │ .../budget/reset     │ │ /openapi.json   │ │
+│  │ .../generate_profile │ │                      │ │ /debug/pprof/*  │ │
+│  └──────────────────────┘ └──────────────────────┘ └─────────────────┘ │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+1. **图形化测试与管理控制台 (`console/engine-console`)**：
+   - **前端界面 (`console/engine-console/web`，React 18 + TS + Vite，默认端口 `:5173`)**：
+     - **Privacy Playground**：44 项隐私原语（掩码脱敏、拉普拉斯/高斯差分隐私、本地 DP 随机响应与直方图估计、Mondrian K-匿名、Fisher-Yates 查询混淆）在线测试与参数调优；
+     - **Dynamic Classification & Management**：动态分类分级规则与标准管理面板，支持行业标准（GB/T 35273、JR/T 0197 等）、分类领域（telecom、finance、medical 等）切换、算子查看与隐私策略配置文件（`privacy.yaml`）一键导出；
+     - **Batch Test Matrix**：39 组全场景样例矩阵一键回归，支持实时切换 REST/gRPC 通信协议与详细耗时分析；
+     - **System Diagnostics Panel**：引擎运行健康度、三层分类漏斗状态（L1 规则/L2 NER/L3 LLM 熔断器）与内存/CPU 指标展示。
+   - **代理后端 BFF (`console/engine-console/bff-go`，默认端口 `:8081`)**：
+     负责与上游 `privacy-engine` 进行 REST/gRPC 双协议代理与请求转换，解耦前端与底层引擎网络拓扑。
+2. **核心内置管控与运维端点 (Internal Control & Ops APIs)**：
+   - **OpenAPI 3.0.3 规范文档导出**：`GET /openapi.json`、`GET /docs/openapi.json`（需 `ops:diagnostics` 权限，供 API 工具自省）；
+   - **系统运行时诊断**：`GET /ops/diagnostics`、`GET /v1/ops/diagnostics`（需 `ops:diagnostics` 权限，输出引擎版本、内存、Goroutine、活跃模块）；
+   - **动态分类分级与规则管理**：
+     - 查询标准与领域：`GET /v1/dynclassification/standards`、`/domains`、`/operators`（需 `dynclassification:read` 权限）；
+     - 规则校验：`POST /v1/dynclassification/validate`（需 `dynclassification:read` 权限）；
+     - 策略配置动态热重载：`POST /v1/dynclassification/profiles/reload`（需 `dynclassification:write` 或 `admin` 权限）；
+     - 策略配置自动生成：`POST /v1/dynclassification/generate_profile`（需 `dynclassification:write` 或 `admin` 权限）；
+   - **差分隐私预算生命周期管理**：
+     - 预算消耗查询：`GET /v1/privacy/budget`（需 `privacy:budget` 权限）；
+     - 预算强制重置：`POST /v1/privacy/budget/reset`（需 `privacy:budget` 或 `admin` 权限）；
+   - **底层性能剖析 (pprof)**：`/debug/pprof/*`（生产默认关闭，需环境变量 `AGENT_PPROF_ENABLED=true` 且调用方具备最高 `ops:admin` 权限）。
+
+#### 3.9.2 登录密钥与凭据体系是什么？
+
+##### (1) 为什么没有传统的「账号/密码登录页面」？
+`privacy-engine` 定位于**高安全内部计算域 Sidecar / 隐私中台引擎**，对标等保三级与微服务治理规范：
+- 摒弃了单体架构中脆弱的弱口令、Session 会话状态与 Cookie 机制（防范撞库攻击、暴力破解与 CSRF 漏洞）；
+- 采用云原生标准的 **API Key (Bearer Token) 细粒度 Scope 授权 + 传输层 mTLS CN 证书双因子准入**。
+
+##### (2) 凭证配置环境变量与格式
+- **认证开关**：`AGENT_AUTH_ENABLED=true`（开发环境默认 false 免密；生产/预发环境必须设为 true）；
+- **密钥配置环境变量**：`AGENT_AUTH_API_KEYS`（或 `PRIVACY_AUTH_API_KEYS`）；
+- **动态密钥文件**：`AGENT_AUTH_API_KEYS_FILE`（指向 YAML/文本密钥挂载卷，支持动态热轮换）；
+- **令牌语法格式**：
+  ```
+  token:identity_name:scope1,scope2[:expires_at]
+  ```
+- **请求携带规范**：
+  - REST 请求头：`Authorization: Bearer <token>` 或 `X-API-Key: <token>`
+  - gRPC 元数据：`metadata.Pairs("authorization", "Bearer <token>")` 或 `metadata.Pairs("x-api-key", "<token>")`
+
+##### (3) 典型预置密钥角色矩阵
+
+| 角色类型 | 配置示例 (`AGENT_AUTH_API_KEYS`) | Scope 权限范围 | 适用主体与操作场景 |
+|---|---|---|---|
+| **超级管理员 (Admin Key)** | `admin-token-super-secret:engine-admin:admin` 或 `...:admin:*` | `admin` 或 `*` | 控制台管理员、规则配置热重载、预算重置、pprof 深度调试与所有管控 API |
+| **调度中枢凭证 (Service-Hub Key)** | `service-hub-token:service-hub:agent:process,privacy:mask,privacy:dp,privacy:kano,medical:process,dynclassification:read` | 计算与脱敏相关 Scopes | `service-hub` 调度中枢唯一持有，仅能触发脱敏/DP/分类计算，无权访问运维管理/重载端点 |
+| **运维监控探针凭证 (Monitor Key)** | `ops-probe-token:monitor:ops:diagnostics,health:read` | `ops:diagnostics`, `health:read` | Prometheus 监控采集、K8s 就绪探针、运维巡检调用 `/ops/diagnostics` 与 `/metrics` |
+
+##### (4) 传输层身份鉴别（mTLS 双向证书与 CN 白名单）
+除了应用层 API Key 外，传输层提供第二道身份鉴别防线：
+- `AGENT_AUTH_INTERNAL_MTLS_ENABLED=true` 启用 gRPC mTLS 强制认证；
+- `AGENT_AUTH_MTLS_WHITELIST_FILE` 配置允许连接的证书 Common Name（CN）白名单（如 `CN=service-hub`, `CN=privshield-client`, `CN=privshield-ops`），支持 5 秒动态热重载，非受信证书即使持有 Token 也在握手层直接阻断。
+
+#### 3.9.3 普通用户与租户全生命周期管理系统设计 (User & Tenant Lifecycle Management)
+
+##### (1) 现状评估与重新设计动因
+在传统配置驱动模式下，API Key 的添加或权限变更往往依赖重启服务或重新加载配置文件，缺乏针对终端用户与业务租户的自主注册、权限申请、权限动态授予/收回以及账号注销等完整生命周期治理机制：
+1. **用户注册与身份建档缺失**：缺乏标准化的普通用户注册入口，用户密码存储不满足等保三级关于复杂度与加盐哈希的强制要求；
+2. **权限生命周期缺乏动态响应**：无法在服务运行期对用户的 Scope 权限进行热授予、热收回或降权，导致权限回收必须中断服务；
+3. **缺乏状态机与防爆破锁死**：缺少账户状态（活跃/冻结/注销）管理与登录失败连续重试锁死机制；
+4. **Token 与用户脱节**：静态 Token 难以追踪具体自然人或机构责任主体，审计溯源链不完整。
+
+因此，系统全面设计并引入了统一的**普通用户与租户全生命周期管理系统**（基于 `pkg/auth` 通用用户引擎）：
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│             普通用户/租户生命周期与动态密钥状态机 (User Lifecycle)       │
+│                                                                        │
+│            [注册请求 POST /v1/auth/users/register]                     │
+│                │                                                       │
+│                ▼                                                       │
+│        ┌───────────────┐        管理员审批 / 动态赋权                   │
+│        │  待审批/初始态 │ ─────────────────────────────┐               │
+│        └───────┬───────┘                              │               │
+│                │ 默认激活 (或审批通过)                 ▼               │
+│                ▼                              ┌───────────────┐        │
+│        ┌───────────────┐     安全风控/冻结     │  正常激活态   │        │
+│        │   Active 正常 ├─────────────────────►│ (持有 APIKey) │        │
+│        └───────▲───────┘                      └───────┬───────┘        │
+│                │                                      │                │
+│                │ 解冻                                 │ 违规/调岗      │
+│        ┌───────┴───────┐                              ▼                │
+│        │Disabled 已冻结│◄───────────────────── 权限收回/密钥即刻失效   │
+│        └───────┬───────┘                                               │
+│                │ 账号注销 (DELETE)                                     │
+│                ▼                                                       │
+│        ┌───────────────┐                                               │
+│        │ Deleted 已注销│ (所有关联 Token 物理吊销，LiveInternalKeys 实时清退) │
+│        └───────────────┘                                               │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+##### (2) 角色权限矩阵与模型设计 (RBAC + ABAC)
+
+系统预置 8 类标准角色并支持细粒度自定义 Scope。**唯一事实源**为 [`pkg/auth/user.go::DefaultScopesForRole`](../../../../pkg/auth/user.go)（`KnownRoles` 为合法角色白名单，非法角色开户直接 `400 INVALID_ROLE`），本表必须与代码一致：
+
+| 角色标识 (`role`) | 角色名称 | 预置权限集合 (`scopes`) | 适用主体与管理职责 |
+|---|---|---|---|
+| `admin` | 超级管理员 | `*`, `user:admin`, `hub:admin`, `ops:admin`, `privacy:budget` | 系统运维、规则热重载、用户权限全生命周期审批、预算强制重置、pprof 调试 |
+| `operator` | 调度运营员 | `hub:dispatch`, `hub:read`, `hub:admin`, `user:read` | 日常调度与任务干预、查看用户清单 |
+| `data-engineer` | 数据工程师 | `privacy:mask`, `privacy:dp`, `privacy:kano`, `medical:process`, `file:process` | 数据脱敏、差分隐私计算、K-匿名化与医疗数据流转，无权修改规则与用户 |
+| `compliance-officer` | 合规审计专员 | `dynclassification:read`, `dynclassification:write`, `privacy:budget`, `ops:diagnostics`, `user:read` | 领域分类分级标准与规则定义、隐私预算消耗监控与合规审计 |
+| `auditor` | 安全审计员 | `audit:read`, `ops:diagnostics`, `health:read`, `user:read` | 独立审计方：系统诊断、审计链路与用户列表查看 |
+| `developer` | 算法业务开发者 | `privacy:mask`, `medical:process`, `hub:dispatch`, `hub:read`, `health:read` | 外部业务接入账号（公开自注册的默认角色），**不含 `user:read`** |
+| `user` | 普通用户 | `privacy:mask`, `health:read` | 最小权限个体账号 |
+| `guest` | 只读访客 | `health:read` | 仅允许访问 `/healthz`、`/readyz` 等健康探针 |
+
+**关键授权语义（务必与代码一致）**：
+
+1. **`user:read` 是只读 scope**：仅可查询用户清单/详情与密钥概要，**不得**据此为他人签发或吊销密钥、改密、改权、冻结（否则任何持只读审计 scope 的账号都能越权提权）。判定函数：`canViewUserAccount`（本人 | `user:read` | `user:admin`）与 `canManageUserAccount`（本人 | `user:admin`）。
+2. **ABAC 主体绑定**：动态签发的 API Key 与登录会话在 `KeyConfig.Subject` 上绑定自然人/机构账号，认证后注入 `Identity.Subject`，使“本人自助”判定与审计溯源可落实到责任主体。
+3. **特权角色不可自注册**：`admin`/`operator`/`compliance-officer`/`auditor` 属特权角色（`IsPrivilegedRole`），公开自注册通道一律强制降权为 `developer`，且禁止携带自定义 scope。
+4. **越权签发拦截**：普通用户为自己签发 Key 时，申请的 scope 必须是自身已持权限的子集（`ErrForbiddenScope` → `403 FORBIDDEN_SCOPE`）。
+5. **最后管理员保护**：降权、冻结、注销若会使系统失去最后一个活跃管理员，一律拒绝（`ErrLastAdmin` → `409 LAST_ADMIN`），防止管理面永久无主。
+
+##### (3) 用户管理核心 API 规范
+
+全部端点挂载在 `/v1/auth` 命名空间（由 [`pkg/auth/user_handlers.go::RegisterUserRoutes`](../../../../pkg/auth/user_handlers.go) 统一注册），成功响应为标准 5 字段信封（`code`/`message`/`data`/`trace_id`/`timestamp`），错误响应为 `code`/`message`/`detail`(可选)/`trace_id`/`timestamp`：
+
+| 方法与路径 | 权限与访问控制 | 核心行为与联动 |
+|---|---|---|
+| `POST /v1/auth/login` | 公开免密 | 校验等保口令与防爆破锁定；成功下发会话 Bearer Token（默认 24h，内存态不落盘）；用户不存在与口令错误统一 `401`，抑制账号枚举 |
+| `POST /v1/auth/users/register` | 公开（**仅引导期首个 admin**，或显式开启自注册）/ `user:admin` | 用户库为空时允许创建首个管理员（角色必须为 `admin`，否则 `400 INVALID_BOOTSTRAP_ROLE`）；默认关闭公开自注册（`403 SELF_REGISTER_DISABLED`） |
+| `POST /v1/auth/logout` | 已认证 | 吊销当前会话 Token，同一 Token 后续请求立即 `401`；长期 API Key 不适用（`404 SESSION_NOT_FOUND`） |
+| `POST /v1/auth/change-password` | 本人或 `user:admin` | 校验旧口令 + 新口令等保复杂度 + 口令历史禁重用（最近 3 个）；成功后**强制吊销该用户全部会话** |
+| `GET /v1/auth/users` | `user:read` 或 `user:admin` | 输出脱敏摘要（抹除口令哈希与 Token 材料） |
+| `GET /v1/auth/users/:username` | 本人或 `user:read` / `user:admin` | 用户档案 + 名下绑定的 API Key 概要 |
+| `PUT /v1/auth/users/:username/permissions` | `user:admin` | 更新角色与自定义 scope；名下所有活密钥权限**毫秒级联动刷新**，无须重启 |
+| `PUT /v1/auth/users/:username/status` | `user:admin` | `disabled` 时名下全部 Key 与会话立即失效（拦截器 `401`）；`active` 解冻后自动恢复 |
+| `DELETE /v1/auth/users/:username` | `user:admin` | 删除账号，所有活跃 Token 从活密钥池注销 |
+| `POST /v1/auth/users/:username/keys` | 本人或 `user:admin` | 请求体 `{"key_name":"etl-runner","scopes":["privacy:mask"],"ttl_seconds":2592000}`；生成 `psk_<32hex>` 随机 Token，**明文仅本次响应下发一次**，服务端只存 SHA-256 摘要 |
+| `GET /v1/auth/users/:username/keys` | 本人或 `user:read` / `user:admin` | 仅输出 `key_id`/`name`/`token_prefix`/`scopes`/`expires_at`，绝不回显明文 |
+| `DELETE /v1/auth/users/:username/keys/:key_id` | 本人或 `user:admin` | 立即从活密钥表剔除，下一次请求常量时间比对直接失效返回 `401` |
+
+> **路由层与 Handler 层的权限分工**：`PermissionForRESTPath` 将 `/v1/auth/login` 与 `/v1/auth/users/register` 显式映射为 `auth:public`（认证中间件对公开路径跳过 scope 强制）；其余 `/v1/auth/*` 路径显式映射为空 scope（仅需已认证），具体授权在 Handler 内按主体（ABAC）强校验。这既避免了新端点 fail-closed 落入 `admin` 兜底（由 `TestAllRoutesHaveExplicitPermission` 门禁守护），也避免了“公开注册端点被要求管理员权限”的引导期死锁。
+
+##### (4) 口令与会话安全控制常数（等保三级 G-03 / G-04 / G-14）
+
+以下常数定义于 [`pkg/auth/user.go`](../../../../pkg/auth/user.go)，属编译期不可绕过的硬约束：
+
+| 控制项 | 取值 | 对应控制点 | 说明 |
+|---|---|---|---|
+| 口令存储 | `bcrypt cost=12` 加盐杂凑 | G-04 | 明文严禁落盘或进日志；bcrypt 计算在写锁外执行，避免阻塞并发认证 |
+| 口令长度 | `8 ~ 72` 字节 | G-04 | 上限 72 是 bcrypt 硬限制：超出部分被**静默截断**会使两个不同口令等价，故显式拒绝 |
+| 字符类别 | 大写/小写/数字/特殊字符 **至少 3 类** | G-04 | `ErrPasswordWeak` |
+| 禁止包含用户名 | 含**逆序**同样拒绝 | G-04 | `ErrPasswordContainsName`（独立哨兵错误，便于客户端提示） |
+| 弱口令字典 | 18 项常见弱口令前缀/全等拦截 | G-04 | `ErrPasswordBlacklisted` |
+| 口令历史 | 最近 **3** 个不得重用；新旧不得相同 | G-04 | `ErrPasswordReused` / `ErrPasswordSame` |
+| 连续失败锁定 | **5** 次 → 锁定 **15** 分钟 | G-03 | 登录成功自动清零；锁定期返回 `429 ACCOUNT_LOCKED` + `Retry-After` |
+| 登录限速 | 每 IP 每分钟 **20** 次（8 分片固定窗口） | G-03 / 抗 DoS | 超限 `429 RATE_LIMITED` + `Retry-After`；缓解口令喷洒与“故意锁死管理员” |
+| 会话有效期 | 默认 = 上限 **24h** | G-14 | 会话为**内存态**，重启即失效（不持久化凭证） |
+| 并发会话配额 | 每用户 **8** 个 | G-14 | 超出淘汰最早会话 |
+| API Key 有效期 | 默认 **30 天**，上限 **90 天** | G-14 | `ttl_seconds=0` 归一化为 30 天而非“永不过期”；负值/超限 `400 INVALID_TTL` |
+| API Key 配额 | 每用户 **32** 个活跃 Key | 抗 DoS | 认证为 O(n) 常量时间比对，须防止密钥表无界膨胀 |
+| 特权操作审计 | 全量结构化 `auth_audit` 日志 | G-07 | 记录 `actor`/`target_user`/`result`/`reason`/`client_ip`/`trace_id`；严禁记录口令与明文 Token |
+
+##### (5) 运行时零重启动态同步（双通道活密钥）
+
+`pkg/auth/middleware.go` 在处理每一次 HTTP/gRPC 请求时，会取得“当前生效的密钥全集”并执行常量时间比对。为避免热路径重复拷贝，采用**双通道 + 版本驱动缓存**：
+
+| 通道 | 索引方式 | 来源 | 落盘内容 |
+|---|---|---|---|
+| `Settings.LiveInternalKeys` | **明文 Token** | 静态 `AGENT_AUTH_API_KEYS` + `KeyStore`（`AGENT_AUTH_API_KEYS_FILE` / K8s Secret 热轮转） | 明文（由部署方控制文件权限） |
+| `Settings.LiveInternalHashedKeys` | **`HashToken`（SHA-256 hex）** | `UserStore` 动态用户 API Key 与登录会话 | **仅摘要 + bcrypt 口令哈希**，明文 Token 永不落盘 |
+
+- **版本驱动聚合器**（[`pkg/auth/live_keys.go::Aggregator`](../../../../pkg/auth/live_keys.go)）：合并后的快照仅在任一来源版本号变化时重建，其余请求零分配复用同一份**只读共享快照**；重建时对配置源做深拷贝，快照与来源内部状态无指针别名。
+- **毫秒级联动**：权限调整、状态冻结/解冻、Token 签发/吊销、改密与注销都会 `bump` 版本号，活密钥表即刻原子更新，实现「配置不动、服务不启、权限秒级生效」。
+- **持久化保障**：`UserStore` 采用临时文件写入 + `os.Rename` 原子替换，目录 `0700`、文件 `0600`；重启后账号、口令哈希与**有效 API Key 摘要**无损恢复（会话 Token 因内存态而失效，需重新登录）。
+
+##### (6) 用户体系环境变量
+
+| 变量 | 默认值 | 用途 |
+|---|---|---|
+| `AGENT_AUTH_USER_STORE_FILE`（兼容 `PRIVACY_USER_STORE_FILE`） | 空（纯内存） | 用户与动态密钥持久化文件路径（如 `data/users.json`）；只写入摘要与口令哈希 |
+| `AGENT_AUTH_USER_SELF_REGISTER` | `false` | 是否开放公开自注册（生产建议保持关闭，账号一律由管理员开户） |
+| `AGENT_AUTH_USER_SESSION_TTL` | `24h` | 登录会话有效期，支持 `24h`/`15m` 或纯秒数；超过 24h 自动收敛 |
+| `AGENT_AUTH_USER_LOGIN_THROTTLE_PER_MIN` | `20` | 登录端点每 IP 每分钟最大尝试次数，`<=0` 关闭该层限速 |
+
+> 变量名以 [`pkg/auth/user_handlers.go::userPolicyEnvTable`](../../../../pkg/auth/user_handlers.go) 为唯一事实源（service-hub 侧前缀为 `SERVICE_HUB_`），编排清单与本表须保持一致，否则会被 `scripts/check_orchestration_env_consistency.sh` 门禁判定为幽灵变量。
 
 ---
 
@@ -929,6 +1142,10 @@ STRIDE 提供系统化的威胁枚举框架。下表的每一行是一种威胁�
 | `AGENT_AUTH_API_KEY` | — | 单 Key（default-internal，Scope `*`） |
 | `AGENT_AUTH_STATIC_API_KEYS` | — | 静态 Key（不热轮） |
 | `AGENT_AUTH_KEYS_FILE` | — | Key 文件（启用 KeyStore 5s mtime 热轮转）；文件不存在/不可读则启动 fail-fast，不静默降级 |
+| `AGENT_AUTH_USER_STORE_FILE`（兼容 `PRIVACY_USER_STORE_FILE`） | 空（纯内存） | 用户与动态密钥持久化文件（目录 `0700`/文件 `0600`，只存 SHA-256 摘要与 bcrypt 口令哈希）；不可读时回退内存态 |
+| `AGENT_AUTH_USER_SELF_REGISTER` | `false` | 公开自注册开关（生产保持关闭；引导期首个 `admin` 不受此限） |
+| `AGENT_AUTH_USER_SESSION_TTL` | `24h` | 登录会话有效期（`24h`/`15m`/纯秒数，超上限自动收敛） |
+| `AGENT_AUTH_USER_LOGIN_THROTTLE_PER_MIN` | `20` | 登录端点每 IP 每分钟最大尝试次数（`<=0` 关闭该层限速） |
 | `AGENT_HEALTH_NO_AUTH` | `true` | 健康探针豁免鉴权（REST `:8079` 与 gRPC `:50051` 同口径） |
 
 ### A.2 传输安全
@@ -990,6 +1207,9 @@ STRIDE 提供系统化的威胁枚举框架。下表的每一行是一种威胁�
 | `medical:process` | 内部 | `/v1/medical*` `/medical*` | — | 医疗影像/报告流水线 |
 | `ops:diagnostics` | 运维 | `/v1/ops/*` `/ops/diagnostics` | — | 只读诊断快照 |
 | `ops:admin` | 最高运维 | `/debug/pprof*` | — | pprof / refresh 主动重采 |
+| `auth:public` | 公开 | `/v1/auth/login` `/v1/auth/users/register` | — | 认证中间件跳过 scope 强制（引导期匿名开户与登录）；其余 `/v1/auth/*` 路由层映射为**空 scope**（仅需已认证），授权在 Handler 内按主体 ABAC 判定 |
+| `user:read` | 审计/管理 | `/v1/auth/users*`（Handler 内校验；路由层为空 scope） | — | 用户与权限**只读**审计（无写权限） |
+| `user:admin` | 用户管理 | `/v1/auth/users*`（Handler 内校验；路由层为空 scope） | — | 用户与权限全生命周期管理（角色/状态/密钥写操作） |
 | `admin` | 最高 | **未显式映射路径（default 分支）** + 未映射方法 | 未映射方法 | fail-closed 兜底 |
 | `*` | 完全 | 任意 | 任意 | 仅本地开发/全权限 Key |
 
@@ -1004,6 +1224,9 @@ STRIDE 提供系统化的威胁枚举框架。下表的每一行是一种威胁�
 | 控制点 | 合规要求（摘要） | 引擎实现机制 | 章节 |
 |---|---|---|---|
 | **G-02** | 网络边界防护/来源真实性 | `ConfigureTrustedProxies` 仅受信代理才信 XFF；`RealClientIP` | §2.2 |
+| **G-03** | 身份鉴别防爆破 | 单账号连续 **5** 次失败锁定 **15** 分钟（`429 ACCOUNT_LOCKED` + `Retry-After`）+ 登录端点每 IP 每分钟 **20** 次限速（8 分片固定窗口） | §3.9.3 (4) |
+| **G-04** | 口令复杂度与存储 | 长度 `8~72`、字符类别 ≥3、禁含用户名（含逆序）、18 项弱口令字典拦截；`bcrypt cost=12` 加盐杂凑（写锁外计算）；口令历史最近 **3** 个禁重用 | §3.9.3 (4) |
+| **G-07** | 特权操作可追溯 | 用户体系全量结构化 `auth_audit` 日志（`actor`/`target_user`/`result`/`reason`/`client_ip`/`trace_id`），严禁记录口令与明文 Token | §3.9.3 (4) |
 | **G-08** | 密钥生命周期/轮换 | 信封 v3 多版本密钥 `keyRegistry`（Active 写入、旧版解密）+ KeyStore 热轮换 | §3.5 §5.2 |
 | **G-12** | 入侵防范/恶意代码防范 | WAF 5 类 72 正则 init 预编译 + ASCII 快速预检 | §6.1 §6.2 |
 | **G-13** | 安全审计/密码操作可追溯 | `CryptoAuditLogger` 记录每次 sm4/sm3 操作（不记明文） | §5.2 |
@@ -1029,6 +1252,10 @@ STRIDE 提供系统化的威胁枚举框架。下表的每一行是一种威胁�
 | [`pkg/auth/middleware.go`](../../../../pkg/auth/middleware.go) | `ConstantTimeLookup`、`AuthenticateAPIKey`、`AuthMiddleware`、错误信封、安全指标 | §3.3 §3.4 §7.4 |
 | [`pkg/auth/keystore.go`](../../../../pkg/auth/keystore.go) | KeyStore 热轮转（5s mtime / SecretWatcher） | §3.5 |
 | [`pkg/auth/settings.go`](../../../../pkg/auth/settings.go) | `KeyConfig`、`IsExpired`、`Settings` | §3.2 |
+| [`pkg/auth/user.go`](../../../../pkg/auth/user.go) | 用户模型与状态机、等保口令复杂度校验（`ValidatePasswordStrength`）、角色→Scope 矩阵（`KnownRoles`）、安全常数 | §3.9.3 (2)(4) |
+| [`pkg/auth/user_store.go`](../../../../pkg/auth/user_store.go) | 用户全生命周期存储、动态 API Key 签发/吊销、会话管理、`LiveHashedKeys` 只读快照、原子持久化 | §3.9.3 (3)(5) |
+| [`pkg/auth/user_handlers.go`](../../../../pkg/auth/user_handlers.go) | `/v1/auth/*` REST 控制器、`userPolicyEnvTable` 环境变量事实源、Handler 内 ABAC 授权 | §3.9.3 (3)(6) |
+| [`pkg/auth/live_keys.go`](../../../../pkg/auth/live_keys.go) | `HashToken`、版本驱动 `Aggregator` 缓存、深拷贝隔离的活密钥聚合 | §3.9.3 (5) |
 | [`pkg/auth/route_audit.go`](../../../../pkg/auth/route_audit.go) | `AuditRoutePermissions`/`LogRoutePermissionAudit` 启动期审计 | §3.8 |
 | [`services/privacy-engine/internal/security/auth.go`](../../../../services/privacy-engine/internal/security/auth.go) | 引擎侧 Auth/SecurityHeaders/RateLimit 中间件 | §2 §3.4 §6.4 |
 | [`services/privacy-engine/internal/security/config.go`](../../../../services/privacy-engine/internal/security/config.go) | `Settings` 装配与 `AGENT_*` 环境变量读取 | 附录 A |

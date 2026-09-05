@@ -28,13 +28,11 @@ package handlers
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +40,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	pkgauth "github.com/fengzhizi319/PrivShield-go/pkg/auth"
+	pkgconfig "github.com/fengzhizi319/PrivShield-go/pkg/config"
 	"github.com/fengzhizi319/PrivShield-go/pkg/metrics"
 	"github.com/fengzhizi319/PrivShield-go/pkg/middleware"
 	naming "github.com/fengzhizi319/PrivShield-go/pkg/naming"
@@ -73,19 +72,21 @@ type dispatchRequest struct {
 // Server aggregates HTTP handler dependencies.
 // Server 结构体聚合 HTTP REST 控制器所需的全部核心依赖与并发控制资源。
 type Server struct {
-	agent      *agent.Client      // 上游 PrivShield Python Agent 客户端
-	datasource *datasource.Client // 下游 datasource-mgr 数据源服务客户端
-	audit      *audit.Client      // audit-log 存证客户端（P0-6：出域 ↔ 留痕强绑定）
-	cfg        *config.Config     // 模块全局运行配置
-	keyStore   *pkgauth.KeyStore  // API Key 文件热轮转 KeyStore（可选，K8s Secret 投影场景）
-	startTime  time.Time          // 服务启动时间戳（用于计算 Uptime）
-	tasks      store.TaskStore    // 任务持久化存储介质（SQLite 或内存实现）
-	logger     *slog.Logger       // 结构化日志记录器
-	mc         *metrics.Collector // Prometheus 监控指标收集器
-	taskSem    chan struct{}      // 信号量通道，限制后台最大并发任务协程数（默认 10）
-	ctx        context.Context    // 用于在服务停机时向所有在途任务协程广播取消信号的父 Context
-	cancel     context.CancelFunc // 触发优雅停机 Context 取消的回调函数
-	wg         sync.WaitGroup     // 等待组，跟踪记录正在执行的后台任务协程
+	agent      *agent.Client       // 上游 PrivShield Python Agent 客户端
+	datasource *datasource.Client  // 下游 datasource-mgr 数据源服务客户端
+	audit      *audit.Client       // audit-log 存证客户端（P0-6：出域 ↔ 留痕强绑定）
+	cfg        *config.Config      // 模块全局运行配置
+	keyStore   *pkgauth.KeyStore   // API Key 文件热轮转 KeyStore（可选，K8s Secret 投影场景）
+	userStore  *pkgauth.UserStore  // 普通用户与动态权限管理引擎
+	liveKeys   *pkgauth.Aggregator // 明文活密钥聚合器（静态 ScopeKeys + KeyStore 热轮转，版本驱动缓存）
+	startTime  time.Time           // 服务启动时间戳（用于计算 Uptime）
+	tasks      store.TaskStore     // 任务持久化存储介质（SQLite 或内存实现）
+	logger     *slog.Logger        // 结构化日志记录器
+	mc         *metrics.Collector  // Prometheus 监控指标收集器
+	taskSem    chan struct{}       // 信号量通道，限制后台最大并发任务协程数（默认 10）
+	ctx        context.Context     // 用于在服务停机时向所有在途任务协程广播取消信号的父 Context
+	cancel     context.CancelFunc  // 触发优雅停机 Context 取消的回调函数
+	wg         sync.WaitGroup      // 等待组，跟踪记录正在执行的后台任务协程
 }
 
 // New creates a new Server instance.
@@ -96,12 +97,21 @@ type Server struct {
 // 绝不允许「没有存证链路却把出域任务标成 done」。测试通过配置中的 AuditLogBaseURLs 指向桩服务。
 func New(ag *agent.Client, ds *datasource.Client, cfg *config.Config, keyStore *pkgauth.KeyStore, tasks store.TaskStore, logger *slog.Logger, mc *metrics.Collector) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
+	userStoreFile := pkgconfig.EnvString("SERVICE_HUB_USER_STORE_FILE", "")
+	us, err := pkgauth.NewUserStore(userStoreFile)
+	if err != nil {
+		logger.Error("failed to initialize user store; falling back to in-memory", "error", err)
+		us, _ = pkgauth.NewUserStore("")
+	}
+
 	return &Server{
 		agent:      ag,
 		datasource: ds,
 		audit:      audit.New(cfg, mc),
 		cfg:        cfg,
 		keyStore:   keyStore,
+		userStore:  us,
+		liveKeys:   pkgauth.NewAggregator(cfg.ScopeKeys, keyStore),
 		startTime:  time.Now(),
 		tasks:      tasks,
 		logger:     logger,
@@ -263,6 +273,13 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 	// Prometheus 监控指标导出
 	r.GET("/metrics", s.mc.Handler())
 
+	// 普通用户与权限全生命周期管理端点 (/v1/auth/*)
+	// 策略口径由环境变量驱动（SERVICE_HUB_USER_SELF_REGISTER / _USER_SESSION_TTL /
+	// _USER_LOGIN_THROTTLE_PER_MIN），默认关闭公开自注册。
+	if s.userStore != nil {
+		pkgauth.RegisterUserRoutes(r, s.userStore, pkgauth.UserRouteOptionsFromEnv("SERVICE_HUB")...)
+	}
+
 	// 【启动权限审计】遍历全部已注册路由，识别遗漏显式 scope 映射、静默落入 fail-closed
 	// 兜底权限（"admin"）的新增接口并打 WARN，防止「加了路由忘配权限」。详见 pkg/auth/route_audit.go。
 	pkgauth.LogRoutePermissionAudit(s.logger, "service-hub", r.Routes(),
@@ -270,60 +287,126 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 		map[string]bool{"admin": true}, nil)
 }
 
-// currentAuthKeys 返回当前生效的 scope key 集合：KeyStore 热轮转 key 优先，并与静态
-// SERVICE_HUB_API_KEYS 合并；同名 token 以 KeyStore 为准。
+// currentAuthKeys 返回当前生效的「明文 Token → KeyConfig」快照：静态 SERVICE_HUB_API_KEYS
+// 与 KeyStore 热轮转 key 合并（同名以热轮转为准），由版本驱动的 Aggregator 缓存，
+// 仅在密钥集变更时重建，避免认证热路径每请求全量拷贝 map。
+//
+// 注：UserStore 动态用户密钥与登录会话**不在**本快照内——它们落盘仅存 SHA-256 摘要，
+// 经 LiveHashedAuthKeys() 走独立的 LiveInternalHashedKeys 通道参与认证。
 func (s *Server) currentAuthKeys() map[string]*pkgauth.KeyConfig {
-	static := s.cfg.ScopeKeys
-	if s.keyStore == nil {
-		return static
+	if s.liveKeys != nil {
+		return s.liveKeys.Keys()
+	}
+	// 兼容未经 New() 直接构造 &Server{...} 的测试与嵌入场景：退化为即时合并（无版本缓存）。
+	static := map[string]*pkgauth.KeyConfig(nil)
+	if s.cfg != nil {
+		static = s.cfg.ScopeKeys
 	}
 	merged := make(map[string]*pkgauth.KeyConfig, len(static))
 	for k, v := range static {
 		merged[k] = v
 	}
-	for k, v := range s.keyStore.Keys() {
-		merged[k] = v
+	if s.keyStore != nil {
+		for k, v := range s.keyStore.Keys() {
+			merged[k] = v
+		}
 	}
 	return merged
 }
 
-// scopeAuthMiddleware 返回 Gin 中间件，优先使用 Scope-based 鉴权（SERVICE_HUB_API_KEYS + KeyStore），
+// LiveAuthKeys 返回可直接挂载到 pkgauth.Settings.LiveInternalKeys 的明文活密钥回调，
+// 供 main.go 接线 gRPC 拦截器，使 REST 与 gRPC 双路径共享同一动态凭证视图。
+func (s *Server) LiveAuthKeys() func() map[string]*pkgauth.KeyConfig {
+	return s.currentAuthKeys
+}
+
+// LiveHashedAuthKeys 返回可挂载到 pkgauth.Settings.LiveInternalHashedKeys 的摘要型活密钥回调；
+// 未启用用户体系时返回 nil（使 gRPC 侧不会误判为“已配置动态凭证来源”）。
+func (s *Server) LiveHashedAuthKeys() func() map[string]*pkgauth.KeyConfig {
+	if s.userStore == nil {
+		return nil
+	}
+	return s.userStore.LiveHashedKeysFunc()
+}
+
+// scopeAuthMiddleware 返回 Gin 中间件，优先使用 Scope-based 鉴权（SERVICE_HUB_API_KEYS + KeyStore + UserStore），
 // 向后兼容单 APIKey 模式（SERVICE_HUB_API_KEY）。
-// Scope-based 模式下，每个 Key 携带 Name 与 Scopes，按路径映射所需权限进行细粒度校验。
+// Scope-based 模式下，每个 Key 携带 Name、Subject 与 Scopes，按路径映射所需权限进行细粒度校验；
+// /v1/auth/* 用户管理面的具体授权在 Handler 内按主体（ABAC）判定，路由层仅要求已认证。
 func (s *Server) scopeAuthMiddleware() gin.HandlerFunc {
-	// Scope-based 模式：SERVICE_HUB_API_KEYS 或 KeyStore 已配置
-	scopeKeys := s.currentAuthKeys()
-	if len(scopeKeys) > 0 {
-		return func(c *gin.Context) {
-			path := c.Request.URL.Path
-			if path == "/health" || path == "/readyz" {
-				c.Next()
-				return
-			}
-			token := pkgauth.ExtractBearerToken(c.GetHeader("Authorization"))
-			if token == "" {
-				pkgauth.AuthFailuresTotal.WithLabelValues("missing_token").Inc()
-				middleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: missing credentials", nil)
-				return
-			}
-			identity := constantTimeLookupKeys(s.currentAuthKeys(), token)
-			if identity == nil {
-				pkgauth.AuthFailuresTotal.WithLabelValues("invalid_token").Inc()
-				middleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: invalid credentials", nil)
-				return
-			}
-			requiredPerm := pkgauth.ServiceHubPermissionForPath(path)
-			if requiredPerm != "" && !identity.HasPermission(requiredPerm) {
-				pkgauth.AuthForbiddenTotal.Inc()
-				middleware.AbortWithError(c, http.StatusForbidden, "FORBIDDEN", "Forbidden: insufficient scope", nil)
-				return
-			}
+	var hashedProvider func() map[string]*pkgauth.KeyConfig
+	if s.userStore != nil {
+		hashedProvider = s.userStore.LiveHashedKeysFunc()
+	}
+	settings := &pkgauth.Settings{
+		AuthEnabled:            true,
+		HealthNoAuth:           true,
+		LiveInternalKeys:       s.currentAuthKeys,
+		LiveInternalHashedKeys: hashedProvider,
+	}
+	legacy := middleware.Auth(s.cfg.APIKey)
+
+	scopeHandler := func(c *gin.Context) {
+		path := c.Request.URL.Path
+		token := pkgauth.ExtractBearerToken(c.GetHeader("Authorization"))
+
+		// 公开认证端点（登录 / 首个管理员引导注册）：未携 Token 时注入 public 身份放行，
+		// 否则启用 Scope 鉴权后登录与开户流程会被一律 401 锁死。
+		if pkgauth.IsAuthPublicPath(path) && token == "" {
+			c.Set(pkgauth.IdentityContextKey, &pkgauth.Identity{
+				ServiceType: "public", Name: "public-caller", Scopes: []string{"auth:public"},
+			})
+			c.Next()
+			return
+		}
+
+		if token == "" {
+			pkgauth.AuthFailuresTotal.WithLabelValues("missing_token").Inc()
+			middleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: missing credentials", nil)
+			return
+		}
+		identity := pkgauth.AuthenticateAPIKey(settings, token)
+		if identity == nil {
+			pkgauth.AuthFailuresTotal.WithLabelValues("invalid_token").Inc()
+			middleware.AbortWithError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Unauthorized: invalid credentials", nil)
+			return
+		}
+
+		// 公开认证端点的映射值 "auth:public" 仅用于路由审计可追溯，不得作为已认证调用者的
+		// 强制 scope；否则仅持 user:admin 而无 "*" 的管理员无法调用注册端点为下属开户。
+		if pkgauth.IsAuthPublicPath(path) {
 			c.Set(pkgauth.IdentityContextKey, identity)
 			c.Next()
+			return
 		}
+
+		requiredPerm := pkgauth.ServiceHubPermissionForPath(path)
+		if requiredPerm != "" && !identity.HasPermission(requiredPerm) {
+			pkgauth.AuthForbiddenTotal.Inc()
+			middleware.AbortWithError(c, http.StatusForbidden, "FORBIDDEN", "Forbidden: insufficient scope", nil)
+			return
+		}
+		c.Set(pkgauth.IdentityContextKey, identity)
+		c.Next()
 	}
-	// 向后兼容：单 APIKey 模式
-	return middleware.Auth(s.cfg.APIKey)
+
+	return func(c *gin.Context) {
+		path := c.Request.URL.Path
+		if path == "/health" || path == "/readyz" {
+			c.Next()
+			return
+		}
+		// 鉴权模式**运行期动态判定**（KeyStore 热轮转与用户体系均可在启动后发生变化）：
+		//   · 存在静态/热轮转 Scope Key → Scope 细粒度鉴权（与历史行为一致）；
+		//   · 未配置遗留单 APIKey 且用户体系已开户 → Scope 鉴权（纯动态开户部署，
+		//     引导期创建首个 admin 后自动从开发免密透传收敛为强制鉴权）；
+		//   · 其余情形 → 遗留单 APIKey 模式（APIKey 为空即开发免密透传），保持向后兼容。
+		if len(s.currentAuthKeys()) > 0 || (s.cfg.APIKey == "" && s.userStore.Count() > 0) {
+			scopeHandler(c)
+			return
+		}
+		legacy(c)
+	}
 }
 
 // identityRateLimitMiddleware 返回身份级细粒度限流中间件（32 分片令牌桶，复用 pkg/middleware）。
@@ -348,33 +431,6 @@ func (s *Server) identityRateLimitMiddleware() gin.HandlerFunc {
 		}
 		return key
 	}, "/health", "/readyz", "/metrics")
-}
-
-// constantTimeLookupKeys 在排序后的 key 集合上执行常量时间 token 查找，防止时序攻击。
-func constantTimeLookupKeys(keys map[string]*pkgauth.KeyConfig, token string) *pkgauth.Identity {
-	if len(keys) == 0 {
-		return nil
-	}
-	sortedKeys := make([]string, 0, len(keys))
-	for k := range keys {
-		sortedKeys = append(sortedKeys, k)
-	}
-	sort.Strings(sortedKeys)
-	tokenBytes := []byte(token)
-	var matched *pkgauth.KeyConfig
-	for _, key := range sortedKeys {
-		if subtle.ConstantTimeCompare([]byte(key), tokenBytes) == 1 {
-			matched = keys[key]
-		}
-	}
-	if matched == nil {
-		return nil
-	}
-	// G-14：过期 Key 不得继续用于认证，避免过期凭证长期有效。
-	if matched.IsExpired() {
-		return nil
-	}
-	return &pkgauth.Identity{ServiceType: "external", Name: matched.Name, Scopes: matched.Scopes}
 }
 
 // callerName 返回当前请求调用者标识名称，未认证时返回 "anonymous"。

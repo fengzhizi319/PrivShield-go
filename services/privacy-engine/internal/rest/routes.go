@@ -18,7 +18,9 @@ import (
 	httppprof "net/http/pprof"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -71,6 +73,7 @@ func RegisterRoutes(r *gin.Engine, svc *service.PrivacyService) {
 	// 健康检查（无前缀，与 Python /health, /livez, /readyz 对齐）
 	//curl http://127.0.0.1:8079/health
 	r.GET("/health", healthHandlerWithService(svc))
+	r.POST("/health", healthHandlerWithService(svc))
 	// Demo: curl http://127.0.0.1:8079/livez
 	r.GET("/livez", livezHandler)
 	// Demo: curl http://127.0.0.1:8079/readyz
@@ -88,9 +91,24 @@ func RegisterRoutes(r *gin.Engine, svc *service.PrivacyService) {
 	// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/privacy/process_file
 	r.POST("/privacy/process_file", processFileHandler(svc))
 
+	// OpenAPI 3.0 规范导出端点
+	r.GET("/openapi.json", openAPISpecHandler(r))
+	r.GET("/docs/openapi.json", openAPISpecHandler(r))
+
+	// 普通用户与权限全生命周期管理端点 (/v1/auth/*)
+	// 策略口径由环境变量驱动（AGENT_AUTH_USER_SELF_REGISTER / _USER_SESSION_TTL /
+	// _USER_LOGIN_THROTTLE_PER_MIN），默认关闭公开自注册：除引导期首个 admin 外，账号一律由管理员开户。
+	if us := security.GetUserStore(); us != nil {
+		pkgauth.RegisterUserRoutes(r, us, pkgauth.UserRouteOptionsFromEnv("AGENT_AUTH")...)
+	}
+
 	// /v1/privacy/* — 隐私原语
 	v1p := r.Group("/v1/privacy")
 	{
+		// 健康检查
+		v1p.GET("/health", healthHandlerWithService(svc))
+		v1p.POST("/health", healthHandlerWithService(svc))
+
 		// 掩码
 		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/mask
 		v1p.POST("/mask", maskHandler(svc))
@@ -100,8 +118,10 @@ func RegisterRoutes(r *gin.Engine, svc *service.PrivacyService) {
 		v1p.POST("/mask_record", maskRecordHandler(svc))
 		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/mask/batch
 		v1p.POST("/mask/batch", maskBatchHandler(svc))
+		v1p.POST("/mask_batch", maskBatchHandler(svc))
 		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/mask/dataframe
 		v1p.POST("/mask/dataframe", maskDataFrameHandler(svc))
+		v1p.POST("/mask_dataframe", maskDataFrameHandler(svc))
 
 		// 差分隐私 — 基础
 		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/dp/count
@@ -191,6 +211,8 @@ func RegisterRoutes(r *gin.Engine, svc *service.PrivacyService) {
 		// Profile 推荐
 		// Demo: curl http://127.0.0.1:8079/v1/privacy/profile/recommend
 		v1p.GET("/profile/recommend", profileRecommendHandler(svc))
+		v1p.POST("/profile/recommend", profileRecommendHandler(svc))
+		v1p.POST("/recommend", profileRecommendHandler(svc))
 
 		// 分类（兼容旧路径）
 		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/privacy/classify/field
@@ -231,10 +253,23 @@ func RegisterRoutes(r *gin.Engine, svc *service.PrivacyService) {
 		v1d.POST("/classify", classifyHandler(svc))
 		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/dynclassification/classify/batch
 		v1d.POST("/classify/batch", classifyBatchHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/dynclassification/eval
+		v1d.POST("/eval", evalHandler(svc))
 		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/dynclassification/eval_record
 		v1d.POST("/eval_record", evalRecordHandler(svc))
 		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/dynclassification/profiles/reload
 		v1d.POST("/profiles/reload", dynProfilesReloadHandler(svc))
+		// Demo: curl -X GET http://127.0.0.1:8079/v1/dynclassification/standards
+		v1d.GET("/standards", listStandardsHandler(svc))
+		// Demo: curl -X GET http://127.0.0.1:8079/v1/dynclassification/domains
+		v1d.GET("/domains", listDomainsHandler(svc))
+		// Demo: curl -X GET http://127.0.0.1:8079/v1/dynclassification/operators
+		v1d.GET("/operators", listOperatorsHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/dynclassification/validate
+		v1d.POST("/validate", validateHandler(svc))
+		v1d.GET("/validate", validateHandler(svc))
+		// Demo: curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8079/v1/dynclassification/generate_profile
+		v1d.POST("/generate_profile", generateProfileHandler(svc))
 	}
 
 	// 【启动权限审计】遍历全部已注册路由，识别遗漏显式 scope 映射、静默落入 fail-closed
@@ -352,14 +387,37 @@ func maskRecordHandler(svc *service.PrivacyService) gin.HandlerFunc {
 func maskBatchHandler(svc *service.PrivacyService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Records []map[string]string `json:"records" binding:"required"`
+			Records    []map[string]string `json:"records"`
+			FieldNames []string            `json:"field_names"`
+			Values     []string            `json:"values"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", err.Error())
 			return
 		}
-		results := svc.MaskBatch(req.Records)
-		c.JSON(http.StatusOK, gin.H{"results": results})
+		if len(req.Values) > 0 {
+			results := make([]string, len(req.Values))
+			for i, v := range req.Values {
+				fieldType := "default"
+				if i < len(req.FieldNames) {
+					fieldType = inferMaskType(req.FieldNames[i])
+				}
+				r, err := svc.MaskField(fieldType, v)
+				if err != nil {
+					results[i] = "***"
+				} else {
+					results[i] = r
+				}
+			}
+			c.JSON(http.StatusOK, gin.H{"results": results})
+			return
+		}
+		if len(req.Records) > 0 {
+			results := svc.MaskBatch(req.Records)
+			c.JSON(http.StatusOK, gin.H{"results": results})
+			return
+		}
+		middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", "records or values required")
 	}
 }
 
@@ -385,12 +443,16 @@ func maskDataFrameHandler(svc *service.PrivacyService) gin.HandlerFunc {
 func dpCountHandler(svc *service.PrivacyService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Count   int     `json:"count" binding:"required"`
-			Epsilon float64 `json:"epsilon" binding:"required"`
+			Count   int       `json:"count"`
+			Values  []float64 `json:"values"`
+			Epsilon float64   `json:"epsilon" binding:"required"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", err.Error())
 			return
+		}
+		if req.Count <= 0 && len(req.Values) > 0 {
+			req.Count = len(req.Values)
 		}
 		result, err := svc.NoisyCount(c.Request.Context(), req.Count, req.Epsilon)
 		if err != nil {
@@ -433,15 +495,24 @@ func dpMeanHandler(svc *service.PrivacyService) gin.HandlerFunc {
 		var req struct {
 			Values    []float64 `json:"values" binding:"required"`
 			Epsilon   float64   `json:"epsilon" binding:"required"`
-			Delta     float64   `json:"delta" binding:"required"`
+			Delta     float64   `json:"delta"`
 			ClipBound float64   `json:"clip_bound"`
+			ClipLower float64   `json:"clip_lower"`
+			ClipUpper float64   `json:"clip_upper"`
+			Mechanism string    `json:"mechanism"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", err.Error())
 			return
 		}
 		if req.ClipBound <= 0 {
-			req.ClipBound = 1.0
+			if req.ClipUpper > req.ClipLower {
+				req.ClipBound = req.ClipUpper - req.ClipLower
+			} else if req.ClipUpper > 0 {
+				req.ClipBound = req.ClipUpper
+			} else {
+				req.ClipBound = 1.0
+			}
 		}
 		result, err := svc.NoisyMean(c.Request.Context(), req.Values, req.Epsilon, req.Delta, req.ClipBound)
 		if err != nil {
@@ -484,60 +555,103 @@ func dpHistogramHandler(svc *service.PrivacyService) gin.HandlerFunc {
 func noisyCountHandler(svc *service.PrivacyService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Count   int     `json:"count" binding:"required"`
-			Epsilon float64 `json:"epsilon" binding:"required"`
+			Count     int     `json:"count"`
+			TrueCount float64 `json:"true_count"`
+			Epsilon   float64 `json:"epsilon" binding:"required"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", err.Error())
 			return
+		}
+		if req.Count <= 0 && req.TrueCount > 0 {
+			req.Count = int(req.TrueCount)
 		}
 		result, err := svc.NoisyCount(c.Request.Context(), req.Count, req.Epsilon)
 		if err != nil {
 			middleware.AbortWithError(c, http.StatusTooManyRequests, "BUDGET_EXHAUSTED", "隐私预算已耗尽", err.Error())
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"noisy_count": result, "epsilon": req.Epsilon})
+		c.JSON(http.StatusOK, gin.H{"noisy_count": result, "result": result, "epsilon": req.Epsilon})
 	}
 }
 
 func noisySumHandler(svc *service.PrivacyService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Values      []float64 `json:"values" binding:"required"`
+			Values      []float64 `json:"values"`
+			TrueSum     *float64  `json:"true_sum"`
 			Epsilon     float64   `json:"epsilon" binding:"required"`
-			Sensitivity float64   `json:"sensitivity" binding:"required"`
+			Sensitivity float64   `json:"sensitivity"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", err.Error())
 			return
 		}
-		result, err := svc.NoisySum(c.Request.Context(), req.Values, req.Epsilon, req.Sensitivity)
+		sensitivity := req.Sensitivity
+		if sensitivity <= 0 {
+			sensitivity = 1.0
+		}
+		vals := req.Values
+		if len(vals) == 0 && req.TrueSum != nil {
+			vals = []float64{*req.TrueSum}
+		}
+		if len(vals) == 0 {
+			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", "values or true_sum required")
+			return
+		}
+		result, err := svc.NoisySum(c.Request.Context(), vals, req.Epsilon, sensitivity)
 		if err != nil {
 			middleware.AbortWithError(c, http.StatusTooManyRequests, "BUDGET_EXHAUSTED", "隐私预算已耗尽", err.Error())
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"noisy_sum": result, "epsilon": req.Epsilon})
+		c.JSON(http.StatusOK, gin.H{"noisy_sum": result, "result": result, "epsilon": req.Epsilon})
 	}
 }
 
 func noisyMeanHandler(svc *service.PrivacyService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Values    []float64 `json:"values" binding:"required"`
-			Epsilon   float64   `json:"epsilon" binding:"required"`
-			Delta     float64   `json:"delta" binding:"required"`
-			ClipBound float64   `json:"clip_bound" binding:"required"`
+			Values      []float64 `json:"values"`
+			TrueSum     *float64  `json:"true_sum"`
+			TrueCount   float64   `json:"true_count"`
+			Epsilon     float64   `json:"epsilon" binding:"required"`
+			Delta       float64   `json:"delta"`
+			ClipBound   float64   `json:"clip_bound"`
+			ClipUpper   float64   `json:"clip_upper"`
+			Sensitivity float64   `json:"sensitivity"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", err.Error())
 			return
 		}
-		result, err := svc.NoisyMean(c.Request.Context(), req.Values, req.Epsilon, req.Delta, req.ClipBound)
+		vals := req.Values
+		if len(vals) == 0 && req.TrueSum != nil {
+			mean := *req.TrueSum
+			if req.TrueCount > 0 {
+				mean = *req.TrueSum / req.TrueCount
+			}
+			vals = []float64{mean}
+		}
+		if len(vals) == 0 {
+			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", "values or true_sum required")
+			return
+		}
+		clip := req.ClipBound
+		if clip <= 0 {
+			clip = req.ClipUpper
+		}
+		if clip <= 0 {
+			clip = req.Sensitivity
+		}
+		if clip <= 0 {
+			clip = 1.0
+		}
+		result, err := svc.NoisyMean(c.Request.Context(), vals, req.Epsilon, req.Delta, clip)
 		if err != nil {
 			middleware.AbortWithError(c, http.StatusTooManyRequests, "BUDGET_EXHAUSTED", "隐私预算已耗尽", err.Error())
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"noisy_mean": result, "epsilon": req.Epsilon})
+		c.JSON(http.StatusOK, gin.H{"noisy_mean": result, "result": result, "epsilon": req.Epsilon})
 	}
 }
 
@@ -623,8 +737,11 @@ func dpChunkedMeanHandler(svc *service.PrivacyService) gin.HandlerFunc {
 		var req struct {
 			Chunks    [][]float64 `json:"chunks" binding:"required"`
 			Epsilon   float64     `json:"epsilon" binding:"required"`
-			Delta     float64     `json:"delta" binding:"required"`
+			Delta     float64     `json:"delta"`
 			ClipBound float64     `json:"clip_bound"`
+			ClipLower float64     `json:"clip_lower"`
+			ClipUpper float64     `json:"clip_upper"`
+			Mechanism string      `json:"mechanism"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", err.Error())
@@ -635,7 +752,13 @@ func dpChunkedMeanHandler(svc *service.PrivacyService) gin.HandlerFunc {
 			allValues = append(allValues, chunk...)
 		}
 		if req.ClipBound <= 0 {
-			req.ClipBound = 1.0
+			if req.ClipUpper > req.ClipLower {
+				req.ClipBound = req.ClipUpper - req.ClipLower
+			} else if req.ClipUpper > 0 {
+				req.ClipBound = req.ClipUpper
+			} else {
+				req.ClipBound = 1.0
+			}
 		}
 		result, err := svc.NoisyMean(c.Request.Context(), allValues, req.Epsilon, req.Delta, req.ClipBound)
 		if err != nil {
@@ -725,7 +848,7 @@ func dpAggregateHandler(svc *service.PrivacyService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
 			Rows      []map[string]string `json:"rows" binding:"required"`
-			Specs     map[string]string   `json:"specs" binding:"required"` // map[字段名]聚合算子 (count/sum/mean)
+			Specs     map[string]any      `json:"specs" binding:"required"` // map[字段名]聚合算子 (count/sum/mean)
 			Epsilon   float64             `json:"epsilon" binding:"required"`
 			Delta     float64             `json:"delta"`
 			ClipLower float64             `json:"clip_lower"`
@@ -736,9 +859,22 @@ func dpAggregateHandler(svc *service.PrivacyService) gin.HandlerFunc {
 			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", err.Error())
 			return
 		}
+		cleanSpecs := make(map[string]string, len(req.Specs))
+		for col, val := range req.Specs {
+			switch v := val.(type) {
+			case string:
+				cleanSpecs[col] = v
+			case []any:
+				if len(v) > 0 {
+					cleanSpecs[col] = fmt.Sprintf("%v", v[0])
+				}
+			default:
+				cleanSpecs[col] = fmt.Sprintf("%v", v)
+			}
+		}
 		// 委托给 service 层的 DPAggregate，该路径调用 SDK 的 dp.Aggregate，
 		// 内置值截断（ClipValue → clipUpper）保障敏感度有界，确保 DP 保证成立。
-		result, err := svc.DPAggregate(req.Rows, req.Specs, req.Epsilon, req.Delta, req.ClipLower, req.ClipUpper, req.Mechanism)
+		result, err := svc.DPAggregate(req.Rows, cleanSpecs, req.Epsilon, req.Delta, req.ClipLower, req.ClipUpper, req.Mechanism)
 		if err != nil {
 			middleware.AbortWithError(c, http.StatusTooManyRequests, "BUDGET_EXHAUSTED", "隐私预算已耗尽", err.Error())
 			return
@@ -912,12 +1048,27 @@ func estimateCategoricalHistogramHandler(svc *service.PrivacyService) gin.Handle
 func kAnonymizeHandler(svc *service.PrivacyService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Records  []map[string]string `json:"records" binding:"required"`
-			QIFields []string            `json:"qi_fields" binding:"required"`
-			K        int                 `json:"k" binding:"required,min=1"`
+			Records  []map[string]string `json:"records"`
+			Record   map[string]string   `json:"record"`
+			QIFields []string            `json:"qi_fields"`
+			QICols   []string            `json:"qi_cols"`
+			K        int                 `json:"k"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", err.Error())
+			return
+		}
+		if len(req.Records) == 0 && len(req.Record) > 0 {
+			req.Records = []map[string]string{req.Record}
+		}
+		if len(req.QIFields) == 0 && len(req.QICols) > 0 {
+			req.QIFields = req.QICols
+		}
+		if req.K < 1 {
+			req.K = 2
+		}
+		if len(req.Records) == 0 || len(req.QIFields) == 0 {
+			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", "records and qi_fields/qi_cols required")
 			return
 		}
 		kanoRecords := make([]kano.Record, len(req.Records))
@@ -931,6 +1082,7 @@ func kAnonymizeHandler(svc *service.PrivacyService) gin.HandlerFunc {
 		}
 		c.JSON(http.StatusOK, gin.H{
 			"records":     result.Records,
+			"result":      result.Records,
 			"k":           result.K,
 			"group_count": result.GroupCount,
 		})
@@ -941,13 +1093,28 @@ func kAnonymizeHandler(svc *service.PrivacyService) gin.HandlerFunc {
 func kAnonymizeTableHandler(svc *service.PrivacyService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Records  []map[string]string `json:"records" binding:"required"`
-			QICols   []string            `json:"qi_cols" binding:"required"`
-			K        int                 `json:"k" binding:"required,min=2"`
+			Records  []map[string]string `json:"records"`
+			Rows     []map[string]string `json:"rows"`
+			QICols   []string            `json:"qi_cols"`
+			QIFields []string            `json:"qi_fields"`
+			K        int                 `json:"k"`
 			MaxDepth int                 `json:"max_depth"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", err.Error())
+			return
+		}
+		if len(req.Records) == 0 && len(req.Rows) > 0 {
+			req.Records = req.Rows
+		}
+		if len(req.QICols) == 0 && len(req.QIFields) > 0 {
+			req.QICols = req.QIFields
+		}
+		if req.K < 2 {
+			req.K = 2
+		}
+		if len(req.Records) == 0 || len(req.QICols) == 0 {
+			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", "records/rows and qi_cols required")
 			return
 		}
 		rows := make([]kano.Record, len(req.Records))
@@ -973,12 +1140,27 @@ func kAnonymizeTableHandler(svc *service.PrivacyService) gin.HandlerFunc {
 func kAnonymizeDataFrameHandler(svc *service.PrivacyService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Records []map[string]interface{} `json:"records" binding:"required"`
-			QICols  []string                 `json:"qi_cols" binding:"required"`
-			K       int                      `json:"k" binding:"required,min=2"`
+			Records  []map[string]interface{} `json:"records"`
+			Data     []map[string]interface{} `json:"data"`
+			QICols   []string                 `json:"qi_cols"`
+			QIFields []string                 `json:"qi_fields"`
+			K        int                      `json:"k"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", err.Error())
+			return
+		}
+		if len(req.Records) == 0 && len(req.Data) > 0 {
+			req.Records = req.Data
+		}
+		if len(req.QICols) == 0 && len(req.QIFields) > 0 {
+			req.QICols = req.QIFields
+		}
+		if req.K < 2 {
+			req.K = 2
+		}
+		if len(req.Records) == 0 || len(req.QICols) == 0 {
+			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", "records/data and qi_cols required")
 			return
 		}
 		result, err := svc.KAnonymizeDataFrame(req.Records, req.QICols, req.K)
@@ -1002,13 +1184,23 @@ func kAnonymizeDataFrameHandler(svc *service.PrivacyService) gin.HandlerFunc {
 func obfuscateHandler(svc *service.PrivacyService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Query     string `json:"query" binding:"required"`
-			NumDecoys int    `json:"num_decoys" binding:"required,min=1"`
-			Domain    string `json:"domain" binding:"required"`
+			Query      string `json:"query" binding:"required"`
+			NumDecoys  int    `json:"num_decoys"`
+			NumDummies int    `json:"num_dummies"`
+			Domain     string `json:"domain"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", err.Error())
 			return
+		}
+		if req.NumDecoys <= 0 && req.NumDummies > 0 {
+			req.NumDecoys = req.NumDummies
+		}
+		if req.NumDecoys <= 0 {
+			req.NumDecoys = 3
+		}
+		if req.Domain == "" {
+			req.Domain = "medical"
 		}
 		queries, realIdx := svc.ObfuscateQuery(req.Query, req.NumDecoys, req.Domain)
 		c.JSON(http.StatusOK, gin.H{
@@ -1021,13 +1213,23 @@ func obfuscateHandler(svc *service.PrivacyService) gin.HandlerFunc {
 func obfuscateBatchHandler(svc *service.PrivacyService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Queries   []string `json:"queries" binding:"required"`
-			NumDecoys int      `json:"num_decoys" binding:"required,min=1"`
-			Domain    string   `json:"domain" binding:"required"`
+			Queries    []string `json:"queries" binding:"required"`
+			NumDecoys  int      `json:"num_decoys"`
+			NumDummies int      `json:"num_dummies"`
+			Domain     string   `json:"domain"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", err.Error())
 			return
+		}
+		if req.NumDecoys <= 0 && req.NumDummies > 0 {
+			req.NumDecoys = req.NumDummies
+		}
+		if req.NumDecoys <= 0 {
+			req.NumDecoys = 3
+		}
+		if req.Domain == "" {
+			req.Domain = "medical"
 		}
 		results := svc.ObfuscateQueryBatch(req.Queries, req.NumDecoys, req.Domain)
 		c.JSON(http.StatusOK, gin.H{"results": results})
@@ -1057,16 +1259,167 @@ func classifyBatchHandler(svc *service.PrivacyService) gin.HandlerFunc {
 	return evalRecordHandler(svc)
 }
 
-func evalRecordHandler(svc *service.PrivacyService) gin.HandlerFunc {
+func evalHandler(svc *service.PrivacyService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Record  map[string]any   `json:"record"`
-			Records []map[string]any `json:"records"`
+			FieldName      string `json:"fieldName"`
+			FieldNameSnake string `json:"field_name"`
+			Field          string `json:"field"`
+			Value          any    `json:"value"`
+			Domain         string `json:"domain"`
+			Standard       string `json:"standard"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", err.Error())
 			return
 		}
+		fieldName := req.FieldName
+		if fieldName == "" {
+			fieldName = req.FieldNameSnake
+		}
+		if fieldName == "" {
+			fieldName = req.Field
+		}
+		if fieldName == "" {
+			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "fieldName is required", nil)
+			return
+		}
+		valueStr := ""
+		if req.Value != nil {
+			valueStr = fmt.Sprintf("%v", req.Value)
+		}
+		start := time.Now()
+		res := svc.Classify(fieldName, valueStr)
+		durationMs := float64(time.Since(start).Microseconds()) / 1000.0
+
+		levelID := res.Level.LevelID()
+		if levelID == "" {
+			levelID = res.LevelID
+		}
+		if levelID == "" {
+			levelID = string(res.Level)
+		}
+
+		tag := gin.H{
+			"level":            levelID,
+			"category":         res.Category,
+			"confidence":       res.Confidence,
+			"sourceEngine":     "RULE",
+			"ruleId":           res.MatchedBy,
+			"domain":           req.Domain,
+			"standardId":       req.Standard,
+			"version":          "1.0.0",
+			"needsHumanReview": false,
+			"isOverride":       false,
+			"isDowngrade":      false,
+			"matchTarget":      "field_value",
+		}
+		fieldResult := gin.H{
+			"fieldName":        fieldName,
+			"fieldValue":       valueStr,
+			"tags":             []gin.H{tag},
+			"finalLevel":       levelID,
+			"confidence":       res.Confidence,
+			"needsHumanReview": false,
+			"engineLayer":      "L1_RULE",
+			"reasoning":        fmt.Sprintf("命中规则: %s", res.MatchedBy),
+			"suppressedTags":   []gin.H{},
+		}
+		auditInfo := gin.H{
+			"version":        "1.0.0",
+			"domain":         req.Domain,
+			"standardId":     req.Standard,
+			"timestamp":      time.Now().UTC().Format(time.RFC3339),
+			"ruleSetVersion": "1.0.0",
+			"rulesEvaluated": 1,
+			"rulesHit":       1,
+			"durationMs":     durationMs,
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"fieldResult":  fieldResult,
+			"recordResult": nil,
+			"auditInfo":    auditInfo,
+			"field":        fieldName,
+			"value":        valueStr,
+			"level":        res.Level,
+			"level_id":     levelID,
+			"category":     res.Category,
+			"confidence":   res.Confidence,
+			"matched_by":   res.MatchedBy,
+		})
+	}
+}
+
+func listStandardsHandler(svc *service.PrivacyService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		resp, err := svc.ListStandardsDetail()
+		if err != nil {
+			middleware.AbortWithError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "获取标准列表失败", err.Error())
+			return
+		}
+		c.JSON(http.StatusOK, resp)
+	}
+}
+
+func listDomainsHandler(svc *service.PrivacyService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		resp := svc.ListDomains()
+		c.JSON(http.StatusOK, resp)
+	}
+}
+
+func listOperatorsHandler(svc *service.PrivacyService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		resp := svc.ListOperators()
+		c.JSON(http.StatusOK, resp)
+	}
+}
+
+func validateHandler(svc *service.PrivacyService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			RulesDir string `json:"rules_dir"`
+		}
+		_ = c.ShouldBindJSON(&req)
+		targetDir := req.RulesDir
+		if targetDir == "" {
+			targetDir = c.Query("rules_dir")
+		}
+		resp := svc.ValidateRules(targetDir)
+		c.JSON(http.StatusOK, resp)
+	}
+}
+
+func generateProfileHandler(svc *service.PrivacyService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			DocPath      string `json:"docPath"`
+			DocPathSnake string `json:"doc_path"`
+		}
+		_ = c.ShouldBindJSON(&req)
+		docPath := req.DocPath
+		if docPath == "" {
+			docPath = req.DocPathSnake
+		}
+		resp := svc.GenerateProfile(docPath)
+		c.JSON(http.StatusOK, resp)
+	}
+}
+
+func evalRecordHandler(svc *service.PrivacyService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Record   map[string]any   `json:"record"`
+			Records  []map[string]any `json:"records"`
+			Domain   string           `json:"domain"`
+			Standard string           `json:"standard"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			middleware.AbortWithError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求参数校验失败", err.Error())
+			return
+		}
+		start := time.Now()
 		if len(req.Records) > 0 {
 			converted := make([]map[string]string, len(req.Records))
 			for i, r := range req.Records {
@@ -1088,17 +1441,75 @@ func evalRecordHandler(svc *service.PrivacyService) gin.HandlerFunc {
 		if len(req.Record) > 0 {
 			results := make(map[string]any, len(req.Record))
 			classified := make([]*dynclassification.ClassificationResult, 0, len(req.Record))
+			fieldResults := make(map[string]any, len(req.Record))
 			for k, v := range req.Record {
-				res := svc.Classify(k, fmt.Sprintf("%v", v))
+				vStr := fmt.Sprintf("%v", v)
+				res := svc.Classify(k, vStr)
 				results[k] = res
 				classified = append(classified, res)
+
+				levelID := res.Level.LevelID()
+				if levelID == "" {
+					levelID = res.LevelID
+				}
+				if levelID == "" {
+					levelID = string(res.Level)
+				}
+				tag := gin.H{
+					"level":            levelID,
+					"category":         res.Category,
+					"confidence":       res.Confidence,
+					"sourceEngine":     "RULE",
+					"ruleId":           res.MatchedBy,
+					"domain":           req.Domain,
+					"standardId":       req.Standard,
+					"version":          "1.0.0",
+					"needsHumanReview": false,
+					"isOverride":       false,
+					"isDowngrade":      false,
+					"matchTarget":      "field_value",
+				}
+				fieldResults[k] = gin.H{
+					"fieldName":        k,
+					"fieldValue":       vStr,
+					"tags":             []gin.H{tag},
+					"finalLevel":       levelID,
+					"confidence":       res.Confidence,
+					"needsHumanReview": false,
+					"engineLayer":      "L1_RULE",
+					"reasoning":        fmt.Sprintf("命中规则: %s", res.MatchedBy),
+					"suppressedTags":   []gin.H{},
+				}
 			}
 			overall := overallSecurityLevel(classified...)
+			durationMs := float64(time.Since(start).Microseconds()) / 1000.0
+
+			recordResult := gin.H{
+				"recordIndex":      0,
+				"fieldResults":     fieldResults,
+				"aggregatedTags":   []gin.H{},
+				"finalLevel":       overall,
+				"confidence":       1.0,
+				"needsHumanReview": false,
+			}
+			auditInfo := gin.H{
+				"version":        "1.0.0",
+				"domain":         req.Domain,
+				"standardId":     req.Standard,
+				"timestamp":      time.Now().UTC().Format(time.RFC3339),
+				"ruleSetVersion": "1.0.0",
+				"rulesEvaluated": len(req.Record),
+				"rulesHit":       len(req.Record),
+				"durationMs":     durationMs,
+			}
+
 			c.JSON(http.StatusOK, gin.H{
 				"result":          results,
 				"classifications": results,
 				"level":           overall,
 				"overall_level":   overall,
+				"recordResult":    recordResult,
+				"auditInfo":       auditInfo,
 			})
 			return
 		}
@@ -1453,4 +1864,87 @@ func containsAny(s string, substrs ...string) bool {
 		}
 	}
 	return false
+}
+
+// openAPISpecHandler 动态构建并导出符合 OpenAPI 3.0.3 标准的 API 规范文档。
+func openAPISpecHandler(r *gin.Engine) gin.HandlerFunc {
+	var (
+		once sync.Once
+		spec map[string]any
+	)
+	return func(c *gin.Context) {
+		once.Do(func() {
+			paths := make(map[string]map[string]any)
+			for _, route := range r.Routes() {
+				if strings.HasPrefix(route.Path, "/debug/pprof") || strings.HasSuffix(route.Path, "/openapi.json") {
+					continue
+				}
+				methodLower := strings.ToLower(route.Method)
+				if paths[route.Path] == nil {
+					paths[route.Path] = make(map[string]any)
+				}
+				tag := "general"
+				switch {
+				case strings.HasPrefix(route.Path, "/v1/privacy"):
+					tag = "privacy"
+				case strings.HasPrefix(route.Path, "/v1/dynclassification"):
+					tag = "dynclassification"
+				case strings.HasPrefix(route.Path, "/v1/agent") || strings.HasPrefix(route.Path, "/agent"):
+					tag = "agent"
+				case strings.HasPrefix(route.Path, "/v1/medical") || strings.HasPrefix(route.Path, "/medical"):
+					tag = "medical"
+				case strings.HasPrefix(route.Path, "/v1/ops") || strings.HasPrefix(route.Path, "/ops"):
+					tag = "ops"
+				case route.Path == "/health" || route.Path == "/livez" || route.Path == "/readyz":
+					tag = "health"
+				}
+
+				paths[route.Path][methodLower] = map[string]any{
+					"summary": fmt.Sprintf("%s %s", route.Method, route.Path),
+					"tags":    []string{tag},
+					"responses": map[string]any{
+						"200": map[string]any{
+							"description": "Successful response",
+						},
+						"400": map[string]any{
+							"description": "Bad Request / Validation Error",
+						},
+						"401": map[string]any{
+							"description": "Unauthorized",
+						},
+						"403": map[string]any{
+							"description": "Forbidden",
+						},
+					},
+				}
+			}
+
+			spec = map[string]any{
+				"openapi": "3.0.3",
+				"info": map[string]any{
+					"title":       "PrivShield Privacy Engine API",
+					"version":     "3.0.0",
+					"description": "Enterprise Privacy-Preserving Governance Sidecar REST API",
+				},
+				"servers": []map[string]any{
+					{"url": "/", "description": "Current engine instance"},
+				},
+				"components": map[string]any{
+					"securitySchemes": map[string]any{
+						"ApiKeyAuth": map[string]any{
+							"type": "apiKey",
+							"in":   "header",
+							"name": "X-API-Key",
+						},
+						"BearerAuth": map[string]any{
+							"type":   "http",
+							"scheme": "bearer",
+						},
+					},
+				},
+				"paths": paths,
+			}
+		})
+		c.JSON(http.StatusOK, spec)
+	}
 }

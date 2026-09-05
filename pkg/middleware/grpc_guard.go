@@ -17,8 +17,11 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+
+	pkgobs "github.com/fengzhizi319/PrivShield-go/pkg/observability"
 )
 
 // ParseAllowedNetworks 将 CIDR（或单 IP，自动补 /32、/128）列表编译为网段切片。
@@ -155,5 +158,49 @@ func StreamKeyedRateLimit(limiter *IPRateLimiter, rps, burst float64, keyFunc GR
 			return status.Error(codes.ResourceExhausted, "rate limit exceeded")
 		}
 		return handler(srv, ss)
+	}
+}
+
+// ExtractGRPCTraceID 从入站 gRPC metadata 中提取追踪 ID（x-request-id、x-trace-id 或 traceparent）。
+// 若均未提供则自动生成高精度加密随机 TraceID。
+func ExtractGRPCTraceID(ctx context.Context) string {
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		for _, key := range []string{"x-request-id", "x-trace-id", "traceparent"} {
+			if vals := md.Get(key); len(vals) > 0 && strings.TrimSpace(vals[0]) != "" {
+				return strings.TrimSpace(vals[0])
+			}
+		}
+	}
+	return pkgobs.GenerateRequestID()
+}
+
+type wrappedServerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (w *wrappedServerStream) Context() context.Context {
+	return w.ctx
+}
+
+// UnaryTraceInterceptor 提取或生成分布式追踪上下文（x-request-id / x-trace-id），
+// 注入到 ctx 并在响应头部对齐透传，实现端到端链路追踪。
+func UnaryTraceInterceptor() grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		traceID := ExtractGRPCTraceID(ctx)
+		ctx = pkgobs.ContextWithRequestID(ctx, traceID)
+		_ = grpc.SetHeader(ctx, metadata.Pairs("x-request-id", traceID, "x-trace-id", traceID))
+		return handler(ctx, req)
+	}
+}
+
+// StreamTraceInterceptor 为流式 RPC 提取或生成分布式追踪上下文并透传。
+func StreamTraceInterceptor() grpc.StreamServerInterceptor {
+	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		ctx := ss.Context()
+		traceID := ExtractGRPCTraceID(ctx)
+		ctx = pkgobs.ContextWithRequestID(ctx, traceID)
+		_ = ss.SetHeader(metadata.Pairs("x-request-id", traceID, "x-trace-id", traceID))
+		return handler(srv, &wrappedServerStream{ServerStream: ss, ctx: ctx})
 	}
 }
